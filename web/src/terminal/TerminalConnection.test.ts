@@ -130,6 +130,26 @@ test("requests a no-store grant and applies a snapshot before sequenced deltas",
   expect(Array.from(vi.mocked(handlers.onOutput).mock.calls[0][0])).toEqual([111, 110, 101]);
 });
 
+test("does not report connected until the canonical renderer is ready", async () => {
+  let releaseSnapshot: (() => void) | undefined;
+  const rendered = new Promise<void>((resolve) => {
+    releaseSnapshot = resolve;
+  });
+  const { connection, handlers, sockets } = harness();
+  handlers.onSnapshot = vi.fn(() => rendered);
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+
+  sockets[0].open();
+  expect(vi.mocked(handlers.onState).mock.calls.some(([state]) => state === "connected")).toBe(false);
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(handlers.onState).mock.calls.some(([state]) => state === "connected")).toBe(false);
+
+  releaseSnapshot?.();
+  await vi.waitFor(() => expect(handlers.onState).toHaveBeenCalledWith("connected", undefined));
+});
+
 test("detects sequence gaps and reconnects from a fresh snapshot", async () => {
   vi.useFakeTimers();
   const { connection, handlers, sockets } = harness([1]);

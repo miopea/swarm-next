@@ -114,3 +114,37 @@ test("stale queued resize events cannot replace the fitted geometry", () => {
   xterm.resizeListener?.({ rows: 38, cols: 132 });
   expect(listener).toHaveBeenCalledWith({ rows: 38, columns: 132 });
 });
+
+test("snapshot geometry stays hidden until the visible renderer is refitted", async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  xterm.propose.mockReset().mockReturnValue({ rows: 38, cols: 132 });
+  const surface = new XtermSurface();
+  const element = document.createElement("div");
+  surface.open(element);
+
+  await surface.restore({
+    sequence: 1,
+    rows: 24,
+    columns: 80,
+    truncated: false,
+    bytes: new TextEncoder().encode("snapshot"),
+  });
+  expect(element.style.visibility).toBe("hidden");
+
+  const fitting = surface.fit();
+  await Promise.resolve();
+  frames.shift()?.(0);
+  await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
+  expect(element.style.visibility).toBe("");
+});

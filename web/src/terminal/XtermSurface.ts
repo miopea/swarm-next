@@ -22,6 +22,8 @@ export class XtermSurface implements TerminalSurface {
   });
   readonly #fit = new FitAddon();
   #resizeObserver: ResizeObserver | undefined;
+  #element: HTMLElement | undefined;
+  #restorePending = false;
   #disposed = false;
 
   constructor() {
@@ -29,6 +31,7 @@ export class XtermSurface implements TerminalSurface {
   }
 
   open(element: HTMLElement): void {
+    this.#element = element;
     this.#terminal.open(element);
     this.#fit.fit();
     this.#resizeObserver = new ResizeObserver(() => this.#fit.fit());
@@ -36,17 +39,21 @@ export class XtermSurface implements TerminalSurface {
   }
 
   async fit(): Promise<{ rows: number; columns: number }> {
-    if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
-    await document.fonts?.ready;
-    for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {
-      await nextAnimationFrame();
+    try {
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
-      const dimensions = this.#fit.proposeDimensions();
-      if (!dimensions || dimensions.rows <= 0 || dimensions.cols <= 0) continue;
-      this.#terminal.resize(dimensions.cols, dimensions.rows);
-      return { rows: dimensions.rows, columns: dimensions.cols };
+      await document.fonts?.ready;
+      for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {
+        await nextAnimationFrame();
+        if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
+        const dimensions = this.#fit.proposeDimensions();
+        if (!dimensions || dimensions.rows <= 0 || dimensions.cols <= 0) continue;
+        this.#terminal.resize(dimensions.cols, dimensions.rows);
+        return { rows: dimensions.rows, columns: dimensions.cols };
+      }
+      throw new Error("Terminal renderer metrics were not ready within the bounded fit window");
+    } finally {
+      this.#finishRestore();
     }
-    throw new Error("Terminal renderer metrics were not ready within the bounded fit window");
   }
 
   write(bytes: Uint8Array): Promise<void> {
@@ -54,9 +61,14 @@ export class XtermSurface implements TerminalSurface {
   }
 
   restore(snapshot: TerminalSnapshot): Promise<void> {
+    this.#restorePending = true;
+    if (this.#element) this.#element.style.visibility = "hidden";
     this.#terminal.reset();
     this.#terminal.resize(snapshot.columns, snapshot.rows);
-    return this.write(snapshot.bytes);
+    return this.write(snapshot.bytes).catch((error: unknown) => {
+      this.#finishRestore();
+      throw error;
+    });
   }
 
   onData(listener: (text: string) => void): Disposable {
@@ -74,6 +86,12 @@ export class XtermSurface implements TerminalSurface {
     this.#disposed = true;
     this.#resizeObserver?.disconnect();
     this.#terminal.dispose();
+  }
+
+  #finishRestore(): void {
+    if (!this.#restorePending) return;
+    this.#restorePending = false;
+    if (this.#element) this.#element.style.visibility = "";
   }
 }
 
