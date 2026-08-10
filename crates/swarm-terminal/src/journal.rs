@@ -176,4 +176,16 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn sustained_output_never_exceeds_configured_memory() {
+        let mut journal = BoundedJournal::new(JournalLimits::new(8 * 1024, 32));
+        for _ in 0..100_000 {
+            journal.push(vec![0; 1024]);
+            assert!(journal.retained_bytes() <= 8 * 1024);
+            assert!(journal.retained_frames() <= 32);
+        }
+        assert_eq!(journal.retained_bytes(), 8 * 1024);
+        assert_eq!(journal.retained_frames(), 8);
+    }
 }

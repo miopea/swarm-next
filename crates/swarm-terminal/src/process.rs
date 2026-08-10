@@ -228,7 +228,10 @@ impl Drop for ProcessTerminalSession {
         if let Ok(reader_thread) = self.reader_thread.get_mut()
             && let Some(reader_thread) = reader_thread.take()
         {
-            let _ = reader_thread.join();
+            // Destructors must not wait indefinitely on an OS reader. The
+            // journal stays bounded while this detached reader observes PTY
+            // closure after the child is killed.
+            drop(reader_thread);
         }
     }
 }

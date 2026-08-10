@@ -3,6 +3,7 @@ use std::{
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 use nix::unistd::Uid;
@@ -14,6 +15,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
+    sync::Semaphore,
 };
 use tracing::{info, warn};
 
@@ -29,12 +31,17 @@ pub enum HostServerError {
     Io(#[from] std::io::Error),
     #[error("terminal host serialization failed: {0}")]
     Protocol(#[from] serde_json::Error),
+    #[error("terminal connection limit was closed")]
+    ConnectionLimitClosed,
+    #[error("terminal request timed out")]
+    RequestTimedOut,
 }
 
 pub struct HostServer {
     listener: UnixListener,
     socket_path: PathBuf,
     registry: Arc<SessionRegistry>,
+    connection_limit: Arc<Semaphore>,
 }
 
 impl std::fmt::Debug for HostServer {
@@ -71,6 +78,7 @@ impl HostServer {
             listener,
             socket_path,
             registry,
+            connection_limit: Arc::new(Semaphore::new(64)),
         })
     }
 
@@ -83,9 +91,14 @@ impl HostServer {
     pub async fn run(self) -> Result<(), HostServerError> {
         info!(socket = %self.socket_path.display(), "terminal host listening");
         loop {
+            let permit = Arc::clone(&self.connection_limit)
+                .acquire_owned()
+                .await
+                .map_err(|_| HostServerError::ConnectionLimitClosed)?;
             let (stream, _) = self.listener.accept().await?;
             let registry = Arc::clone(&self.registry);
             tokio::spawn(async move {
+                let _permit = permit;
                 if let Err(error) = serve_connection(stream, registry).await {
                     warn!(%error, "terminal host rejected connection");
                 }
@@ -105,18 +118,24 @@ impl Drop for HostServer {
 }
 
 fn secure_runtime_directory(path: &Path) -> Result<(), HostServerError> {
-    fs::create_dir_all(path)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_dir()
-        || metadata.file_type().is_symlink()
-        || metadata.uid() != Uid::effective().as_raw()
-        || metadata.permissions().mode() & 0o077 != 0
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && metadata.file_type().is_symlink()
     {
         return Err(HostServerError::InsecureRuntimeDirectory(
             path.to_path_buf(),
         ));
     }
+    fs::create_dir_all(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != Uid::effective().as_raw()
+    {
+        return Err(HostServerError::InsecureRuntimeDirectory(
+            path.to_path_buf(),
+        ));
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
 
@@ -135,7 +154,12 @@ async fn serve_connection(
     let (reader, mut writer) = stream.into_split();
     let mut payload = Vec::new();
     let mut reader = BufReader::new(reader).take(MAX_REQUEST_BYTES + 1);
-    reader.read_until(b'\n', &mut payload).await?;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        reader.read_until(b'\n', &mut payload),
+    )
+    .await
+    .map_err(|_| HostServerError::RequestTimedOut)??;
     let response = if payload.len() as u64 > MAX_REQUEST_BYTES {
         error_response("request_too_large", "request exceeded the bounded frame")
     } else {
@@ -345,5 +369,27 @@ mod tests {
         );
         drop(server);
         assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn symlink_runtime_directory_is_rejected_without_chmod() {
+        let runtime = TempDir::new().unwrap();
+        let target = runtime.path().join("target");
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        let alias = runtime.path().join("alias");
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry =
+            Arc::new(SessionRegistry::new(JournalLimits::default(), 1, [workspace]).unwrap());
+
+        assert!(matches!(
+            HostServer::bind(alias.join("terminal.sock"), registry),
+            Err(HostServerError::InsecureRuntimeDirectory(_))
+        ));
+        assert_eq!(
+            fs::metadata(target).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
     }
 }
