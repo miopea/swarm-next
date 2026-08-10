@@ -14,6 +14,7 @@ Read and review these documents in order:
 10. [Open product questions](09-open-questions.md)
 11. [M0 evidence review](10-m0-evidence-review.md)
 12. [M1 terminal-host foundation](11-terminal-host-foundation.md)
+13. [M1 browser terminal attachment](12-browser-terminal-attachment.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do
