@@ -65,7 +65,7 @@ function snapshotFrame(
   return frame.buffer;
 }
 
-function harness(retryDelaysMs: readonly number[] = [1]) {
+function harness(retryDelaysMs: readonly number[] = [1], confirmationTimeoutMs = 3_000) {
   const sockets: FakeWebSocket[] = [];
   const fetch = vi.fn().mockResolvedValue({
     ok: true,
@@ -88,6 +88,7 @@ function harness(retryDelaysMs: readonly number[] = [1]) {
     fetch,
     locationOrigin: "http://127.0.0.1:5173",
     retryDelaysMs,
+    confirmationTimeoutMs,
     websocketFactory: (_url, protocols) => {
       expect(protocols[0]).toBe("swarm-terminal.v3");
       expect(protocols[1]).toMatch(/^swarm-grant\./);
@@ -234,6 +235,25 @@ test("an open-close loop cannot reset the bounded reconnect budget", async () =>
   }
   expect(sockets).toHaveLength(3);
   expect(handlers.onState).toHaveBeenCalledWith("error", expect.stringContaining("reconnect limit reached"));
+});
+
+test("an unconfirmed socket is abandoned inside the bounded retry budget", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness([1], 1);
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+
+  await vi.advanceTimersByTimeAsync(1);
+  expect(sockets[0].close).toHaveBeenCalledWith(1013, "terminal confirmation timed out");
+  expect(handlers.onState).toHaveBeenCalledWith(
+    "disconnected",
+    "terminal connection received no confirmation",
+  );
+
+  await vi.advanceTimersByTimeAsync(1);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(sockets).toHaveLength(2);
 });
 
 test("renderer backlog is bounded and forces canonical recovery", async () => {

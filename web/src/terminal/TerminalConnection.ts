@@ -37,6 +37,7 @@ export interface TerminalConnectionOptions {
   websocketFactory?: WebSocketFactory;
   locationOrigin?: string;
   retryDelaysMs?: readonly number[];
+  confirmationTimeoutMs?: number;
 }
 
 const GRANT_PROTOCOL_PREFIX = "swarm-grant.";
@@ -44,6 +45,7 @@ const OUTPUT_FRAME_TYPE = 1;
 const SNAPSHOT_FRAME_TYPE = 2;
 const MAX_PENDING_RENDER_BYTES = 3 * 1024 * 1024;
 const DEFAULT_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
+const DEFAULT_CONFIRMATION_TIMEOUT_MS = 3_000;
 
 /** Owns one browser attachment independently from React component lifetime. */
 export class TerminalConnection {
@@ -53,9 +55,11 @@ export class TerminalConnection {
   readonly #websocketFactory: WebSocketFactory;
   readonly #locationOrigin: string;
   readonly #retryDelaysMs: readonly number[];
+  readonly #confirmationTimeoutMs: number;
   #handlers: TerminalConnectionHandlers | undefined;
   #socket: WebSocket | undefined;
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
+  #confirmationTimer: ReturnType<typeof setTimeout> | undefined;
   #retryAttempt = 0;
   #sequence = 0;
   #hasCanonicalState = false;
@@ -77,6 +81,7 @@ export class TerminalConnection {
     this.#websocketFactory = options.websocketFactory ?? ((url, protocols) => new WebSocket(url, protocols));
     this.#locationOrigin = options.locationOrigin ?? window.location.origin;
     this.#retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+    this.#confirmationTimeoutMs = options.confirmationTimeoutMs ?? DEFAULT_CONFIRMATION_TIMEOUT_MS;
   }
 
   start(handlers: TerminalConnectionHandlers): void {
@@ -103,6 +108,7 @@ export class TerminalConnection {
     this.#disposed = true;
     if (this.#retryTimer !== undefined) clearTimeout(this.#retryTimer);
     this.#retryTimer = undefined;
+    this.#clearConfirmationTimer();
     this.#socket?.close(1000, "terminal controller disposed");
     this.#socket = undefined;
     this.#handlers?.onState("closed");
@@ -138,6 +144,7 @@ export class TerminalConnection {
       this.#rendererConfirmed = false;
       this.#recovering = false;
       this.#socket = socket;
+      this.#armConfirmationTimer(socket);
       socket.addEventListener("open", () => this.#handleOpen(socket));
       socket.addEventListener("message", (event) => this.#handleMessage(socket, event));
       socket.addEventListener("close", () => this.#handleClose(socket));
@@ -166,6 +173,7 @@ export class TerminalConnection {
 
   #handleMessage(socket: WebSocket, event: MessageEvent): void {
     if (socket !== this.#socket || this.#disposed) return;
+    this.#clearConfirmationTimer();
     if (event.data instanceof ArrayBuffer) {
       this.#enqueueBinaryFrame(new Uint8Array(event.data));
       return;
@@ -276,6 +284,7 @@ export class TerminalConnection {
 
   #handleClose(socket: WebSocket): void {
     if (socket !== this.#socket) return;
+    this.#clearConfirmationTimer();
     this.#socket = undefined;
     if (!this.#disposed && !this.#fatal) this.#scheduleReconnect("terminal connection closed");
   }
@@ -308,6 +317,7 @@ export class TerminalConnection {
   #fail(detail: string): void {
     this.#fatal = true;
     this.#renderGeneration += 1;
+    this.#clearConfirmationTimer();
     this.#handlers?.onState("recovery_required", detail);
     this.#socket?.close(1008, detail.slice(0, 100));
   }
@@ -333,5 +343,21 @@ export class TerminalConnection {
     if (this.#rendererConfirmed && detail === undefined) return;
     this.#rendererConfirmed = true;
     this.#handlers?.onState("connected", detail);
+  }
+
+  #armConfirmationTimer(socket: WebSocket): void {
+    this.#clearConfirmationTimer();
+    this.#confirmationTimer = setTimeout(() => {
+      this.#confirmationTimer = undefined;
+      if (socket !== this.#socket || this.#disposed || this.#fatal) return;
+      this.#socket = undefined;
+      socket.close(1013, "terminal confirmation timed out");
+      this.#scheduleReconnect("terminal connection received no confirmation");
+    }, this.#confirmationTimeoutMs);
+  }
+
+  #clearConfirmationTimer(): void {
+    if (this.#confirmationTimer !== undefined) clearTimeout(this.#confirmationTimer);
+    this.#confirmationTimer = undefined;
   }
 }
