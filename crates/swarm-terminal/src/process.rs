@@ -10,12 +10,13 @@ use std::{
 };
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use serde::{Deserialize, Serialize};
 use swarm_domain::WorkerSessionId;
 use thiserror::Error;
 
 use crate::{BoundedJournal, JournalLimits, ProviderCommand, Resume};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalSize {
     pub rows: u16,
     pub columns: u16,
@@ -350,6 +351,19 @@ impl SessionRegistry {
     /// Returns an error if the registry lock is poisoned.
     pub fn is_empty(&self) -> Result<bool, SessionRegistryError> {
         Ok(self.len()? == 0)
+    }
+
+    /// Returns immutable identities and current process state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a poisoned registry or failed OS process query.
+    pub fn session_states(&self) -> Result<Vec<(WorkerSessionId, bool)>, SessionRegistryError> {
+        let sessions = lock(&self.sessions)?;
+        sessions
+            .values()
+            .map(|session| Ok((session.id(), session.is_running()?)))
+            .collect()
     }
 }
 

@@ -1,0 +1,349 @@
+use std::{
+    fs,
+    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+use nix::unistd::Uid;
+use swarm_terminal::{
+    ClaudeCodeAdapter, HostRequest, HostResponse, HostSessionSummary, MAX_REQUEST_BYTES,
+    MAX_RESPONSE_BYTES, PROTOCOL_VERSION, ProviderTerminalAdapter, SessionRegistry,
+};
+use thiserror::Error;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    net::{UnixListener, UnixStream},
+};
+use tracing::{info, warn};
+
+#[derive(Debug, Error)]
+pub enum HostServerError {
+    #[error("terminal socket must have a parent directory")]
+    MissingSocketParent,
+    #[error("terminal runtime directory is not a secure owned directory: {0}")]
+    InsecureRuntimeDirectory(PathBuf),
+    #[error("terminal socket already exists: {0}")]
+    SocketAlreadyExists(PathBuf),
+    #[error("terminal host I/O failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("terminal host serialization failed: {0}")]
+    Protocol(#[from] serde_json::Error),
+}
+
+pub struct HostServer {
+    listener: UnixListener,
+    socket_path: PathBuf,
+    registry: Arc<SessionRegistry>,
+}
+
+impl std::fmt::Debug for HostServer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HostServer")
+            .field("socket_path", &self.socket_path)
+            .finish_non_exhaustive()
+    }
+}
+
+impl HostServer {
+    /// Binds a same-user Unix socket inside a private runtime directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for insecure ownership, an existing socket, permission
+    /// failures, or bind failures.
+    pub fn bind(
+        socket_path: impl Into<PathBuf>,
+        registry: Arc<SessionRegistry>,
+    ) -> Result<Self, HostServerError> {
+        let socket_path = socket_path.into();
+        let parent = socket_path
+            .parent()
+            .ok_or(HostServerError::MissingSocketParent)?;
+        secure_runtime_directory(parent)?;
+        if fs::symlink_metadata(&socket_path).is_ok() {
+            return Err(HostServerError::SocketAlreadyExists(socket_path));
+        }
+        let listener = UnixListener::bind(&socket_path)?;
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
+        Ok(Self {
+            listener,
+            socket_path,
+            registry,
+        })
+    }
+
+    /// Serves requests until the owning task is cancelled or the listener
+    /// fails. Dropping the server removes only its own socket path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when accepting a connection fails.
+    pub async fn run(self) -> Result<(), HostServerError> {
+        info!(socket = %self.socket_path.display(), "terminal host listening");
+        loop {
+            let (stream, _) = self.listener.accept().await?;
+            let registry = Arc::clone(&self.registry);
+            tokio::spawn(async move {
+                if let Err(error) = serve_connection(stream, registry).await {
+                    warn!(%error, "terminal host rejected connection");
+                }
+            });
+        }
+    }
+}
+
+impl Drop for HostServer {
+    fn drop(&mut self) {
+        if let Ok(metadata) = fs::symlink_metadata(&self.socket_path)
+            && metadata.file_type().is_socket()
+        {
+            let _ = fs::remove_file(&self.socket_path);
+        }
+    }
+}
+
+fn secure_runtime_directory(path: &Path) -> Result<(), HostServerError> {
+    fs::create_dir_all(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != Uid::effective().as_raw()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(HostServerError::InsecureRuntimeDirectory(
+            path.to_path_buf(),
+        ));
+    }
+    Ok(())
+}
+
+async fn serve_connection(
+    stream: UnixStream,
+    registry: Arc<SessionRegistry>,
+) -> Result<(), HostServerError> {
+    let credentials = stream.peer_cred()?;
+    if credentials.uid() != Uid::effective().as_raw() {
+        return Err(HostServerError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "terminal IPC peer user did not match the host user",
+        )));
+    }
+
+    let (reader, mut writer) = stream.into_split();
+    let mut payload = Vec::new();
+    let mut reader = BufReader::new(reader).take(MAX_REQUEST_BYTES + 1);
+    reader.read_until(b'\n', &mut payload).await?;
+    let response = if payload.len() as u64 > MAX_REQUEST_BYTES {
+        error_response("request_too_large", "request exceeded the bounded frame")
+    } else {
+        match serde_json::from_slice::<HostRequest>(&payload) {
+            Ok(request) => dispatch(registry, request).await,
+            Err(error) => error_response("invalid_request", &error.to_string()),
+        }
+    };
+
+    let mut response = serde_json::to_vec(&response)?;
+    if response.len() as u64 > MAX_RESPONSE_BYTES {
+        response = serde_json::to_vec(&error_response(
+            "response_too_large",
+            "response exceeded the bounded frame",
+        ))?;
+    }
+    response.push(b'\n');
+    writer.write_all(&response).await?;
+    Ok(())
+}
+
+async fn dispatch(registry: Arc<SessionRegistry>, request: HostRequest) -> HostResponse {
+    tokio::task::spawn_blocking(move || dispatch_blocking(&registry, request))
+        .await
+        .unwrap_or_else(|error| error_response("host_task_failed", &error.to_string()))
+}
+
+fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostResponse {
+    let result = match request {
+        HostRequest::Ping => {
+            return HostResponse::Pong {
+                protocol_version: PROTOCOL_VERSION,
+            };
+        }
+        HostRequest::StartClaude { workspace, size } => ClaudeCodeAdapter
+            .command_for(&workspace)
+            .map_err(|error| error.to_string())
+            .and_then(|command| {
+                registry
+                    .spawn(&command, size)
+                    .map_err(|error| error.to_string())
+            })
+            .map(|session| HostResponse::SessionStarted {
+                session_id: session.id(),
+            }),
+        HostRequest::ListSessions => registry
+            .session_states()
+            .map(|sessions| HostResponse::Sessions {
+                sessions: sessions
+                    .into_iter()
+                    .map(|(session_id, running)| HostSessionSummary {
+                        session_id,
+                        running,
+                    })
+                    .collect(),
+            })
+            .map_err(|error| error.to_string()),
+        HostRequest::Read {
+            session_id,
+            after_sequence,
+        } => registry
+            .get(session_id)
+            .and_then(|session| session.resume_after(after_sequence))
+            .map(|resume| HostResponse::Output { session_id, resume })
+            .map_err(|error| error.to_string()),
+        HostRequest::Write { session_id, bytes } => registry
+            .get(session_id)
+            .and_then(|session| session.write_input(&bytes))
+            .map(|()| HostResponse::Acknowledged)
+            .map_err(|error| error.to_string()),
+        HostRequest::Resize { session_id, size } => registry
+            .get(session_id)
+            .and_then(|session| session.resize(size))
+            .map(|()| HostResponse::Acknowledged)
+            .map_err(|error| error.to_string()),
+        HostRequest::Stop { session_id } => registry
+            .stop(session_id)
+            .map(|()| HostResponse::Acknowledged)
+            .map_err(|error| error.to_string()),
+    };
+    result.unwrap_or_else(|message| error_response("terminal_operation_failed", &message))
+}
+
+fn error_response(code: &str, message: &str) -> HostResponse {
+    HostResponse::Error {
+        code: code.into(),
+        message: message.into(),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::{env, time::Duration};
+
+    use swarm_terminal::{HostClient, JournalLimits, ProviderCommand, Resume, TerminalSize};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn client_reconnect_preserves_a_real_terminal_session() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec![
+                "-lc".into(),
+                "printf before; read value; printf 'after:%s' \"$value\"".into(),
+            ],
+            working_directory: workspace,
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, Arc::clone(&registry)).unwrap();
+        let server_task = tokio::spawn(server.run());
+
+        let first_client = HostClient::new(&socket);
+        assert!(matches!(
+            first_client.request(&HostRequest::Ping).await.unwrap(),
+            HostResponse::Pong {
+                protocol_version: PROTOCOL_VERSION
+            }
+        ));
+        drop(first_client);
+
+        let replacement_client = HostClient::new(&socket);
+        let sessions = replacement_client
+            .request(&HostRequest::ListSessions)
+            .await
+            .unwrap();
+        let HostResponse::Sessions { sessions } = sessions else {
+            panic!("expected session list");
+        };
+        assert_eq!(sessions[0].session_id, session.id());
+
+        replacement_client
+            .request(&HostRequest::Write {
+                session_id: session.id(),
+                bytes: b"restart-proof\n".to_vec(),
+            })
+            .await
+            .unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let response = replacement_client
+                .request(&HostRequest::Read {
+                    session_id: session.id(),
+                    after_sequence: 0,
+                })
+                .await
+                .unwrap();
+            let HostResponse::Output {
+                resume: Resume::Deltas { frames },
+                ..
+            } = response
+            else {
+                panic!("expected retained deltas");
+            };
+            let output = frames
+                .into_iter()
+                .flat_map(|frame| frame.bytes)
+                .collect::<Vec<_>>();
+            if String::from_utf8_lossy(&output).contains("after:restart-proof") {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for output"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        replacement_client
+            .request(&HostRequest::Stop {
+                session_id: session.id(),
+            })
+            .await
+            .unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn socket_directory_and_socket_are_private() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry =
+            Arc::new(SessionRegistry::new(JournalLimits::default(), 1, [workspace]).unwrap());
+        let socket = runtime.path().join("private").join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+
+        assert_eq!(
+            fs::metadata(socket.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&socket).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        drop(server);
+        assert!(!socket.exists());
+    }
+}

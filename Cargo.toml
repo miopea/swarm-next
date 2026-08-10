@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/swarm-api", "crates/swarm-domain", "crates/swarm-terminal"]
+members = [
+  "crates/swarm-api",
+  "crates/swarm-domain",
+  "crates/swarm-terminal",
+  "crates/swarm-terminal-host",
+]
 resolver = "3"
 
 [workspace.package]
@@ -11,11 +16,12 @@ repository = "https://github.com/miopea/swarm-next"
 
 [workspace.dependencies]
 axum = "0.8.9"
+nix = { version = "0.28", features = ["user"] }
 portable-pty = "0.9.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
