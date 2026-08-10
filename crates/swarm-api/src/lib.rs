@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use swarm_domain::WorkerSessionId;
 use swarm_terminal::{
-    CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, HostClient, HostRequest,
-    HostResponse, JournalLimits, MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS,
+    CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, HistoryCursor, HostClient,
+    HostRequest, HostResponse, JournalLimits, MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS,
     MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, TerminalSize,
 };
 use tokio::sync::Semaphore;
@@ -123,6 +123,12 @@ struct OutputQuery {
     after: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct HistoryQuery {
+    segment: Option<u64>,
+    record: Option<u32>,
+}
+
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
@@ -170,6 +176,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/terminal/history/diagnostics",
             get(history_diagnostics),
+        )
+        .route(
+            "/api/v1/terminal/history/sessions",
+            get(list_history_sessions),
+        )
+        .route(
+            "/api/v1/terminal/history/sessions/{session_id}",
+            get(read_history),
         )
         .route(
             "/api/v1/terminal/sessions/{session_id}",
@@ -232,8 +246,43 @@ async fn list_sessions(
 async fn history_diagnostics(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-) -> Result<Json<HostResponse>, ApiError> {
-    authorized_request(&state, &headers, HostRequest::HistoryDiagnostics).await
+) -> Result<Response, ApiError> {
+    authorized_no_store_request(&state, &headers, HostRequest::HistoryDiagnostics).await
+}
+
+async fn list_history_sessions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorized_no_store_request(&state, &headers, HostRequest::ListHistorySessions).await
+}
+
+async fn read_history(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Response, ApiError> {
+    let cursor = match (query.segment, query.record) {
+        (None, None) => None,
+        (Some(segment), Some(record)) => Some(HistoryCursor { segment, record }),
+        _ => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_history_cursor",
+                "history cursor requires both segment and record",
+            ));
+        }
+    };
+    authorized_no_store_request(
+        &state,
+        &headers,
+        HostRequest::ReadHistory {
+            session_id: parse_session_id(&session_id)?,
+            cursor,
+        },
+    )
+    .await
 }
 
 async fn start_session(
@@ -427,6 +476,15 @@ async fn authorized_request(
     Ok(Json(response))
 }
 
+async fn authorized_no_store_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    request: HostRequest,
+) -> Result<Response, ApiError> {
+    let Json(response) = authorized_request(state, headers, request).await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
+}
+
 fn terminal_client(state: &AppState) -> Result<&HostClient, ApiError> {
     state.terminal_host.as_ref().ok_or_else(|| {
         ApiError::new(
@@ -534,6 +592,7 @@ mod tests {
     use serde_json::Value;
     use swarm_terminal::{
         HistoryLimits, HistoryStore, JournalLimits, ProviderCommand, SessionRegistry,
+        TerminalSnapshot,
     };
     use swarm_terminal_host::HostServer;
     use tempfile::TempDir;
@@ -657,6 +716,7 @@ mod tests {
 
         let response = authorized_get(app, "/api/v1/terminal/history/diagnostics").await;
         assert!(response.status().is_success());
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let json = response_json(response).await;
         assert_eq!(
             json["diagnostics"]["limits"]["max_total_bytes"],
@@ -664,6 +724,76 @@ mod tests {
         );
         assert_eq!(json["diagnostics"]["retained_bytes"], 0);
         assert!(json.get("bytes").is_none());
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn durable_history_is_listed_and_paged_after_store_reopen() {
+        let runtime = TempDir::new().unwrap();
+        let history_root = runtime.path().join("history");
+        let id = WorkerSessionId::new();
+        {
+            let history = HistoryStore::open(&history_root, HistoryLimits::default()).unwrap();
+            history.start_session(id).unwrap();
+            history
+                .append_checkpoint(
+                    id,
+                    &TerminalSnapshot {
+                        sequence: 0,
+                        rows: 24,
+                        columns: 80,
+                        truncated: false,
+                        bytes: Vec::new(),
+                    },
+                )
+                .unwrap();
+            history.append(id, 1, b"survived-restart").unwrap();
+            history.finish_session(id).unwrap();
+        }
+        let history =
+            Arc::new(HistoryStore::open(&history_root, HistoryLimits::default()).unwrap());
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new_with_history(
+                JournalLimits::new(4096, 64),
+                1,
+                [workspace],
+                Some(history),
+            )
+            .unwrap(),
+        );
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let app =
+            router(AppState::default().with_terminal_host(HostClient::new(&socket), "secret"));
+
+        let sessions_response =
+            authorized_get(app.clone(), "/api/v1/terminal/history/sessions").await;
+        assert_eq!(
+            sessions_response.headers()[header::CACHE_CONTROL],
+            "no-store"
+        );
+        let sessions = response_json(sessions_response).await;
+        assert_eq!(sessions["sessions"][0]["session_id"], id.to_string());
+        assert_eq!(sessions["sessions"][0]["active"], false);
+
+        let page_response =
+            authorized_get(app, &format!("/api/v1/terminal/history/sessions/{id}")).await;
+        assert_eq!(page_response.headers()[header::CACHE_CONTROL], "no-store");
+        let page = response_json(page_response).await;
+        assert_eq!(page["page"]["session_id"], id.to_string());
+        let output = page["page"]["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|record| record["kind"] == "output")
+            .flat_map(|record| record["bytes"].as_array().into_iter().flatten())
+            .filter_map(Value::as_u64)
+            .filter_map(|byte| u8::try_from(byte).ok())
+            .collect::<Vec<_>>();
+        assert_eq!(output, b"survived-restart");
         server_task.abort();
         let _ = server_task.await;
     }

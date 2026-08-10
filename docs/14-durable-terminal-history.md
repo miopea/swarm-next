@@ -1,6 +1,6 @@
 # M1 durable terminal history
 
-Status: **Implemented storage foundation**
+Status: **Implemented durable-history checkpoint**
 
 This increment gives the Rust terminal host a bounded, crash-recoverable record
 of PTY output. It deliberately does not claim that a terminal-host restart
@@ -59,13 +59,27 @@ counts, dropped records/bytes, recovered truncated bytes, and corrupt-segment
 count. It never returns terminal payloads, commands, workspace paths, or
 operator credentials.
 
+Terminal content is available only through separate authorized routes:
+
+- `GET /api/v1/terminal/history/sessions`
+- `GET /api/v1/terminal/history/sessions/{id}`
+- `GET /api/v1/terminal/history/sessions/{id}?segment={n}&record={n}`
+
+History pages are bounded to 2,048 records and 512 KiB of ordinary output. One
+canonical checkpoint may exceed the page target, but remains independently
+bounded by the approximately 2 MiB record limit. The returned cursor identifies
+the next record. If retention evicts the cursor's segment, the host sets
+`reset: true` and restarts the page at the oldest retained canonical
+checkpoint. A caller can therefore replace its historical view instead of
+joining bytes onto an invalid ANSI state.
+
 ## Recovery semantics
 
 - Browser or API restart: the terminal host still owns the PTY and serves the
   live canonical snapshot, as before.
-- Terminal-host process restart: validated history remains on disk, but the PTY
-  is not reported as live. Historical replay and descriptor handoff build on
-  this foundation in separate increments.
+- Terminal-host process restart: validated history remains listable and
+  pageable, but the PTY is not reported as live. Descriptor handoff builds on
+  this foundation in a separate increment.
 - Explicit worker stop: the final segment is synced and becomes eligible for
   normal age and byte eviction.
 
@@ -77,6 +91,9 @@ operator credentials.
 - Multiple sessions trigger deterministic global eviction.
 - Active segments drop new history rather than violating the total bound.
 - Torn writes and checksum failures preserve all earlier valid records.
+- Durable history remains listable and pageable after the store is reopened.
+- Pagination never duplicates records; an evicted cursor resets to a retained
+  canonical checkpoint.
 - Age pruning and Unix permission tests pass.
 - The full Rust workspace passes formatting, Clippy with warnings denied, and
   all tests.

@@ -55,6 +55,10 @@ Directories are mode `0700` and files are mode `0600` on Unix. Symlinked state
 directories are rejected. Terminal bytes are never copied into logs or
 diagnostic responses.
 
+IPC protocol version 4 exposes content-free session listings and bounded
+history pages. Cursors identify a segment and record; an evicted cursor resets
+to the oldest retained checkpoint rather than returning an invalid continuation.
+
 Durable bytes do not imply a live PTY. After terminal-host failure, validated
 history may be recovered as archived output, while the session remains exited
 until descriptor handoff or a process-supervision boundary can prove the PTY is

@@ -265,6 +265,14 @@ fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostRe
             .history_diagnostics()
             .map(|diagnostics| HostResponse::HistoryDiagnostics { diagnostics })
             .map_err(|error| error.to_string()),
+        HostRequest::ListHistorySessions => registry
+            .history_sessions()
+            .map(|sessions| HostResponse::HistorySessions { sessions })
+            .map_err(|error| error.to_string()),
+        HostRequest::ReadHistory { session_id, cursor } => registry
+            .history_page(session_id, cursor)
+            .map(|page| HostResponse::HistoryPage { page })
+            .map_err(|error| error.to_string()),
         HostRequest::Read {
             session_id,
             after_sequence,

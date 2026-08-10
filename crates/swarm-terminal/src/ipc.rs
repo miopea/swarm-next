@@ -11,9 +11,11 @@ use tokio::{
     net::UnixStream,
 };
 
-use crate::{HistoryDiagnostics, Resume, TerminalSize};
+use crate::{
+    HistoryCursor, HistoryDiagnostics, HistoryPage, HistorySessionSummary, Resume, TerminalSize,
+};
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -33,6 +35,11 @@ pub enum HostRequest {
     },
     ListSessions,
     HistoryDiagnostics,
+    ListHistorySessions,
+    ReadHistory {
+        session_id: WorkerSessionId,
+        cursor: Option<HistoryCursor>,
+    },
     Read {
         session_id: WorkerSessionId,
         after_sequence: Option<u64>,
@@ -74,6 +81,12 @@ pub enum HostResponse {
     },
     HistoryDiagnostics {
         diagnostics: Option<HistoryDiagnostics>,
+    },
+    HistorySessions {
+        sessions: Vec<HistorySessionSummary>,
+    },
+    HistoryPage {
+        page: HistoryPage,
     },
     Output {
         session_id: WorkerSessionId,

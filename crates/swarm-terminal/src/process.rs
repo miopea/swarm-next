@@ -17,8 +17,8 @@ use tokio::sync::watch;
 use tracing::warn;
 
 use crate::{
-    CanonicalTerminalState, HistoryAppendOutcome, HistoryDiagnostics, HistoryError, HistoryStore,
-    JournalLimits, ProviderCommand, Resume,
+    CanonicalTerminalState, HistoryAppendOutcome, HistoryCursor, HistoryDiagnostics, HistoryError,
+    HistoryPage, HistorySessionSummary, HistoryStore, JournalLimits, ProviderCommand, Resume,
 };
 
 pub const MAX_TERMINAL_ROWS: u16 = 200;
@@ -510,6 +510,37 @@ impl SessionRegistry {
             .as_ref()
             .map(|history| history.diagnostics().map_err(SessionRegistryError::from))
             .transpose()
+    }
+
+    /// Lists durable terminal sessions when history is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if history is disabled or unavailable.
+    pub fn history_sessions(&self) -> Result<Vec<HistorySessionSummary>, SessionRegistryError> {
+        self.history
+            .as_ref()
+            .ok_or_else(|| SessionRegistryError::Terminal("terminal history is disabled".into()))?
+            .sessions()
+            .map_err(SessionRegistryError::from)
+    }
+
+    /// Reads a bounded durable-history page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if history is disabled, the session is unknown, or
+    /// the store is unavailable.
+    pub fn history_page(
+        &self,
+        id: WorkerSessionId,
+        cursor: Option<HistoryCursor>,
+    ) -> Result<HistoryPage, SessionRegistryError> {
+        self.history
+            .as_ref()
+            .ok_or_else(|| SessionRegistryError::Terminal("terminal history is disabled".into()))?
+            .page(id, cursor)
+            .map_err(SessionRegistryError::from)
     }
 }
 

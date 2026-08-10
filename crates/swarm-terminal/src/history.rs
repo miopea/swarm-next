@@ -20,6 +20,9 @@ const OUTPUT_RECORD: u8 = 1;
 const CHECKPOINT_RECORD: u8 = 2;
 const RECORD_HEADER_BYTES: usize = 32;
 const SYNC_INTERVAL_BYTES: u64 = 256 * 1024;
+pub const MAX_HISTORY_RECORD_BYTES: u64 = 2 * 1024 * 1024 + 64;
+pub const MAX_HISTORY_PAGE_BYTES: u64 = 512 * 1024;
+pub const MAX_HISTORY_PAGE_RECORDS: usize = 2_048;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HistoryLimits {
@@ -54,7 +57,7 @@ impl HistoryLimits {
             .checked_add(RECORD_HEADER_BYTES as u64)
             .ok_or(HistoryError::InvalidLimits)?;
         if self.max_record_bytes == 0
-            || self.max_record_bytes > u64::from(u32::MAX)
+            || self.max_record_bytes > MAX_HISTORY_RECORD_BYTES
             || self.max_segment_bytes < minimum_segment
             || self.max_session_bytes < self.max_segment_bytes
             || self.max_total_bytes < self.max_session_bytes
@@ -69,7 +72,7 @@ impl HistoryLimits {
 impl Default for HistoryLimits {
     fn default() -> Self {
         Self::new(
-            2 * 1024 * 1024,
+            MAX_HISTORY_RECORD_BYTES,
             4 * 1024 * 1024,
             64 * 1024 * 1024,
             512 * 1024 * 1024,
@@ -97,7 +100,31 @@ pub enum HistoryAppendOutcome {
     DroppedAtCapacity,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HistoryCursor {
+    pub segment: u64,
+    pub record: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HistoryPage {
+    pub session_id: WorkerSessionId,
+    pub records: Vec<HistoryRecord>,
+    pub next_cursor: Option<HistoryCursor>,
+    pub has_more: bool,
+    pub reset: bool,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HistorySessionSummary {
+    pub session_id: WorkerSessionId,
+    pub retained_bytes: u64,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HistoryRecord {
     Output {
         sequence: u64,
@@ -116,6 +143,13 @@ impl HistoryRecord {
         match self {
             Self::Output { sequence, .. } => *sequence,
             Self::Checkpoint { snapshot, .. } => snapshot.sequence,
+        }
+    }
+
+    const fn payload_bytes(&self) -> usize {
+        match self {
+            Self::Output { bytes, .. } => bytes.len(),
+            Self::Checkpoint { snapshot, .. } => 5 + snapshot.bytes.len(),
         }
     }
 }
@@ -385,6 +419,159 @@ impl HistoryStore {
         Ok(records)
     }
 
+    /// Lists durable sessions without exposing terminal content.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store lock is poisoned.
+    pub fn sessions(&self) -> Result<Vec<HistorySessionSummary>, HistoryError> {
+        let state = self.lock()?;
+        let mut sessions = state
+            .sessions
+            .iter()
+            .map(|(session_id, session)| HistorySessionSummary {
+                session_id: *session_id,
+                retained_bytes: session.retained_bytes(),
+                active: session.active,
+            })
+            .collect::<Vec<_>>();
+        sessions.sort_by_key(|session| session.session_id.to_string());
+        Ok(sessions)
+    }
+
+    /// Reads one bounded page of durable history. A cursor whose segment was
+    /// evicted resets atomically to the oldest retained checkpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown session, I/O, or a poisoned store lock.
+    pub fn page(
+        &self,
+        id: WorkerSessionId,
+        cursor: Option<HistoryCursor>,
+    ) -> Result<HistoryPage, HistoryError> {
+        self.page_with_bounds(id, cursor, MAX_HISTORY_PAGE_BYTES, MAX_HISTORY_PAGE_RECORDS)
+    }
+
+    fn page_with_bounds(
+        &self,
+        id: WorkerSessionId,
+        cursor: Option<HistoryCursor>,
+        max_page_bytes: u64,
+        max_page_records: usize,
+    ) -> Result<HistoryPage, HistoryError> {
+        let (active, mut segments) = self.open_session_segments(id)?;
+        if segments.is_empty() {
+            return Ok(HistoryPage {
+                session_id: id,
+                records: Vec::new(),
+                next_cursor: cursor,
+                has_more: false,
+                reset: false,
+                active,
+            });
+        }
+
+        let PageStart::Position {
+            mut segment,
+            mut record,
+            mut reset,
+        } = page_start(&segments, cursor.as_ref())
+        else {
+            return Ok(HistoryPage {
+                session_id: id,
+                records: Vec::new(),
+                next_cursor: cursor,
+                has_more: false,
+                reset: false,
+                active,
+            });
+        };
+
+        let mut page_records = Vec::new();
+        let mut page_bytes = 0_u64;
+        let mut next_cursor = cursor;
+        let mut has_more = false;
+        while segment < segments.len() {
+            let (segment_index, file) = &mut segments[segment];
+            let records = read_records(file, self.limits.max_record_bytes)?;
+            if record > records.len() {
+                reset = true;
+                segment = 0;
+                record = 0;
+                page_records.clear();
+                page_bytes = 0;
+                next_cursor = None;
+                for (_, file) in &mut segments {
+                    file.seek(SeekFrom::Start(0))?;
+                }
+                continue;
+            }
+            if record == records.len() {
+                segment += 1;
+                record = 0;
+                continue;
+            }
+            for (index, history_record) in records.into_iter().enumerate().skip(record) {
+                let record_bytes = history_record.payload_bytes() as u64;
+                if !page_records.is_empty()
+                    && (page_bytes.saturating_add(record_bytes) > max_page_bytes
+                        || page_records.len() >= max_page_records)
+                {
+                    has_more = true;
+                    next_cursor = Some(HistoryCursor {
+                        segment: *segment_index,
+                        record: u32::try_from(index).unwrap_or(u32::MAX),
+                    });
+                    break;
+                }
+                page_bytes = page_bytes.saturating_add(record_bytes);
+                page_records.push(history_record);
+                next_cursor = Some(HistoryCursor {
+                    segment: *segment_index,
+                    record: u32::try_from(index.saturating_add(1)).unwrap_or(u32::MAX),
+                });
+            }
+            if has_more {
+                break;
+            }
+            segment += 1;
+            record = 0;
+            if let Some((next_segment, _)) = segments.get(segment) {
+                next_cursor = Some(HistoryCursor {
+                    segment: *next_segment,
+                    record: 0,
+                });
+            }
+        }
+
+        Ok(HistoryPage {
+            session_id: id,
+            records: page_records,
+            next_cursor,
+            has_more,
+            reset,
+            active,
+        })
+    }
+
+    fn open_session_segments(
+        &self,
+        id: WorkerSessionId,
+    ) -> Result<(bool, Vec<(u64, File)>), HistoryError> {
+        let state = self.lock()?;
+        let session = state
+            .sessions
+            .get(&id)
+            .ok_or(HistoryError::SessionNotFound)?;
+        let segments = session
+            .segments
+            .iter()
+            .map(|segment| Ok((segment.index, File::open(&segment.path)?)))
+            .collect::<Result<Vec<_>, std::io::Error>>()?;
+        Ok((session.active, segments))
+    }
+
     /// Returns content-free capacity and recovery diagnostics.
     ///
     /// # Errors
@@ -429,6 +616,44 @@ impl HistoryStore {
 pub fn default_terminal_history_path() -> PathBuf {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
     home.join(".local/state/swarm-next/terminal-history")
+}
+
+enum PageStart {
+    Position {
+        segment: usize,
+        record: usize,
+        reset: bool,
+    },
+    BeyondRetained,
+}
+
+fn page_start(segments: &[(u64, File)], cursor: Option<&HistoryCursor>) -> PageStart {
+    let Some(cursor) = cursor else {
+        return PageStart::Position {
+            segment: 0,
+            record: 0,
+            reset: false,
+        };
+    };
+    if let Some(segment) = segments
+        .iter()
+        .position(|(index, _)| *index == cursor.segment)
+    {
+        return PageStart::Position {
+            segment,
+            record: cursor.record as usize,
+            reset: false,
+        };
+    }
+    if cursor.segment > segments.last().expect("segments are non-empty").0 {
+        PageStart::BeyondRetained
+    } else {
+        PageStart::Position {
+            segment: 0,
+            record: 0,
+            reset: true,
+        }
+    }
 }
 
 fn close_current(state: &mut StoreState, id: WorkerSessionId) -> Result<(), HistoryError> {
@@ -682,7 +907,9 @@ fn cleanup_empty_sessions(state: &mut StoreState, root: &Path) -> Result<(), His
             Err(ref error) if error.kind() == std::io::ErrorKind::NotFound => {
                 state.sessions.remove(&id);
             }
-            Err(ref error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+            Err(ref error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                state.sessions.remove(&id);
+            }
             Err(error) => return Err(HistoryError::Io(error)),
         }
     }
@@ -741,7 +968,11 @@ fn scan_store(root: &Path, limits: HistoryLimits) -> Result<StoreState, HistoryE
             });
             session.next_segment = session.next_segment.max(index.saturating_add(1));
         }
-        state.sessions.insert(id, session);
+        if session.segments.is_empty() {
+            let _ = fs::remove_dir(entry.path());
+        } else {
+            state.sessions.insert(id, session);
+        }
     }
     Ok(state)
 }
@@ -1063,6 +1294,56 @@ mod tests {
     }
 
     #[test]
+    fn history_pages_are_bounded_and_resume_without_duplicate_records() {
+        let temp = TempDir::new().unwrap();
+        let store = store(&temp);
+        let id = WorkerSessionId::new();
+        start(&store, id);
+        append_output(&store, id, 7, b"hello");
+        append_output(&store, id, 8, b"world");
+
+        let first = store.page_with_bounds(id, None, 128, 1).unwrap();
+        assert_eq!(first.records.len(), 1);
+        assert!(first.has_more);
+        assert!(matches!(first.records[0], HistoryRecord::Checkpoint { .. }));
+        let second = store
+            .page_with_bounds(id, first.next_cursor, 128, 1)
+            .unwrap();
+        assert!(matches!(
+            second.records[0],
+            HistoryRecord::Output { sequence: 7, .. }
+        ));
+        let third = store
+            .page_with_bounds(id, second.next_cursor, 128, 1)
+            .unwrap();
+        assert!(matches!(
+            third.records[0],
+            HistoryRecord::Output { sequence: 8, .. }
+        ));
+        assert!(!third.has_more);
+    }
+
+    #[test]
+    fn evicted_history_cursor_resets_to_a_retained_checkpoint() {
+        let temp = TempDir::new().unwrap();
+        let store = store(&temp);
+        let id = WorkerSessionId::new();
+        start(&store, id);
+        let original = store.page_with_bounds(id, None, 128, 1).unwrap();
+        let stale_cursor = original.next_cursor;
+        for sequence in 1..=20 {
+            append_output(&store, id, sequence, &[b'x'; 80]);
+        }
+
+        let recovered = store.page_with_bounds(id, stale_cursor, 128, 1).unwrap();
+        assert!(recovered.reset);
+        assert!(matches!(
+            recovered.records.first(),
+            Some(HistoryRecord::Checkpoint { .. })
+        ));
+    }
+
+    #[test]
     fn sustained_output_stays_inside_session_and_store_bounds() {
         let temp = TempDir::new().unwrap();
         let store = store(&temp);
@@ -1108,6 +1389,20 @@ mod tests {
         store.finish_session(id).unwrap();
         assert_eq!(store.diagnostics().unwrap().session_count, 0);
         assert!(!store.session_path(id).exists());
+    }
+
+    #[test]
+    fn unknown_files_do_not_create_unbounded_in_memory_session_entries() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("history");
+        fs::create_dir(&root).unwrap();
+        let id = WorkerSessionId::new();
+        let session = root.join(id.to_string());
+        fs::create_dir(&session).unwrap();
+        fs::write(session.join("unknown.file"), b"not terminal history").unwrap();
+
+        let store = HistoryStore::open(&root, limits()).unwrap();
+        assert_eq!(store.diagnostics().unwrap().session_count, 0);
     }
 
     #[test]

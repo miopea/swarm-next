@@ -6,8 +6,9 @@ mod provider;
 mod state;
 
 pub use history::{
-    HistoryAppendOutcome, HistoryDiagnostics, HistoryError, HistoryLimits, HistoryRecord,
-    HistoryStore, default_terminal_history_path,
+    HistoryAppendOutcome, HistoryCursor, HistoryDiagnostics, HistoryError, HistoryLimits,
+    HistoryPage, HistoryRecord, HistorySessionSummary, HistoryStore, MAX_HISTORY_PAGE_BYTES,
+    MAX_HISTORY_PAGE_RECORDS, MAX_HISTORY_RECORD_BYTES, default_terminal_history_path,
 };
 pub use ipc::{
     HostClient, HostRequest, HostResponse, HostSessionSummary, IpcError, MAX_REQUEST_BYTES,
