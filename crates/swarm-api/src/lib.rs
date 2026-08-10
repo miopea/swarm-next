@@ -630,6 +630,7 @@ mod tests {
     use axum::{body::Body, http::Request};
     use futures_util::{SinkExt, StreamExt};
     use serde_json::Value;
+    use swarm_domain::WorkerSessionId;
     use swarm_terminal::{
         HistoryLimits, HistoryStore, JournalLimits, PROTOCOL_VERSION, ProviderCommand,
         SessionRegistry, TerminalSnapshot,
@@ -637,7 +638,7 @@ mod tests {
     use swarm_terminal_host::HostServer;
     use tempfile::TempDir;
     use tokio_tungstenite::{
-        connect_async,
+        MaybeTlsStream, WebSocketStream, connect_async,
         tungstenite::{Message as ClientMessage, client::IntoClientRequest},
     };
     use tower::ServiceExt;
@@ -965,25 +966,8 @@ mod tests {
         let state = AppState::default().with_terminal_host(HostClient::new(&socket), "secret");
         let app = router(state);
 
-        let grant_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!(
-                        "/api/v1/terminal/sessions/{}/attach-grants",
-                        session.id()
-                    ))
-                    .header("authorization", "Bearer secret")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(grant_response.status(), StatusCode::OK);
-        assert_eq!(grant_response.headers()[header::CACHE_CONTROL], "no-store");
-        let grant_json = response_json(grant_response).await;
-        let grant = grant_json["grant"].as_str().unwrap();
+        let grant = issue_terminal_grant(&app, session.id()).await;
+        let second_grant = issue_terminal_grant(&app, session.id()).await;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -992,28 +976,31 @@ mod tests {
             "ws://{address}/api/v1/terminal/sessions/{}/attach",
             session.id()
         );
-        let mut request = websocket_url.clone().into_client_request().unwrap();
-        request.headers_mut().insert(
-            header::SEC_WEBSOCKET_PROTOCOL,
-            format!("{TERMINAL_WEBSOCKET_PROTOCOL}, {TERMINAL_GRANT_PROTOCOL_PREFIX}{grant}")
-                .parse()
-                .unwrap(),
-        );
-        let (mut websocket, response) = connect_async(request).await.unwrap();
-        assert_eq!(
-            response.headers()[header::SEC_WEBSOCKET_PROTOCOL],
-            TERMINAL_WEBSOCKET_PROTOCOL
-        );
+        let mut websocket = connect_terminal(&websocket_url, &grant).await;
+
+        let (initial, initial_dimensions) =
+            terminal_output_until(&mut websocket, "socket-ready").await;
+        assert_eq!(initial_dimensions, Some((24, 80)));
+        assert!(String::from_utf8_lossy(&initial).contains("socket-ready"));
+
+        let mut second_websocket = connect_terminal(&websocket_url, &second_grant).await;
+        let (_, second_initial_dimensions) =
+            terminal_output_until(&mut second_websocket, "socket-ready").await;
+        assert_eq!(second_initial_dimensions, Some((24, 80)));
+
         websocket
             .send(ClientMessage::Text(
-                r#"{"type":"resume","after_sequence":null}"#.into(),
+                r#"{"type":"resize","rows":30,"columns":100}"#.into(),
             ))
             .await
             .unwrap();
+        let (_, first_resized_dimensions) =
+            terminal_output_until(&mut websocket, "socket-ready").await;
+        let (_, second_resized_dimensions) =
+            terminal_output_until(&mut second_websocket, "socket-ready").await;
+        assert_eq!(first_resized_dimensions, Some((30, 100)));
+        assert_eq!(second_resized_dimensions, Some((30, 100)));
 
-        let (initial, saw_snapshot) = terminal_output_until(&mut websocket, "socket-ready").await;
-        assert!(saw_snapshot);
-        assert!(String::from_utf8_lossy(&initial).contains("socket-ready"));
         websocket
             .send(ClientMessage::Text(
                 r#"{"type":"input","text":"hello\n"}"#.into(),
@@ -1043,7 +1030,58 @@ mod tests {
         let _ = host_task.await;
     }
 
-    async fn terminal_output_until<S>(websocket: &mut S, expected: &str) -> (Vec<u8>, bool)
+    async fn issue_terminal_grant(app: &Router, session_id: WorkerSessionId) -> String {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/terminal/sessions/{session_id}/attach-grants"
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        response_json(response).await["grant"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    async fn connect_terminal(
+        websocket_url: &str,
+        grant: &str,
+    ) -> WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>> {
+        let mut request = websocket_url.into_client_request().unwrap();
+        request.headers_mut().insert(
+            header::SEC_WEBSOCKET_PROTOCOL,
+            format!("{TERMINAL_WEBSOCKET_PROTOCOL}, {TERMINAL_GRANT_PROTOCOL_PREFIX}{grant}")
+                .parse()
+                .unwrap(),
+        );
+        let (mut websocket, response) = connect_async(request).await.unwrap();
+        assert_eq!(
+            response.headers()[header::SEC_WEBSOCKET_PROTOCOL],
+            TERMINAL_WEBSOCKET_PROTOCOL
+        );
+        websocket
+            .send(ClientMessage::Text(
+                r#"{"type":"resume","after_sequence":null}"#.into(),
+            ))
+            .await
+            .unwrap();
+        websocket
+    }
+
+    async fn terminal_output_until<S>(
+        websocket: &mut S,
+        expected: &str,
+    ) -> (Vec<u8>, Option<(u16, u16)>)
     where
         S: futures_util::Stream<
                 Item = Result<ClientMessage, tokio_tungstenite::tungstenite::Error>,
@@ -1051,7 +1089,7 @@ mod tests {
     {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         let mut output = Vec::new();
-        let mut saw_snapshot = false;
+        let mut snapshot_dimensions = None;
         loop {
             let message = tokio::time::timeout_at(deadline, websocket.next())
                 .await
@@ -1063,14 +1101,17 @@ mod tests {
                     1 => output.extend_from_slice(&payload[9..]),
                     2 => {
                         assert!(payload.len() >= 14);
-                        saw_snapshot = true;
+                        snapshot_dimensions = Some((
+                            u16::from_be_bytes(payload[9..11].try_into().unwrap()),
+                            u16::from_be_bytes(payload[11..13].try_into().unwrap()),
+                        ));
                         output.clear();
                         output.extend_from_slice(&payload[14..]);
                     }
                     frame_type => panic!("unexpected terminal frame type {frame_type}"),
                 }
                 if String::from_utf8_lossy(&output).contains(expected) {
-                    return (output, saw_snapshot);
+                    return (output, snapshot_dimensions);
                 }
             }
         }
