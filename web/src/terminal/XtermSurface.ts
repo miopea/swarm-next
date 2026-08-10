@@ -20,6 +20,7 @@ export class XtermSurface implements TerminalSurface {
   });
   readonly #fit = new FitAddon();
   #resizeObserver: ResizeObserver | undefined;
+  #disposed = false;
 
   constructor() {
     this.#terminal.loadAddon(this.#fit);
@@ -32,7 +33,13 @@ export class XtermSurface implements TerminalSurface {
     this.#resizeObserver.observe(element);
   }
 
-  size(): { rows: number; columns: number } {
+  async fit(): Promise<{ rows: number; columns: number }> {
+    if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
+    await document.fonts?.ready;
+    await nextAnimationFrame();
+    await nextAnimationFrame();
+    if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
+    this.#fit.fit();
     return { rows: this.#terminal.rows, columns: this.#terminal.cols };
   }
 
@@ -55,7 +62,12 @@ export class XtermSurface implements TerminalSurface {
   }
 
   dispose(): void {
+    this.#disposed = true;
     this.#resizeObserver?.disconnect();
     this.#terminal.dispose();
   }
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }

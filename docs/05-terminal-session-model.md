@@ -43,11 +43,12 @@ Snapshot acquisition and live subscription form one atomic operation. Every
 frame identifies the worker session and sequence. Frames from a stale session
 are rejected even if the durable worker name has been reused.
 
-Attachment begins only after the browser terminal is mounted, opened, fitted,
-and measured. The initial `swarm-terminal.v3` resume message carries those
-stable dimensions. The API commits them to the host before acquiring the first
-snapshot or delta response, making renderer readiness and initial geometry part
-of the same synchronization boundary.
+Attachment begins only after the browser terminal is mounted and opened, font
+metrics are ready, and two layout frames have elapsed before the authoritative
+fit and measurement. The initial `swarm-terminal.v3` resume message carries
+those stable dimensions. The API commits them to the host before acquiring the
+first snapshot or delta response, making renderer readiness and initial
+geometry part of the same synchronization boundary.
 
 ## Rendering rules
 
