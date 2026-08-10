@@ -172,22 +172,28 @@ async fn stream_output(
     mut after_sequence: Option<u64>,
     outbound: mpsc::Sender<Message>,
 ) {
+    let mut first_read = true;
     loop {
-        let (resume, running) =
-            match wait_for_output(&terminal_host, session_id, after_sequence).await {
-                Ok(output) => output,
-                Err((code, message)) => {
-                    let _ = send_control(
-                        &outbound,
-                        &ServerTerminalMessage::Error {
-                            code: &code,
-                            message,
-                        },
-                    )
-                    .await;
-                    return;
-                }
-            };
+        let output = if first_read {
+            first_read = false;
+            read_output(&terminal_host, session_id, after_sequence).await
+        } else {
+            wait_for_output(&terminal_host, session_id, after_sequence).await
+        };
+        let (resume, running) = match output {
+            Ok(output) => output,
+            Err((code, message)) => {
+                let _ = send_control(
+                    &outbound,
+                    &ServerTerminalMessage::Error {
+                        code: &code,
+                        message,
+                    },
+                )
+                .await;
+                return;
+            }
+        };
 
         match resume {
             Resume::Deltas { frames } => {
@@ -224,18 +230,44 @@ async fn stream_output(
     }
 }
 
+async fn read_output(
+    terminal_host: &HostClient,
+    session_id: WorkerSessionId,
+    after_sequence: Option<u64>,
+) -> Result<(Resume, bool), (String, String)> {
+    request_output(
+        terminal_host,
+        session_id,
+        HostRequest::Read {
+            session_id,
+            after_sequence,
+        },
+    )
+    .await
+}
+
 async fn wait_for_output(
     terminal_host: &HostClient,
     session_id: WorkerSessionId,
     after_sequence: Option<u64>,
 ) -> Result<(Resume, bool), (String, String)> {
-    match terminal_host
-        .request(&HostRequest::Wait {
+    request_output(
+        terminal_host,
+        session_id,
+        HostRequest::Wait {
             session_id,
             after_sequence,
-        })
-        .await
-    {
+        },
+    )
+    .await
+}
+
+async fn request_output(
+    terminal_host: &HostClient,
+    session_id: WorkerSessionId,
+    request: HostRequest,
+) -> Result<(Resume, bool), (String, String)> {
+    match terminal_host.request(&request).await {
         Ok(HostResponse::Output {
             session_id: response_session,
             resume,
