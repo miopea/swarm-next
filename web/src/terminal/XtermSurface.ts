@@ -4,6 +4,8 @@ import { Terminal } from "@xterm/xterm";
 import type { TerminalSnapshot } from "./TerminalConnection";
 import type { Disposable, TerminalSurface } from "./TerminalController";
 
+const MAX_FIT_FRAMES = 60;
+
 export class XtermSurface implements TerminalSurface {
   readonly #terminal = new Terminal({
     cursorBlink: true,
@@ -36,11 +38,15 @@ export class XtermSurface implements TerminalSurface {
   async fit(): Promise<{ rows: number; columns: number }> {
     if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
     await document.fonts?.ready;
-    await nextAnimationFrame();
-    await nextAnimationFrame();
-    if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
-    this.#fit.fit();
-    return { rows: this.#terminal.rows, columns: this.#terminal.cols };
+    for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {
+      await nextAnimationFrame();
+      if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
+      const dimensions = this.#fit.proposeDimensions();
+      if (!dimensions || dimensions.rows <= 0 || dimensions.cols <= 0) continue;
+      this.#terminal.resize(dimensions.cols, dimensions.rows);
+      return { rows: dimensions.rows, columns: dimensions.cols };
+    }
+    throw new Error("Terminal renderer metrics were not ready within the bounded fit window");
   }
 
   write(bytes: Uint8Array): Promise<void> {

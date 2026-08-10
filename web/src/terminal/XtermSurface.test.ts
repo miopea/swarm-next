@@ -2,6 +2,7 @@ import { expect, test, vi } from "vitest";
 
 const xterm = vi.hoisted(() => ({
   fit: vi.fn(),
+  propose: vi.fn<() => { rows: number; cols: number } | undefined>(),
   terminal: undefined as { rows: number; cols: number } | undefined,
 }));
 
@@ -9,10 +10,15 @@ vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
     fit(): void {
       xterm.fit();
-      if (xterm.terminal) {
-        xterm.terminal.rows = 38;
-        xterm.terminal.cols = 132;
+      const dimensions = xterm.propose();
+      if (xterm.terminal && dimensions) {
+        xterm.terminal.rows = dimensions.rows;
+        xterm.terminal.cols = dimensions.cols;
       }
+    }
+
+    proposeDimensions(): { rows: number; cols: number } | undefined {
+      return xterm.propose();
     }
   },
 }));
@@ -48,7 +54,7 @@ vi.mock("@xterm/xterm", () => ({
 
 import { XtermSurface } from "./XtermSurface";
 
-test("authoritative fit waits for two post-mount layout frames", async () => {
+test("authoritative fit waits until xterm can propose real dimensions", async () => {
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     frames.push(callback);
@@ -61,6 +67,11 @@ test("authoritative fit waits for two post-mount layout frames", async () => {
       disconnect(): void {}
     },
   );
+  xterm.propose
+    .mockReset()
+    .mockReturnValueOnce(undefined)
+    .mockReturnValueOnce(undefined)
+    .mockReturnValue({ rows: 38, cols: 132 });
   const surface = new XtermSurface();
   surface.open(document.createElement("div"));
   xterm.fit.mockClear();
@@ -75,5 +86,5 @@ test("authoritative fit waits for two post-mount layout frames", async () => {
 
   frames.shift()?.(16);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
-  expect(xterm.fit).toHaveBeenCalledTimes(1);
+  expect(xterm.terminal).toMatchObject({ rows: 38, cols: 132 });
 });
