@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -32,6 +33,20 @@ impl WorkerSessionId {
 impl Default for WorkerSessionId {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl fmt::Display for WorkerSessionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for WorkerSessionId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
     }
 }
 

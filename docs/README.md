@@ -13,6 +13,7 @@ Read and review these documents in order:
 9. [Quality and acceptance](08-quality-and-acceptance.md)
 10. [Open product questions](09-open-questions.md)
 11. [M0 evidence review](10-m0-evidence-review.md)
+12. [M1 terminal-host foundation](11-terminal-host-foundation.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do
@@ -34,3 +35,4 @@ Current decision records:
 - [ADR 0002: Proposed technology direction](decisions/0002-proposed-technology-direction.md)
 - [ADR 0003: Provider-owned terminal permissions](decisions/0003-provider-owned-permissions.md)
 - [ADR 0004: Replaceable browser presentation adapter](decisions/0004-replaceable-browser-adapter.md)
+- [ADR 0005: Independent terminal-host process](decisions/0005-independent-terminal-host.md)
