@@ -67,6 +67,7 @@ export class TerminalConnection {
   #fatal = false;
   #recovering = false;
   #connectionConfirmed = false;
+  #rendererConfirmed = false;
   #size: { rows: number; columns: number } | undefined;
 
   constructor(options: TerminalConnectionOptions) {
@@ -134,6 +135,7 @@ export class TerminalConnection {
       ]);
       socket.binaryType = "arraybuffer";
       this.#connectionConfirmed = false;
+      this.#rendererConfirmed = false;
       this.#recovering = false;
       this.#socket = socket;
       socket.addEventListener("open", () => this.#handleOpen(socket));
@@ -160,7 +162,6 @@ export class TerminalConnection {
         columns: size.columns,
       }),
     );
-    this.#handlers?.onState("connected");
   }
 
   #handleMessage(socket: WebSocket, event: MessageEvent): void {
@@ -182,6 +183,7 @@ export class TerminalConnection {
     }
     if (message.type === "state" && typeof message.running === "boolean") {
       this.#confirmConnection();
+      if (this.#hasCanonicalState) this.#confirmRenderedConnection();
       this.#handlers?.onRunningChange(message.running);
     } else if (message.type === "error") {
       this.#handlers?.onState("error", message.message ?? message.code ?? "terminal protocol error");
@@ -243,12 +245,12 @@ export class TerminalConnection {
       });
       this.#sequence = sequence;
       this.#hasCanonicalState = true;
-      this.#confirmConnection();
       if (truncated) {
-        this.#handlers?.onState(
-          "connected",
+        this.#confirmRenderedConnection(
           "Terminal view was reset after exceeding its canonical memory bound",
         );
+      } else {
+        this.#confirmRenderedConnection();
       }
       return;
     }
@@ -269,7 +271,7 @@ export class TerminalConnection {
     }
     await this.#handlers?.onOutput(frame.slice(9));
     this.#sequence = sequence;
-    this.#confirmConnection();
+    this.#confirmRenderedConnection();
   }
 
   #handleClose(socket: WebSocket): void {
@@ -324,5 +326,12 @@ export class TerminalConnection {
     if (this.#connectionConfirmed) return;
     this.#connectionConfirmed = true;
     this.#retryAttempt = 0;
+  }
+
+  #confirmRenderedConnection(detail?: string): void {
+    this.#confirmConnection();
+    if (this.#rendererConfirmed && detail === undefined) return;
+    this.#rendererConfirmed = true;
+    this.#handlers?.onState("connected", detail);
   }
 }
