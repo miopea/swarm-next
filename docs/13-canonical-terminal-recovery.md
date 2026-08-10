@@ -26,7 +26,10 @@ cursor, including zero, means a prior snapshot or delta has finished rendering.
 This distinction prevents an empty sequence-zero snapshot from being emitted in
 a loop while a quiet worker waits for output.
 
-The `swarm-terminal.v2` binary frames are:
+The `swarm-terminal.v3` resume handshake includes the last applied sequence and
+the mounted renderer's stable, non-zero rows and columns. Before selecting a
+replay response, the API synchronously commits those dimensions to the terminal
+host. Its binary frames remain:
 
 - delta: type byte `1`, big-endian `u64` sequence, raw PTY bytes;
 - snapshot: type byte `2`, big-endian `u64` sequence, big-endian `u16` rows,
@@ -57,6 +60,8 @@ it never kills or replaces the provider process.
 - Styled cells, cursor state, dimensions, and alternate-screen mode recover.
 - A committed resize wakes every attachment at a sequenced snapshot boundary;
   no client applies later output using stale dimensions.
+- Renderer mounting, fitting, initial resize acknowledgement, and first replay
+  occur in that order, including after a full browser reload.
 - Resume cursor advances only after the renderer's completion callback.
 - A renderer backlog crosses a hard bound and requests a fresh snapshot.
 - Pathological parser content compacts, and oversize fallback is visible.

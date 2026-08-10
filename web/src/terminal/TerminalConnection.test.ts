@@ -71,7 +71,7 @@ function harness(retryDelaysMs: readonly number[] = [1]) {
     ok: true,
     json: async () => ({
       grant: `grant-${sockets.length}`,
-      protocol: "swarm-terminal.v2",
+      protocol: "swarm-terminal.v3",
       websocket_path: "/api/v1/terminal/sessions/session-1/attach",
       expires_in_ms: 30_000,
     }),
@@ -89,13 +89,14 @@ function harness(retryDelaysMs: readonly number[] = [1]) {
     locationOrigin: "http://127.0.0.1:5173",
     retryDelaysMs,
     websocketFactory: (_url, protocols) => {
-      expect(protocols[0]).toBe("swarm-terminal.v2");
+      expect(protocols[0]).toBe("swarm-terminal.v3");
       expect(protocols[1]).toMatch(/^swarm-grant\./);
       const socket = new FakeWebSocket();
       sockets.push(socket);
       return socket as unknown as WebSocket;
     },
   });
+  connection.resize(24, 80);
   return { connection, fetch, handlers, sockets };
 }
 
@@ -112,7 +113,12 @@ test("requests a no-store grant and applies a snapshot before sequenced deltas",
     expect.objectContaining({ method: "POST", cache: "no-store" }),
   );
   sockets[0].open();
-  expect(JSON.parse(sockets[0].sent[0])).toEqual({ type: "resume", after_sequence: null });
+  expect(JSON.parse(sockets[0].sent[0])).toEqual({
+    type: "resume",
+    after_sequence: null,
+    rows: 24,
+    columns: 80,
+  });
   sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
   sockets[0].message(outputFrame(1n, "one"));
   sockets[0].message(outputFrame(1n, "duplicate"));
@@ -139,7 +145,12 @@ test("detects sequence gaps and reconnects from a fresh snapshot", async () => {
   await vi.advanceTimersByTimeAsync(0);
   expect(sockets).toHaveLength(2);
   sockets[1].open();
-  expect(JSON.parse(sockets[1].sent[0])).toEqual({ type: "resume", after_sequence: null });
+  expect(JSON.parse(sockets[1].sent[0])).toEqual({
+    type: "resume",
+    after_sequence: null,
+    rows: 24,
+    columns: 80,
+  });
   expect(handlers.onState).toHaveBeenCalledWith(
     "disconnected",
     expect.stringContaining("requesting a fresh snapshot"),
@@ -162,7 +173,12 @@ test("unexpected disconnect obtains a fresh grant and resumes without duplicatin
   expect(fetch).toHaveBeenCalledTimes(2);
   expect(sockets).toHaveLength(2);
   sockets[1].open();
-  expect(JSON.parse(sockets[1].sent[0])).toEqual({ type: "resume", after_sequence: 1 });
+  expect(JSON.parse(sockets[1].sent[0])).toEqual({
+    type: "resume",
+    after_sequence: 1,
+    rows: 24,
+    columns: 80,
+  });
   sockets[1].message(outputFrame(2n, "two"));
   await vi.waitFor(() => expect(connection.sequence).toBe(2));
   expect(handlers.onOutput).toHaveBeenCalledTimes(2);

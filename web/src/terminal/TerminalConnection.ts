@@ -67,6 +67,7 @@ export class TerminalConnection {
   #fatal = false;
   #recovering = false;
   #connectionConfirmed = false;
+  #size: { rows: number; columns: number } | undefined;
 
   constructor(options: TerminalConnectionOptions) {
     this.#sessionId = options.sessionId;
@@ -80,6 +81,7 @@ export class TerminalConnection {
   start(handlers: TerminalConnectionHandlers): void {
     if (this.#disposed) throw new Error("Cannot start a disposed terminal connection");
     if (this.#started) return;
+    if (!this.#size) throw new Error("Cannot start a terminal connection before measuring its renderer");
     this.#started = true;
     this.#handlers = handlers;
     void this.#connect();
@@ -91,6 +93,7 @@ export class TerminalConnection {
 
   resize(rows: number, columns: number): void {
     if (rows <= 0 || columns <= 0) return;
+    this.#size = { rows, columns };
     this.#send({ type: "resize", rows, columns });
   }
 
@@ -144,10 +147,17 @@ export class TerminalConnection {
 
   #handleOpen(socket: WebSocket): void {
     if (socket !== this.#socket || this.#disposed) return;
+    const size = this.#size;
+    if (!size) {
+      this.#fail("terminal renderer size was unavailable during attachment");
+      return;
+    }
     socket.send(
       JSON.stringify({
         type: "resume",
         after_sequence: this.#hasCanonicalState ? this.#sequence : null,
+        rows: size.rows,
+        columns: size.columns,
       }),
     );
     this.#handlers?.onState("connected");

@@ -32,6 +32,10 @@ export class XtermSurface implements TerminalSurface {
     this.#resizeObserver.observe(element);
   }
 
+  size(): { rows: number; columns: number } {
+    return { rows: this.#terminal.rows, columns: this.#terminal.cols };
+  }
+
   write(bytes: Uint8Array): Promise<void> {
     return new Promise((resolve) => this.#terminal.write(bytes, resolve));
   }

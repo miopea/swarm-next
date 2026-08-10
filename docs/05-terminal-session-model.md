@@ -43,10 +43,18 @@ Snapshot acquisition and live subscription form one atomic operation. Every
 frame identifies the worker session and sequence. Frames from a stale session
 are rejected even if the durable worker name has been reused.
 
+Attachment begins only after the browser terminal is mounted, opened, fitted,
+and measured. The initial `swarm-terminal.v3` resume message carries those
+stable dimensions. The API commits them to the host before acquiring the first
+snapshot or delta response, making renderer readiness and initial geometry part
+of the same synchronization boundary.
+
 ## Rendering rules
 
 - Switching visible workers never reconnects or resets a session.
 - React component remounts do not own WebSocket or xterm lifetime.
+- WebSocket startup never precedes mounting, opening, fitting, and measuring
+  the renderer.
 - Hidden terminals never commit zero or intermediate dimensions.
 - A resize is sent only after a stable non-zero ResizeObserver measurement.
 - A changed resize advances the canonical sequence, invalidates byte-only

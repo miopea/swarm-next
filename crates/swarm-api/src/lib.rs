@@ -976,21 +976,21 @@ mod tests {
             "ws://{address}/api/v1/terminal/sessions/{}/attach",
             session.id()
         );
-        let mut websocket = connect_terminal(&websocket_url, &grant).await;
+        let mut websocket = connect_terminal(&websocket_url, &grant, 30, 100).await;
 
         let (initial, initial_dimensions) =
             terminal_output_until(&mut websocket, "socket-ready").await;
-        assert_eq!(initial_dimensions, Some((24, 80)));
+        assert_eq!(initial_dimensions, Some((30, 100)));
         assert!(String::from_utf8_lossy(&initial).contains("socket-ready"));
 
-        let mut second_websocket = connect_terminal(&websocket_url, &second_grant).await;
+        let mut second_websocket = connect_terminal(&websocket_url, &second_grant, 30, 100).await;
         let (_, second_initial_dimensions) =
             terminal_output_until(&mut second_websocket, "socket-ready").await;
-        assert_eq!(second_initial_dimensions, Some((24, 80)));
+        assert_eq!(second_initial_dimensions, Some((30, 100)));
 
         websocket
             .send(ClientMessage::Text(
-                r#"{"type":"resize","rows":30,"columns":100}"#.into(),
+                r#"{"type":"resize","rows":35,"columns":110}"#.into(),
             ))
             .await
             .unwrap();
@@ -998,8 +998,8 @@ mod tests {
             terminal_output_until(&mut websocket, "socket-ready").await;
         let (_, second_resized_dimensions) =
             terminal_output_until(&mut second_websocket, "socket-ready").await;
-        assert_eq!(first_resized_dimensions, Some((30, 100)));
-        assert_eq!(second_resized_dimensions, Some((30, 100)));
+        assert_eq!(first_resized_dimensions, Some((35, 110)));
+        assert_eq!(second_resized_dimensions, Some((35, 110)));
 
         websocket
             .send(ClientMessage::Text(
@@ -1056,6 +1056,8 @@ mod tests {
     async fn connect_terminal(
         websocket_url: &str,
         grant: &str,
+        rows: u16,
+        columns: u16,
     ) -> WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>> {
         let mut request = websocket_url.into_client_request().unwrap();
         request.headers_mut().insert(
@@ -1071,7 +1073,10 @@ mod tests {
         );
         websocket
             .send(ClientMessage::Text(
-                r#"{"type":"resume","after_sequence":null}"#.into(),
+                format!(
+                    r#"{{"type":"resume","after_sequence":null,"rows":{rows},"columns":{columns}}}"#
+                )
+                .into(),
             ))
             .await
             .unwrap();
