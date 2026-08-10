@@ -46,12 +46,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = HostServer::bind(socket_path, registry)?;
     tokio::select! {
         result = server.run() => result?,
-        result = tokio::signal::ctrl_c() => {
+        result = shutdown_signal() => {
             result?;
             info!("terminal host received graceful shutdown signal");
         }
     }
     Ok(())
+}
+
+#[cfg(unix)]
+async fn shutdown_signal() -> std::io::Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut terminate = signal(SignalKind::terminate())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() -> std::io::Result<()> {
+    tokio::signal::ctrl_c().await
 }
 
 fn history_limits_from_env() -> Result<HistoryLimits, Box<dyn std::error::Error>> {

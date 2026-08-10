@@ -1,0 +1,233 @@
+#!/bin/sh
+set -eu
+
+action=${1:-}
+bundle=${2:-}
+home_dir=${HOME:?HOME is required}
+install_root=${SWARM_INSTALL_ROOT:-"$home_dir/.local/lib/swarm-next"}
+config_root=${SWARM_CONFIG_ROOT:-"$home_dir/.config/swarm-next"}
+state_root=${SWARM_STATE_ROOT:-"$home_dir/.local/state/swarm-next"}
+unit_root=${SWARM_SYSTEMD_USER_ROOT:-"$home_dir/.config/systemd/user"}
+bin_root=${SWARM_BIN_ROOT:-"$home_dir/.local/bin"}
+systemctl_bin=${SWARM_SYSTEMCTL_BIN:-systemctl}
+curl_bin=${SWARM_CURL_BIN:-curl}
+health_url=${SWARM_HEALTH_URL:-http://127.0.0.1:8766/health}
+health_attempts=${SWARM_HEALTH_ATTEMPTS:-30}
+drain_timeout=${SWARM_DRAIN_TIMEOUT_SECONDS:-300}
+workspace_root=${SWARM_WORKSPACE_ROOT:-}
+[ -n "$workspace_root" ] || workspace_root=$(sed -n 's/^SWARM_WORKSPACE_ROOTS=//p' "$config_root/swarm-next.env" 2>/dev/null || true)
+[ -n "$workspace_root" ] || workspace_root="$home_dir/swarm-workspaces"
+drain_release=
+rollback_release=
+
+die() { printf 'swarm-next-package: %s\n' "$*" >&2; exit 1; }
+run_systemctl() { "$systemctl_bin" --user "$@"; }
+
+on_exit() {
+  result=$?
+  trap - EXIT
+  if [ -n "$drain_release" ]; then
+    SWARM_TERMINAL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/swarm-next/terminal.sock" \
+      "$drain_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
+  fi
+  if [ -n "$rollback_release" ] && [ -d "$rollback_release" ]; then
+    run_systemctl stop swarm-next.target >/dev/null 2>&1 || true
+    activate_link "$rollback_release" >/dev/null 2>&1 || true
+    install_units "$rollback_release" >/dev/null 2>&1 || true
+    run_systemctl start swarm-next.target >/dev/null 2>&1 || true
+  fi
+  exit "$result"
+}
+trap on_exit EXIT
+
+validate_roots() {
+  for managed_root in "$install_root" "$config_root" "$state_root" "$unit_root" "$bin_root"; do
+    case "$managed_root" in "$home_dir"/*) :;; *) die "managed paths must remain below HOME";; esac
+    case "$managed_root" in *[!A-Za-z0-9_./-]*) die "managed paths contain unsupported characters";; esac
+  done
+  case "$install_root" in */swarm-next) :;; *) die "install root must end in /swarm-next";; esac
+  case "$config_root" in */swarm-next) :;; *) die "config root must end in /swarm-next";; esac
+  case "$state_root" in */swarm-next) :;; *) die "state root must end in /swarm-next";; esac
+  case "$workspace_root" in /*) :;; *) die "workspace root must be absolute";; esac
+  case "$workspace_root" in *[!A-Za-z0-9_./-]*) die "workspace root contains unsupported characters";; esac
+  case "$drain_timeout" in *[!0-9]*|"") die "drain timeout must be an integer";; esac
+  [ "$drain_timeout" -ge 1 ] && [ "$drain_timeout" -le 86400 ] || die "drain timeout must be from 1 through 86400 seconds"
+  case "$health_attempts" in *[!0-9]*|"") die "health attempts must be an integer";; esac
+  [ "$health_attempts" -ge 1 ] && [ "$health_attempts" -le 300 ] || die "health attempts must be from 1 through 300"
+}
+
+validate_bundle() {
+  [ -d "$bundle" ] || die "release directory is required"
+  version=$(cat "$bundle/VERSION")
+  protocol=$(cat "$bundle/PROTOCOL")
+  case "$version" in *[!0-9A-Za-z._-]*|"") die "invalid release version";; esac
+  case "$protocol" in *[!0-9]*|"") die "invalid protocol version";; esac
+  [ -x "$bundle/bin/swarm-api" ] || die "swarm-api is missing or not executable"
+  [ -x "$bundle/bin/swarm-terminal-host" ] || die "terminal host is missing or not executable"
+  [ -x "$bundle/bin/swarmctl" ] || die "swarmctl is missing or not executable"
+  [ -f "$bundle/web/index.html" ] || die "compiled web index is missing"
+  (cd "$bundle" && sha256sum -c SHA256SUMS >/dev/null) || die "release checksum verification failed"
+}
+
+validate_config() {
+  config_file="$config_root/swarm-next.env"
+  [ -f "$config_file" ] || die "configuration file is missing"
+  [ "$(sed -n 's/^SWARM_API_BIND=//p' "$config_file")" = "127.0.0.1:8766" ] || die "packaged API bind must remain 127.0.0.1:8766"
+  [ "$(sed -n 's/^SWARM_WORKSPACE_ROOTS=//p' "$config_file")" = "$workspace_root" ] || die "configured workspace root differs from the service write boundary"
+  token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_file")
+  [ "${#token}" -ge 32 ] || die "operator token must contain at least 32 characters"
+  chmod 0600 "$config_file"
+}
+
+render_unit() {
+  source_file=$1
+  destination=$2
+  sed \
+    -e "s|@INSTALL_ROOT@|$install_root|g" \
+    -e "s|@CONFIG_ROOT@|$config_root|g" \
+    -e "s|@STATE_ROOT@|$state_root|g" \
+    -e "s|@WORKSPACE_ROOT@|$workspace_root|g" \
+    "$source_file" > "$destination.tmp"
+  mv -f "$destination.tmp" "$destination"
+}
+
+write_initial_config() {
+  config_file="$config_root/swarm-next.env"
+  [ -e "$config_file" ] && return
+  token=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+  umask 077
+  {
+    printf 'SWARM_API_BIND=127.0.0.1:8766\n'
+    printf 'SWARM_OPERATOR_TOKEN=%s\n' "$token"
+    printf 'SWARM_WORKSPACE_ROOTS=%s\n' "$workspace_root"
+  } > "$config_file"
+}
+
+install_release() {
+  release="$install_root/releases/$version"
+  if [ ! -d "$release" ]; then
+    staging="$install_root/releases/.staging-$version-$$"
+    mkdir -p "$staging"
+    cp -R "$bundle/." "$staging/"
+    chmod 0755 "$staging/bin/"*
+    mv "$staging" "$release"
+  fi
+  (cd "$release" && sha256sum -c SHA256SUMS >/dev/null) || die "installed release checksum verification failed"
+  printf '%s\n' "$release"
+}
+
+activate_link() {
+  release=$1
+  ln -sfn "$release" "$install_root/current.next"
+  mv -Tf "$install_root/current.next" "$install_root/current"
+  ln -sfn "$install_root/current/bin/swarmctl" "$bin_root/swarmctl"
+}
+
+install_units() {
+  unit_release=$1
+  for name in swarm-next-terminal-host.service swarm-next-api.service swarm-next.target; do
+    render_unit "$unit_release/systemd-user/$name.in" "$unit_root/$name"
+  done
+  run_systemctl daemon-reload
+}
+
+wait_for_health() {
+  attempts=0
+  while [ "$attempts" -lt "$health_attempts" ]; do
+    if "$curl_bin" --fail --silent --show-error --max-time 2 "$health_url" >/dev/null; then
+      return 0
+    fi
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+  return 1
+}
+
+install_or_update() {
+  validate_bundle
+  mkdir -p "$install_root/releases" "$config_root" "$state_root/terminal-history" "$state_root/providers/claude" "$unit_root" "$bin_root" "$workspace_root"
+  chmod 0700 "$config_root" "$state_root"
+  write_initial_config
+  validate_config
+  new_release=$(install_release)
+  old_release=
+  [ ! -L "$install_root/current" ] || old_release=$(readlink "$install_root/current")
+  [ "$old_release" != "$new_release" ] || { install_units "$new_release"; run_systemctl enable --now swarm-next.target; wait_for_health || die "installed service is unhealthy"; return; }
+
+  if [ -n "$old_release" ]; then
+    old_protocol=$(cat "$old_release/PROTOCOL")
+    [ "$old_protocol" = "$protocol" ] || die "protocol change requires a future compatibility migration"
+    SWARM_TERMINAL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/swarm-next/terminal.sock" \
+      "$old_release/bin/swarmctl" drain >/dev/null
+    drain_release=$old_release
+    if ! SWARM_TERMINAL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/swarm-next/terminal.sock" \
+      "$old_release/bin/swarmctl" wait-ready "$drain_timeout" >/dev/null; then
+      SWARM_TERMINAL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/swarm-next/terminal.sock" \
+        "$old_release/bin/swarmctl" cancel-drain >/dev/null || true
+      drain_release=
+      die "update staged but active workers did not drain; running release was not changed"
+    fi
+    ln -sfn "$old_release" "$install_root/previous"
+    run_systemctl stop swarm-next.target
+    drain_release=
+    rollback_release=$old_release
+  fi
+
+  activate_link "$new_release"
+  install_units "$new_release"
+  if run_systemctl enable --now swarm-next.target && wait_for_health; then
+    rollback_release=
+    printf 'Swarm Next %s is healthy at %s\n' "$version" "$health_url"
+    return
+  fi
+
+  if [ -n "$old_release" ]; then
+    run_systemctl stop swarm-next.target || true
+    activate_link "$old_release"
+    install_units "$old_release"
+    run_systemctl start swarm-next.target
+    wait_for_health || die "new release failed and rollback is also unhealthy"
+    rollback_release=
+    die "new release failed health verification; previous release restored"
+  fi
+  run_systemctl stop swarm-next.target || true
+  die "initial installation failed health verification"
+}
+
+rollback() {
+  [ -L "$install_root/previous" ] || die "no previous release is retained"
+  previous=$(readlink "$install_root/previous")
+  current=$(readlink "$install_root/current")
+  [ -d "$previous" ] || die "retained previous release is missing"
+  SWARM_TERMINAL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/swarm-next/terminal.sock" \
+    "$current/bin/swarmctl" drain >/dev/null
+  drain_release=$current
+  SWARM_TERMINAL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/swarm-next/terminal.sock" \
+    "$current/bin/swarmctl" wait-ready "$drain_timeout" >/dev/null || die "rollback is waiting on active workers"
+  run_systemctl stop swarm-next.target
+  drain_release=
+  rollback_release=$current
+  activate_link "$previous"
+  ln -sfn "$current" "$install_root/previous"
+  install_units "$previous"
+  run_systemctl start swarm-next.target
+  wait_for_health || die "rollback release failed health verification"
+  rollback_release=
+}
+
+uninstall_product() {
+  run_systemctl disable --now swarm-next.target 2>/dev/null || true
+  rm -f "$unit_root/swarm-next-terminal-host.service" "$unit_root/swarm-next-api.service" "$unit_root/swarm-next.target"
+  run_systemctl daemon-reload
+  [ ! -L "$bin_root/swarmctl" ] || rm -f "$bin_root/swarmctl"
+  rm -rf "$install_root"
+  printf 'Application removed. Configuration and state were preserved in %s and %s.\n' "$config_root" "$state_root"
+}
+
+validate_roots
+case "$action" in
+  install|update) install_or_update;;
+  rollback) rollback;;
+  uninstall) uninstall_product;;
+  *) die "usage: swarm-next-package <install|update> RELEASE_DIR | rollback | uninstall";;
+esac

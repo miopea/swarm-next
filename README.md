@@ -80,3 +80,34 @@ cargo run -p swarm-cli --bin swarmctl -- drain
 cargo run -p swarm-cli --bin swarmctl -- wait-ready 300
 cargo run -p swarm-cli --bin swarmctl -- cancel-drain
 ```
+
+## Ubuntu/Debian dogfood package
+
+Build the release on Linux, extract it on the target host, and install it as
+unprivileged systemd user services:
+
+```sh
+./packaging/linux/build-release.sh
+tar -xzf dist/swarm-next-0.1.0-linux-x86_64.tar.gz
+./packaging/linux/swarm-next-package install ./swarm-next-0.1.0-linux-x86_64
+```
+
+The packaged UI listens on `http://127.0.0.1:8766`. Releases are staged under
+`~/.local/lib/swarm-next`, configuration is written once under
+`~/.config/swarm-next`, and durable terminal history remains under
+`~/.local/state/swarm-next`. The writable workspace defaults to
+`~/swarm-workspaces`; set `SWARM_WORKSPACE_ROOT` during the first install to
+choose a different absolute path. Use `update RELEASE_DIR`, `rollback`, or
+`uninstall`. Uninstall preserves configuration and state.
+
+Claude runs with an isolated profile at
+`~/.local/state/swarm-next/providers/claude`, keeping the host-wide profile
+read-only. Authenticate that profile once before dogfooding:
+
+```sh
+CLAUDE_CONFIG_DIR="$HOME/.local/state/swarm-next/providers/claude" claude
+```
+
+The user service runs while the user manager is active. A remote host that must
+keep running after logout may require an administrator to enable user lingering;
+the installer does not elevate privileges or change that host policy.
