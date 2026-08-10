@@ -10,6 +10,7 @@ export interface Disposable {
 
 export interface TerminalSurface {
   open(element: HTMLElement): void;
+  size(): { rows: number; columns: number };
   write(bytes: Uint8Array): Promise<void>;
   restore(snapshot: TerminalSnapshot): Promise<void>;
   onData(listener: (text: string) => void): Disposable;
@@ -50,23 +51,25 @@ export class TerminalController {
       this.#surface.onData((text) => this.#connection.sendInput(text)),
       this.#surface.onResize(({ rows, columns }) => this.#connection.resize(rows, columns)),
     ];
-    this.#connection.start({
-      onOutput: (bytes) => this.#surface.write(bytes),
-      onSnapshot: (snapshot) => this.#surface.restore(snapshot),
-      onState: (state, detail) => this.#setState(state, detail),
-      onRunningChange: (running) => {
-        if (!running) this.#setState("closed", "worker process exited");
-      },
-    });
   }
 
   attach(container: HTMLElement): void {
     if (this.#disposed) throw new Error("Cannot attach a disposed terminal");
+    container.replaceChildren(this.#host);
     if (!this.#opened) {
       this.#surface.open(this.#host);
       this.#opened = true;
+      const { rows, columns } = this.#surface.size();
+      this.#connection.resize(rows, columns);
+      this.#connection.start({
+        onOutput: (bytes) => this.#surface.write(bytes),
+        onSnapshot: (snapshot) => this.#surface.restore(snapshot),
+        onState: (state, detail) => this.#setState(state, detail),
+        onRunningChange: (running) => {
+          if (!running) this.#setState("closed", "worker process exited");
+        },
+      });
     }
-    container.replaceChildren(this.#host);
   }
 
   detach(): void {

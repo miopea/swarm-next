@@ -1,12 +1,12 @@
 use futures_util::{SinkExt, StreamExt, stream::SplitStream};
 use serde::{Deserialize, Serialize};
 use swarm_domain::WorkerSessionId;
-use swarm_terminal::{HostClient, HostRequest, HostResponse, Resume};
+use swarm_terminal::{HostClient, HostRequest, HostResponse, Resume, TerminalSize};
 use tokio::sync::mpsc;
 
 use axum::extract::ws::{Message, WebSocket};
 
-pub const TERMINAL_WEBSOCKET_PROTOCOL: &str = "swarm-terminal.v2";
+pub const TERMINAL_WEBSOCKET_PROTOCOL: &str = "swarm-terminal.v3";
 pub const TERMINAL_GRANT_PROTOCOL_PREFIX: &str = "swarm-grant.";
 pub const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 * 1024;
 const OUTBOUND_MESSAGE_CAPACITY: usize = 64;
@@ -16,9 +16,18 @@ const SNAPSHOT_FRAME_TYPE: u8 = 2;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientTerminalMessage {
-    Resume { after_sequence: Option<u64> },
-    Input { text: String },
-    Resize { rows: u16, columns: u16 },
+    Resume {
+        after_sequence: Option<u64>,
+        rows: u16,
+        columns: u16,
+    },
+    Input {
+        text: String,
+    },
+    Resize {
+        rows: u16,
+        columns: u16,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -33,45 +42,10 @@ pub async fn serve_terminal_socket(
     terminal_host: HostClient,
     session_id: WorkerSessionId,
 ) {
-    let initial = tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv()).await;
-    let after_sequence = match initial {
-        Ok(Some(Ok(Message::Text(text)))) => {
-            match serde_json::from_str::<ClientTerminalMessage>(&text) {
-                Ok(ClientTerminalMessage::Resume { after_sequence }) => after_sequence,
-                Ok(_) => {
-                    send_direct_error(
-                        &mut socket,
-                        "resume_required",
-                        "the first terminal message must establish a replay cursor",
-                    )
-                    .await;
-                    return;
-                }
-                Err(error) => {
-                    send_direct_error(&mut socket, "invalid_message", &error.to_string()).await;
-                    return;
-                }
-            }
-        }
-        Ok(Some(Ok(_))) => {
-            send_direct_error(
-                &mut socket,
-                "resume_required",
-                "the first terminal message must be a text replay request",
-            )
-            .await;
-            return;
-        }
-        Ok(Some(Err(_)) | None) => return,
-        Err(_) => {
-            send_direct_error(
-                &mut socket,
-                "resume_timeout",
-                "the replay cursor was not provided within the bounded handshake",
-            )
-            .await;
-            return;
-        }
+    let Some(after_sequence) =
+        complete_initial_handshake(&mut socket, &terminal_host, session_id).await
+    else {
+        return;
     };
 
     let (mut socket_sender, socket_receiver) = socket.split();
@@ -111,6 +85,85 @@ pub async fn serve_terminal_socket(
     }
     drop(outbound_sender);
     let _ = writer.await;
+}
+
+async fn complete_initial_handshake(
+    socket: &mut WebSocket,
+    terminal_host: &HostClient,
+    session_id: WorkerSessionId,
+) -> Option<Option<u64>> {
+    let initial = tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv()).await;
+    let (after_sequence, initial_size) = match initial {
+        Ok(Some(Ok(Message::Text(text)))) => {
+            match serde_json::from_str::<ClientTerminalMessage>(&text) {
+                Ok(ClientTerminalMessage::Resume {
+                    after_sequence,
+                    rows,
+                    columns,
+                }) if rows > 0 && columns > 0 => (after_sequence, TerminalSize::new(rows, columns)),
+                Ok(_) => {
+                    send_direct_error(
+                        socket,
+                        "resume_required",
+                        "the first terminal message must establish a replay cursor and non-zero renderer size",
+                    )
+                    .await;
+                    return None;
+                }
+                Err(error) => {
+                    send_direct_error(socket, "invalid_message", &error.to_string()).await;
+                    return None;
+                }
+            }
+        }
+        Ok(Some(Ok(_))) => {
+            send_direct_error(
+                socket,
+                "resume_required",
+                "the first terminal message must be a text replay request",
+            )
+            .await;
+            return None;
+        }
+        Ok(Some(Err(_)) | None) => return None,
+        Err(_) => {
+            send_direct_error(
+                socket,
+                "resume_timeout",
+                "the replay cursor was not provided within the bounded handshake",
+            )
+            .await;
+            return None;
+        }
+    };
+
+    match terminal_host
+        .request(&HostRequest::Resize {
+            session_id,
+            size: initial_size,
+        })
+        .await
+    {
+        Ok(HostResponse::Acknowledged) => {}
+        Ok(HostResponse::Error { code, message }) => {
+            send_direct_error(socket, &code, &message).await;
+            return None;
+        }
+        Ok(_) => {
+            send_direct_error(
+                socket,
+                "unexpected_host_response",
+                "terminal host did not acknowledge the initial renderer size",
+            )
+            .await;
+            return None;
+        }
+        Err(error) => {
+            send_direct_error(socket, "terminal_host_unavailable", &error.to_string()).await;
+            return None;
+        }
+    }
+    Some(after_sequence)
 }
 
 async fn stream_output(
@@ -353,7 +406,7 @@ async fn send_control(
         .map_err(|_| ())
 }
 
-async fn send_direct_error(socket: &mut WebSocket, code: &'static str, message: &str) {
+async fn send_direct_error(socket: &mut WebSocket, code: &str, message: &str) {
     if let Ok(payload) = serde_json::to_string(&ServerTerminalMessage::Error {
         code,
         message: message.into(),

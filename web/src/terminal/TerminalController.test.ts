@@ -10,6 +10,7 @@ import {
 function fakeSurface(): TerminalSurface {
   return {
     open: vi.fn(),
+    size: vi.fn(() => ({ rows: 24, columns: 80 })),
     write: vi.fn().mockResolvedValue(undefined),
     restore: vi.fn().mockResolvedValue(undefined),
     onData: vi.fn(() => ({ dispose: vi.fn() })),
@@ -29,11 +30,14 @@ test("view detach does not dispose, reopen, or reconnect a terminal", () => {
   const firstMount = document.createElement("div");
   const secondMount = document.createElement("div");
 
+  expect(connection.start).not.toHaveBeenCalled();
   controller.attach(firstMount);
   controller.detach();
   controller.attach(secondMount);
 
   expect(surface.open).toHaveBeenCalledTimes(1);
+  expect(surface.size).toHaveBeenCalledTimes(1);
+  expect(connection.resize).toHaveBeenCalledWith(24, 80);
   expect(surface.dispose).not.toHaveBeenCalled();
   expect(connection.start).toHaveBeenCalledTimes(1);
   expect(connection.dispose).not.toHaveBeenCalled();
@@ -78,7 +82,8 @@ test("only explicit session close disposes the controller", () => {
 test("canonical snapshots reset the renderer through its controller", async () => {
   const surface = fakeSurface();
   const connection = fakeConnection();
-  new TerminalController(() => surface, () => connection);
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
   const handlers = vi.mocked(connection.start).mock.calls[0][0];
   const snapshot = {
     sequence: 9,

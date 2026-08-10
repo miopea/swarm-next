@@ -24,8 +24,11 @@ so the browser adapter remains replaceable. Explicitly preserve alternate-screen
 mode in addition to the parser's formatted screen and input modes.
 
 Absence of a cursor is distinct from sequence zero. IPC protocol version 2 and
-WebSocket subprotocol `swarm-terminal.v2` carry that distinction and the new
-snapshot frame.
+the snapshot frame carry that distinction. WebSocket subprotocol
+`swarm-terminal.v3` additionally requires the first resume message to carry the
+mounted renderer's stable, non-zero rows and columns. The API commits that size
+through the host before acquiring the initial replay response, so the first
+snapshot and its renderer cannot disagree about geometry.
 
 A changed terminal resize advances the canonical sequence without inventing
 PTY bytes, invalidates every earlier byte-only cursor, and wakes attachments to
@@ -50,6 +53,8 @@ and sequence. This event is carried to the browser instead of failing silently.
 - Reload and stale-cursor recovery cost is proportional to the bounded visible
   screen, not the volume of recent worker output.
 - Snapshot acquisition and subsequent deltas cannot race past one another.
+- Browser transport starts only after the terminal host element is mounted and
+  xterm has been opened, fitted, and measured.
 - Browser resume cursors advance only after xterm confirms that bytes rendered.
 - Slow rendering reconnects from a snapshot instead of accumulating messages.
 - Concurrent attachments converge on the same committed dimensions before
