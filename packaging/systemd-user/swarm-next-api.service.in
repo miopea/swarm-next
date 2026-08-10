@@ -12,8 +12,6 @@ Environment=SWARM_WEB_ROOT=@INSTALL_ROOT@/current/web
 ExecStart=@INSTALL_ROOT@/current/bin/swarm-api
 Restart=on-failure
 RestartSec=2s
-RuntimeDirectory=swarm-next
-RuntimeDirectoryMode=0700
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
