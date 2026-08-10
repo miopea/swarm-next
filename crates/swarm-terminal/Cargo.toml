@@ -11,7 +11,7 @@ serde.workspace = true
 serde_json.workspace = true
 swarm-domain = { path = "../swarm-domain" }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "sync"] }
 tracing.workspace = true
 
 [lints]

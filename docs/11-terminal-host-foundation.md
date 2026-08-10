@@ -18,6 +18,8 @@ to survive API replacement. It does not yet claim the full walking skeleton.
 - Provider-specific `StartClaude`; no arbitrary-command operation in IPC or HTTP.
 - Operator bearer authentication on all terminal HTTP routes.
 - API reconstruction and terminal-host client reconnection with a live PTY.
+- Event-driven host waits, one-time attach grants, and browser WebSocket replay
+  are implemented in the follow-on browser attachment increment.
 
 ## Process ownership
 
@@ -69,7 +71,6 @@ roots and provider commands, so HTTP authorization is not its only boundary.
 ## Remaining M1 work
 
 - Canonical terminal parser and snapshot representation.
-- Event-driven browser WebSocket attachment with short-lived attach grants.
 - Durable, time-and-byte-bounded on-disk history.
 - Host restart/update descriptor handoff or explicit compatibility fallback.
 - Packaged service lifecycle, diagnostics, and longer resource soak.

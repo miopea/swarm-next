@@ -66,4 +66,6 @@ cargo run -p swarm-api
 ```
 
 Run the browser client with `pnpm --dir web dev`. It proxies `/health` and
-`/api` to `127.0.0.1:8765`. Do not commit or log operator tokens.
+HTTP/WebSocket `/api` traffic to `127.0.0.1:8765`. Unlock the development UI
+with the same operator token configured for the API. The token remains in
+browser memory; do not commit or log operator tokens.
