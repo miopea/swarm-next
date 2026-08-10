@@ -85,6 +85,9 @@ test("only explicit session close disposes the controller", () => {
 
 test("canonical snapshots reset the renderer through its controller", async () => {
   const surface = fakeSurface();
+  vi.mocked(surface.fit)
+    .mockResolvedValueOnce({ rows: 24, columns: 80 })
+    .mockResolvedValueOnce({ rows: 38, columns: 132 });
   const connection = fakeConnection();
   const controller = new TerminalController(() => surface, () => connection);
   controller.attach(document.createElement("div"));
@@ -101,6 +104,8 @@ test("canonical snapshots reset the renderer through its controller", async () =
   await handlers.onSnapshot(snapshot);
 
   expect(surface.restore).toHaveBeenCalledWith(snapshot);
+  expect(surface.fit).toHaveBeenCalledTimes(2);
+  expect(connection.resize).toHaveBeenLastCalledWith(38, 132);
   expect(surface.write).not.toHaveBeenCalled();
 });
 

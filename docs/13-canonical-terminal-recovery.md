@@ -63,6 +63,8 @@ it never kills or replaces the provider process.
 - Renderer mounting, post-font/post-layout fitting, initial resize
   acknowledgement, and first replay occur in that order, including after a
   full browser reload.
+- Snapshot restoration is followed by one visible-container refit so replay
+  cannot leave xterm at stale server dimensions.
 - Resume cursor advances only after the renderer's completion callback.
 - A renderer backlog crosses a hard bound and requests a fresh snapshot.
 - Pathological parser content compacts, and oversize fallback is visible.
