@@ -28,6 +28,9 @@ process. The terminal host gets write access only to the configured workspace
 root and application state; the remainder of home is read-only. Claude's
 documented `CLAUDE_CONFIG_DIR` redirects its credentials, settings, session
 history, and plugins into an isolated provider directory within that state.
+The service PATH explicitly includes the user's local binary directory so a
+user-scoped Claude installation is available without depending on login-shell
+initialization.
 The API has a read-only home and system view. Both use a private temporary
 directory, `NoNewPrivileges`, a restrictive umask, bounded restart delay, and
 journald.
