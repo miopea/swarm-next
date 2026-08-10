@@ -9,6 +9,7 @@ type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kin
 type SessionSummary = { session_id: string; running: boolean };
 type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 type SessionStartedResponse = { type: "session_started"; session_id: string };
+const OPERATOR_TOKEN_STORAGE_KEY = "swarm-next.operator-token.v1";
 
 export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
@@ -34,6 +35,35 @@ export function App() {
     return () => controller.abort();
   }, []);
 
+  useEffect(() => {
+    const savedToken = readSavedOperatorToken();
+    if (!savedToken) return;
+
+    let cancelled = false;
+    setBusy(true);
+    void fetchSessions(savedToken)
+      .then((nextSessions) => {
+        if (cancelled) return;
+        terminalWorkspace.authenticate(savedToken);
+        setOperatorToken(savedToken);
+        setSessions(nextSessions);
+        setActiveSessionId(nextSessions[0]?.session_id);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        clearSavedOperatorToken();
+        terminalWorkspace.logout();
+        setOperationError(error instanceof Error ? error.message : "Saved authentication is no longer valid");
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function authenticate(event: FormEvent) {
     event.preventDefault();
     if (!tokenDraft) return;
@@ -43,9 +73,13 @@ export function App() {
       const nextSessions = await fetchSessions(tokenDraft);
       terminalWorkspace.authenticate(tokenDraft);
       setOperatorToken(tokenDraft);
+      const tokenWasSaved = saveOperatorToken(tokenDraft);
       setTokenDraft("");
       setSessions(nextSessions);
       setActiveSessionId((current) => current ?? nextSessions[0]?.session_id);
+      if (!tokenWasSaved) {
+        setOperationError("Unlocked, but this browser blocked tab storage; refreshing will lock Swarm again.");
+      }
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : "Authentication failed");
     } finally {
@@ -114,6 +148,7 @@ export function App() {
   }
 
   function logout() {
+    clearSavedOperatorToken();
     terminalWorkspace.logout();
     setOperatorToken(undefined);
     setSessions([]);
@@ -205,6 +240,32 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function readSavedOperatorToken(): string | undefined {
+  try {
+    return window.sessionStorage.getItem(OPERATOR_TOKEN_STORAGE_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveOperatorToken(operatorToken: string): boolean {
+  try {
+    window.sessionStorage.setItem(OPERATOR_TOKEN_STORAGE_KEY, operatorToken);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearSavedOperatorToken() {
+  try {
+    window.sessionStorage.removeItem(OPERATOR_TOKEN_STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable under hardened browser policies. Locking the
+    // in-memory workspace remains sufficient for the current page lifetime.
+  }
 }
 
 async function fetchSessions(operatorToken: string): Promise<SessionSummary[]> {
