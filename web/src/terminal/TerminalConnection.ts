@@ -185,7 +185,6 @@ export class TerminalConnection {
 
   #handleMessage(socket: WebSocket, event: MessageEvent): void {
     if (socket !== this.#socket || this.#disposed) return;
-    this.#clearConfirmationTimer();
     if (event.data instanceof ArrayBuffer) {
       this.#enqueueBinaryFrame(new Uint8Array(event.data));
       return;
@@ -202,7 +201,6 @@ export class TerminalConnection {
       return;
     }
     if (message.type === "state" && typeof message.running === "boolean") {
-      this.#confirmConnection();
       if (this.#hasCanonicalState) this.#confirmRenderedConnection();
       this.#handlers?.onRunningChange(message.running);
     } else if (message.type === "error") {
@@ -351,6 +349,7 @@ export class TerminalConnection {
   }
 
   #confirmRenderedConnection(detail?: string): void {
+    this.#clearConfirmationTimer();
     this.#confirmConnection();
     if (this.#rendererConfirmed && detail === undefined) return;
     this.#rendererConfirmed = true;

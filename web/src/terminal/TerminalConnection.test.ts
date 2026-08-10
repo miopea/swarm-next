@@ -142,6 +142,7 @@ test("does not report connected until the canonical renderer is ready", async ()
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
 
   sockets[0].open();
+  sockets[0].message(JSON.stringify({ type: "state", running: true }));
   expect(vi.mocked(handlers.onState).mock.calls.some(([state]) => state === "connected")).toBe(false);
   sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
   await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalledTimes(1));
@@ -254,6 +255,28 @@ test("an unconfirmed socket is abandoned inside the bounded retry budget", async
   await vi.advanceTimersByTimeAsync(1);
   await vi.advanceTimersByTimeAsync(0);
   expect(sockets).toHaveLength(2);
+});
+
+test("state messages without canonical bytes cannot reset the reconnect budget", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness([1], 1);
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  sockets[0].message(JSON.stringify({ type: "state", running: true }));
+
+  await vi.advanceTimersByTimeAsync(1);
+  await vi.advanceTimersByTimeAsync(1);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(sockets).toHaveLength(2);
+  sockets[1].open();
+  sockets[1].message(JSON.stringify({ type: "state", running: true }));
+
+  await vi.advanceTimersByTimeAsync(1);
+  expect(handlers.onState).toHaveBeenCalledWith(
+    "error",
+    expect.stringContaining("reconnect limit reached"),
+  );
 });
 
 test("an unconfirmed attach grant is aborted inside the bounded retry budget", async () => {
