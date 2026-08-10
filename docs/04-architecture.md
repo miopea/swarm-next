@@ -11,7 +11,8 @@ an embedded SQLite database.
 React application
   |-- generated HTTP client
   |-- application event stream
-  `-- terminal synchronization stream
+  |-- replaceable presentation components
+  `-- framework-independent terminal controllers
 
 Rust application
   |-- API and authentication adapters
@@ -61,6 +62,8 @@ not a second product backend.
 13. Compatibility code documents its owner and deletion condition.
 14. Unsafe Rust is isolated, documented, and reviewed at a module boundary.
 15. A subsystem reports health using evidence it owns.
+16. UI component lifetime never owns worker, terminal, connection, replay, or
+    canonical-dimension lifetime.
 
 ## Data ownership
 
@@ -105,4 +108,3 @@ Recommended rules:
 - Multi-user collaboration beyond securing the primary operator workflow.
 - Mechanical compatibility with every legacy endpoint.
 - Reimplementation of provider-native automatic approval.
-
