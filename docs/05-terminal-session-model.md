@@ -67,6 +67,9 @@ geometry part of the same synchronization boundary.
   create a synchronization loop.
 - Reload produces one synchronization transition, not reset plus repeated
   replay guesses.
+- After restoring a snapshot, a visible attachment re-fits to its actual
+  container and reports that geometry. Matching dimensions are a no-op; a
+  mismatch creates one new canonical snapshot boundary.
 - Background terminals may suspend rendering, but their session cursors and
   bounded catch-up policy remain explicit.
 

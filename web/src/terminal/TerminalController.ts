@@ -111,7 +111,11 @@ export class TerminalController {
     this.#connection.resize(rows, columns);
     this.#connection.start({
       onOutput: (bytes) => this.#surface.write(bytes),
-      onSnapshot: (snapshot) => this.#surface.restore(snapshot),
+      onSnapshot: async (snapshot) => {
+        await this.#surface.restore(snapshot);
+        const fitted = await this.#surface.fit();
+        this.#connection.resize(fitted.rows, fitted.columns);
+      },
       onState: (state, detail) => this.#setState(state, detail),
       onRunningChange: (running) => {
         if (!running) this.#setState("closed", "worker process exited");
