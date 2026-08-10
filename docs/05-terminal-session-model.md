@@ -1,6 +1,6 @@
 # Terminal-session model
 
-Status: **Proposed**
+Status: **Partially implemented**
 
 The terminal is a persistent server resource. A browser terminal is a rendered
 attachment to that resource.
@@ -33,6 +33,10 @@ The server responds with either:
 
 1. missing deltas when the journal still covers the client's cursor; or
 2. one canonical snapshot followed by deltas after its sequence.
+
+The active-screen form of this contract is implemented by
+[ADR 0006](decisions/0006-canonical-terminal-snapshots.md). Durable scrollback
+restoration remains pending.
 
 Snapshot acquisition and live subscription form one atomic operation. Every
 frame identifies the worker session and sequence. Frames from a stale session
@@ -86,4 +90,3 @@ disconnect, reject, or archive. No bound silently expands.
 - Alternate-screen applications recover correctly.
 - Resize during output preserves canonical state.
 - Descriptor handoff preserves live processes and terminal streams.
-

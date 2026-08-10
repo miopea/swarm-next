@@ -27,7 +27,7 @@ reload therefore requires unlocking again during this foundation phase.
 2. The API returns a cryptographically random, one-time grant with a 30-second
    lifetime and `Cache-Control: no-store`.
 3. The browser sends the grant in `Sec-WebSocket-Protocol`, never in a URL. The
-   server selects and echoes only the stable `swarm-terminal.v1` protocol.
+   server selects and echoes only the stable versioned terminal protocol.
 4. The first WebSocket message commits the browser's last applied sequence.
 5. The API waits on terminal-host output notifications over local IPC. It does
    not poll from the browser or run a per-terminal timer loop.
@@ -35,9 +35,8 @@ reload therefore requires unlocking again during this foundation phase.
    rejects gaps, ignores duplicates, and advances its cursor only after a frame
    is accepted.
 
-The current bounded journal can return `snapshot_required`. The browser makes
-that recovery requirement visible and does not guess or replay from an unsafe
-cursor. Canonical snapshot generation is the next terminal-state increment.
+The canonical-recovery increment now replaces an expired journal cursor with an
+atomic screen snapshot. See [M1 canonical terminal recovery](13-canonical-terminal-recovery.md).
 
 ## Ownership and bounds
 
@@ -88,7 +87,6 @@ API, and browser processes were verified absent.
 
 ## Remaining M1 work
 
-- Canonical terminal parser and atomic snapshot-plus-delta attachment.
 - Durable time-and-byte-bounded on-disk terminal history.
 - Host upgrade descriptor handoff or explicit compatibility fallback.
 - Packaged lifecycle and user-facing authentication beyond the development
