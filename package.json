@@ -1,0 +1,10 @@
+{
+  "name": "swarm-next",
+  "private": true,
+  "packageManager": "pnpm@11.16.0",
+  "scripts": {
+    "build": "pnpm --dir web build",
+    "check": "pnpm --dir web check",
+    "test": "pnpm --dir web test"
+  }
+}

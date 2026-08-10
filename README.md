@@ -4,9 +4,8 @@ Swarm Next is a ground-up redesign of Swarm: a persistent control room for AI
 coding agents. It preserves proven user outcomes while replacing accidental
 architecture, obsolete automation, and implementation-driven product behavior.
 
-This repository begins with product and architecture discovery. Runtime code is
-intentionally deferred until the initial capability decisions, user journeys,
-domain model, and walking-skeleton acceptance criteria are approved.
+The product and architecture baseline is accepted. Runtime development now
+begins with the terminal-first walking skeleton.
 
 ## Intended product qualities
 
@@ -18,15 +17,16 @@ domain model, and walking-skeleton acceptance criteria are approved.
 - Integrations extend the product through declared application interfaces.
 - Operators install, run, update, and diagnose one application.
 
-## Proposed implementation direction
+## Implementation direction
 
 - Rust modular monolith for the application and terminal/session backend.
-- React and TypeScript for the browser application.
+- A TypeScript browser adapter, currently rendered with React.
 - SQLite as the embedded source of truth, owned by one persistence boundary.
 - Versioned HTTP, event, and terminal synchronization contracts.
 
-These are proposed decisions until accepted through the architecture review.
-See [docs/README.md](docs/README.md) for the review sequence.
+React does not own terminal or worker lifetime and remains replaceable behind
+the browser adapter boundary. See [docs/README.md](docs/README.md) for the
+accepted decisions and continuing review sequence.
 
 ## Relationship to legacy Swarm
 
@@ -37,9 +37,21 @@ remove before implementation.
 
 ## Current milestone
 
-**M0: Product and architecture definition**
+**M1: Terminal foundation**
 
-M0 exits only when the capability inventory, critical journeys, architectural
-constitution, terminal-session model, walking skeleton, and dogfooding plan
-have been reviewed and approved.
+M1 proves bounded terminal history, immutable worker-session identity, stable
+browser attach/detach, and eventual survival across browser and API restarts.
 
+## Development
+
+```sh
+cargo test --workspace
+pnpm install --frozen-lockfile
+pnpm check
+pnpm test
+pnpm build
+```
+
+Run the API with `cargo run -p swarm-api` and the web client with
+`pnpm --dir web dev`. The development client proxies `/health` and `/api` to
+`127.0.0.1:8765`.

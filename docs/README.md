@@ -33,3 +33,4 @@ Current decision records:
 - [ADR 0001: Architecture-first replacement](decisions/0001-architecture-first-replacement.md)
 - [ADR 0002: Proposed technology direction](decisions/0002-proposed-technology-direction.md)
 - [ADR 0003: Provider-owned terminal permissions](decisions/0003-provider-owned-permissions.md)
+- [ADR 0004: Replaceable browser presentation adapter](decisions/0004-replaceable-browser-adapter.md)

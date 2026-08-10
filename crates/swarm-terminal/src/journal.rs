@@ -1,0 +1,176 @@
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct JournalLimits {
+    pub max_bytes: usize,
+    pub max_frames: usize,
+}
+
+impl JournalLimits {
+    #[must_use]
+    pub const fn new(max_bytes: usize, max_frames: usize) -> Self {
+        Self {
+            max_bytes,
+            max_frames,
+        }
+    }
+}
+
+impl Default for JournalLimits {
+    fn default() -> Self {
+        Self::new(8 * 1024 * 1024, 16_384)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SequencedFrame {
+    pub sequence: u64,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Resume<'a> {
+    Deltas(Vec<&'a SequencedFrame>),
+    SnapshotRequired { latest_sequence: u64 },
+}
+
+#[derive(Debug)]
+pub struct BoundedJournal {
+    limits: JournalLimits,
+    frames: VecDeque<SequencedFrame>,
+    retained_bytes: usize,
+    next_sequence: u64,
+}
+
+impl BoundedJournal {
+    #[must_use]
+    pub fn new(limits: JournalLimits) -> Self {
+        Self {
+            limits,
+            frames: VecDeque::new(),
+            retained_bytes: 0,
+            next_sequence: 1,
+        }
+    }
+
+    pub fn push(&mut self, bytes: impl Into<Vec<u8>>) -> u64 {
+        let bytes = bytes.into();
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        if self.limits.max_bytes == 0
+            || self.limits.max_frames == 0
+            || bytes.len() > self.limits.max_bytes
+        {
+            self.clear_retained();
+            return sequence;
+        }
+        self.retained_bytes += bytes.len();
+        self.frames.push_back(SequencedFrame { sequence, bytes });
+        self.enforce_limits();
+        sequence
+    }
+
+    #[must_use]
+    pub fn resume_after(&self, sequence: u64) -> Resume<'_> {
+        let latest_sequence = self.latest_sequence();
+        if sequence >= latest_sequence {
+            return Resume::Deltas(Vec::new());
+        }
+        let first_retained = self
+            .frames
+            .front()
+            .map_or(self.next_sequence, |frame| frame.sequence);
+        if sequence.saturating_add(1) < first_retained {
+            return Resume::SnapshotRequired { latest_sequence };
+        }
+        Resume::Deltas(
+            self.frames
+                .iter()
+                .filter(|frame| frame.sequence > sequence)
+                .collect(),
+        )
+    }
+
+    #[must_use]
+    pub const fn retained_bytes(&self) -> usize {
+        self.retained_bytes
+    }
+    #[must_use]
+    pub fn retained_frames(&self) -> usize {
+        self.frames.len()
+    }
+    #[must_use]
+    pub const fn limits(&self) -> JournalLimits {
+        self.limits
+    }
+    #[must_use]
+    pub const fn latest_sequence(&self) -> u64 {
+        self.next_sequence.saturating_sub(1)
+    }
+
+    fn enforce_limits(&mut self) {
+        while self.retained_bytes > self.limits.max_bytes
+            || self.frames.len() > self.limits.max_frames
+        {
+            if let Some(frame) = self.frames.pop_front() {
+                self.retained_bytes -= frame.bytes.len();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn clear_retained(&mut self) {
+        self.frames.clear();
+        self.retained_bytes = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evicts_old_frames_at_byte_limit() {
+        let mut journal = BoundedJournal::new(JournalLimits::new(5, 10));
+        journal.push(b"abc".to_vec());
+        let latest = journal.push(b"def".to_vec());
+        assert_eq!(journal.retained_bytes(), 3);
+        assert_eq!(journal.retained_frames(), 1);
+        assert_eq!(
+            journal.resume_after(0),
+            Resume::SnapshotRequired {
+                latest_sequence: latest
+            }
+        );
+    }
+
+    #[test]
+    fn resumes_with_exact_missing_deltas() {
+        let mut journal = BoundedJournal::new(JournalLimits::new(32, 10));
+        let first = journal.push(b"one".to_vec());
+        journal.push(b"two".to_vec());
+        journal.push(b"three".to_vec());
+        let Resume::Deltas(frames) = journal.resume_after(first) else {
+            panic!("expected retained deltas");
+        };
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].bytes, b"two");
+        assert_eq!(frames[1].bytes, b"three");
+    }
+
+    #[test]
+    fn oversized_frame_does_not_break_the_bound() {
+        let mut journal = BoundedJournal::new(JournalLimits::new(4, 10));
+        let sequence = journal.push(vec![0; 5]);
+        assert_eq!(journal.retained_bytes(), 0);
+        assert_eq!(journal.retained_frames(), 0);
+        assert_eq!(
+            journal.resume_after(0),
+            Resume::SnapshotRequired {
+                latest_sequence: sequence
+            }
+        );
+    }
+}

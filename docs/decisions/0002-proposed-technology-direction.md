@@ -12,10 +12,12 @@ runtimes.
 
 ## Decision
 
-Use a modular Rust application backend, React/TypeScript browser frontend, and
-SQLite embedded persistence. Avoid a permanent Python or Node application
-backend. Internally isolate terminal supervision only when lifecycle or
-security requirements justify a child process.
+Use a modular Rust application backend, a TypeScript browser presentation
+adapter currently rendered with React, and SQLite embedded persistence. Avoid
+a permanent Python or Node application backend. Internally isolate terminal
+supervision only when lifecycle or security requirements justify a child
+process. React remains replaceable behind the browser adapter boundary defined
+by ADR 0004.
 
 ## Consequences
 

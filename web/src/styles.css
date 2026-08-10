@@ -1,0 +1,31 @@
+:root {
+  color: #e5e7eb;
+  background: #090d14;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+h1, h2, h3, p { margin-top: 0; }
+.app-shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 100vh; }
+.worker-rail { display: grid; grid-template-columns: 40px 1fr; align-content: start; gap: 18px 14px; padding: 24px 18px; background: #0d131e; border-right: 1px solid #202a38; }
+.brand-mark { display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid #3b82f6; border-radius: 11px; color: #93c5fd; font-weight: 800; }
+.eyebrow { margin: 0 0 4px; color: #7c8da5; font-size: .7rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+h1 { margin-bottom: 0; font-size: 1.1rem; }
+.empty-rail { grid-column: 1 / -1; padding: 15px; border: 1px dashed #2b3747; border-radius: 10px; color: #7c8da5; font-size: .85rem; }
+.workspace { display: flex; min-width: 0; flex-direction: column; }
+.workspace-header { display: flex; align-items: center; justify-content: space-between; min-height: 88px; padding: 20px 28px; border-bottom: 1px solid #202a38; }
+.workspace-header h2 { margin-bottom: 0; font-size: 1.25rem; }
+.status { padding: 7px 10px; border: 1px solid #334155; border-radius: 999px; color: #94a3b8; font-size: .75rem; }
+.status-ready { border-color: #14532d; color: #86efac; }
+.status-error { border-color: #7f1d1d; color: #fca5a5; }
+.terminal-empty { display: grid; max-width: 520px; margin: auto; padding: 40px; place-items: center; text-align: center; }
+.terminal-prompt { margin-bottom: 18px; color: #60a5fa; font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; font-size: 2rem; }
+.terminal-empty h3 { margin-bottom: 8px; }
+.terminal-empty p { color: #94a3b8; line-height: 1.6; }
+
+@media (max-width: 720px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .worker-rail { border-right: 0; border-bottom: 1px solid #202a38; }
+}
