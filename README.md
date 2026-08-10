@@ -52,6 +52,18 @@ pnpm test
 pnpm build
 ```
 
-Run the API with `cargo run -p swarm-api` and the web client with
-`pnpm --dir web dev`. The development client proxies `/health` and `/api` to
-`127.0.0.1:8765`.
+Run the terminal host and API in separate shells with a shared socket path. The
+host and API are separate process owners shipped as one application:
+
+```sh
+export SWARM_TERMINAL_SOCKET="$HOME/.local/state/swarm-next/run/terminal.sock"
+export SWARM_WORKSPACE_ROOTS="/absolute/path/to/workspaces"
+cargo run -p swarm-terminal-host
+
+# In the API shell, set the same socket and a development-only secret.
+export SWARM_OPERATOR_TOKEN="replace-with-a-long-random-development-token"
+cargo run -p swarm-api
+```
+
+Run the browser client with `pnpm --dir web dev`. It proxies `/health` and
+`/api` to `127.0.0.1:8765`. Do not commit or log operator tokens.

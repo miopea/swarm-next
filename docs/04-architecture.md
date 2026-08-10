@@ -20,12 +20,12 @@ Rust application
   |-- domain modules
   |-- integration adapters
   |-- persistence boundary -> SQLite
-  `-- terminal/process runtime -> PTYs and workers
+  `-- local IPC -> independent Rust terminal host -> PTYs and workers
 ```
 
-One binary may internally isolate terminal supervision through a child process
-when descriptor survival or security requires it. That is a deployment detail,
-not a second product backend.
+The terminal host is a dedicated process in the same product package. This
+process boundary preserves PTY descriptors across API replacement; it is a
+deployment boundary, not a second product backend.
 
 ## Proposed modules
 
