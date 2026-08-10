@@ -29,9 +29,8 @@ pub struct SequencedFrame {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Resume {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum JournalResume {
     Deltas { frames: Vec<SequencedFrame> },
     SnapshotRequired { latest_sequence: u64 },
 }
@@ -73,19 +72,19 @@ impl BoundedJournal {
     }
 
     #[must_use]
-    pub fn resume_after(&self, sequence: u64) -> Resume {
+    pub(crate) fn resume_after(&self, sequence: u64) -> JournalResume {
         let latest_sequence = self.latest_sequence();
         if sequence >= latest_sequence {
-            return Resume::Deltas { frames: Vec::new() };
+            return JournalResume::Deltas { frames: Vec::new() };
         }
         let first_retained = self
             .frames
             .front()
             .map_or(self.next_sequence, |frame| frame.sequence);
         if sequence.saturating_add(1) < first_retained {
-            return Resume::SnapshotRequired { latest_sequence };
+            return JournalResume::SnapshotRequired { latest_sequence };
         }
-        Resume::Deltas {
+        JournalResume::Deltas {
             frames: self
                 .frames
                 .iter()
@@ -102,10 +101,6 @@ impl BoundedJournal {
     #[must_use]
     pub fn retained_frames(&self) -> usize {
         self.frames.len()
-    }
-    #[must_use]
-    pub const fn limits(&self) -> JournalLimits {
-        self.limits
     }
     #[must_use]
     pub const fn latest_sequence(&self) -> u64 {
@@ -143,7 +138,7 @@ mod tests {
         assert_eq!(journal.retained_frames(), 1);
         assert_eq!(
             journal.resume_after(0),
-            Resume::SnapshotRequired {
+            JournalResume::SnapshotRequired {
                 latest_sequence: latest
             }
         );
@@ -155,7 +150,7 @@ mod tests {
         let first = journal.push(b"one".to_vec());
         journal.push(b"two".to_vec());
         journal.push(b"three".to_vec());
-        let Resume::Deltas { frames } = journal.resume_after(first) else {
+        let JournalResume::Deltas { frames } = journal.resume_after(first) else {
             panic!("expected retained deltas");
         };
         assert_eq!(frames.len(), 2);
@@ -171,7 +166,7 @@ mod tests {
         assert_eq!(journal.retained_frames(), 0);
         assert_eq!(
             journal.resume_after(0),
-            Resume::SnapshotRequired {
+            JournalResume::SnapshotRequired {
                 latest_sequence: sequence
             }
         );

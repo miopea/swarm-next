@@ -6,16 +6,17 @@ use tokio::sync::mpsc;
 
 use axum::extract::ws::{Message, WebSocket};
 
-pub const TERMINAL_WEBSOCKET_PROTOCOL: &str = "swarm-terminal.v1";
+pub const TERMINAL_WEBSOCKET_PROTOCOL: &str = "swarm-terminal.v2";
 pub const TERMINAL_GRANT_PROTOCOL_PREFIX: &str = "swarm-grant.";
 pub const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 * 1024;
 const OUTBOUND_MESSAGE_CAPACITY: usize = 64;
 const OUTPUT_FRAME_TYPE: u8 = 1;
+const SNAPSHOT_FRAME_TYPE: u8 = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientTerminalMessage {
-    Resume { after_sequence: u64 },
+    Resume { after_sequence: Option<u64> },
     Input { text: String },
     Resize { rows: u16, columns: u16 },
 }
@@ -24,7 +25,6 @@ enum ClientTerminalMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerTerminalMessage<'a> {
     State { running: bool, latest_sequence: u64 },
-    SnapshotRequired { latest_sequence: u64 },
     Error { code: &'a str, message: String },
 }
 
@@ -116,7 +116,7 @@ pub async fn serve_terminal_socket(
 async fn stream_output(
     terminal_host: HostClient,
     session_id: WorkerSessionId,
-    mut after_sequence: u64,
+    mut after_sequence: Option<u64>,
     outbound: mpsc::Sender<Message>,
 ) {
     loop {
@@ -145,13 +145,11 @@ async fn stream_output(
                     return;
                 }
             }
-            Resume::SnapshotRequired { latest_sequence } => {
-                let _ = send_control(
-                    &outbound,
-                    &ServerTerminalMessage::SnapshotRequired { latest_sequence },
-                )
-                .await;
-                return;
+            Resume::Snapshot { snapshot } => {
+                if send_snapshot(&outbound, &snapshot).await.is_err() {
+                    return;
+                }
+                after_sequence = Some(snapshot.sequence);
             }
         }
 
@@ -159,7 +157,7 @@ async fn stream_output(
             &outbound,
             &ServerTerminalMessage::State {
                 running,
-                latest_sequence: after_sequence,
+                latest_sequence: after_sequence.unwrap_or(0),
             },
         )
         .await
@@ -176,7 +174,7 @@ async fn stream_output(
 async fn wait_for_output(
     terminal_host: &HostClient,
     session_id: WorkerSessionId,
-    after_sequence: u64,
+    after_sequence: Option<u64>,
 ) -> Result<(Resume, bool), (String, String)> {
     match terminal_host
         .request(&HostRequest::Wait {
@@ -202,18 +200,18 @@ async fn wait_for_output(
 async fn send_output_frames(
     outbound: &mpsc::Sender<Message>,
     frames: Vec<swarm_terminal::SequencedFrame>,
-    after_sequence: &mut u64,
+    after_sequence: &mut Option<u64>,
 ) -> Result<(), ()> {
     for frame in frames {
-        if frame.sequence != after_sequence.saturating_add(1) {
+        let expected = after_sequence.map_or(1, |sequence| sequence.saturating_add(1));
+        if frame.sequence != expected {
             send_control(
                 outbound,
                 &ServerTerminalMessage::Error {
                     code: "terminal_sequence_gap",
                     message: format!(
                         "expected terminal sequence {}, received {}",
-                        after_sequence.saturating_add(1),
-                        frame.sequence
+                        expected, frame.sequence
                     ),
                 },
             )
@@ -228,9 +226,26 @@ async fn send_output_frames(
             .send(Message::Binary(payload.into()))
             .await
             .map_err(|_| ())?;
-        *after_sequence = frame.sequence;
+        *after_sequence = Some(frame.sequence);
     }
     Ok(())
+}
+
+async fn send_snapshot(
+    outbound: &mpsc::Sender<Message>,
+    snapshot: &swarm_terminal::TerminalSnapshot,
+) -> Result<(), ()> {
+    let mut payload = Vec::with_capacity(snapshot.bytes.len() + 14);
+    payload.push(SNAPSHOT_FRAME_TYPE);
+    payload.extend_from_slice(&snapshot.sequence.to_be_bytes());
+    payload.extend_from_slice(&snapshot.rows.to_be_bytes());
+    payload.extend_from_slice(&snapshot.columns.to_be_bytes());
+    payload.push(u8::from(snapshot.truncated));
+    payload.extend_from_slice(&snapshot.bytes);
+    outbound
+        .send(Message::Binary(payload.into()))
+        .await
+        .map_err(|_| ())
 }
 
 async fn handle_input(

@@ -7,9 +7,18 @@ export type TerminalConnectionState =
   | "error";
 
 export interface TerminalConnectionHandlers {
-  onOutput(bytes: Uint8Array): void;
+  onOutput(bytes: Uint8Array): void | Promise<void>;
+  onSnapshot(snapshot: TerminalSnapshot): void | Promise<void>;
   onState(state: TerminalConnectionState, detail?: string): void;
   onRunningChange(running: boolean): void;
+}
+
+export interface TerminalSnapshot {
+  sequence: number;
+  rows: number;
+  columns: number;
+  truncated: boolean;
+  bytes: Uint8Array;
 }
 
 type GrantResponse = {
@@ -32,6 +41,8 @@ export interface TerminalConnectionOptions {
 
 const GRANT_PROTOCOL_PREFIX = "swarm-grant.";
 const OUTPUT_FRAME_TYPE = 1;
+const SNAPSHOT_FRAME_TYPE = 2;
+const MAX_PENDING_RENDER_BYTES = 3 * 1024 * 1024;
 const DEFAULT_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 
 /** Owns one browser attachment independently from React component lifetime. */
@@ -47,9 +58,14 @@ export class TerminalConnection {
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
   #retryAttempt = 0;
   #sequence = 0;
+  #hasCanonicalState = false;
+  #renderQueue = Promise.resolve();
+  #pendingRenderBytes = 0;
+  #renderGeneration = 0;
   #started = false;
   #disposed = false;
   #fatal = false;
+  #recovering = false;
   #connectionConfirmed = false;
 
   constructor(options: TerminalConnectionOptions) {
@@ -115,6 +131,7 @@ export class TerminalConnection {
       ]);
       socket.binaryType = "arraybuffer";
       this.#connectionConfirmed = false;
+      this.#recovering = false;
       this.#socket = socket;
       socket.addEventListener("open", () => this.#handleOpen(socket));
       socket.addEventListener("message", (event) => this.#handleMessage(socket, event));
@@ -127,14 +144,19 @@ export class TerminalConnection {
 
   #handleOpen(socket: WebSocket): void {
     if (socket !== this.#socket || this.#disposed) return;
-    socket.send(JSON.stringify({ type: "resume", after_sequence: this.#sequence }));
+    socket.send(
+      JSON.stringify({
+        type: "resume",
+        after_sequence: this.#hasCanonicalState ? this.#sequence : null,
+      }),
+    );
     this.#handlers?.onState("connected");
   }
 
   #handleMessage(socket: WebSocket, event: MessageEvent): void {
     if (socket !== this.#socket || this.#disposed) return;
     if (event.data instanceof ArrayBuffer) {
-      this.#handleOutputFrame(new Uint8Array(event.data));
+      this.#enqueueBinaryFrame(new Uint8Array(event.data));
       return;
     }
     if (typeof event.data !== "string") {
@@ -151,20 +173,34 @@ export class TerminalConnection {
     if (message.type === "state" && typeof message.running === "boolean") {
       this.#confirmConnection();
       this.#handlers?.onRunningChange(message.running);
-    } else if (message.type === "snapshot_required") {
-      this.#fatal = true;
-      this.#handlers?.onState(
-        "recovery_required",
-        `Terminal history no longer contains sequence ${this.#sequence + 1}`,
-      );
-      socket.close(1008, "canonical snapshot required");
     } else if (message.type === "error") {
       this.#handlers?.onState("error", message.message ?? message.code ?? "terminal protocol error");
     }
   }
 
-  #handleOutputFrame(frame: Uint8Array): void {
-    if (frame.byteLength < 9 || frame[0] !== OUTPUT_FRAME_TYPE) {
+  #enqueueBinaryFrame(frame: Uint8Array): void {
+    if (this.#recovering) return;
+    if (this.#pendingRenderBytes + frame.byteLength > MAX_PENDING_RENDER_BYTES) {
+      this.#recoverFromSnapshot("terminal renderer fell behind its bounded queue");
+      return;
+    }
+    this.#pendingRenderBytes += frame.byteLength;
+    const generation = this.#renderGeneration;
+    this.#renderQueue = this.#renderQueue
+      .then(async () => {
+        if (generation !== this.#renderGeneration || this.#disposed) return;
+        await this.#applyBinaryFrame(frame);
+      })
+      .catch((error: unknown) => {
+        this.#fail(error instanceof Error ? error.message : "terminal renderer failed");
+      })
+      .finally(() => {
+        this.#pendingRenderBytes -= frame.byteLength;
+      });
+  }
+
+  async #applyBinaryFrame(frame: Uint8Array): Promise<void> {
+    if (frame.byteLength < 9) {
       this.#fail("terminal output frame was malformed");
       return;
     }
@@ -174,14 +210,56 @@ export class TerminalConnection {
       this.#fail("terminal sequence exceeded browser precision");
       return;
     }
-    if (sequence <= this.#sequence) return;
-    if (sequence !== this.#sequence + 1) {
-      this.#fail(`terminal sequence gap: expected ${this.#sequence + 1}, received ${sequence}`);
+    if (frame[0] === SNAPSHOT_FRAME_TYPE) {
+      if (frame.byteLength < 14) {
+        this.#fail("terminal snapshot frame was malformed");
+        return;
+      }
+      const dimensions = new DataView(frame.buffer, frame.byteOffset + 9, 4);
+      const rows = dimensions.getUint16(0);
+      const columns = dimensions.getUint16(2);
+      if (rows === 0 || columns === 0) {
+        this.#fail("terminal snapshot dimensions were invalid");
+        return;
+      }
+      if (this.#hasCanonicalState && sequence < this.#sequence) return;
+      const truncated = frame[13] === 1;
+      await this.#handlers?.onSnapshot({
+        sequence,
+        rows,
+        columns,
+        truncated,
+        bytes: frame.slice(14),
+      });
+      this.#sequence = sequence;
+      this.#hasCanonicalState = true;
+      this.#confirmConnection();
+      if (truncated) {
+        this.#handlers?.onState(
+          "connected",
+          "Terminal view was reset after exceeding its canonical memory bound",
+        );
+      }
       return;
     }
+    if (frame[0] !== OUTPUT_FRAME_TYPE) {
+      this.#fail("terminal binary frame type was unsupported");
+      return;
+    }
+    if (!this.#hasCanonicalState) {
+      this.#fail("terminal output arrived before canonical state");
+      return;
+    }
+    if (sequence <= this.#sequence) return;
+    if (sequence !== this.#sequence + 1) {
+      this.#recoverFromSnapshot(
+        `terminal sequence gap: expected ${this.#sequence + 1}, received ${sequence}`,
+      );
+      return;
+    }
+    await this.#handlers?.onOutput(frame.slice(9));
     this.#sequence = sequence;
     this.#confirmConnection();
-    this.#handlers?.onOutput(frame.slice(9));
   }
 
   #handleClose(socket: WebSocket): void {
@@ -217,8 +295,19 @@ export class TerminalConnection {
 
   #fail(detail: string): void {
     this.#fatal = true;
+    this.#renderGeneration += 1;
     this.#handlers?.onState("recovery_required", detail);
     this.#socket?.close(1008, detail.slice(0, 100));
+  }
+
+  #recoverFromSnapshot(detail: string): void {
+    if (this.#recovering || this.#fatal || this.#disposed) return;
+    this.#recovering = true;
+    this.#renderGeneration += 1;
+    this.#hasCanonicalState = false;
+    this.#sequence = 0;
+    this.#handlers?.onState("disconnected", `${detail}; requesting a fresh snapshot`);
+    this.#socket?.close(1013, "fresh terminal snapshot required");
   }
 
   #confirmConnection(): void {

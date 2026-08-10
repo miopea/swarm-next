@@ -20,6 +20,8 @@ to survive API replacement. It does not yet claim the full walking skeleton.
 - API reconstruction and terminal-host client reconnection with a live PTY.
 - Event-driven host waits, one-time attach grants, and browser WebSocket replay
   are implemented in the follow-on browser attachment increment.
+- Canonical active-screen snapshots and bounded renderer recovery are
+  implemented in the follow-on canonical recovery increment.
 
 ## Process ownership
 
@@ -70,8 +72,6 @@ roots and provider commands, so HTTP authorization is not its only boundary.
 
 ## Remaining M1 work
 
-- Canonical terminal parser and snapshot representation.
 - Durable, time-and-byte-bounded on-disk history.
 - Host restart/update descriptor handoff or explicit compatibility fallback.
 - Packaged service lifecycle, diagnostics, and longer resource soak.
-- Browser-driven two-terminal switching and reload verification.

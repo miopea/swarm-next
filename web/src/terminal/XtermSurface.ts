@@ -1,6 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 
+import type { TerminalSnapshot } from "./TerminalConnection";
 import type { Disposable, TerminalSurface } from "./TerminalController";
 
 export class XtermSurface implements TerminalSurface {
@@ -9,6 +10,7 @@ export class XtermSurface implements TerminalSurface {
     convertEol: false,
     fontFamily: '"Cascadia Code", "SFMono-Regular", Consolas, monospace',
     fontSize: 14,
+    scrollback: 1_000,
     theme: {
       background: "#090d14",
       foreground: "#e5e7eb",
@@ -30,8 +32,14 @@ export class XtermSurface implements TerminalSurface {
     this.#resizeObserver.observe(element);
   }
 
-  write(bytes: Uint8Array): void {
-    this.#terminal.write(bytes);
+  write(bytes: Uint8Array): Promise<void> {
+    return new Promise((resolve) => this.#terminal.write(bytes, resolve));
+  }
+
+  restore(snapshot: TerminalSnapshot): Promise<void> {
+    this.#terminal.reset();
+    this.#terminal.resize(snapshot.columns, snapshot.rows);
+    return this.write(snapshot.bytes);
   }
 
   onData(listener: (text: string) => void): Disposable {

@@ -13,7 +13,7 @@ use tokio::{
 
 use crate::{Resume, TerminalSize};
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -34,11 +34,11 @@ pub enum HostRequest {
     ListSessions,
     Read {
         session_id: WorkerSessionId,
-        after_sequence: u64,
+        after_sequence: Option<u64>,
     },
     Wait {
         session_id: WorkerSessionId,
-        after_sequence: u64,
+        after_sequence: Option<u64>,
     },
     Write {
         session_id: WorkerSessionId,
