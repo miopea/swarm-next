@@ -1,20 +1,57 @@
+import type { TerminalConnectionHandlers, TerminalConnectionState } from "./TerminalConnection";
+
+export interface Disposable {
+  dispose(): void;
+}
+
 export interface TerminalSurface {
   open(element: HTMLElement): void;
+  write(bytes: Uint8Array): void;
+  onData(listener: (text: string) => void): Disposable;
+  onResize(listener: (size: { rows: number; columns: number }) => void): Disposable;
+  dispose(): void;
+}
+
+export interface TerminalConnectionLike {
+  start(handlers: TerminalConnectionHandlers): void;
+  sendInput(text: string): void;
+  resize(rows: number, columns: number): void;
   dispose(): void;
 }
 
 export type TerminalSurfaceFactory = () => TerminalSurface;
+export type TerminalConnectionFactory = () => TerminalConnectionLike;
+export type TerminalStatusListener = (state: TerminalConnectionState, detail?: string) => void;
 
-/** Owns a renderer independently from any React component. */
+const MAX_STATUS_SUBSCRIBERS = 8;
+
+/** Owns renderer and transport lifecycles independently from React views. */
 export class TerminalController {
   readonly #host = document.createElement("div");
   readonly #surface: TerminalSurface;
+  readonly #connection: TerminalConnectionLike;
+  readonly #surfaceSubscriptions: Disposable[];
+  readonly #statusSubscribers = new Set<TerminalStatusListener>();
   #opened = false;
   #disposed = false;
+  #state: TerminalConnectionState = "connecting";
+  #stateDetail: string | undefined;
 
-  constructor(factory: TerminalSurfaceFactory) {
-    this.#surface = factory();
+  constructor(surfaceFactory: TerminalSurfaceFactory, connectionFactory: TerminalConnectionFactory) {
+    this.#surface = surfaceFactory();
+    this.#connection = connectionFactory();
     this.#host.className = "terminal-surface";
+    this.#surfaceSubscriptions = [
+      this.#surface.onData((text) => this.#connection.sendInput(text)),
+      this.#surface.onResize(({ rows, columns }) => this.#connection.resize(rows, columns)),
+    ];
+    this.#connection.start({
+      onOutput: (bytes) => this.#surface.write(bytes),
+      onState: (state, detail) => this.#setState(state, detail),
+      onRunningChange: (running) => {
+        if (!running) this.#setState("closed", "worker process exited");
+      },
+    });
   }
 
   attach(container: HTMLElement): void {
@@ -30,21 +67,43 @@ export class TerminalController {
     this.#host.remove();
   }
 
+  subscribe(listener: TerminalStatusListener): Disposable {
+    if (this.#statusSubscribers.size >= MAX_STATUS_SUBSCRIBERS) {
+      throw new Error(`Terminal status subscriber limit of ${MAX_STATUS_SUBSCRIBERS} reached`);
+    }
+    this.#statusSubscribers.add(listener);
+    listener(this.#state, this.#stateDetail);
+    return { dispose: () => this.#statusSubscribers.delete(listener) };
+  }
+
   dispose(): void {
     if (this.#disposed) return;
-    this.detach();
-    this.#surface.dispose();
     this.#disposed = true;
+    this.detach();
+    for (const subscription of this.#surfaceSubscriptions) subscription.dispose();
+    this.#connection.dispose();
+    this.#surface.dispose();
+    this.#statusSubscribers.clear();
+  }
+
+  #setState(state: TerminalConnectionState, detail?: string): void {
+    this.#state = state;
+    this.#stateDetail = detail;
+    for (const subscriber of this.#statusSubscribers) subscriber(state, detail);
   }
 }
 
 export class TerminalControllerRegistry {
   readonly #controllers = new Map<string, TerminalController>();
 
-  getOrCreate(sessionId: string, factory: TerminalSurfaceFactory): TerminalController {
+  getOrCreate(
+    sessionId: string,
+    surfaceFactory: TerminalSurfaceFactory,
+    connectionFactory: TerminalConnectionFactory,
+  ): TerminalController {
     const existing = this.#controllers.get(sessionId);
     if (existing) return existing;
-    const controller = new TerminalController(factory);
+    const controller = new TerminalController(surfaceFactory, connectionFactory);
     this.#controllers.set(sessionId, controller);
     return controller;
   }
@@ -54,6 +113,11 @@ export class TerminalControllerRegistry {
     if (!controller) return;
     controller.dispose();
     this.#controllers.delete(sessionId);
+  }
+
+  closeAll(): void {
+    for (const controller of this.#controllers.values()) controller.dispose();
+    this.#controllers.clear();
   }
 
   get size(): number {
