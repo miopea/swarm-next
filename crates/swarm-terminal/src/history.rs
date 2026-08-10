@@ -1239,6 +1239,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::{CanonicalTerminalState, JournalLimits, TerminalSize};
 
     fn limits() -> HistoryLimits {
         HistoryLimits::new(128, 192, 384, 768, 60)
@@ -1341,6 +1342,46 @@ mod tests {
             recovered.records.first(),
             Some(HistoryRecord::Checkpoint { .. })
         ));
+    }
+
+    #[test]
+    fn retained_checkpoint_and_output_records_rebuild_canonical_state() {
+        let temp = TempDir::new().unwrap();
+        let limits = HistoryLimits::new(512, 640, 1280, 1280, 60);
+        let store = HistoryStore::open(temp.path().join("history"), limits).unwrap();
+        let id = WorkerSessionId::new();
+        let mut canonical =
+            CanonicalTerminalState::new(JournalLimits::new(1024, 32), TerminalSize::new(4, 20));
+        store.start_session(id).unwrap();
+        store.append_checkpoint(id, &canonical.snapshot()).unwrap();
+        for line in 0..100 {
+            let output = format!("line-{line:03}\r\n").into_bytes();
+            let sequence = canonical.push(output.clone());
+            if store.append(id, sequence, &output).unwrap()
+                == HistoryAppendOutcome::CheckpointRequired
+            {
+                store.append_checkpoint(id, &canonical.snapshot()).unwrap();
+            }
+        }
+
+        let mut replay: Option<vt100::Parser> = None;
+        for record in store.read_session(id).unwrap() {
+            match record {
+                HistoryRecord::Checkpoint { snapshot, .. } => {
+                    let mut parser = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
+                    parser.process(&snapshot.bytes);
+                    replay = Some(parser);
+                }
+                HistoryRecord::Output { bytes, .. } => {
+                    replay.as_mut().unwrap().process(&bytes);
+                }
+            }
+        }
+        let replay = replay.expect("retained history must begin with a checkpoint");
+        assert_eq!(
+            replay.screen().state_formatted(),
+            canonical.snapshot().bytes
+        );
     }
 
     #[test]

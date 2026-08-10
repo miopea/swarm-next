@@ -94,6 +94,8 @@ joining bytes onto an invalid ANSI state.
 - Durable history remains listable and pageable after the store is reopened.
 - Pagination never duplicates records; an evicted cursor resets to a retained
   canonical checkpoint.
+- Replaying the oldest retained checkpoint and its later output converges with
+  uninterrupted canonical terminal state after earlier segments are evicted.
 - Age pruning and Unix permission tests pass.
 - The full Rust workspace passes formatting, Clippy with warnings denied, and
   all tests.
