@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use swarm_domain::WorkerSessionId;
@@ -13,6 +16,12 @@ use crate::{Resume, TerminalSize};
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
+
+#[must_use]
+pub fn default_terminal_socket_path() -> PathBuf {
+    let home = env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
+    home.join(".local/state/swarm-next/run/terminal.sock")
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 axum.workspace = true
 serde.workspace = true
+subtle.workspace = true
+swarm-domain = { path = "../swarm-domain" }
 swarm-terminal = { path = "../swarm-terminal" }
 tokio.workspace = true
 tracing.workspace = true
@@ -15,6 +17,8 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+swarm-terminal-host = { path = "../swarm-terminal-host" }
+tempfile = "3"
 tower.workspace = true
 
 [lints]
