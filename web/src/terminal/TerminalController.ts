@@ -51,7 +51,6 @@ export class TerminalController {
     this.#host.className = "terminal-surface";
     this.#surfaceSubscriptions = [
       this.#surface.onData((text) => this.#connection.sendInput(text)),
-      this.#surface.onResize(({ rows, columns }) => this.#connection.resize(rows, columns)),
     ];
   }
 
@@ -118,6 +117,11 @@ export class TerminalController {
         if (!running) this.#setState("closed", "worker process exited");
       },
     });
+    this.#surfaceSubscriptions.push(
+      this.#surface.onResize(({ rows: nextRows, columns: nextColumns }) =>
+        this.#connection.resize(nextRows, nextColumns),
+      ),
+    );
     this.#started = true;
   }
 
