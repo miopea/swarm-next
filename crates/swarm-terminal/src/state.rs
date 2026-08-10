@@ -69,8 +69,25 @@ impl CanonicalTerminalState {
         }
     }
 
-    pub fn resize(&mut self, size: TerminalSize) {
+    #[must_use]
+    pub fn size(&self) -> TerminalSize {
+        let (rows, columns) = self.parser.screen().size();
+        TerminalSize::new(rows, columns)
+    }
+
+    /// Commits dimensions and creates a sequenced snapshot boundary.
+    ///
+    /// Byte deltas cannot describe a resize to an already attached renderer,
+    /// so every client cursor before this boundary must receive a canonical
+    /// snapshot. Identical dimensions are a no-op to prevent resize echoes
+    /// from creating synchronization loops.
+    pub fn resize(&mut self, size: TerminalSize) -> bool {
+        if self.size() == size {
+            return false;
+        }
         self.parser.screen_mut().set_size(size.rows, size.columns);
+        self.journal.snapshot_boundary();
+        true
     }
 
     #[must_use]
@@ -173,8 +190,20 @@ mod tests {
     fn resize_is_part_of_the_canonical_snapshot() {
         let mut state =
             CanonicalTerminalState::new(JournalLimits::new(128, 8), TerminalSize::new(24, 80));
-        state.resize(TerminalSize::new(40, 120));
-        assert_eq!((state.snapshot().rows, state.snapshot().columns), (40, 120));
+        let cursor = state.push(b"before-resize".to_vec());
+
+        assert!(state.resize(TerminalSize::new(40, 120)));
+        let Resume::Snapshot { snapshot } = state.resume_after(Some(cursor)) else {
+            panic!("a pre-resize cursor must receive canonical dimensions");
+        };
+        assert_eq!(snapshot.sequence, cursor + 1);
+        assert_eq!((snapshot.rows, snapshot.columns), (40, 120));
+
+        assert!(!state.resize(TerminalSize::new(40, 120)));
+        assert!(matches!(
+            state.resume_after(Some(snapshot.sequence)),
+            Resume::Deltas { frames } if frames.is_empty()
+        ));
     }
 
     #[test]

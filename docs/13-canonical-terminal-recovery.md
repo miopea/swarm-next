@@ -55,6 +55,8 @@ it never kills or replaces the provider process.
 - Fresh, expired, and covered cursors select snapshot or deltas correctly.
 - Snapshot plus deltas converges with uninterrupted parsing.
 - Styled cells, cursor state, dimensions, and alternate-screen mode recover.
+- A committed resize wakes every attachment at a sequenced snapshot boundary;
+  no client applies later output using stale dimensions.
 - Resume cursor advances only after the renderer's completion callback.
 - A renderer backlog crosses a hard bound and requests a fresh snapshot.
 - Pathological parser content compacts, and oversize fallback is visible.

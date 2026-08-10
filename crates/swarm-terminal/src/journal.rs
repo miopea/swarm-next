@@ -71,6 +71,16 @@ impl BoundedJournal {
         sequence
     }
 
+    /// Advances the canonical sequence while invalidating every retained
+    /// byte-only cursor. Callers use this when terminal state changes without
+    /// corresponding PTY output, such as a committed resize.
+    pub(crate) fn snapshot_boundary(&mut self) -> u64 {
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        self.clear_retained();
+        sequence
+    }
+
     #[must_use]
     pub(crate) fn resume_after(&self, sequence: u64) -> JournalResume {
         let latest_sequence = self.latest_sequence();
@@ -182,5 +192,23 @@ mod tests {
         }
         assert_eq!(journal.retained_bytes(), 8 * 1024);
         assert_eq!(journal.retained_frames(), 8);
+    }
+
+    #[test]
+    fn snapshot_boundary_invalidates_byte_only_cursors() {
+        let mut journal = BoundedJournal::new(JournalLimits::new(32, 10));
+        let cursor = journal.push(b"before-resize".to_vec());
+
+        let boundary = journal.snapshot_boundary();
+
+        assert_eq!(boundary, cursor + 1);
+        assert_eq!(journal.retained_bytes(), 0);
+        assert_eq!(journal.retained_frames(), 0);
+        assert_eq!(
+            journal.resume_after(cursor),
+            JournalResume::SnapshotRequired {
+                latest_sequence: boundary
+            }
+        );
     }
 }

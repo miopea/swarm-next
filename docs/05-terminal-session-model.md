@@ -49,7 +49,10 @@ are rejected even if the durable worker name has been reused.
 - React component remounts do not own WebSocket or xterm lifetime.
 - Hidden terminals never commit zero or intermediate dimensions.
 - A resize is sent only after a stable non-zero ResizeObserver measurement.
-- The server acknowledges the committed dimensions.
+- A changed resize advances the canonical sequence, invalidates byte-only
+  cursors, and wakes every attachment with one canonical snapshot.
+- An identical resize is acknowledged as a no-op so renderer echoes cannot
+  create a synchronization loop.
 - Reload produces one synchronization transition, not reset plus repeated
   replay guesses.
 - Background terminals may suspend rendering, but their session cursors and

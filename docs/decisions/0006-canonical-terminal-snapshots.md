@@ -27,6 +27,12 @@ Absence of a cursor is distinct from sequence zero. IPC protocol version 2 and
 WebSocket subprotocol `swarm-terminal.v2` carry that distinction and the new
 snapshot frame.
 
+A changed terminal resize advances the canonical sequence without inventing
+PTY bytes, invalidates every earlier byte-only cursor, and wakes attachments to
+receive the new canonical snapshot. Repeating the already committed dimensions
+is a no-op. This makes dimensions part of synchronization truth instead of an
+out-of-band browser assumption.
+
 Canonical state is bounded by:
 
 - 1,000 parser scrollback rows;
@@ -46,6 +52,8 @@ and sequence. This event is carried to the browser instead of failing silently.
 - Snapshot acquisition and subsequent deltas cannot race past one another.
 - Browser resume cursors advance only after xterm confirms that bytes rendered.
 - Slow rendering reconnects from a snapshot instead of accumulating messages.
+- Concurrent attachments converge on the same committed dimensions before
+  applying subsequent output.
 - The current snapshot preserves the active screen, cursor, drawing state,
   supported input modes, and alternate-screen mode. Restoring historical
   scrollback awaits the bounded durable-history increment.

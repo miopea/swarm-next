@@ -248,16 +248,21 @@ impl ProcessTerminalSession {
     pub fn resize(&self, size: TerminalSize) -> Result<(), SessionRegistryError> {
         size.validate()?;
         let mut terminal_state = lock(&self.terminal_state)?;
+        if terminal_state.size() == size {
+            return Ok(());
+        }
         lock(&self.master)?
             .resize(size.as_pty_size())
             .map_err(terminal_error)?;
-        terminal_state.resize(size);
+        debug_assert!(terminal_state.resize(size));
         if let Some(history) = &self.history {
             let snapshot = terminal_state.snapshot();
             if let Err(error) = history.append_checkpoint(self.id, &snapshot) {
                 warn!(session_id = %self.id, %error, "terminal history resize checkpoint failed");
             }
         }
+        drop(terminal_state);
+        self.output_state.send_replace(true);
         Ok(())
     }
 
