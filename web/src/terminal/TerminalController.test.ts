@@ -117,9 +117,11 @@ test("transport waits for a post-layout renderer fit", async () => {
 
   controller.attach(document.createElement("div"));
   expect(surface.open).toHaveBeenCalledTimes(1);
+  expect(surface.onResize).not.toHaveBeenCalled();
   expect(connection.start).not.toHaveBeenCalled();
 
   resolveFit?.({ rows: 38, columns: 132 });
   await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
   expect(connection.resize).toHaveBeenCalledWith(38, 132);
+  expect(surface.onResize).toHaveBeenCalledTimes(1);
 });

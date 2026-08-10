@@ -3,6 +3,7 @@ import { expect, test, vi } from "vitest";
 const xterm = vi.hoisted(() => ({
   fit: vi.fn(),
   propose: vi.fn<() => { rows: number; cols: number } | undefined>(),
+  resizeListener: undefined as ((size: { rows: number; cols: number }) => void) | undefined,
   terminal: undefined as { rows: number; cols: number } | undefined,
 }));
 
@@ -45,7 +46,8 @@ vi.mock("@xterm/xterm", () => ({
     onData(): { dispose(): void } {
       return { dispose: vi.fn() };
     }
-    onResize(): { dispose(): void } {
+    onResize(listener: (size: { rows: number; cols: number }) => void): { dispose(): void } {
+      xterm.resizeListener = listener;
       return { dispose: vi.fn() };
     }
     dispose(): void {}
@@ -87,4 +89,28 @@ test("authoritative fit waits until xterm can propose real dimensions", async ()
   frames.shift()?.(16);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
   expect(xterm.terminal).toMatchObject({ rows: 38, cols: 132 });
+});
+
+test("stale queued resize events cannot replace the fitted geometry", () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const surface = new XtermSurface();
+  surface.open(document.createElement("div"));
+  if (xterm.terminal) {
+    xterm.terminal.rows = 38;
+    xterm.terminal.cols = 132;
+  }
+  const listener = vi.fn();
+  surface.onResize(listener);
+
+  xterm.resizeListener?.({ rows: 24, cols: 80 });
+  expect(listener).not.toHaveBeenCalled();
+
+  xterm.resizeListener?.({ rows: 38, cols: 132 });
+  expect(listener).toHaveBeenCalledWith({ rows: 38, columns: 132 });
 });

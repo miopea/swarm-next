@@ -56,6 +56,9 @@ geometry part of the same synchronization boundary.
 - React component remounts do not own WebSocket or xterm lifetime.
 - WebSocket startup never precedes mounting, opening, fitting, and measuring
   the renderer.
+- Live resize observation begins only after the authoritative initial fit, and
+  queued resize events that no longer match xterm's current dimensions are
+  ignored.
 - Hidden terminals never commit zero or intermediate dimensions.
 - A resize is sent only after a stable non-zero ResizeObserver measurement.
 - A changed resize advances the canonical sequence, invalidates byte-only

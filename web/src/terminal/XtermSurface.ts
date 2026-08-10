@@ -64,7 +64,10 @@ export class XtermSurface implements TerminalSurface {
   }
 
   onResize(listener: (size: { rows: number; columns: number }) => void): Disposable {
-    return this.#terminal.onResize(({ rows, cols }) => listener({ rows, columns: cols }));
+    return this.#terminal.onResize(({ rows, cols }) => {
+      if (rows !== this.#terminal.rows || cols !== this.#terminal.cols) return;
+      listener({ rows, columns: cols });
+    });
   }
 
   dispose(): void {
