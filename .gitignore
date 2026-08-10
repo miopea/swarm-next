@@ -1,0 +1,15 @@
+/target/
+/node_modules/
+/dist/
+/coverage/
+/.vite/
+/.env
+/.env.*
+!.env.example
+*.log
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+Thumbs.db
+
