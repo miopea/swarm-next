@@ -6,8 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+portable-pty.workspace = true
 serde.workspace = true
+swarm-domain = { path = "../swarm-domain" }
 thiserror.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

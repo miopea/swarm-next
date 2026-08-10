@@ -11,6 +11,7 @@ repository = "https://github.com/miopea/swarm-next"
 
 [workspace.dependencies]
 axum = "0.8.9"
+portable-pty = "0.9.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
