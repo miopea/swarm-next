@@ -15,7 +15,7 @@ use crate::{
     HistoryCursor, HistoryDiagnostics, HistoryPage, HistorySessionSummary, Resume, TerminalSize,
 };
 
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -29,6 +29,9 @@ pub fn default_terminal_socket_path() -> PathBuf {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostRequest {
     Ping,
+    HostStatus,
+    BeginDrain,
+    CancelDrain,
     StartClaude {
         workspace: PathBuf,
         size: TerminalSize,
@@ -67,11 +70,23 @@ pub struct HostSessionSummary {
     pub running: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TerminalHostStatus {
+    pub protocol_version: u16,
+    pub host_version: String,
+    pub draining: bool,
+    pub running_sessions: usize,
+    pub retained_sessions: usize,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostResponse {
     Pong {
         protocol_version: u16,
+    },
+    HostStatus {
+        status: TerminalHostStatus,
     },
     SessionStarted {
         session_id: WorkerSessionId,

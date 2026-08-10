@@ -17,6 +17,7 @@ Read and review these documents in order:
 13. [M1 browser terminal attachment](12-browser-terminal-attachment.md)
 14. [M1 canonical terminal recovery](13-canonical-terminal-recovery.md)
 15. [M1 durable terminal history](14-durable-terminal-history.md)
+16. [M1 terminal-host update lifecycle](15-terminal-host-update-lifecycle.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do
@@ -41,3 +42,4 @@ Current decision records:
 - [ADR 0005: Independent terminal-host process](decisions/0005-independent-terminal-host.md)
 - [ADR 0006: Host-owned canonical terminal snapshots](decisions/0006-canonical-terminal-snapshots.md)
 - [ADR 0007: Host-owned bounded durable terminal history](decisions/0007-host-owned-durable-terminal-history.md)
+- [ADR 0008: Drain-compatible terminal-host updates](decisions/0008-drain-compatible-terminal-host-updates.md)

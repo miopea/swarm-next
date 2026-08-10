@@ -77,5 +77,6 @@ roots and provider commands, so HTTP authorization is not its only boundary.
 
 ## Remaining M1 work
 
-- Host restart/update descriptor handoff or explicit compatibility fallback.
-- Packaged service lifecycle, diagnostics, and longer resource soak.
+- Package the implemented compatible-host drain contract into the installer and
+  updater lifecycle.
+- Longer resource soak and promotion evidence.

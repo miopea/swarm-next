@@ -11,6 +11,7 @@ use swarm_domain::WorkerSessionId;
 use swarm_terminal::{
     ClaudeCodeAdapter, HostRequest, HostResponse, HostSessionSummary, MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES, PROTOCOL_VERSION, ProviderTerminalAdapter, SessionRegistry,
+    TerminalHostStatus,
 };
 use thiserror::Error;
 use tokio::{
@@ -238,6 +239,19 @@ fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostRe
                 protocol_version: PROTOCOL_VERSION,
             };
         }
+        HostRequest::HostStatus => terminal_host_status(registry)
+            .map(|status| HostResponse::HostStatus { status })
+            .map_err(|error| error.to_string()),
+        HostRequest::BeginDrain => registry
+            .begin_drain()
+            .and_then(|_| terminal_host_status(registry))
+            .map(|status| HostResponse::HostStatus { status })
+            .map_err(|error| error.to_string()),
+        HostRequest::CancelDrain => registry
+            .cancel_drain()
+            .and_then(|()| terminal_host_status(registry))
+            .map(|status| HostResponse::HostStatus { status })
+            .map_err(|error| error.to_string()),
         HostRequest::StartClaude { workspace, size } => ClaudeCodeAdapter
             .command_for(&workspace)
             .map_err(|error| error.to_string())
@@ -307,6 +321,18 @@ fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostRe
             .map_err(|error| error.to_string()),
     };
     result.unwrap_or_else(|message| error_response("terminal_operation_failed", &message))
+}
+
+fn terminal_host_status(
+    registry: &SessionRegistry,
+) -> Result<TerminalHostStatus, swarm_terminal::SessionRegistryError> {
+    Ok(TerminalHostStatus {
+        protocol_version: PROTOCOL_VERSION,
+        host_version: env!("CARGO_PKG_VERSION").into(),
+        draining: registry.is_draining(),
+        running_sessions: registry.running_session_count()?,
+        retained_sessions: registry.len()?,
+    })
 }
 
 fn error_response(code: &str, message: &str) -> HostResponse {
@@ -408,6 +434,49 @@ mod tests {
             })
             .await
             .unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn ipc_drain_status_is_atomic_with_session_creation() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec!["-lc".into(), "sleep 5".into()],
+            working_directory: workspace,
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, Arc::clone(&registry)).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let client = HostClient::new(&socket);
+
+        let HostResponse::HostStatus { status } =
+            client.request(&HostRequest::BeginDrain).await.unwrap()
+        else {
+            panic!("begin drain must return host status");
+        };
+        assert!(status.draining);
+        assert_eq!(status.running_sessions, 1);
+        assert_eq!(status.retained_sessions, 1);
+        assert_eq!(status.protocol_version, PROTOCOL_VERSION);
+        assert!(matches!(
+            registry.spawn(&command, TerminalSize::default()),
+            Err(swarm_terminal::SessionRegistryError::HostDraining)
+        ));
+
+        let HostResponse::HostStatus { status } =
+            client.request(&HostRequest::CancelDrain).await.unwrap()
+        else {
+            panic!("cancel drain must return host status");
+        };
+        assert!(!status.draining);
+        session.stop().unwrap();
         server_task.abort();
         let _ = server_task.await;
     }

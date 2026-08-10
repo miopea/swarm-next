@@ -169,6 +169,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/v1/runtime/limits", get(runtime_limits))
+        .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
         .route(
             "/api/v1/terminal/sessions",
             get(list_sessions).post(start_session),
@@ -234,6 +235,13 @@ async fn runtime_limits(State(state): State<Arc<AppState>>) -> Json<RuntimeLimit
             max_cells: MAX_TERMINAL_CELLS,
         },
     })
+}
+
+async fn terminal_host_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorized_no_store_request(&state, &headers, HostRequest::HostStatus).await
 }
 
 async fn list_sessions(
@@ -591,8 +599,8 @@ mod tests {
     use futures_util::{SinkExt, StreamExt};
     use serde_json::Value;
     use swarm_terminal::{
-        HistoryLimits, HistoryStore, JournalLimits, ProviderCommand, SessionRegistry,
-        TerminalSnapshot,
+        HistoryLimits, HistoryStore, JournalLimits, PROTOCOL_VERSION, ProviderCommand,
+        SessionRegistry, TerminalSnapshot,
     };
     use swarm_terminal_host::HostServer;
     use tempfile::TempDir;
@@ -714,7 +722,7 @@ mod tests {
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
 
-        let response = authorized_get(app, "/api/v1/terminal/history/diagnostics").await;
+        let response = authorized_get(app.clone(), "/api/v1/terminal/history/diagnostics").await;
         assert!(response.status().is_success());
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let json = response_json(response).await;
@@ -724,6 +732,12 @@ mod tests {
         );
         assert_eq!(json["diagnostics"]["retained_bytes"], 0);
         assert!(json.get("bytes").is_none());
+        let status_response = authorized_get(app, "/api/v1/runtime/terminal-host").await;
+        assert_eq!(status_response.headers()[header::CACHE_CONTROL], "no-store");
+        let status = response_json(status_response).await;
+        assert_eq!(status["status"]["protocol_version"], PROTOCOL_VERSION);
+        assert_eq!(status["status"]["draining"], false);
+        assert_eq!(status["status"]["running_sessions"], 0);
         server_task.abort();
         let _ = server_task.await;
     }
