@@ -1,0 +1,23 @@
+[package]
+name = "swarm-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "swarmctl"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+swarm-terminal = { path = "../swarm-terminal" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+swarm-terminal-host = { path = "../swarm-terminal-host" }
+tempfile = "3"
+
+[lints]
+workspace = true

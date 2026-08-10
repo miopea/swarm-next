@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/swarm-cli",
   "crates/swarm-api",
   "crates/swarm-domain",
   "crates/swarm-terminal",

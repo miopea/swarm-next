@@ -70,3 +70,13 @@ Run the browser client with `pnpm --dir web dev`. It proxies `/health` and
 HTTP/WebSocket `/api` traffic to `127.0.0.1:8765`. Unlock the development UI
 with the same operator token configured for the API. The token remains in
 browser memory; do not commit or log operator tokens.
+
+Inspect or drive the terminal-host update drain through the typed lifecycle
+client. It never kills workers or deletes sockets:
+
+```sh
+cargo run -p swarm-cli --bin swarmctl -- status
+cargo run -p swarm-cli --bin swarmctl -- drain
+cargo run -p swarm-cli --bin swarmctl -- wait-ready 300
+cargo run -p swarm-cli --bin swarmctl -- cancel-drain
+```
