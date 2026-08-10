@@ -88,8 +88,8 @@ unprivileged systemd user services:
 
 ```sh
 ./packaging/linux/build-release.sh
-tar -xzf dist/swarm-next-0.1.0-linux-x86_64.tar.gz
-./packaging/linux/swarm-next-package install ./swarm-next-0.1.0-linux-x86_64
+tar -xzf dist/swarm-next-0.1.0-<commit>-linux-x86_64.tar.gz
+./packaging/linux/swarm-next-package install ./swarm-next-0.1.0-<commit>-linux-x86_64
 ```
 
 The packaged UI listens on `http://127.0.0.1:8766`. Releases are staged under
@@ -111,3 +111,7 @@ CLAUDE_CONFIG_DIR="$HOME/.local/state/swarm-next/providers/claude" claude
 The user service runs while the user manager is active. A remote host that must
 keep running after logout may require an administrator to enable user lingering;
 the installer does not elevate privileges or change that host policy.
+
+Each immutable release ID includes its Git commit. The builder refuses a dirty
+worktree so an installed artifact always maps back to one reviewable source
+state and can coexist with later `0.1.0` dogfood builds.

@@ -22,6 +22,10 @@ Swarm Next ships one release artifact containing the Rust API, terminal host,
 - a same-user Unix socket under the systemd user runtime directory;
 - the side-by-side HTTP endpoint `127.0.0.1:8766`.
 
+Release identity combines the Cargo version and Git commit. Packaging refuses a
+dirty worktree, preventing two different builds from claiming the same
+immutable release directory.
+
 The API serves the compiled browser application, so the operator starts and
 updates one product even though terminal ownership remains in its independent
 process. The terminal host gets write access only to the configured workspace
