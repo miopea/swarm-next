@@ -10,7 +10,7 @@ export interface Disposable {
 
 export interface TerminalSurface {
   open(element: HTMLElement): void;
-  size(): { rows: number; columns: number };
+  fit(): Promise<{ rows: number; columns: number }>;
   write(bytes: Uint8Array): Promise<void>;
   restore(snapshot: TerminalSnapshot): Promise<void>;
   onData(listener: (text: string) => void): Disposable;
@@ -39,6 +39,8 @@ export class TerminalController {
   readonly #surfaceSubscriptions: Disposable[];
   readonly #statusSubscribers = new Set<TerminalStatusListener>();
   #opened = false;
+  #started = false;
+  #startPromise: Promise<void> | undefined;
   #disposed = false;
   #state: TerminalConnectionState = "connecting";
   #stateDetail: string | undefined;
@@ -59,17 +61,8 @@ export class TerminalController {
     if (!this.#opened) {
       this.#surface.open(this.#host);
       this.#opened = true;
-      const { rows, columns } = this.#surface.size();
-      this.#connection.resize(rows, columns);
-      this.#connection.start({
-        onOutput: (bytes) => this.#surface.write(bytes),
-        onSnapshot: (snapshot) => this.#surface.restore(snapshot),
-        onState: (state, detail) => this.#setState(state, detail),
-        onRunningChange: (running) => {
-          if (!running) this.#setState("closed", "worker process exited");
-        },
-      });
     }
+    this.#startWhenFitted();
   }
 
   detach(): void {
@@ -93,6 +86,39 @@ export class TerminalController {
     this.#connection.dispose();
     this.#surface.dispose();
     this.#statusSubscribers.clear();
+  }
+
+  #startWhenFitted(): void {
+    if (this.#started || this.#startPromise) return;
+    const startPromise = this.#fitAndStart();
+    this.#startPromise = startPromise;
+    void startPromise
+      .catch((error: unknown) => {
+        if (!this.#disposed) {
+          this.#setState(
+            "error",
+            error instanceof Error ? error.message : "terminal renderer fit failed",
+          );
+        }
+      })
+      .finally(() => {
+        if (this.#startPromise === startPromise) this.#startPromise = undefined;
+      });
+  }
+
+  async #fitAndStart(): Promise<void> {
+    const { rows, columns } = await this.#surface.fit();
+    if (this.#disposed || this.#started || !this.#host.parentElement) return;
+    this.#connection.resize(rows, columns);
+    this.#connection.start({
+      onOutput: (bytes) => this.#surface.write(bytes),
+      onSnapshot: (snapshot) => this.#surface.restore(snapshot),
+      onState: (state, detail) => this.#setState(state, detail),
+      onRunningChange: (running) => {
+        if (!running) this.#setState("closed", "worker process exited");
+      },
+    });
+    this.#started = true;
   }
 
   #setState(state: TerminalConnectionState, detail?: string): void {

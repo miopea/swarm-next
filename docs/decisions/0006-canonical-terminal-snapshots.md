@@ -53,8 +53,10 @@ and sequence. This event is carried to the browser instead of failing silently.
 - Reload and stale-cursor recovery cost is proportional to the bounded visible
   screen, not the volume of recent worker output.
 - Snapshot acquisition and subsequent deltas cannot race past one another.
-- Browser transport starts only after the terminal host element is mounted and
-  xterm has been opened, fitted, and measured.
+- Browser transport starts only after the terminal host element is mounted,
+  font metrics are ready, and xterm has been fitted after two layout frames.
+  An eager fit in the mount call is insufficient because xterm can otherwise
+  retain its 80-by-24 default inside a much larger stable container.
 - Browser resume cursors advance only after xterm confirms that bytes rendered.
 - Slow rendering reconnects from a snapshot instead of accumulating messages.
 - Concurrent attachments converge on the same committed dimensions before
