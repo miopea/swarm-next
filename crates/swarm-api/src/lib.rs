@@ -968,6 +968,7 @@ mod tests {
 
         let grant = issue_terminal_grant(&app, session.id()).await;
         let second_grant = issue_terminal_grant(&app, session.id()).await;
+        let resume_grant = issue_terminal_grant(&app, session.id()).await;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -976,15 +977,37 @@ mod tests {
             "ws://{address}/api/v1/terminal/sessions/{}/attach",
             session.id()
         );
-        let mut websocket = connect_terminal(&websocket_url, &grant, 30, 100).await;
+        let mut websocket = connect_terminal(&websocket_url, &grant, 30, 100, None).await;
 
-        let (initial, initial_dimensions) =
+        let (initial, initial_dimensions, initial_sequence) =
             terminal_output_until(&mut websocket, "socket-ready").await;
         assert_eq!(initial_dimensions, Some((30, 100)));
         assert!(String::from_utf8_lossy(&initial).contains("socket-ready"));
 
-        let mut second_websocket = connect_terminal(&websocket_url, &second_grant, 30, 100).await;
-        let (_, second_initial_dimensions) =
+        let mut resumed_websocket = connect_terminal(
+            &websocket_url,
+            &resume_grant,
+            30,
+            100,
+            Some(initial_sequence),
+        )
+        .await;
+        let resumed_state = tokio::time::timeout(Duration::from_secs(1), resumed_websocket.next())
+            .await
+            .expect("covered resume should be acknowledged without new output")
+            .expect("covered resume WebSocket closed")
+            .unwrap();
+        let ClientMessage::Text(resumed_state) = resumed_state else {
+            panic!("covered resume should receive an immediate state acknowledgement");
+        };
+        let resumed_state: Value = serde_json::from_str(&resumed_state).unwrap();
+        assert_eq!(resumed_state["type"], "state");
+        assert_eq!(resumed_state["running"], true);
+        assert_eq!(resumed_state["latest_sequence"], initial_sequence);
+
+        let mut second_websocket =
+            connect_terminal(&websocket_url, &second_grant, 30, 100, None).await;
+        let (_, second_initial_dimensions, _) =
             terminal_output_until(&mut second_websocket, "socket-ready").await;
         assert_eq!(second_initial_dimensions, Some((30, 100)));
 
@@ -994,9 +1017,9 @@ mod tests {
             ))
             .await
             .unwrap();
-        let (_, first_resized_dimensions) =
+        let (_, first_resized_dimensions, _) =
             terminal_output_until(&mut websocket, "socket-ready").await;
-        let (_, second_resized_dimensions) =
+        let (_, second_resized_dimensions, _) =
             terminal_output_until(&mut second_websocket, "socket-ready").await;
         assert_eq!(first_resized_dimensions, Some((35, 110)));
         assert_eq!(second_resized_dimensions, Some((35, 110)));
@@ -1007,7 +1030,7 @@ mod tests {
             ))
             .await
             .unwrap();
-        let (after_input, _) = terminal_output_until(&mut websocket, "socket:hello").await;
+        let (after_input, _, _) = terminal_output_until(&mut websocket, "socket:hello").await;
         assert!(String::from_utf8_lossy(&after_input).contains("socket:hello"));
 
         let mut reused_request = websocket_url.into_client_request().unwrap();
@@ -1058,6 +1081,7 @@ mod tests {
         grant: &str,
         rows: u16,
         columns: u16,
+        after_sequence: Option<u64>,
     ) -> WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>> {
         let mut request = websocket_url.into_client_request().unwrap();
         request.headers_mut().insert(
@@ -1074,7 +1098,9 @@ mod tests {
         websocket
             .send(ClientMessage::Text(
                 format!(
-                    r#"{{"type":"resume","after_sequence":null,"rows":{rows},"columns":{columns}}}"#
+                    r#"{{"type":"resume","after_sequence":{},"rows":{rows},"columns":{columns}}}"#,
+                    after_sequence
+                        .map_or_else(|| "null".to_owned(), |sequence| sequence.to_string())
                 )
                 .into(),
             ))
@@ -1086,7 +1112,7 @@ mod tests {
     async fn terminal_output_until<S>(
         websocket: &mut S,
         expected: &str,
-    ) -> (Vec<u8>, Option<(u16, u16)>)
+    ) -> (Vec<u8>, Option<(u16, u16)>, u64)
     where
         S: futures_util::Stream<
                 Item = Result<ClientMessage, tokio_tungstenite::tungstenite::Error>,
@@ -1102,6 +1128,7 @@ mod tests {
                 .expect("terminal WebSocket closed")
                 .unwrap();
             if let ClientMessage::Binary(payload) = message {
+                let latest_sequence = u64::from_be_bytes(payload[1..9].try_into().unwrap());
                 match payload[0] {
                     1 => output.extend_from_slice(&payload[9..]),
                     2 => {
@@ -1116,7 +1143,7 @@ mod tests {
                     frame_type => panic!("unexpected terminal frame type {frame_type}"),
                 }
                 if String::from_utf8_lossy(&output).contains(expected) {
-                    return (output, snapshot_dimensions);
+                    return (output, snapshot_dimensions, latest_sequence);
                 }
             }
         }
