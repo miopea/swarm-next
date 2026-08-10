@@ -1,0 +1,24 @@
+[Unit]
+Description=Swarm Next application and web UI
+PartOf=swarm-next.target
+After=swarm-next-terminal-host.service
+Requires=swarm-next-terminal-host.service
+
+[Service]
+Type=simple
+EnvironmentFile=@CONFIG_ROOT@/swarm-next.env
+Environment=SWARM_TERMINAL_SOCKET=%t/swarm-next/terminal.sock
+Environment=SWARM_WEB_ROOT=@INSTALL_ROOT@/current/web
+ExecStart=@INSTALL_ROOT@/current/bin/swarm-api
+Restart=on-failure
+RestartSec=2s
+RuntimeDirectory=swarm-next
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+UMask=0077
+
+[Install]
+WantedBy=swarm-next.target

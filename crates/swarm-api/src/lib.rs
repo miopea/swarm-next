@@ -1,12 +1,16 @@
 mod attach;
 mod terminal_socket;
 
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    path::{Path as FilePath, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 
 use axum::{
     Json, Router,
     extract::{Path, Query, State, WebSocketUpgrade},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
@@ -19,6 +23,7 @@ use swarm_terminal::{
     MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, TerminalSize,
 };
 use tokio::sync::Semaphore;
+use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 use attach::{ATTACH_GRANT_TTL, AttachGrantError, AttachGrantStore, MAX_ATTACH_GRANTS};
 use terminal_socket::{
@@ -166,6 +171,33 @@ impl IntoResponse for ApiError {
 }
 
 pub fn router(state: AppState) -> Router {
+    api_router(state)
+}
+
+/// Builds the API and serves a compiled browser application from `web_root`.
+/// Unknown files remain 404s; API misses are never rewritten to HTML.
+pub fn router_with_web_root(state: AppState, web_root: impl AsRef<FilePath>) -> Router {
+    api_router(state)
+        .fallback_service(ServeDir::new(web_root).append_index_html_on_directories(true))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+}
+
+fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/api/v1/runtime/limits", get(runtime_limits))
@@ -627,6 +659,52 @@ mod tests {
         let json = response_json(response).await;
         assert_eq!(json["status"], "ok");
         assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
+    async fn packaged_router_serves_only_existing_browser_assets() {
+        let web_root = TempDir::new().unwrap();
+        std::fs::write(
+            web_root.path().join("index.html"),
+            "<!doctype html><title>Swarm Next</title>",
+        )
+        .unwrap();
+        std::fs::write(web_root.path().join("app.js"), "export {};").unwrap();
+        let app = router_with_web_root(AppState::default(), web_root.path());
+
+        let index = app
+            .clone()
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(index.status(), StatusCode::OK);
+        assert_eq!(index.headers()[header::CACHE_CONTROL], "no-cache");
+        assert_eq!(index.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(index.headers()[header::X_FRAME_OPTIONS], "DENY");
+        assert_eq!(index.headers()[header::REFERRER_POLICY], "no-referrer");
+
+        let asset = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/app.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(asset.status(), StatusCode::OK);
+
+        let missing_api = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/not-a-route")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_api.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

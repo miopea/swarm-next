@@ -1,0 +1,26 @@
+[Unit]
+Description=Swarm Next terminal host
+PartOf=swarm-next.target
+
+[Service]
+Type=simple
+EnvironmentFile=@CONFIG_ROOT@/swarm-next.env
+Environment=SWARM_TERMINAL_SOCKET=%t/swarm-next/terminal.sock
+Environment=SWARM_TERMINAL_HISTORY_DIR=@STATE_ROOT@/terminal-history
+Environment=CLAUDE_CONFIG_DIR=@STATE_ROOT@/providers/claude
+ExecStart=@INSTALL_ROOT@/current/bin/swarm-terminal-host
+Restart=on-failure
+RestartSec=2s
+RuntimeDirectory=swarm-next
+RuntimeDirectoryMode=0700
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@STATE_ROOT@
+ReadWritePaths=@WORKSPACE_ROOT@
+UMask=0077
+
+[Install]
+WantedBy=swarm-next.target

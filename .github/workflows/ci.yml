@@ -34,3 +34,9 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
+
+  linux-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: packaging/linux/test-package-lifecycle.sh

@@ -1,0 +1,6 @@
+[Unit]
+Description=Swarm Next
+Wants=swarm-next-terminal-host.service swarm-next-api.service
+
+[Install]
+WantedBy=default.target
