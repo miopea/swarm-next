@@ -811,10 +811,12 @@ dependencies = [
 name = "swarm-terminal"
 version = "0.1.0"
 dependencies = [
+ "nix",
  "portable-pty",
  "serde",
  "serde_json",
  "swarm-domain",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

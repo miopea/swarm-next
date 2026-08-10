@@ -14,8 +14,12 @@ use serde::{Deserialize, Serialize};
 use swarm_domain::WorkerSessionId;
 use thiserror::Error;
 use tokio::sync::watch;
+use tracing::warn;
 
-use crate::{CanonicalTerminalState, JournalLimits, ProviderCommand, Resume};
+use crate::{
+    CanonicalTerminalState, HistoryAppendOutcome, HistoryCursor, HistoryDiagnostics, HistoryError,
+    HistoryPage, HistorySessionSummary, HistoryStore, JournalLimits, ProviderCommand, Resume,
+};
 
 pub const MAX_TERMINAL_ROWS: u16 = 200;
 pub const MAX_TERMINAL_COLUMNS: u16 = 320;
@@ -77,6 +81,8 @@ pub enum SessionRegistryError {
     SessionNotFound,
     #[error("terminal operation failed: {0}")]
     Terminal(String),
+    #[error(transparent)]
+    History(#[from] HistoryError),
     #[error("terminal session lock was poisoned")]
     LockPoisoned,
 }
@@ -90,6 +96,7 @@ pub struct ProcessTerminalSession {
     output_state: watch::Sender<bool>,
     reader_running: Arc<AtomicBool>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
+    history: Option<Arc<HistoryStore>>,
 }
 
 impl std::fmt::Debug for ProcessTerminalSession {
@@ -118,6 +125,16 @@ impl ProcessTerminalSession {
         limits: JournalLimits,
         size: TerminalSize,
     ) -> Result<Self, SessionRegistryError> {
+        Self::spawn_with_history(id, command, limits, size, None)
+    }
+
+    fn spawn_with_history(
+        id: WorkerSessionId,
+        command: &ProviderCommand,
+        limits: JournalLimits,
+        size: TerminalSize,
+        history: Option<Arc<HistoryStore>>,
+    ) -> Result<Self, SessionRegistryError> {
         size.validate()?;
         let pair = native_pty_system()
             .openpty(size.as_pty_size())
@@ -134,7 +151,12 @@ impl ProcessTerminalSession {
         let mut reader = pair.master.try_clone_reader().map_err(terminal_error)?;
         let writer = pair.master.take_writer().map_err(terminal_error)?;
         let terminal_state = Arc::new(Mutex::new(CanonicalTerminalState::new(limits, size)));
+        if let Some(history) = &history {
+            history.start_session(id)?;
+            history.append_checkpoint(id, &lock(&terminal_state)?.snapshot())?;
+        }
         let reader_terminal_state = Arc::clone(&terminal_state);
+        let reader_history = history.as_ref().map(Arc::clone);
         let (output_state, _) = watch::channel(true);
         let reader_output_state = output_state.clone();
         let reader_running = Arc::new(AtomicBool::new(true));
@@ -147,14 +169,39 @@ impl ProcessTerminalSession {
                     match reader.read(&mut buffer) {
                         Ok(0) | Err(_) => break,
                         Ok(read) => {
-                            if let Ok(mut terminal_state) = reader_terminal_state.lock() {
-                                terminal_state.push(buffer[..read].to_vec());
-                                reader_output_state.send_replace(true);
-                            } else {
-                                break;
+                            let output = &buffer[..read];
+                            let sequence =
+                                if let Ok(mut terminal_state) = reader_terminal_state.lock() {
+                                    terminal_state.push(output.to_vec())
+                                } else {
+                                    break;
+                                };
+                            if let Some(history) = &reader_history {
+                                match history.append(id, sequence, output) {
+                                    Ok(HistoryAppendOutcome::CheckpointRequired) => {
+                                        let snapshot = match reader_terminal_state.lock() {
+                                            Ok(terminal_state) => terminal_state.snapshot(),
+                                            Err(_) => break,
+                                        };
+                                        if let Err(error) = history.append_checkpoint(id, &snapshot)
+                                        {
+                                            warn!(session_id = %id, %error, "terminal history checkpoint failed");
+                                        }
+                                    }
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        warn!(session_id = %id, %error, "terminal history append failed");
+                                    }
+                                }
                             }
+                            reader_output_state.send_replace(true);
                         }
                     }
+                }
+                if let Some(history) = &reader_history
+                    && let Err(error) = history.finish_session(id)
+                {
+                    warn!(session_id = %id, %error, "terminal history finalization failed");
                 }
                 reader_state.store(false, Ordering::Release);
                 reader_output_state.send_replace(false);
@@ -170,6 +217,7 @@ impl ProcessTerminalSession {
             output_state,
             reader_running,
             reader_thread: Mutex::new(Some(reader_thread)),
+            history,
         })
     }
 
@@ -202,6 +250,12 @@ impl ProcessTerminalSession {
             .resize(size.as_pty_size())
             .map_err(terminal_error)?;
         terminal_state.resize(size);
+        if let Some(history) = &self.history {
+            let snapshot = terminal_state.snapshot();
+            if let Err(error) = history.append_checkpoint(self.id, &snapshot) {
+                warn!(session_id = %self.id, %error, "terminal history resize checkpoint failed");
+            }
+        }
         Ok(())
     }
 
@@ -301,6 +355,7 @@ pub struct SessionRegistry {
     limits: JournalLimits,
     max_sessions: usize,
     allowed_roots: Vec<PathBuf>,
+    history: Option<Arc<HistoryStore>>,
 }
 
 impl SessionRegistry {
@@ -314,6 +369,20 @@ impl SessionRegistry {
         max_sessions: usize,
         allowed_roots: impl IntoIterator<Item = PathBuf>,
     ) -> Result<Self, SessionRegistryError> {
+        Self::new_with_history(limits, max_sessions, allowed_roots, None)
+    }
+
+    /// Creates a registry with optional host-owned durable history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any allowed root cannot be canonicalized.
+    pub fn new_with_history(
+        limits: JournalLimits,
+        max_sessions: usize,
+        allowed_roots: impl IntoIterator<Item = PathBuf>,
+        history: Option<Arc<HistoryStore>>,
+    ) -> Result<Self, SessionRegistryError> {
         let allowed_roots = allowed_roots
             .into_iter()
             .map(|root| {
@@ -326,6 +395,7 @@ impl SessionRegistry {
             limits,
             max_sessions,
             allowed_roots,
+            history,
         })
     }
 
@@ -360,11 +430,12 @@ impl SessionRegistry {
             });
         }
         let id = WorkerSessionId::new();
-        let session = Arc::new(ProcessTerminalSession::spawn(
+        let session = Arc::new(ProcessTerminalSession::spawn_with_history(
             id,
             command,
             self.limits,
             size,
+            self.history.as_ref().map(Arc::clone),
         )?);
         sessions.insert(id, Arc::clone(&session));
         Ok(session)
@@ -427,6 +498,50 @@ impl SessionRegistry {
             .map(|session| Ok((session.id(), session.is_running()?)))
             .collect()
     }
+
+    /// Returns content-free durable-history diagnostics when history is
+    /// enabled for this host.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the history store lock is poisoned.
+    pub fn history_diagnostics(&self) -> Result<Option<HistoryDiagnostics>, SessionRegistryError> {
+        self.history
+            .as_ref()
+            .map(|history| history.diagnostics().map_err(SessionRegistryError::from))
+            .transpose()
+    }
+
+    /// Lists durable terminal sessions when history is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if history is disabled or unavailable.
+    pub fn history_sessions(&self) -> Result<Vec<HistorySessionSummary>, SessionRegistryError> {
+        self.history
+            .as_ref()
+            .ok_or_else(|| SessionRegistryError::Terminal("terminal history is disabled".into()))?
+            .sessions()
+            .map_err(SessionRegistryError::from)
+    }
+
+    /// Reads a bounded durable-history page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if history is disabled, the session is unknown, or
+    /// the store is unavailable.
+    pub fn history_page(
+        &self,
+        id: WorkerSessionId,
+        cursor: Option<HistoryCursor>,
+    ) -> Result<HistoryPage, SessionRegistryError> {
+        self.history
+            .as_ref()
+            .ok_or_else(|| SessionRegistryError::Terminal("terminal history is disabled".into()))?
+            .page(id, cursor)
+            .map_err(SessionRegistryError::from)
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, SessionRegistryError> {
@@ -445,6 +560,8 @@ mod tests {
     };
 
     use super::*;
+    use crate::{HistoryLimits, HistoryRecord};
+    use tempfile::TempDir;
 
     fn shell_command(script: &str) -> ProviderCommand {
         ProviderCommand {
@@ -486,6 +603,47 @@ mod tests {
         )
         .unwrap();
         assert!(output_until(&session, "firstsecond").contains("firstsecond"));
+    }
+
+    #[test]
+    fn real_pty_output_is_persisted_at_the_canonical_sequence() {
+        let temp = TempDir::new().unwrap();
+        let history = Arc::new(
+            HistoryStore::open(temp.path().join("history"), HistoryLimits::default()).unwrap(),
+        );
+        let registry = SessionRegistry::new_with_history(
+            JournalLimits::new(1024, 16),
+            1,
+            [env::temp_dir().canonicalize().unwrap()],
+            Some(Arc::clone(&history)),
+        )
+        .unwrap();
+        let session = registry
+            .spawn(
+                &shell_command("printf 'durable-output'"),
+                TerminalSize::default(),
+            )
+            .unwrap();
+        assert!(output_until(&session, "durable-output").contains("durable-output"));
+
+        let records = history.read_session(session.id()).unwrap();
+        assert!(!records.is_empty());
+        let Resume::Snapshot { snapshot } = session.resume_after(None).unwrap() else {
+            panic!("fresh read must return a canonical snapshot");
+        };
+        assert_eq!(records.last().unwrap().sequence(), snapshot.sequence);
+        assert!(
+            String::from_utf8_lossy(
+                &records
+                    .into_iter()
+                    .flat_map(|record| match record {
+                        HistoryRecord::Output { bytes, .. } => bytes,
+                        HistoryRecord::Checkpoint { snapshot, .. } => snapshot.bytes,
+                    })
+                    .collect::<Vec<_>>()
+            )
+            .contains("durable-output")
+        );
     }
 
     #[test]
