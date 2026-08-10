@@ -1,4 +1,8 @@
-import type { TerminalConnectionHandlers, TerminalConnectionState } from "./TerminalConnection";
+import type {
+  TerminalConnectionHandlers,
+  TerminalConnectionState,
+  TerminalSnapshot,
+} from "./TerminalConnection";
 
 export interface Disposable {
   dispose(): void;
@@ -6,7 +10,8 @@ export interface Disposable {
 
 export interface TerminalSurface {
   open(element: HTMLElement): void;
-  write(bytes: Uint8Array): void;
+  write(bytes: Uint8Array): Promise<void>;
+  restore(snapshot: TerminalSnapshot): Promise<void>;
   onData(listener: (text: string) => void): Disposable;
   onResize(listener: (size: { rows: number; columns: number }) => void): Disposable;
   dispose(): void;
@@ -47,6 +52,7 @@ export class TerminalController {
     ];
     this.#connection.start({
       onOutput: (bytes) => this.#surface.write(bytes),
+      onSnapshot: (snapshot) => this.#surface.restore(snapshot),
       onState: (state, detail) => this.#setState(state, detail),
       onRunningChange: (running) => {
         if (!running) this.#setState("closed", "worker process exited");

@@ -15,7 +15,11 @@ use swarm_domain::WorkerSessionId;
 use thiserror::Error;
 use tokio::sync::watch;
 
-use crate::{BoundedJournal, JournalLimits, ProviderCommand, Resume};
+use crate::{CanonicalTerminalState, JournalLimits, ProviderCommand, Resume};
+
+pub const MAX_TERMINAL_ROWS: u16 = 200;
+pub const MAX_TERMINAL_COLUMNS: u16 = 320;
+pub const MAX_TERMINAL_CELLS: usize = 32_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalSize {
@@ -36,6 +40,22 @@ impl TerminalSize {
             pixel_width: 0,
             pixel_height: 0,
         }
+    }
+
+    fn validate(self) -> Result<(), SessionRegistryError> {
+        let cells = usize::from(self.rows) * usize::from(self.columns);
+        if self.rows == 0
+            || self.columns == 0
+            || self.rows > MAX_TERMINAL_ROWS
+            || self.columns > MAX_TERMINAL_COLUMNS
+            || cells > MAX_TERMINAL_CELLS
+        {
+            return Err(SessionRegistryError::Terminal(format!(
+                "terminal dimensions must be non-zero and within {MAX_TERMINAL_ROWS} rows, \
+                 {MAX_TERMINAL_COLUMNS} columns, and {MAX_TERMINAL_CELLS} cells"
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -66,7 +86,7 @@ pub struct ProcessTerminalSession {
     child: Mutex<Box<dyn Child + Send + Sync>>,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
-    journal: Arc<Mutex<BoundedJournal>>,
+    terminal_state: Arc<Mutex<CanonicalTerminalState>>,
     output_state: watch::Sender<bool>,
     reader_running: Arc<AtomicBool>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
@@ -98,6 +118,7 @@ impl ProcessTerminalSession {
         limits: JournalLimits,
         size: TerminalSize,
     ) -> Result<Self, SessionRegistryError> {
+        size.validate()?;
         let pair = native_pty_system()
             .openpty(size.as_pty_size())
             .map_err(terminal_error)?;
@@ -112,8 +133,8 @@ impl ProcessTerminalSession {
 
         let mut reader = pair.master.try_clone_reader().map_err(terminal_error)?;
         let writer = pair.master.take_writer().map_err(terminal_error)?;
-        let journal = Arc::new(Mutex::new(BoundedJournal::new(limits)));
-        let reader_journal = Arc::clone(&journal);
+        let terminal_state = Arc::new(Mutex::new(CanonicalTerminalState::new(limits, size)));
+        let reader_terminal_state = Arc::clone(&terminal_state);
         let (output_state, _) = watch::channel(true);
         let reader_output_state = output_state.clone();
         let reader_running = Arc::new(AtomicBool::new(true));
@@ -126,8 +147,8 @@ impl ProcessTerminalSession {
                     match reader.read(&mut buffer) {
                         Ok(0) | Err(_) => break,
                         Ok(read) => {
-                            if let Ok(mut journal) = reader_journal.lock() {
-                                journal.push(buffer[..read].to_vec());
+                            if let Ok(mut terminal_state) = reader_terminal_state.lock() {
+                                terminal_state.push(buffer[..read].to_vec());
                                 reader_output_state.send_replace(true);
                             } else {
                                 break;
@@ -145,7 +166,7 @@ impl ProcessTerminalSession {
             child: Mutex::new(child),
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
-            journal,
+            terminal_state,
             output_state,
             reader_running,
             reader_thread: Mutex::new(Some(reader_thread)),
@@ -175,14 +196,13 @@ impl ProcessTerminalSession {
     ///
     /// Returns an error for a zero dimension, poisoned lock, or PTY failure.
     pub fn resize(&self, size: TerminalSize) -> Result<(), SessionRegistryError> {
-        if size.rows == 0 || size.columns == 0 {
-            return Err(SessionRegistryError::Terminal(
-                "terminal dimensions must be non-zero".into(),
-            ));
-        }
+        size.validate()?;
+        let mut terminal_state = lock(&self.terminal_state)?;
         lock(&self.master)?
             .resize(size.as_pty_size())
-            .map_err(terminal_error)
+            .map_err(terminal_error)?;
+        terminal_state.resize(size);
+        Ok(())
     }
 
     /// Returns retained deltas or a deterministic snapshot requirement.
@@ -190,8 +210,8 @@ impl ProcessTerminalSession {
     /// # Errors
     ///
     /// Returns an error if the bounded journal lock was poisoned.
-    pub fn resume_after(&self, sequence: u64) -> Result<Resume, SessionRegistryError> {
-        Ok(lock(&self.journal)?.resume_after(sequence))
+    pub fn resume_after(&self, sequence: Option<u64>) -> Result<Resume, SessionRegistryError> {
+        Ok(lock(&self.terminal_state)?.resume_after(sequence))
     }
 
     /// Waits until output advances or the PTY reader closes, then returns a
@@ -202,7 +222,10 @@ impl ProcessTerminalSession {
     ///
     /// Returns an error if the journal lock is poisoned or the notification
     /// channel closes unexpectedly.
-    pub async fn wait_after(&self, sequence: u64) -> Result<(Resume, bool), SessionRegistryError> {
+    pub async fn wait_after(
+        &self,
+        sequence: Option<u64>,
+    ) -> Result<(Resume, bool), SessionRegistryError> {
         let mut changes = self.output_state.subscribe();
         loop {
             let reader_running = *changes.borrow_and_update();
@@ -250,7 +273,7 @@ impl ProcessTerminalSession {
 fn resume_has_output(resume: &Resume) -> bool {
     match resume {
         Resume::Deltas { frames } => !frames.is_empty(),
-        Resume::SnapshotRequired { .. } => true,
+        Resume::Snapshot { .. } => true,
     }
 }
 
@@ -434,13 +457,13 @@ mod tests {
     fn output_until(session: &ProcessTerminalSession, text: &str) -> String {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            let Resume::Deltas { frames } = session.resume_after(0).unwrap() else {
-                panic!("test output exceeded its journal");
+            let output = match session.resume_after(None).unwrap() {
+                Resume::Snapshot { snapshot } => snapshot.bytes,
+                Resume::Deltas { frames } => frames
+                    .into_iter()
+                    .flat_map(|frame| frame.bytes)
+                    .collect::<Vec<_>>(),
             };
-            let output = frames
-                .into_iter()
-                .flat_map(|frame| frame.bytes)
-                .collect::<Vec<_>>();
             let output = String::from_utf8_lossy(&output).into_owned();
             if output.contains(text) {
                 return output;
@@ -491,7 +514,12 @@ mod tests {
             .unwrap(),
         );
         let waiting_session = Arc::clone(&session);
-        let waiter = tokio::spawn(async move { waiting_session.wait_after(0).await });
+        let initial_sequence = match session.resume_after(None).unwrap() {
+            Resume::Snapshot { snapshot } => snapshot.sequence,
+            Resume::Deltas { .. } => panic!("fresh attachment must produce a canonical snapshot"),
+        };
+        let waiter =
+            tokio::spawn(async move { waiting_session.wait_after(Some(initial_sequence)).await });
 
         tokio::task::yield_now().await;
         session.write_input(b"ready\n").unwrap();
@@ -503,12 +531,12 @@ mod tests {
             .unwrap();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         let mut next = Some(first);
-        let mut sequence = 0;
+        let mut sequence = initial_sequence;
         let mut output = Vec::new();
         loop {
             let (resume, _) = match next.take() {
                 Some(resume) => resume,
-                None => tokio::time::timeout_at(deadline, session.wait_after(sequence))
+                None => tokio::time::timeout_at(deadline, session.wait_after(Some(sequence)))
                     .await
                     .expect("event-driven follow-up timed out")
                     .unwrap(),
@@ -540,5 +568,16 @@ mod tests {
         ));
         registry.stop(first.id()).unwrap();
         assert!(registry.is_empty().unwrap());
+    }
+
+    #[test]
+    fn rejects_terminal_dimensions_outside_memory_bounds_before_spawn() {
+        let result = ProcessTerminalSession::spawn(
+            WorkerSessionId::new(),
+            &shell_command("sleep 1"),
+            JournalLimits::new(1024, 16),
+            TerminalSize::new(MAX_TERMINAL_ROWS + 1, 80),
+        );
+        assert!(matches!(result, Err(SessionRegistryError::Terminal(_))));
     }
 }

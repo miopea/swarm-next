@@ -13,7 +13,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use swarm_domain::WorkerSessionId;
-use swarm_terminal::{HostClient, HostRequest, HostResponse, JournalLimits, TerminalSize};
+use swarm_terminal::{
+    CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, HostClient, HostRequest,
+    HostResponse, JournalLimits, MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS,
+    MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, TerminalSize,
+};
 use tokio::sync::Semaphore;
 
 use attach::{ATTACH_GRANT_TTL, AttachGrantError, AttachGrantStore, MAX_ATTACH_GRANTS};
@@ -80,6 +84,12 @@ struct TerminalRuntimeLimits {
     journal_max_frames: usize,
     attach_grant_max_active: usize,
     websocket_max_active: usize,
+    canonical_scrollback_rows: usize,
+    canonical_compaction_input_bytes: usize,
+    canonical_snapshot_max_bytes: usize,
+    max_rows: u16,
+    max_columns: u16,
+    max_cells: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -110,8 +120,7 @@ struct ResizeRequest {
 
 #[derive(Debug, Deserialize)]
 struct OutputQuery {
-    #[serde(default)]
-    after: u64,
+    after: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -199,6 +208,12 @@ async fn runtime_limits(State(state): State<Arc<AppState>>) -> Json<RuntimeLimit
             journal_max_frames: state.terminal_limits.max_frames,
             attach_grant_max_active: MAX_ATTACH_GRANTS,
             websocket_max_active: MAX_TERMINAL_WEBSOCKETS,
+            canonical_scrollback_rows: CANONICAL_SCROLLBACK_ROWS,
+            canonical_compaction_input_bytes: CANONICAL_COMPACTION_INPUT_BYTES,
+            canonical_snapshot_max_bytes: MAX_CANONICAL_SNAPSHOT_BYTES,
+            max_rows: MAX_TERMINAL_ROWS,
+            max_columns: MAX_TERMINAL_COLUMNS,
+            max_cells: MAX_TERMINAL_CELLS,
         },
     })
 }
@@ -215,7 +230,7 @@ async fn start_session(
     headers: HeaderMap,
     Json(request): Json<StartSessionRequest>,
 ) -> Result<Json<HostResponse>, ApiError> {
-    require_non_zero_size(request.rows, request.columns)?;
+    require_valid_size(request.rows, request.columns)?;
     authorized_request(
         &state,
         &headers,
@@ -267,7 +282,7 @@ async fn resize_terminal(
     Path(session_id): Path<String>,
     Json(request): Json<ResizeRequest>,
 ) -> Result<Json<HostResponse>, ApiError> {
-    require_non_zero_size(request.rows, request.columns)?;
+    require_valid_size(request.rows, request.columns)?;
     authorized_request(
         &state,
         &headers,
@@ -305,7 +320,7 @@ async fn issue_attach_grant(
     match client
         .request(&HostRequest::Read {
             session_id,
-            after_sequence: u64::MAX,
+            after_sequence: Some(u64::MAX),
         })
         .await
         .map_err(|error| host_unavailable(&error))?
@@ -479,12 +494,21 @@ fn parse_session_id(value: &str) -> Result<WorkerSessionId, ApiError> {
     })
 }
 
-fn require_non_zero_size(rows: u16, columns: u16) -> Result<(), ApiError> {
-    if rows == 0 || columns == 0 {
+fn require_valid_size(rows: u16, columns: u16) -> Result<(), ApiError> {
+    let cells = usize::from(rows) * usize::from(columns);
+    if rows == 0
+        || columns == 0
+        || rows > MAX_TERMINAL_ROWS
+        || columns > MAX_TERMINAL_COLUMNS
+        || cells > MAX_TERMINAL_CELLS
+    {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_terminal_size",
-            "terminal dimensions must be non-zero",
+            format!(
+                "terminal dimensions must be non-zero and within {MAX_TERMINAL_ROWS} rows, \
+                 {MAX_TERMINAL_COLUMNS} columns, and {MAX_TERMINAL_CELLS} cells"
+            ),
         ));
     }
     Ok(())
@@ -539,6 +563,18 @@ mod tests {
         let json = response_json(response).await;
         assert_eq!(json["terminal"]["journal_max_bytes"], 2048);
         assert_eq!(json["terminal"]["journal_max_frames"], 64);
+        assert_eq!(json["terminal"]["canonical_scrollback_rows"], 1_000);
+        assert_eq!(
+            json["terminal"]["canonical_compaction_input_bytes"],
+            CANONICAL_COMPACTION_INPUT_BYTES
+        );
+        assert_eq!(
+            json["terminal"]["canonical_snapshot_max_bytes"],
+            MAX_CANONICAL_SNAPSHOT_BYTES
+        );
+        assert_eq!(json["terminal"]["max_rows"], MAX_TERMINAL_ROWS);
+        assert_eq!(json["terminal"]["max_columns"], MAX_TERMINAL_COLUMNS);
+        assert_eq!(json["terminal"]["max_cells"], MAX_TERMINAL_CELLS);
     }
 
     #[tokio::test]
@@ -688,12 +724,13 @@ mod tests {
         );
         websocket
             .send(ClientMessage::Text(
-                r#"{"type":"resume","after_sequence":0}"#.into(),
+                r#"{"type":"resume","after_sequence":null}"#.into(),
             ))
             .await
             .unwrap();
 
-        let initial = terminal_output_until(&mut websocket, "socket-ready").await;
+        let (initial, saw_snapshot) = terminal_output_until(&mut websocket, "socket-ready").await;
+        assert!(saw_snapshot);
         assert!(String::from_utf8_lossy(&initial).contains("socket-ready"));
         websocket
             .send(ClientMessage::Text(
@@ -701,7 +738,7 @@ mod tests {
             ))
             .await
             .unwrap();
-        let after_input = terminal_output_until(&mut websocket, "socket:hello").await;
+        let (after_input, _) = terminal_output_until(&mut websocket, "socket:hello").await;
         assert!(String::from_utf8_lossy(&after_input).contains("socket:hello"));
 
         let mut reused_request = websocket_url.into_client_request().unwrap();
@@ -724,7 +761,7 @@ mod tests {
         let _ = host_task.await;
     }
 
-    async fn terminal_output_until<S>(websocket: &mut S, expected: &str) -> Vec<u8>
+    async fn terminal_output_until<S>(websocket: &mut S, expected: &str) -> (Vec<u8>, bool)
     where
         S: futures_util::Stream<
                 Item = Result<ClientMessage, tokio_tungstenite::tungstenite::Error>,
@@ -732,6 +769,7 @@ mod tests {
     {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         let mut output = Vec::new();
+        let mut saw_snapshot = false;
         loop {
             let message = tokio::time::timeout_at(deadline, websocket.next())
                 .await
@@ -739,10 +777,18 @@ mod tests {
                 .expect("terminal WebSocket closed")
                 .unwrap();
             if let ClientMessage::Binary(payload) = message {
-                assert_eq!(payload[0], 1);
-                output.extend_from_slice(&payload[9..]);
+                match payload[0] {
+                    1 => output.extend_from_slice(&payload[9..]),
+                    2 => {
+                        assert!(payload.len() >= 14);
+                        saw_snapshot = true;
+                        output.clear();
+                        output.extend_from_slice(&payload[14..]);
+                    }
+                    frame_type => panic!("unexpected terminal frame type {frame_type}"),
+                }
                 if String::from_utf8_lossy(&output).contains(expected) {
-                    return output;
+                    return (output, saw_snapshot);
                 }
             }
         }

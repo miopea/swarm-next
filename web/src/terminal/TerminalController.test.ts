@@ -10,7 +10,8 @@ import {
 function fakeSurface(): TerminalSurface {
   return {
     open: vi.fn(),
-    write: vi.fn(),
+    write: vi.fn().mockResolvedValue(undefined),
+    restore: vi.fn().mockResolvedValue(undefined),
     onData: vi.fn(() => ({ dispose: vi.fn() })),
     onResize: vi.fn(() => ({ dispose: vi.fn() })),
     dispose: vi.fn(),
@@ -72,4 +73,23 @@ test("only explicit session close disposes the controller", () => {
   expect(surface.dispose).toHaveBeenCalledTimes(1);
   expect(connection.dispose).toHaveBeenCalledTimes(1);
   expect(registry.size).toBe(0);
+});
+
+test("canonical snapshots reset the renderer through its controller", async () => {
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  new TerminalController(() => surface, () => connection);
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  const snapshot = {
+    sequence: 9,
+    rows: 30,
+    columns: 100,
+    truncated: false,
+    bytes: new TextEncoder().encode("canonical"),
+  };
+
+  await handlers.onSnapshot(snapshot);
+
+  expect(surface.restore).toHaveBeenCalledWith(snapshot);
+  expect(surface.write).not.toHaveBeenCalled();
 });

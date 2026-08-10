@@ -13,6 +13,7 @@ swarm-domain = { path = "../swarm-domain" }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "sync"] }
 tracing.workspace = true
+vt100.workspace = true
 
 [lints]
 workspace = true

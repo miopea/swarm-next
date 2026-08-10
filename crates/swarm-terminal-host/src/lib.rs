@@ -203,7 +203,7 @@ async fn dispatch(registry: Arc<SessionRegistry>, request: HostRequest) -> HostR
 async fn dispatch_wait(
     registry: &SessionRegistry,
     session_id: WorkerSessionId,
-    after_sequence: u64,
+    after_sequence: Option<u64>,
 ) -> HostResponse {
     let session = match registry.get(session_id) {
         Ok(session) => session,
@@ -365,7 +365,7 @@ mod tests {
             let response = replacement_client
                 .request(&HostRequest::Read {
                     session_id: session.id(),
-                    after_sequence: 0,
+                    after_sequence: Some(0),
                 })
                 .await
                 .unwrap();
@@ -441,7 +441,7 @@ mod tests {
         let connection = tokio::spawn(serve_connection(server, Arc::clone(&registry)));
         let mut request = serde_json::to_vec(&HostRequest::Wait {
             session_id: session.id(),
-            after_sequence: 0,
+            after_sequence: Some(0),
         })
         .unwrap();
         request.push(b'\n');
