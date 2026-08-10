@@ -1,6 +1,6 @@
 # Capability inventory
 
-Status: **Proposed initial assessment**
+Status: **M0 draft recommendation**
 
 This inventory is intentionally organized around outcomes rather than legacy
 modules. Decisions are provisional until reviewed with the primary operator.
@@ -31,7 +31,7 @@ Decision meanings:
 
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
-| Routine approval drones | Remove/Merge | Provider-native automatic approval now covers much of the original value. Retain only policy or audit outcomes not supplied natively. |
+| Routine approval drones | Remove | Provider-native permissions own provider tool approval. Keep only typed Swarm-level operator decisions. |
 | Idle detection and nudging | Redesign | Valuable only where provider session status is authoritative enough; avoid screen-scraping heuristics where possible. |
 | Crash/revival automation | Redesign | Becomes worker lifecycle recovery, not a drone. |
 | Host pressure management | Redesign | Becomes platform resource policy with explicit thresholds, quotas, and operator visibility. |
@@ -41,10 +41,10 @@ Decision meanings:
 | Queen completion detection | Redesign | Prefer explicit agent/task protocol signals; retain inference only as a fallback. |
 | Queen interactive conversation | Investigate | Validate frequency and whether it belongs in the unified operator conversation surface. |
 | Proposal approval system | Merge | One generalized operator-decision inbox rather than feature-specific proposal surfaces. |
-| Approval-rule regex engine | Remove/Investigate | Likely obsolete for provider prompts; retain only if a current non-provider policy use remains. |
+| Approval-rule regex engine | Remove | Do not infer authorization from rendered terminal text or maintain a second permission authority. |
 | Standing improvement loops | Investigate | High resource and safety implications; require demonstrated ongoing value and hard budgets. |
 | Playbook synthesis | Investigate | Potentially valuable, but assess actual retrieval/use before carrying its machinery forward. |
-| Speculative task preparation | Remove/Investigate | Complexity must be justified by measured user benefit. |
+| Speculative task preparation | Defer | Complexity must be justified by measured user benefit after the core task loop is stable. |
 
 ## Coordination
 
@@ -96,16 +96,17 @@ Decision meanings:
 | Global search | Keep/Redesign | Likely valuable across tasks, workers, messages, and decisions; validate scope. |
 | OpenAPI documentation | Keep | Generate from accepted Rust contracts; also generate the React client. |
 
-## Required review
+## Delivery tiers
 
-The primary operator should review this inventory in several short passes:
+The implementation sequence is:
 
-1. Daily-driver essentials.
-2. Automation and Queen behavior.
-3. Coordination and MCP.
-4. Integrations and remote/mobile use.
-5. Experimental or rarely used features.
+1. Walking skeleton: terminal continuity, worker lifecycle, minimal task loop,
+   local auth, persistence, diagnostics, update/recovery proof.
+2. First core expansion: second provider, small coordination protocol, search,
+   feedback, resource policy, and GitHub integration.
+3. Deferred evaluation: Queen, groups, integrations, mobile/remote operation,
+   pipelines, playbooks, and experimental automation.
 
-No `Investigate`, `Remove/Investigate`, or `Keep/Redesign` entry becomes an
-implementation requirement until its decision is resolved.
-
+No `Investigate`, `Defer`, or compound decision becomes an implementation
+requirement until dogfooding resolves it. See `10-m0-evidence-review.md` for the
+evidence and recommended cut.

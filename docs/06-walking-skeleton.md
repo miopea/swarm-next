@@ -1,6 +1,6 @@
 # Walking skeleton
 
-Status: **Proposed**
+Status: **Accepted**
 
 The first runtime milestone proves one complete, production-shaped journey. It
 is not a prototype that bypasses authentication, persistence, recovery, or
@@ -16,7 +16,8 @@ the application backend without killing the worker.
 ## Included vertical path
 
 - Single-operator authentication suitable for local testing.
-- One workspace and one provider adapter.
+- One workspace and one Claude Code provider adapter. The adapter contract is
+  designed against both Claude Code and Codex before implementation.
 - Create, view, assign, activate, review, and complete one task.
 - Start and stop one immutable worker session.
 - Persistent Rust terminal session with bounded history.
@@ -49,4 +50,3 @@ the application backend without killing the worker.
   exit, and interrupted snapshot synchronization.
 - The feedback bundle is sufficient to distinguish frontend, API, terminal,
   provider, and database failures.
-
