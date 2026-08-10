@@ -70,6 +70,11 @@ grep -q "SWARM_WORKSPACE_ROOTS=$SWARM_WORKSPACE_ROOT" "$SWARM_CONFIG_ROOT/swarm-
 grep -q "$SWARM_INSTALL_ROOT/current/bin/swarm-api" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "CLAUDE_CONFIG_DIR=$SWARM_STATE_ROOT/providers/claude" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
 grep -q 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
+grep -q '^RuntimeDirectory=swarm-next$' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
+if grep -q '^RuntimeDirectory=' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"; then
+  echo "API must not own the terminal host runtime directory" >&2
+  exit 1
+fi
 [ -d "$SWARM_STATE_ROOT/providers/claude" ]
 if command -v systemd-analyze >/dev/null 2>&1; then
   systemd-analyze --user verify \

@@ -39,6 +39,10 @@ The API has a read-only home and system view. Both use a private temporary
 directory, `NoNewPrivileges`, a restrictive umask, bounded restart delay, and
 journald.
 
+Only the terminal host owns the shared systemd runtime directory. The API uses
+the socket there but does not declare `RuntimeDirectory`; otherwise an API-only
+restart can make systemd remove the live host socket from beneath its owner.
+
 An update verifies its checksums and protocol before changing the active link.
 It stages the new release, begins drain through the current version's
 `swarmctl`, waits for zero live sessions with a bounded timeout, then stops the
