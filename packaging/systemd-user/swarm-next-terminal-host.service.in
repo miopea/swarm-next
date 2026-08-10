@@ -5,6 +5,7 @@ PartOf=swarm-next.target
 [Service]
 Type=simple
 EnvironmentFile=@CONFIG_ROOT@/swarm-next.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=SWARM_TERMINAL_SOCKET=%t/swarm-next/terminal.sock
 Environment=SWARM_TERMINAL_HISTORY_DIR=@STATE_ROOT@/terminal-history
 Environment=CLAUDE_CONFIG_DIR=@STATE_ROOT@/providers/claude

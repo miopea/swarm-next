@@ -69,6 +69,7 @@ grep -q '127.0.0.1:8766' "$SWARM_CONFIG_ROOT/swarm-next.env"
 grep -q "SWARM_WORKSPACE_ROOTS=$SWARM_WORKSPACE_ROOT" "$SWARM_CONFIG_ROOT/swarm-next.env"
 grep -q "$SWARM_INSTALL_ROOT/current/bin/swarm-api" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "CLAUDE_CONFIG_DIR=$SWARM_STATE_ROOT/providers/claude" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
+grep -q 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
 [ -d "$SWARM_STATE_ROOT/providers/claude" ]
 if command -v systemd-analyze >/dev/null 2>&1; then
   systemd-analyze --user verify \
