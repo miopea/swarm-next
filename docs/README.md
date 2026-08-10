@@ -18,6 +18,7 @@ Read and review these documents in order:
 14. [M1 canonical terminal recovery](13-canonical-terminal-recovery.md)
 15. [M1 durable terminal history](14-durable-terminal-history.md)
 16. [M1 terminal-host update lifecycle](15-terminal-host-update-lifecycle.md)
+17. [M1 swarmctl lifecycle client](16-swarmctl-lifecycle-client.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do

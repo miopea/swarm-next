@@ -800,6 +800,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "swarm-cli"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "swarm-terminal",
+ "swarm-terminal-host",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "swarm-domain"
 version = "0.1.0"
 dependencies = [
