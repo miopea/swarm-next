@@ -60,6 +60,7 @@ export class TerminalConnection {
   #socket: WebSocket | undefined;
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
   #confirmationTimer: ReturnType<typeof setTimeout> | undefined;
+  #grantAbortController: AbortController | undefined;
   #retryAttempt = 0;
   #sequence = 0;
   #hasCanonicalState = false;
@@ -109,6 +110,8 @@ export class TerminalConnection {
     if (this.#retryTimer !== undefined) clearTimeout(this.#retryTimer);
     this.#retryTimer = undefined;
     this.#clearConfirmationTimer();
+    this.#grantAbortController?.abort();
+    this.#grantAbortController = undefined;
     this.#socket?.close(1000, "terminal controller disposed");
     this.#socket = undefined;
     this.#handlers?.onState("closed");
@@ -121,6 +124,9 @@ export class TerminalConnection {
   async #connect(): Promise<void> {
     if (this.#disposed || this.#fatal) return;
     this.#handlers?.onState("connecting");
+    const grantAbortController = new AbortController();
+    this.#grantAbortController = grantAbortController;
+    this.#armGrantTimer(grantAbortController);
     try {
       const response = await this.#fetch(
         `/api/v1/terminal/sessions/${encodeURIComponent(this.#sessionId)}/attach-grants`,
@@ -128,11 +134,14 @@ export class TerminalConnection {
           method: "POST",
           headers: { Authorization: `Bearer ${this.#operatorToken}` },
           cache: "no-store",
+          signal: grantAbortController.signal,
         },
       );
       if (!response.ok) throw new Error(`Attach grant returned ${response.status}`);
       const grant = (await response.json()) as GrantResponse;
-      if (this.#disposed) return;
+      if (this.#disposed || this.#grantAbortController !== grantAbortController) return;
+      this.#grantAbortController = undefined;
+      this.#clearConfirmationTimer();
       const websocketUrl = new URL(grant.websocket_path, this.#locationOrigin);
       websocketUrl.protocol = websocketUrl.protocol === "https:" ? "wss:" : "ws:";
       const socket = this.#websocketFactory(websocketUrl.toString(), [
@@ -150,6 +159,9 @@ export class TerminalConnection {
       socket.addEventListener("close", () => this.#handleClose(socket));
       socket.addEventListener("error", () => this.#handleSocketError(socket));
     } catch (error) {
+      if (this.#grantAbortController !== grantAbortController) return;
+      this.#grantAbortController = undefined;
+      this.#clearConfirmationTimer();
       this.#scheduleReconnect(error instanceof Error ? error.message : "terminal attachment failed");
     }
   }
@@ -353,6 +365,17 @@ export class TerminalConnection {
       this.#socket = undefined;
       socket.close(1013, "terminal confirmation timed out");
       this.#scheduleReconnect("terminal connection received no confirmation");
+    }, this.#confirmationTimeoutMs);
+  }
+
+  #armGrantTimer(controller: AbortController): void {
+    this.#clearConfirmationTimer();
+    this.#confirmationTimer = setTimeout(() => {
+      this.#confirmationTimer = undefined;
+      if (controller !== this.#grantAbortController || this.#disposed || this.#fatal) return;
+      this.#grantAbortController = undefined;
+      controller.abort();
+      this.#scheduleReconnect("terminal attach grant received no response");
     }, this.#confirmationTimeoutMs);
   }
 

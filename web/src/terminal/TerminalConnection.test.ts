@@ -256,6 +256,48 @@ test("an unconfirmed socket is abandoned inside the bounded retry budget", async
   expect(sockets).toHaveLength(2);
 });
 
+test("an unconfirmed attach grant is aborted inside the bounded retry budget", async () => {
+  vi.useFakeTimers();
+  const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener(
+        "abort",
+        () => reject(new DOMException("Aborted", "AbortError")),
+        { once: true },
+      );
+    }),
+  );
+  const handlers: TerminalConnectionHandlers = {
+    onOutput: vi.fn(),
+    onSnapshot: vi.fn(),
+    onState: vi.fn(),
+    onRunningChange: vi.fn(),
+  };
+  const connection = new TerminalConnection({
+    sessionId: "session-1",
+    operatorToken: "secret",
+    fetch: fetch as typeof window.fetch,
+    retryDelaysMs: [1],
+    confirmationTimeoutMs: 1,
+    websocketFactory: vi.fn(),
+  });
+  connection.resize(24, 80);
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).toHaveBeenCalledTimes(1);
+
+  await vi.advanceTimersByTimeAsync(1);
+  expect(handlers.onState).toHaveBeenCalledWith(
+    "disconnected",
+    "terminal attach grant received no response",
+  );
+
+  await vi.advanceTimersByTimeAsync(1);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  connection.dispose();
+});
+
 test("renderer backlog is bounded and forces canonical recovery", async () => {
   let releaseOutput: (() => void) | undefined;
   const blockedOutput = new Promise<void>((resolve) => {
