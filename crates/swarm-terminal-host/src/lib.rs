@@ -7,6 +7,7 @@ use std::{
 };
 
 use nix::unistd::Uid;
+use swarm_domain::WorkerSessionId;
 use swarm_terminal::{
     ClaudeCodeAdapter, HostRequest, HostResponse, HostSessionSummary, MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES, PROTOCOL_VERSION, ProviderTerminalAdapter, SessionRegistry,
@@ -164,6 +165,12 @@ async fn serve_connection(
         error_response("request_too_large", "request exceeded the bounded frame")
     } else {
         match serde_json::from_slice::<HostRequest>(&payload) {
+            Ok(request) if matches!(&request, HostRequest::Wait { .. }) => {
+                tokio::select! {
+                    response = dispatch(registry, request) => response,
+                    _ = reader.read_u8() => return Ok(()),
+                }
+            }
             Ok(request) => dispatch(registry, request).await,
             Err(error) => error_response("invalid_request", &error.to_string()),
         }
@@ -182,9 +189,46 @@ async fn serve_connection(
 }
 
 async fn dispatch(registry: Arc<SessionRegistry>, request: HostRequest) -> HostResponse {
-    tokio::task::spawn_blocking(move || dispatch_blocking(&registry, request))
-        .await
-        .unwrap_or_else(|error| error_response("host_task_failed", &error.to_string()))
+    match request {
+        HostRequest::Wait {
+            session_id,
+            after_sequence,
+        } => dispatch_wait(&registry, session_id, after_sequence).await,
+        request => tokio::task::spawn_blocking(move || dispatch_blocking(&registry, request))
+            .await
+            .unwrap_or_else(|error| error_response("host_task_failed", &error.to_string())),
+    }
+}
+
+async fn dispatch_wait(
+    registry: &SessionRegistry,
+    session_id: WorkerSessionId,
+    after_sequence: u64,
+) -> HostResponse {
+    let session = match registry.get(session_id) {
+        Ok(session) => session,
+        Err(error) => return error_response("terminal_operation_failed", &error.to_string()),
+    };
+    let result =
+        tokio::time::timeout(Duration::from_secs(30), session.wait_after(after_sequence)).await;
+    match result {
+        Ok(Ok((resume, running))) => HostResponse::Output {
+            session_id,
+            resume,
+            running,
+        },
+        Ok(Err(error)) => error_response("terminal_operation_failed", &error.to_string()),
+        Err(_) => match (session.resume_after(after_sequence), session.is_running()) {
+            (Ok(resume), Ok(running)) => HostResponse::Output {
+                session_id,
+                resume,
+                running,
+            },
+            (Err(error), _) | (_, Err(error)) => {
+                error_response("terminal_operation_failed", &error.to_string())
+            }
+        },
+    }
 }
 
 fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostResponse {
@@ -222,9 +266,19 @@ fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostRe
             after_sequence,
         } => registry
             .get(session_id)
-            .and_then(|session| session.resume_after(after_sequence))
-            .map(|resume| HostResponse::Output { session_id, resume })
+            .and_then(|session| Ok((session.resume_after(after_sequence)?, session.is_running()?)))
+            .map(|(resume, running)| HostResponse::Output {
+                session_id,
+                resume,
+                running,
+            })
             .map_err(|error| error.to_string()),
+        HostRequest::Wait { .. } => {
+            return error_response(
+                "invalid_dispatch",
+                "wait requests must use the asynchronous dispatcher",
+            );
+        }
         HostRequest::Write { session_id, bytes } => registry
             .get(session_id)
             .and_then(|session| session.write_input(&bytes))
@@ -369,6 +423,37 @@ mod tests {
         );
         drop(server);
         assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn disconnected_wait_releases_its_connection_immediately() {
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 1, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec!["-lc".into(), "sleep 5".into()],
+            working_directory: workspace,
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let connection = tokio::spawn(serve_connection(server, Arc::clone(&registry)));
+        let mut request = serde_json::to_vec(&HostRequest::Wait {
+            session_id: session.id(),
+            after_sequence: 0,
+        })
+        .unwrap();
+        request.push(b'\n');
+        client.write_all(&request).await.unwrap();
+        drop(client);
+
+        tokio::time::timeout(Duration::from_secs(1), connection)
+            .await
+            .expect("disconnected wait retained the host connection")
+            .unwrap()
+            .unwrap();
+        session.stop().unwrap();
     }
 
     #[tokio::test]

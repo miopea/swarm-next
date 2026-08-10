@@ -36,6 +36,10 @@ pub enum HostRequest {
         session_id: WorkerSessionId,
         after_sequence: u64,
     },
+    Wait {
+        session_id: WorkerSessionId,
+        after_sequence: u64,
+    },
     Write {
         session_id: WorkerSessionId,
         bytes: Vec<u8>,
@@ -70,6 +74,7 @@ pub enum HostResponse {
     Output {
         session_id: WorkerSessionId,
         resume: Resume,
+        running: bool,
     },
     Acknowledged,
     Error {

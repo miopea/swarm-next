@@ -13,6 +13,7 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 use serde::{Deserialize, Serialize};
 use swarm_domain::WorkerSessionId;
 use thiserror::Error;
+use tokio::sync::watch;
 
 use crate::{BoundedJournal, JournalLimits, ProviderCommand, Resume};
 
@@ -66,6 +67,7 @@ pub struct ProcessTerminalSession {
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     journal: Arc<Mutex<BoundedJournal>>,
+    output_state: watch::Sender<bool>,
     reader_running: Arc<AtomicBool>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
 }
@@ -112,6 +114,8 @@ impl ProcessTerminalSession {
         let writer = pair.master.take_writer().map_err(terminal_error)?;
         let journal = Arc::new(Mutex::new(BoundedJournal::new(limits)));
         let reader_journal = Arc::clone(&journal);
+        let (output_state, _) = watch::channel(true);
+        let reader_output_state = output_state.clone();
         let reader_running = Arc::new(AtomicBool::new(true));
         let reader_state = Arc::clone(&reader_running);
         let reader_thread = thread::Builder::new()
@@ -124,6 +128,7 @@ impl ProcessTerminalSession {
                         Ok(read) => {
                             if let Ok(mut journal) = reader_journal.lock() {
                                 journal.push(buffer[..read].to_vec());
+                                reader_output_state.send_replace(true);
                             } else {
                                 break;
                             }
@@ -131,6 +136,7 @@ impl ProcessTerminalSession {
                     }
                 }
                 reader_state.store(false, Ordering::Release);
+                reader_output_state.send_replace(false);
             })
             .map_err(terminal_error)?;
 
@@ -140,6 +146,7 @@ impl ProcessTerminalSession {
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
             journal,
+            output_state,
             reader_running,
             reader_thread: Mutex::new(Some(reader_thread)),
         })
@@ -187,6 +194,28 @@ impl ProcessTerminalSession {
         Ok(lock(&self.journal)?.resume_after(sequence))
     }
 
+    /// Waits until output advances or the PTY reader closes, then returns a
+    /// bounded resume result. Subscribing before the initial read prevents a
+    /// notification race between checking the journal and sleeping.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the journal lock is poisoned or the notification
+    /// channel closes unexpectedly.
+    pub async fn wait_after(&self, sequence: u64) -> Result<(Resume, bool), SessionRegistryError> {
+        let mut changes = self.output_state.subscribe();
+        loop {
+            let reader_running = *changes.borrow_and_update();
+            let resume = self.resume_after(sequence)?;
+            if resume_has_output(&resume) || !reader_running {
+                return Ok((resume, reader_running));
+            }
+            changes.changed().await.map_err(|_| {
+                SessionRegistryError::Terminal("terminal output notifier closed".into())
+            })?;
+        }
+    }
+
     /// Checks process state without blocking.
     ///
     /// # Errors
@@ -215,6 +244,13 @@ impl ProcessTerminalSession {
     #[must_use]
     pub fn reader_running(&self) -> bool {
         self.reader_running.load(Ordering::Acquire)
+    }
+}
+
+fn resume_has_output(resume: &Resume) -> bool {
+    match resume {
+        Resume::Deltas { frames } => !frames.is_empty(),
+        Resume::SnapshotRequired { .. } => true,
     }
 }
 
@@ -440,6 +476,54 @@ mod tests {
         .unwrap();
         session.write_input(b"hello\n").unwrap();
         assert!(output_until(&session, "received:hello").contains("received:hello"));
+        session.stop().unwrap();
+    }
+
+    #[tokio::test]
+    async fn wait_wakes_for_output_without_polling() {
+        let session = Arc::new(
+            ProcessTerminalSession::spawn(
+                WorkerSessionId::new(),
+                &shell_command("read value; printf 'event:%s' \"$value\""),
+                JournalLimits::new(1024, 16),
+                TerminalSize::default(),
+            )
+            .unwrap(),
+        );
+        let waiting_session = Arc::clone(&session);
+        let waiter = tokio::spawn(async move { waiting_session.wait_after(0).await });
+
+        tokio::task::yield_now().await;
+        session.write_input(b"ready\n").unwrap();
+
+        let first = tokio::time::timeout(Duration::from_secs(3), waiter)
+            .await
+            .expect("event-driven wait timed out")
+            .unwrap()
+            .unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let mut next = Some(first);
+        let mut sequence = 0;
+        let mut output = Vec::new();
+        loop {
+            let (resume, _) = match next.take() {
+                Some(resume) => resume,
+                None => tokio::time::timeout_at(deadline, session.wait_after(sequence))
+                    .await
+                    .expect("event-driven follow-up timed out")
+                    .unwrap(),
+            };
+            let Resume::Deltas { frames } = resume else {
+                panic!("expected retained deltas");
+            };
+            for frame in frames {
+                sequence = frame.sequence;
+                output.extend(frame.bytes);
+            }
+            if String::from_utf8_lossy(&output).contains("event:ready") {
+                break;
+            }
+        }
         session.stop().unwrap();
     }
 
