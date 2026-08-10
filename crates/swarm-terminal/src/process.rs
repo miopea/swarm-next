@@ -73,6 +73,8 @@ impl Default for TerminalSize {
 pub enum SessionRegistryError {
     #[error("terminal session limit of {limit} reached")]
     SessionLimitReached { limit: usize },
+    #[error("terminal host is draining for an update")]
+    HostDraining,
     #[error("workspace is outside the configured roots: {0}")]
     WorkspaceNotAllowed(PathBuf),
     #[error("workspace cannot be resolved: {0}")]
@@ -356,6 +358,7 @@ pub struct SessionRegistry {
     max_sessions: usize,
     allowed_roots: Vec<PathBuf>,
     history: Option<Arc<HistoryStore>>,
+    draining: AtomicBool,
 }
 
 impl SessionRegistry {
@@ -396,6 +399,7 @@ impl SessionRegistry {
             max_sessions,
             allowed_roots,
             history,
+            draining: AtomicBool::new(false),
         })
     }
 
@@ -424,6 +428,9 @@ impl SessionRegistry {
         }
 
         let mut sessions = lock(&self.sessions)?;
+        if self.draining.load(Ordering::Acquire) {
+            return Err(SessionRegistryError::HostDraining);
+        }
         if sessions.len() >= self.max_sessions {
             return Err(SessionRegistryError::SessionLimitReached {
                 limit: self.max_sessions,
@@ -542,6 +549,54 @@ impl SessionRegistry {
             .page(id, cursor)
             .map_err(SessionRegistryError::from)
     }
+
+    /// Atomically prevents new sessions and returns the number of still-running
+    /// sessions that must drain before host replacement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a poisoned registry or failed process query.
+    pub fn begin_drain(&self) -> Result<usize, SessionRegistryError> {
+        let sessions = lock(&self.sessions)?;
+        self.draining.store(true, Ordering::Release);
+        running_sessions(&sessions)
+    }
+
+    /// Cancels a pending update drain and allows new sessions again.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the registry lock is poisoned.
+    pub fn cancel_drain(&self) -> Result<(), SessionRegistryError> {
+        let _sessions = lock(&self.sessions)?;
+        self.draining.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    /// Returns whether new session creation is currently disabled for update.
+    #[must_use]
+    pub fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::Acquire)
+    }
+
+    /// Returns the number of live provider processes. Exited sessions retained
+    /// for status or history do not block host replacement.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a poisoned registry or failed process query.
+    pub fn running_session_count(&self) -> Result<usize, SessionRegistryError> {
+        let sessions = lock(&self.sessions)?;
+        running_sessions(&sessions)
+    }
+}
+
+fn running_sessions(
+    sessions: &HashMap<WorkerSessionId, Arc<ProcessTerminalSession>>,
+) -> Result<usize, SessionRegistryError> {
+    sessions.values().try_fold(0, |count, session| {
+        Ok(count + usize::from(session.is_running()?))
+    })
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, SessionRegistryError> {
@@ -726,6 +781,54 @@ mod tests {
         ));
         registry.stop(first.id()).unwrap();
         assert!(registry.is_empty().unwrap());
+    }
+
+    #[test]
+    fn drain_rejects_new_sessions_without_disrupting_existing_worker() {
+        let root = env::temp_dir().canonicalize().unwrap();
+        let registry = SessionRegistry::new(JournalLimits::new(1024, 16), 2, [root]).unwrap();
+        let existing = registry
+            .spawn(
+                &shell_command("read value; printf 'during-drain:%s' \"$value\""),
+                TerminalSize::default(),
+            )
+            .unwrap();
+
+        assert_eq!(registry.begin_drain().unwrap(), 1);
+        assert!(registry.is_draining());
+        assert!(matches!(
+            registry.spawn(&shell_command("sleep 1"), TerminalSize::default()),
+            Err(SessionRegistryError::HostDraining)
+        ));
+        existing.write_input(b"preserved\n").unwrap();
+        assert!(
+            output_until(&existing, "during-drain:preserved").contains("during-drain:preserved")
+        );
+
+        registry.cancel_drain().unwrap();
+        let replacement = registry
+            .spawn(&shell_command("sleep 1"), TerminalSize::default())
+            .unwrap();
+        registry.stop(existing.id()).unwrap();
+        registry.stop(replacement.id()).unwrap();
+    }
+
+    #[test]
+    fn exited_sessions_do_not_block_drain_readiness() {
+        let root = env::temp_dir().canonicalize().unwrap();
+        let registry = SessionRegistry::new(JournalLimits::new(1024, 16), 1, [root]).unwrap();
+        let session = registry
+            .spawn(&shell_command("printf finished"), TerminalSize::default())
+            .unwrap();
+        assert!(output_until(&session, "finished").contains("finished"));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while session.is_running().unwrap() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_eq!(registry.begin_drain().unwrap(), 0);
+        assert_eq!(registry.len().unwrap(), 1);
     }
 
     #[test]

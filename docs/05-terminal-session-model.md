@@ -35,8 +35,9 @@ The server responds with either:
 2. one canonical snapshot followed by deltas after its sequence.
 
 The active-screen form of this contract is implemented by
-[ADR 0006](decisions/0006-canonical-terminal-snapshots.md). Durable scrollback
-restoration remains pending.
+[ADR 0006](decisions/0006-canonical-terminal-snapshots.md). Bounded durable
+scrollback and post-host-restart archival replay are implemented by
+[ADR 0007](decisions/0007-host-owned-durable-terminal-history.md).
 
 Snapshot acquisition and live subscription form one atomic operation. Every
 frame identifies the worker session and sequence. Frames from a stale session
@@ -62,8 +63,9 @@ are rejected even if the durable worker name has been reused.
 - Slow client: drop queued deltas at the bound and require a fresh snapshot.
 - Worker exit: close the session with final status; never silently attach the
   client to a replacement process.
-- Terminal runtime update: compatibility check and descriptor handoff; on
-  failure, preserve the old runtime or perform an explicit controlled restart.
+- Terminal runtime update: compatibility check and drain the old compatible
+  host; preserve it while workers remain, or perform an explicit controlled
+  restart. Descriptor handoff remains a future optimization.
 
 ## Resource policy
 
@@ -89,4 +91,5 @@ disconnect, reject, or archive. No bound silently expands.
 - Repeated attach/detach has bounded memory.
 - Alternate-screen applications recover correctly.
 - Resize during output preserves canonical state.
-- Descriptor handoff preserves live processes and terminal streams.
+- Drain transition is atomic with session creation and preserves existing live
+  processes and terminal streams.

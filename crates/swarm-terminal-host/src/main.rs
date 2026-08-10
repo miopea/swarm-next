@@ -43,7 +43,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         allowed_roots,
         Some(history),
     )?);
-    HostServer::bind(socket_path, registry)?.run().await?;
+    let server = HostServer::bind(socket_path, registry)?;
+    tokio::select! {
+        result = server.run() => result?,
+        result = tokio::signal::ctrl_c() => {
+            result?;
+            info!("terminal host received graceful shutdown signal");
+        }
+    }
     Ok(())
 }
 
