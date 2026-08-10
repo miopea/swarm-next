@@ -1,6 +1,6 @@
 # ADR 0003: Provider-owned terminal permissions
 
-Status: **Proposed**
+Status: **Accepted**
 
 ## Context
 

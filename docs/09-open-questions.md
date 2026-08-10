@@ -1,24 +1,23 @@
 # Open product questions
 
-Status: **Narrowed after M0 evidence review**
+Status: **M0 implementation choices resolved**
 
-Only two answers block the walking skeleton. The remaining questions should be
-answered by side-by-side dogfooding rather than by rebuilding legacy behavior
-in advance.
+The primary operator accepted the recommendations below on 2026-08-10. The
+remaining questions should be answered by side-by-side dogfooding rather than
+by rebuilding legacy behavior in advance.
 
-## Blocking implementation
+## Resolved for implementation
 
-1. **First provider:** should the first complete adapter target Claude Code or
-   Codex? The other provider follows after the terminal/session contract passes
-   recovery and soak tests. **Recommendation: Claude Code first**, because it
-   exercises the current primary Swarm workflow; design the adapter contract
-   against both providers before implementation.
-2. **Terminal retention:** how much detached terminal history should remain
-   locally available by default: a time window, a byte budget, or both? The
-   architecture will enforce both hard memory and disk bounds regardless.
-   **Recommendation: both**—a small in-memory journal for fast resume plus a
-   bounded on-disk history with time and byte eviction. Set exact values from a
-   representative output trace and soak test, not intuition.
+1. **First provider: Claude Code.** It exercises the current primary Swarm
+   workflow. Codex follows after the terminal/session contract passes recovery
+   and soak tests; the adapter contract is designed against both first.
+2. **Terminal retention: time and byte bounds.** Use a small in-memory journal
+   for fast resume plus bounded on-disk history with time and byte eviction.
+   Set exact values from a representative output trace and soak test, not
+   intuition.
+3. **First usable milestone: terminal-first vertical slice.** Prove two-worker
+   switching, browser reload, API restart survival, and bounded memory before
+   introducing the task board.
 
 ## Defaults we can safely start with
 

@@ -1,6 +1,6 @@
 # M0 evidence review
 
-Status: **Draft recommendation for operator review**
+Status: **Accepted M0 baseline**
 
 This review narrows the replacement to outcomes that are both central to daily
 operation and necessary to test the new architecture. It is not a promise to
@@ -114,7 +114,7 @@ behaves like durable equipment:
 
 ## Recommendation
 
-Approve this cut as the M0 product baseline. Begin implementation only after
-the provider-first choice and the terminal retention policy in
-`09-open-questions.md` are resolved. Other deferred capabilities can be tested
-through dogfooding without blocking the walking skeleton.
+The primary operator accepted this cut on 2026-08-10 with Claude Code first,
+time-and-byte terminal retention bounds, and a terminal-first vertical slice.
+Other deferred capabilities can be tested through dogfooding without blocking
+the walking skeleton.

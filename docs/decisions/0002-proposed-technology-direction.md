@@ -1,6 +1,6 @@
 # ADR-0002: Rust backend and React frontend
 
-Status: **Proposed**
+Status: **Accepted**
 
 ## Context
 
@@ -38,7 +38,8 @@ security requirements justify a child process.
 
 ## Validation
 
-Approve only after reviewing the capability inventory and walking skeleton.
-The walking skeleton must demonstrate terminal recovery, developer workflow,
-integration-test ergonomics, and acceptable implementation velocity.
-
+Accepted by the primary operator on 2026-08-10 after reviewing the capability
+inventory and walking skeleton. The walking skeleton must still demonstrate
+terminal recovery, developer workflow, integration-test ergonomics, and
+acceptable implementation velocity before the architecture is considered
+proven.
