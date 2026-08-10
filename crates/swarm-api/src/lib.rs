@@ -168,6 +168,10 @@ pub fn router(state: AppState) -> Router {
             get(list_sessions).post(start_session),
         )
         .route(
+            "/api/v1/terminal/history/diagnostics",
+            get(history_diagnostics),
+        )
+        .route(
             "/api/v1/terminal/sessions/{session_id}",
             delete(stop_session),
         )
@@ -223,6 +227,13 @@ async fn list_sessions(
     headers: HeaderMap,
 ) -> Result<Json<HostResponse>, ApiError> {
     authorized_request(&state, &headers, HostRequest::ListSessions).await
+}
+
+async fn history_diagnostics(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<HostResponse>, ApiError> {
+    authorized_request(&state, &headers, HostRequest::HistoryDiagnostics).await
 }
 
 async fn start_session(
@@ -521,7 +532,9 @@ mod tests {
     use axum::{body::Body, http::Request};
     use futures_util::{SinkExt, StreamExt};
     use serde_json::Value;
-    use swarm_terminal::{JournalLimits, ProviderCommand, SessionRegistry};
+    use swarm_terminal::{
+        HistoryLimits, HistoryStore, JournalLimits, ProviderCommand, SessionRegistry,
+    };
     use swarm_terminal_host::HostServer;
     use tempfile::TempDir;
     use tokio_tungstenite::{
@@ -606,6 +619,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn history_diagnostics_are_authorized_and_content_free() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let history = Arc::new(
+            HistoryStore::open(runtime.path().join("history"), HistoryLimits::default()).unwrap(),
+        );
+        let registry = Arc::new(
+            SessionRegistry::new_with_history(
+                JournalLimits::new(4096, 64),
+                1,
+                [workspace],
+                Some(history),
+            )
+            .unwrap(),
+        );
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let app =
+            router(AppState::default().with_terminal_host(HostClient::new(&socket), "secret"));
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/terminal/history/diagnostics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/terminal/history/diagnostics").await;
+        assert!(response.status().is_success());
+        let json = response_json(response).await;
+        assert_eq!(
+            json["diagnostics"]["limits"]["max_total_bytes"],
+            HistoryLimits::default().max_total_bytes
+        );
+        assert_eq!(json["diagnostics"]["retained_bytes"], 0);
+        assert!(json.get("bytes").is_none());
+        server_task.abort();
+        let _ = server_task.await;
     }
 
     #[tokio::test]

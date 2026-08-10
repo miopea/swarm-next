@@ -22,6 +22,8 @@ to survive API replacement. It does not yet claim the full walking skeleton.
   are implemented in the follow-on browser attachment increment.
 - Canonical active-screen snapshots and bounded renderer recovery are
   implemented in the follow-on canonical recovery increment.
+- Bounded, checksummed, same-user on-disk output history and content-free
+  diagnostics are implemented in the durable-history increment.
 
 ## Process ownership
 
@@ -49,6 +51,7 @@ terminal host.
 All terminal routes require `Authorization: Bearer <operator token>`:
 
 - `GET /api/v1/terminal/sessions`
+- `GET /api/v1/terminal/history/diagnostics`
 - `POST /api/v1/terminal/sessions`
 - `GET /api/v1/terminal/sessions/{id}/output?after={sequence}`
 - `POST /api/v1/terminal/sessions/{id}/input`
@@ -72,6 +75,6 @@ roots and provider commands, so HTTP authorization is not its only boundary.
 
 ## Remaining M1 work
 
-- Durable, time-and-byte-bounded on-disk history.
+- Bounded historical-scrollback retrieval from the durable store.
 - Host restart/update descriptor handoff or explicit compatibility fallback.
 - Packaged service lifecycle, diagnostics, and longer resource soak.

@@ -57,6 +57,7 @@ host and API are separate process owners shipped as one application:
 
 ```sh
 export SWARM_TERMINAL_SOCKET="$HOME/.local/state/swarm-next/run/terminal.sock"
+export SWARM_TERMINAL_HISTORY_DIR="$HOME/.local/state/swarm-next/terminal-history"
 export SWARM_WORKSPACE_ROOTS="/absolute/path/to/workspaces"
 cargo run -p swarm-terminal-host
 

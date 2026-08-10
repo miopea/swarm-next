@@ -11,9 +11,9 @@ use tokio::{
     net::UnixStream,
 };
 
-use crate::{Resume, TerminalSize};
+use crate::{HistoryDiagnostics, Resume, TerminalSize};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -32,6 +32,7 @@ pub enum HostRequest {
         size: TerminalSize,
     },
     ListSessions,
+    HistoryDiagnostics,
     Read {
         session_id: WorkerSessionId,
         after_sequence: Option<u64>,
@@ -70,6 +71,9 @@ pub enum HostResponse {
     },
     Sessions {
         sessions: Vec<HostSessionSummary>,
+    },
+    HistoryDiagnostics {
+        diagnostics: Option<HistoryDiagnostics>,
     },
     Output {
         session_id: WorkerSessionId,

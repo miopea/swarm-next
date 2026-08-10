@@ -1,9 +1,14 @@
+mod history;
 mod ipc;
 mod journal;
 mod process;
 mod provider;
 mod state;
 
+pub use history::{
+    HistoryAppendOutcome, HistoryDiagnostics, HistoryError, HistoryLimits, HistoryRecord,
+    HistoryStore, default_terminal_history_path,
+};
 pub use ipc::{
     HostClient, HostRequest, HostResponse, HostSessionSummary, IpcError, MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES, PROTOCOL_VERSION, default_terminal_socket_path,
