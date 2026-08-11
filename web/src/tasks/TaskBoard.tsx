@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 
 import type { SessionSummary, Task, TaskState } from "../api";
+import BeeMascot from "../brand/BeeMascot";
 
 type Props = {
   tasks: Task[];
@@ -78,7 +79,7 @@ export default function TaskBoard({
           <span className="count-badge">{openTasks.length}</span>
         </div>
         {openTasks.length === 0 ? (
-          <div className="empty-card"><strong>No work queued</strong><span>Create a focused task when you are ready.</span></div>
+          <div className="empty-card"><BeeMascot className="empty-bee" expression="available" /><div><strong>No work queued</strong><span>Create a focused task when you are ready.</span></div></div>
         ) : (
           <div className="task-grid">
             {openTasks.map((task) => (

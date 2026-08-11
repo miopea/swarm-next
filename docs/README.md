@@ -22,6 +22,7 @@ Read and review these documents in order:
 18. [ADR 0009: unprivileged systemd user package lifecycle](decisions/0009-systemd-user-package-lifecycle.md)
 19. [M1 two-worker soak gate](17-two-worker-soak.md)
 20. [M1 minimal task workflow](18-minimal-task-workflow.md)
+21. [Visual design system](19-visual-design-system.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do

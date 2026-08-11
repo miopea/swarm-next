@@ -10,7 +10,22 @@ afterEach(() => {
   cleanup();
   terminalWorkspace.logout();
   window.sessionStorage.clear();
+  window.localStorage.clear();
+  delete document.documentElement.dataset.theme;
+  document.documentElement.style.colorScheme = "";
   vi.unstubAllGlobals();
+});
+
+test("applies and remembers the selected color theme", async () => {
+  window.localStorage.setItem("swarm-next.color-theme.v1", "dark");
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ status: "ok", version: "0.1.0" })));
+
+  render(<App />);
+
+  expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  fireEvent.click(screen.getByRole("button", { name: "Switch to light theme" }));
+  expect(document.documentElement).toHaveAttribute("data-theme", "light");
+  expect(window.localStorage.getItem("swarm-next.color-theme.v1")).toBe("light");
 });
 
 test("reports the connected runtime version", async () => {
