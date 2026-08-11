@@ -13,6 +13,9 @@ mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_WORKSPACE_BYTES: usize = 4096;
 const CURRENT_SCHEMA_VERSION: i64 = 2;
+// Rollback compatibility owner: persistence. Remove this bridge only after every retained
+// release can read schema v3 or newer.
+const MAX_SUPPORTED_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Clone)]
 pub struct TaskStore {
@@ -122,11 +125,11 @@ impl TaskStore {
                 migrate_worker_roster(&transaction)?;
                 transaction.commit()?;
             }
-            CURRENT_SCHEMA_VERSION => {}
+            CURRENT_SCHEMA_VERSION | MAX_SUPPORTED_SCHEMA_VERSION => {}
             found => {
                 return Err(TaskStoreError::UnsupportedSchemaVersion {
                     found,
-                    supported: CURRENT_SCHEMA_VERSION,
+                    supported: MAX_SUPPORTED_SCHEMA_VERSION,
                 });
             }
         }
@@ -545,6 +548,22 @@ mod tests {
                 .unwrap(),
             CURRENT_SCHEMA_VERSION
         );
+    }
+
+    #[test]
+    fn reopens_schema_v3_for_safe_rollback() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .pragma_update(None, "user_version", MAX_SUPPORTED_SCHEMA_VERSION)
+                .unwrap();
+        }
+        let reopened = TaskStore::open(path).unwrap();
+        reopened.verify_integrity().unwrap();
     }
 
     #[test]
