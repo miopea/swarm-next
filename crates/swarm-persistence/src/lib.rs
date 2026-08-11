@@ -738,6 +738,22 @@ mod tests {
     }
 
     #[test]
+    fn reopens_schema_v3_for_safe_rollback() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
+                .unwrap();
+        }
+        let reopened = TaskStore::open(path).unwrap();
+        reopened.verify_integrity().unwrap();
+    }
+
+    #[test]
     fn backup_is_consistent_and_reopenable() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.sqlite3");
