@@ -26,6 +26,7 @@ import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
 const OPERATOR_TOKEN_STORAGE_KEY = "swarm-next.operator-token.v1";
+const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
 type Surface = "tasks" | "workers";
@@ -40,12 +41,13 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [workerNameDraft, setWorkerNameDraft] = useState("");
   const [workspace, setWorkspace] = useState("");
-  const [surface, setSurface] = useState<Surface>("tasks");
+  const [surface, setSurface] = useState<Surface>(readSavedSurface);
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
 
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
+  useEffect(() => saveSurface(surface), [surface]);
 
   useEffect(() => { void loadTerminalView().catch(() => undefined); }, []);
 
@@ -421,5 +423,7 @@ function RuntimeStatus({ state }: { state: LoadState }) {
 
 function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>; }
 function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
+function readSavedSurface(): Surface { try { return window.sessionStorage.getItem(SURFACE_STORAGE_KEY) === "workers" ? "workers" : "tasks"; } catch { return "tasks"; } }
+function saveSurface(surface: Surface) { try { window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface); } catch { /* Surface persistence is a non-critical convenience. */ } }
 function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }
 function ThemeIcon({ theme }: { theme: ColorTheme }) { return theme === "light" ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8 8 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg>; }

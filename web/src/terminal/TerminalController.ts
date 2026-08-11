@@ -41,6 +41,7 @@ export class TerminalController {
   #opened = false;
   #started = false;
   #startPromise: Promise<void> | undefined;
+  #refitPromise: Promise<void> | undefined;
   #disposed = false;
   #state: TerminalConnectionState = "connecting";
   #stateDetail: string | undefined;
@@ -61,7 +62,11 @@ export class TerminalController {
       this.#surface.open(this.#host);
       this.#opened = true;
     }
-    this.#startWhenFitted();
+    if (this.#started) {
+      this.#refitWhenAttached();
+    } else {
+      this.#startWhenFitted();
+    }
   }
 
   detach(): void {
@@ -103,6 +108,30 @@ export class TerminalController {
       .finally(() => {
         if (this.#startPromise === startPromise) this.#startPromise = undefined;
       });
+  }
+
+  #refitWhenAttached(): void {
+    if (this.#refitPromise) return;
+    const refitPromise = this.#refitAttachedSurface();
+    this.#refitPromise = refitPromise;
+    void refitPromise
+      .catch((error: unknown) => {
+        if (!this.#disposed) {
+          this.#setState(
+            "error",
+            error instanceof Error ? error.message : "terminal renderer refit failed",
+          );
+        }
+      })
+      .finally(() => {
+        if (this.#refitPromise === refitPromise) this.#refitPromise = undefined;
+      });
+  }
+
+  async #refitAttachedSurface(): Promise<void> {
+    const { rows, columns } = await this.#surface.fit();
+    if (this.#disposed || !this.#started || !this.#host.parentElement) return;
+    this.#connection.resize(rows, columns);
   }
 
   async #fitAndStart(): Promise<void> {
