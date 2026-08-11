@@ -4,6 +4,30 @@ Status: **Proposed**
 
 ## Core identities
 
+### Operator
+
+One authenticated person. An operator owns exactly one Hive. Presence is
+tracked per operator and device; authorization is never inferred from presence.
+
+### Hive
+
+One operator's independently managed Swarm environment. It owns a personal
+Queen, private workers, tasks, settings, execution nodes, and integration
+identities. Apiary membership is optional and exclusive.
+
+### Apiary
+
+An optional federation of Hives with one Keeper. It owns membership, policy,
+shared-project configuration, atomic task claims, cross-Hive routing, and
+organization audit. It does not own Hive repositories or terminal processes.
+An Apiary selects exactly one immutable shared-work backend: Jira or Native.
+
+### Stewardship
+
+A Keeper-granted scope over selected Hives, Jira projects, and capabilities.
+Stewardship augments the operator's existing Queen. A Hive may have no primary
+Steward and escalate directly to Keeper.
+
 ### Workspace
 
 A configured environment in which tasks and workers operate. It identifies a
@@ -31,6 +55,10 @@ scrollback, output sequence, and client attachment state.
 A durable unit of intended work. A task has content, priority, dependencies,
 source references, lifecycle state, and optional assignment. It does not own a
 worker process.
+
+A task has one home Hive. An Apiary-visible task may be unclaimed temporarily,
+but execution begins only after an atomic claim or Keeper assignment establishes
+one home Hive. Cross-Hive work is a handoff or linked contribution.
 
 ### Assignment
 
@@ -62,6 +90,11 @@ Configuration and credentials connecting a workspace to an external system.
 Integration adapters translate external events into application commands and
 cannot directly mutate core tables.
 
+Jira project bindings are owned by either one Hive or its Jira-backed Apiary.
+Each Hive synchronizes with its operator Jira identity; Apiary coordination
+distributes bindings and arbitrates claims without becoming the routine sync
+actor. Native Apiary synchronization is a separate canonical adapter.
+
 ## Critical distinctions
 
 - Worker name is not worker-session identity.
@@ -73,6 +106,10 @@ cannot directly mutate core tables.
 - Browser connection is not authentication authority.
 - Configuration source is not configuration precedence; imported configuration
   becomes one canonical stored representation.
+- Apiary project ownership is not task home-Hive ownership.
+- Apiary membership is not transferable task ownership.
+- Structured oversight is not permission to stream or control a private
+  terminal.
 
 ## Initial state-machine candidates
 

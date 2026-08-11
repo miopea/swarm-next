@@ -30,6 +30,8 @@ deployment boundary, not a second product backend.
 ## Proposed modules
 
 - `identity`: authentication, sessions, authorization, attach grants.
+- `apiary`: optional Hive federation, membership, scoped stewardship, project
+  catalog, atomic claims, and cross-Hive routing.
 - `workspace`: roots, provider binding, runtime configuration.
 - `tasks`: task lifecycle, dependencies, assignment, history.
 - `workers`: durable worker identity and worker-session lifecycle.
@@ -99,12 +101,18 @@ Recommended rules:
 - Integration credentials are accessible only to their adapter.
 - The terminal supervisor validates local peer identity and command limits.
 - Audit records distinguish operator, automation, integration, and agent actors.
+- A Hive is the execution and credential boundary. Apiary authorization can
+  coordinate a Hive but cannot bypass its filesystem, provider, or terminal
+  boundaries.
+- Steward authority is an explicit durable scope grant, never inferred from
+  organizational labels or model output.
 
 ## Explicit non-goals for the foundation
 
 - Microservices.
 - A general plugin runtime.
 - Distributed databases.
-- Multi-user collaboration beyond securing the primary operator workflow.
+- Shipping multi-user collaboration in the first local dogfood slice. The
+  identity and ownership model is nevertheless Apiary-ready per ADR 0010.
 - Mechanical compatibility with every legacy endpoint.
 - Reimplementation of provider-native automatic approval.

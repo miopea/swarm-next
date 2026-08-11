@@ -2,6 +2,224 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use uuid::Uuid;
 
+macro_rules! domain_id {
+    ($name:ident) => {
+        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(Uuid);
+
+        impl $name {
+            #[must_use]
+            pub fn new() -> Self {
+                Self(Uuid::now_v7())
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt(formatter)
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = uuid::Error;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Uuid::parse_str(value).map(Self)
+            }
+        }
+    };
+}
+
+domain_id!(OperatorId);
+domain_id!(HiveId);
+domain_id!(ApiaryId);
+domain_id!(StewardshipId);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SharedWorkBackend {
+    Jira,
+    Native,
+}
+
+impl fmt::Display for SharedWorkBackend {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Jira => "jira",
+            Self::Native => "native",
+        })
+    }
+}
+
+impl FromStr for SharedWorkBackend {
+    type Err = ParseSharedWorkBackendError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "jira" => Ok(Self::Jira),
+            "native" => Ok(Self::Native),
+            _ => Err(ParseSharedWorkBackendError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseSharedWorkBackendError;
+
+impl fmt::Display for ParseSharedWorkBackendError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown shared-work backend")
+    }
+}
+
+impl std::error::Error for ParseSharedWorkBackendError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Operator {
+    pub id: OperatorId,
+    pub display_name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Hive {
+    pub id: HiveId,
+    pub name: String,
+    pub operator_id: OperatorId,
+    pub apiary_id: Option<ApiaryId>,
+}
+
+impl Hive {
+    #[must_use]
+    pub fn personal(name: impl Into<String>, operator_id: OperatorId) -> Self {
+        Self {
+            id: HiveId::new(),
+            name: name.into(),
+            operator_id,
+            apiary_id: None,
+        }
+    }
+
+    /// Joins one Apiary without allowing implicit federation transfer.
+    ///
+    /// # Errors
+    /// Returns the current Apiary when this Hive must leave it first.
+    pub fn join(&mut self, apiary_id: ApiaryId) -> Result<(), HiveMembershipError> {
+        if let Some(current) = self.apiary_id {
+            return Err(HiveMembershipError::AlreadyJoined(current));
+        }
+        self.apiary_id = Some(apiary_id);
+        Ok(())
+    }
+
+    /// Leaves the current Apiary after application services validate shared work.
+    pub fn leave(&mut self) -> Option<ApiaryId> {
+        self.apiary_id.take()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HiveMembershipError {
+    AlreadyJoined(ApiaryId),
+}
+
+impl fmt::Display for HiveMembershipError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyJoined(apiary_id) => {
+                write!(
+                    formatter,
+                    "Hive must leave Apiary {apiary_id} before joining another"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for HiveMembershipError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Apiary {
+    pub id: ApiaryId,
+    pub name: String,
+    pub keeper_operator_id: OperatorId,
+    shared_work_backend: SharedWorkBackend,
+}
+
+impl Apiary {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        keeper_operator_id: OperatorId,
+        shared_work_backend: SharedWorkBackend,
+    ) -> Self {
+        Self {
+            id: ApiaryId::new(),
+            name: name.into(),
+            keeper_operator_id,
+            shared_work_backend,
+        }
+    }
+
+    #[must_use]
+    pub const fn shared_work_backend(&self) -> SharedWorkBackend {
+        self.shared_work_backend
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StewardCapability {
+    Observe,
+    Assign,
+    Assist,
+    Takeover,
+    ManageProjects,
+    ManageMembers,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Stewardship {
+    pub id: StewardshipId,
+    pub apiary_id: ApiaryId,
+    pub steward_operator_id: OperatorId,
+    pub managed_hive_ids: Vec<HiveId>,
+    pub capabilities: Vec<StewardCapability>,
+}
+
+impl Stewardship {
+    #[must_use]
+    pub fn allows(&self, hive_id: HiveId, capability: StewardCapability) -> bool {
+        self.managed_hive_ids.contains(&hive_id) && self.capabilities.contains(&capability)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryCollapseReadiness {
+    pub active_hive_count: usize,
+    pub pending_invitation_count: usize,
+    pub active_stewardship_count: usize,
+    pub open_cross_hive_work_count: usize,
+    pub departed_node_count: usize,
+}
+
+impl ApiaryCollapseReadiness {
+    #[must_use]
+    pub const fn can_collapse(self) -> bool {
+        self.active_hive_count == 1
+            && self.pending_invitation_count == 0
+            && self.active_stewardship_count == 0
+            && self.open_cross_hive_work_count == 0
+            && self.departed_node_count == 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct WorkerId(Uuid);
@@ -386,5 +604,87 @@ mod tests {
         assert!(TaskState::Blocked.can_transition_to(TaskState::Active));
         assert!(!TaskState::Ready.can_transition_to(TaskState::Completed));
         assert!(!TaskState::Completed.can_transition_to(TaskState::Active));
+    }
+
+    #[test]
+    fn hive_membership_is_exclusive_and_requires_leaving_first() {
+        let operator_id = OperatorId::new();
+        let first_apiary = ApiaryId::new();
+        let second_apiary = ApiaryId::new();
+        let mut hive = Hive::personal("Violet Hive", operator_id);
+
+        hive.join(first_apiary).unwrap();
+        assert_eq!(hive.apiary_id, Some(first_apiary));
+        assert_eq!(
+            hive.join(second_apiary),
+            Err(HiveMembershipError::AlreadyJoined(first_apiary))
+        );
+
+        assert_eq!(hive.leave(), Some(first_apiary));
+        hive.join(second_apiary).unwrap();
+        assert_eq!(hive.apiary_id, Some(second_apiary));
+    }
+
+    #[test]
+    fn apiary_backend_is_selected_at_creation() {
+        let keeper_id = OperatorId::new();
+        let jira = Apiary::new("Garden", keeper_id, SharedWorkBackend::Jira);
+        let native = Apiary::new("Workshop", keeper_id, SharedWorkBackend::Native);
+
+        assert_eq!(jira.shared_work_backend(), SharedWorkBackend::Jira);
+        assert_eq!(native.shared_work_backend(), SharedWorkBackend::Native);
+        assert_ne!(jira.id, native.id);
+    }
+
+    #[test]
+    fn stewardship_authority_is_explicitly_scoped() {
+        let managed_hive = HiveId::new();
+        let other_hive = HiveId::new();
+        let stewardship = Stewardship {
+            id: StewardshipId::new(),
+            apiary_id: ApiaryId::new(),
+            steward_operator_id: OperatorId::new(),
+            managed_hive_ids: vec![managed_hive],
+            capabilities: vec![StewardCapability::Observe, StewardCapability::Takeover],
+        };
+
+        assert!(stewardship.allows(managed_hive, StewardCapability::Observe));
+        assert!(stewardship.allows(managed_hive, StewardCapability::Takeover));
+        assert!(!stewardship.allows(managed_hive, StewardCapability::Assign));
+        assert!(!stewardship.allows(other_hive, StewardCapability::Takeover));
+    }
+
+    #[test]
+    fn sole_hive_collapse_fails_closed_on_any_federation_state() {
+        let ready = ApiaryCollapseReadiness {
+            active_hive_count: 1,
+            ..ApiaryCollapseReadiness::default()
+        };
+        assert!(ready.can_collapse());
+
+        for blocked in [
+            ApiaryCollapseReadiness {
+                active_hive_count: 2,
+                ..ready
+            },
+            ApiaryCollapseReadiness {
+                pending_invitation_count: 1,
+                ..ready
+            },
+            ApiaryCollapseReadiness {
+                active_stewardship_count: 1,
+                ..ready
+            },
+            ApiaryCollapseReadiness {
+                open_cross_hive_work_count: 1,
+                ..ready
+            },
+            ApiaryCollapseReadiness {
+                departed_node_count: 1,
+                ..ready
+            },
+        ] {
+            assert!(!blocked.can_collapse());
+        }
     }
 }
