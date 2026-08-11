@@ -206,6 +206,73 @@ impl Stewardship {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "role", content = "stewardship_id")]
+pub enum HiveAuthority {
+    Owner,
+    Keeper,
+    Steward(StewardshipId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HiveAuthorization {
+    pub actor_operator_id: OperatorId,
+    pub target_hive_id: HiveId,
+    pub capability: StewardCapability,
+    pub authority: HiveAuthority,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HiveAuthorizationDenied;
+
+impl fmt::Display for HiveAuthorizationDenied {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("operator is not authorized for the Hive capability")
+    }
+}
+
+impl std::error::Error for HiveAuthorizationDenied {}
+
+/// Resolves one explicit Hive capability without inferring authority from presence or agent output.
+///
+/// # Errors
+/// Denies access when the actor is not the Hive owner, the matching Apiary Keeper, or an
+/// in-scope Steward with the requested capability. Missing or mismatched federation context
+/// fails closed.
+pub fn authorize_hive_capability(
+    actor_operator_id: OperatorId,
+    target_hive: &Hive,
+    apiary: Option<&Apiary>,
+    stewardships: &[Stewardship],
+    capability: StewardCapability,
+) -> Result<HiveAuthorization, HiveAuthorizationDenied> {
+    let authority = if actor_operator_id == target_hive.operator_id {
+        HiveAuthority::Owner
+    } else {
+        let target_apiary_id = target_hive.apiary_id.ok_or(HiveAuthorizationDenied)?;
+        let apiary = apiary
+            .filter(|candidate| candidate.id == target_apiary_id)
+            .ok_or(HiveAuthorizationDenied)?;
+        if actor_operator_id == apiary.keeper_operator_id {
+            HiveAuthority::Keeper
+        } else {
+            let stewardship = stewardships.iter().find(|stewardship| {
+                stewardship.apiary_id == target_apiary_id
+                    && stewardship.steward_operator_id == actor_operator_id
+                    && stewardship.allows(target_hive.id, capability)
+            });
+            HiveAuthority::Steward(stewardship.ok_or(HiveAuthorizationDenied)?.id)
+        }
+    };
+
+    Ok(HiveAuthorization {
+        actor_operator_id,
+        target_hive_id: target_hive.id,
+        capability,
+        authority,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ApiaryCollapseReadiness {
     pub active_hive_count: usize,
@@ -661,6 +728,81 @@ mod tests {
         assert!(stewardship.allows(managed_hive, StewardCapability::Takeover));
         assert!(!stewardship.allows(managed_hive, StewardCapability::Assign));
         assert!(!stewardship.allows(other_hive, StewardCapability::Takeover));
+    }
+
+    #[test]
+    fn hive_authorization_is_owner_keeper_or_explicitly_scoped_steward() {
+        let owner_id = OperatorId::new();
+        let keeper_id = OperatorId::new();
+        let steward_id = OperatorId::new();
+        let stranger_id = OperatorId::new();
+        let mut hive = Hive::personal("Developer Hive", owner_id);
+
+        let owner =
+            authorize_hive_capability(owner_id, &hive, None, &[], StewardCapability::Takeover)
+                .unwrap();
+        assert_eq!(owner.authority, HiveAuthority::Owner);
+
+        let apiary = Apiary::new("Garden", keeper_id, SharedWorkBackend::Jira);
+        hive.join(apiary.id).unwrap();
+        let keeper = authorize_hive_capability(
+            keeper_id,
+            &hive,
+            Some(&apiary),
+            &[],
+            StewardCapability::ManageProjects,
+        )
+        .unwrap();
+        assert_eq!(keeper.authority, HiveAuthority::Keeper);
+
+        let stewardship = Stewardship {
+            id: StewardshipId::new(),
+            apiary_id: apiary.id,
+            steward_operator_id: steward_id,
+            managed_hive_ids: vec![hive.id],
+            capabilities: vec![StewardCapability::Observe],
+        };
+        let steward = authorize_hive_capability(
+            steward_id,
+            &hive,
+            Some(&apiary),
+            std::slice::from_ref(&stewardship),
+            StewardCapability::Observe,
+        )
+        .unwrap();
+        assert_eq!(steward.authority, HiveAuthority::Steward(stewardship.id));
+
+        assert!(
+            authorize_hive_capability(
+                steward_id,
+                &hive,
+                Some(&apiary),
+                std::slice::from_ref(&stewardship),
+                StewardCapability::Takeover,
+            )
+            .is_err()
+        );
+        assert!(
+            authorize_hive_capability(
+                stranger_id,
+                &hive,
+                Some(&apiary),
+                std::slice::from_ref(&stewardship),
+                StewardCapability::Observe,
+            )
+            .is_err()
+        );
+        let wrong_apiary = Apiary::new("Other", keeper_id, SharedWorkBackend::Jira);
+        assert!(
+            authorize_hive_capability(
+                keeper_id,
+                &hive,
+                Some(&wrong_apiary),
+                &[],
+                StewardCapability::Observe,
+            )
+            .is_err()
+        );
     }
 
     #[test]
