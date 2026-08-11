@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type DragEvent, type FormEvent } from "react";
 
 import type { SessionSummary, Task, TaskState } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -23,6 +23,15 @@ const stateLabels: Record<TaskState, string> = {
   completed: "Completed",
 };
 
+const validTargets: Record<TaskState, TaskState[]> = {
+  draft: ["ready"],
+  ready: ["active", "blocked"],
+  active: ["blocked", "review"],
+  blocked: ["ready", "active"],
+  review: ["active", "completed"],
+  completed: [],
+};
+
 export default function TaskBoard({
   tasks,
   sessions,
@@ -35,6 +44,7 @@ export default function TaskBoard({
 }: Props) {
   const [title, setTitle] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [draggedTaskId, setDraggedTaskId] = useState<string>();
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -46,6 +56,7 @@ export default function TaskBoard({
 
   const openTasks = tasks.filter((task) => task.state !== "completed");
   const completedTasks = tasks.filter((task) => task.state === "completed");
+  const draggedTask = tasks.find((task) => task.id === draggedTaskId);
 
   return (
     <div className="task-board">
@@ -98,10 +109,33 @@ export default function TaskBoard({
                 onTransition={onTransition}
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
+                onDragStart={setDraggedTaskId}
+                onDragEnd={() => setDraggedTaskId(undefined)}
               />
             ))}
           </div>
         )}
+        {draggedTask && (
+          <div className="task-drop-strip" aria-live="polite">
+            <span>Move <strong>{draggedTask.title}</strong> to</span>
+            {validTargets[draggedTask.state].map((state) => (
+              <button
+                className={`task-drop-target state-${state}`}
+                key={state}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setDraggedTaskId(undefined);
+                  void onTransition(draggedTask, state);
+                }}
+                disabled={busy}
+              >
+                {stateLabels[state]}
+              </button>
+            ))}
+          </div>
+        )}
+
       </section>
 
       {completedTasks.length > 0 && (
@@ -118,6 +152,8 @@ export default function TaskBoard({
                 onTransition={onTransition}
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
+                onDragStart={setDraggedTaskId}
+                onDragEnd={() => setDraggedTaskId(undefined)}
               />
             ))}
           </div>
@@ -127,11 +163,17 @@ export default function TaskBoard({
   );
 }
 
-function TaskCard({ task, sessions, workerNames, busy, onTransition, onAssign, onStartWorker }: Omit<Props, "tasks" | "onCreate"> & { task: Task }) {
+function TaskCard({ task, sessions, workerNames, busy, onTransition, onAssign, onStartWorker, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate"> & { task: Task; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const runningSessions = sessions.filter((session) => session.running);
   return (
-    <article className="task-card">
+    <article
+      className="task-card"
+      aria-label={task.title}
+      draggable={!busy && task.state !== "completed"}
+      onDragStart={(event: DragEvent<HTMLElement>) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", task.id); onDragStart(task.id); }}
+      onDragEnd={onDragEnd}
+    >
       <div className="task-card-topline">
         <span className={`task-state state-${task.state}`}>{stateLabels[task.state]}</span>
         <code>{shortWorkspace(task.workspace)}</code>
