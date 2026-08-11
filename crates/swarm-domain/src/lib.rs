@@ -95,6 +95,12 @@ pub struct Hive {
     pub apiary_id: Option<ApiaryId>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HiveIdentity {
+    pub operator: Operator,
+    pub hive: Hive,
+}
+
 impl Hive {
     #[must_use]
     pub fn personal(name: impl Into<String>, operator_id: OperatorId) -> Self {
@@ -363,6 +369,7 @@ impl std::error::Error for ParseProviderKindError {}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkerProfile {
     pub id: WorkerId,
+    pub hive_id: HiveId,
     pub name: String,
     pub role: WorkerRole,
     pub provider: ProviderKind,
@@ -546,6 +553,7 @@ pub struct TaskDetailsUpdate {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub id: TaskId,
+    pub hive_id: HiveId,
     pub title: String,
     pub description: String,
     pub priority: TaskPriority,
@@ -583,6 +591,7 @@ mod tests {
     fn worker_profile_identity_outlives_its_session() {
         let profile = WorkerProfile {
             id: WorkerId::new(),
+            hive_id: HiveId::new(),
             name: "Queen".into(),
             role: WorkerRole::Queen,
             provider: ProviderKind::ClaudeCode,

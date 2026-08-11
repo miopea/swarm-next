@@ -1,7 +1,7 @@
 use std::{collections::HashSet, str::FromStr};
 
 use rusqlite::{OptionalExtension, params};
-use swarm_domain::{ProviderKind, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId};
+use swarm_domain::{HiveId, ProviderKind, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId};
 
 use super::{MAX_WORKSPACE_BYTES, TaskStore, TaskStoreError};
 
@@ -56,7 +56,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "
-            SELECT p.id, p.name, p.role, p.provider, p.workspace, p.autostart,
+            SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
                    p.position, s.session_id, p.created_at, p.updated_at
             FROM worker_profiles p
             LEFT JOIN worker_sessions s
@@ -80,7 +80,7 @@ impl TaskStore {
         connection
             .query_row(
                 "
-                SELECT p.id, p.name, p.role, p.provider, p.workspace, p.autostart,
+                SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
                        p.position, s.session_id, p.created_at, p.updated_at
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
@@ -197,7 +197,7 @@ impl TaskStore {
         connection
             .query_row(
                 "
-                SELECT p.id, p.name, p.role, p.provider, p.workspace, p.autostart,
+                SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
                        p.position, s.session_id, p.created_at, p.updated_at
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
@@ -223,6 +223,7 @@ impl TaskStore {
         let name = name.trim();
         let workspace = workspace.trim();
         validate_profile(name, workspace)?;
+        let hive_id = self.local_hive_identity()?.hive.id;
         let connection = self.connection()?;
         let duplicate = connection
             .query_row(
@@ -250,10 +251,11 @@ impl TaskStore {
         let id = WorkerId::new();
         connection.execute(
             "INSERT INTO worker_profiles
-             (id, name, role, provider, workspace, autostart, position)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (id, hive_id, name, role, provider, workspace, autostart, position)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 id.to_string(),
+                hive_id.to_string(),
                 name,
                 role.to_string(),
                 provider.to_string(),
@@ -280,25 +282,28 @@ fn validate_profile(name: &str, workspace: &str) -> Result<(), TaskStoreError> {
 fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> {
     let id =
         WorkerId::from_str(&row.get::<_, String>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
-    let role = WorkerRole::from_str(&row.get::<_, String>(2)?)
+    let hive_id =
+        HiveId::from_str(&row.get::<_, String>(1)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let role = WorkerRole::from_str(&row.get::<_, String>(3)?)
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
-    let provider = ProviderKind::from_str(&row.get::<_, String>(3)?)
+    let provider = ProviderKind::from_str(&row.get::<_, String>(4)?)
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
     let session = row
-        .get::<_, Option<String>>(7)?
+        .get::<_, Option<String>>(8)?
         .map(|value| WorkerSessionId::from_str(&value).map_err(|_| rusqlite::Error::InvalidQuery))
         .transpose()?;
     Ok(WorkerProfile {
         id,
-        name: row.get(1)?,
+        hive_id,
+        name: row.get(2)?,
         role,
         provider,
-        workspace: row.get(4)?,
-        autostart: row.get::<_, i64>(5)? != 0,
-        position: row.get(6)?,
+        workspace: row.get(5)?,
+        autostart: row.get::<_, i64>(6)? != 0,
+        position: row.get(7)?,
         active_session_id: session,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 
