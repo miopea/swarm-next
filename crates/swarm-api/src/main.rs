@@ -1,5 +1,5 @@
 use std::{env, net::SocketAddr, path::PathBuf};
-use swarm_api::{AppState, router, router_with_web_root};
+use swarm_api::{AppState, router, router_with_asset_root, router_with_web_root};
 use swarm_persistence::TaskStore;
 use swarm_terminal::{HostClient, default_terminal_socket_path};
 use tracing::info;
@@ -23,9 +23,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = api_address_from_env()?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     info!(%address, "Swarm Next API listening");
-    let app = match env::var_os("SWARM_WEB_ROOT") {
-        Some(root) => router_with_web_root(state, root),
-        None => router(state),
+    let app = match (
+        env::var_os("SWARM_WEB_ROOT"),
+        env::var_os("SWARM_ASSET_ROOT"),
+    ) {
+        (Some(root), Some(asset_root)) => router_with_asset_root(state, root, asset_root),
+        (Some(root), None) => router_with_web_root(state, root),
+        (None, _) => router(state),
     };
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

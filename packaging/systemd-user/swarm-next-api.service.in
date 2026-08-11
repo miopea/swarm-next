@@ -9,6 +9,7 @@ Type=simple
 EnvironmentFile=@CONFIG_ROOT@/swarm-next.env
 Environment=SWARM_TERMINAL_SOCKET=%t/swarm-next/terminal.sock
 Environment=SWARM_WEB_ROOT=@INSTALL_ROOT@/current/web
+Environment=SWARM_ASSET_ROOT=@INSTALL_ROOT@/assets
 Environment=SWARM_DATABASE_PATH=@STATE_ROOT@/swarm-next.sqlite3
 ExecStart=@INSTALL_ROOT@/current/bin/swarm-api
 Restart=on-failure

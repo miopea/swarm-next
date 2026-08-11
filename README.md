@@ -99,7 +99,9 @@ tar -xzf dist/swarm-next-0.1.0-<commit>-linux-x86_64.tar.gz
 The packaged UI listens on `http://127.0.0.1:8766`. Releases are staged under
 `~/.local/lib/swarm-next`, configuration is written once under
 `~/.config/swarm-next`, and durable terminal history remains under
-`~/.local/state/swarm-next`. The writable workspace defaults to
+`~/.local/state/swarm-next`. Content-hashed browser assets are retained under
+`~/.local/lib/swarm-next/assets` so a tab opened before an update can still load
+a deferred terminal module afterward. The writable workspace defaults to
 `~/swarm-workspaces`; set `SWARM_WORKSPACE_ROOT` during the first install to
 choose a different absolute path. Use `update RELEASE_DIR`, `rollback`, or
 `uninstall`. Uninstall preserves configuration and state.

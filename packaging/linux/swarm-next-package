@@ -116,6 +116,14 @@ install_release() {
   printf '%s\n' "$release"
 }
 
+publish_assets() {
+  release=$1
+  [ -d "$release/web/assets" ] || return 0
+  asset_root="$install_root/assets"
+  mkdir -p "$asset_root"
+  cp -R "$release/web/assets/." "$asset_root/"
+}
+
 activate_link() {
   release=$1
   ln -sfn "$release" "$install_root/current.next"
@@ -152,11 +160,15 @@ install_or_update() {
   new_release=$(install_release)
   old_release=
   [ ! -L "$install_root/current" ] || old_release=$(readlink "$install_root/current")
+  if [ -n "$old_release" ] && [ "$old_release" != "$new_release" ]; then
+    old_protocol=$(cat "$old_release/PROTOCOL")
+    [ "$old_protocol" = "$protocol" ] || die "protocol change requires a future compatibility migration"
+  fi
+  [ -z "$old_release" ] || publish_assets "$old_release"
+  publish_assets "$new_release"
   [ "$old_release" != "$new_release" ] || { install_units "$new_release"; run_systemctl enable --now swarm-next.target; wait_for_health || die "installed service is unhealthy"; return; }
 
   if [ -n "$old_release" ]; then
-    old_protocol=$(cat "$old_release/PROTOCOL")
-    [ "$old_protocol" = "$protocol" ] || die "protocol change requires a future compatibility migration"
     SWARM_TERMINAL_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/swarm-next/terminal.sock" \
       "$old_release/bin/swarmctl" drain >/dev/null
     drain_release=$old_release

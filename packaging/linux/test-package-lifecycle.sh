@@ -35,7 +35,7 @@ make_bundle() {
   version=$1
   protocol=${2:-5}
   bundle="$test_root/bundle-$version"
-  mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
+  mkdir -p "$bundle/bin" "$bundle/web/assets" "$bundle/systemd-user"
   for binary in swarm-api swarm-terminal-host swarmctl; do
     cat > "$bundle/bin/$binary" <<'EOF'
 #!/bin/sh
@@ -48,6 +48,7 @@ EOF
     chmod +x "$bundle/bin/$binary"
   done
   printf '<!doctype html><title>test</title>\n' > "$bundle/web/index.html"
+  printf 'export const version = "%s";\n' "$version" > "$bundle/web/assets/app-$version.js"
   cp "$repo_root/packaging/systemd-user/"*.in "$bundle/systemd-user/"
   printf '%s\n' "$version" > "$bundle/VERSION"
   printf '%s\n' "$protocol" > "$bundle/PROTOCOL"
@@ -68,7 +69,9 @@ package="$repo_root/packaging/linux/swarm-next-package"
 grep -q '127.0.0.1:8766' "$SWARM_CONFIG_ROOT/swarm-next.env"
 grep -q "SWARM_WORKSPACE_ROOTS=$SWARM_WORKSPACE_ROOT" "$SWARM_CONFIG_ROOT/swarm-next.env"
 grep -q "$SWARM_INSTALL_ROOT/current/bin/swarm-api" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
+grep -q "SWARM_ASSET_ROOT=$SWARM_INSTALL_ROOT/assets" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "SWARM_DATABASE_PATH=$SWARM_STATE_ROOT/swarm-next.sqlite3" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
+[ -f "$SWARM_INSTALL_ROOT/assets/app-1.0.0.js" ]
 grep -q "ReadWritePaths=$SWARM_STATE_ROOT" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "CLAUDE_CONFIG_DIR=$SWARM_STATE_ROOT/providers/claude" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
 grep -q 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
@@ -103,6 +106,8 @@ grep -q '^cancel-drain$' "$HOME/swarmctl.log"
 "$package" update "$test_root/bundle-2.0.0"
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/previous/VERSION")" = "1.0.0" ]
+[ -f "$SWARM_INSTALL_ROOT/assets/app-1.0.0.js" ]
+[ -f "$SWARM_INSTALL_ROOT/assets/app-2.0.0.js" ]
 
 "$package" rollback
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "1.0.0" ]

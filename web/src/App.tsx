@@ -16,9 +16,11 @@ import {
 import BeeMascot from "./brand/BeeMascot";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
+import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 
-const TerminalView = lazy(() => import("./terminal/TerminalView"));
+const loadTerminalView = () => import("./terminal/TerminalView");
+const TerminalView = lazy(loadTerminalView);
 const OPERATOR_TOKEN_STORAGE_KEY = "swarm-next.operator-token.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
@@ -38,6 +40,8 @@ export function App() {
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
 
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
+
+  useEffect(() => { void loadTerminalView().catch(() => undefined); }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -285,9 +289,11 @@ export function App() {
         ) : surface === "tasks" ? (
           <TaskBoard tasks={tasks} sessions={sessions} busy={busy} onCreate={addTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} />
         ) : activeSession ? (
-          <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
-            <TerminalView key={`${operatorToken}:${activeSession.session_id}`} operatorToken={operatorToken} session={activeSession} onStop={() => void stopSession(activeSession.session_id)} busy={busy} />
-          </Suspense>
+          <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}`}>
+            <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
+              <TerminalView operatorToken={operatorToken} session={activeSession} onStop={() => void stopSession(activeSession.session_id)} busy={busy} />
+            </Suspense>
+          </TerminalLoadBoundary>
         ) : (
           <div className="terminal-empty"><BeeMascot className="empty-bee" expression="sleeping" /><p className="eyebrow">No active session</p><h3>Start with a task or workspace</h3><p>Launch Claude from a ready task to preserve its assignment, or start an unassigned worker from the sidebar.</p></div>
         )}

@@ -28,7 +28,16 @@ immutable release directory.
 
 The API serves the compiled browser application, so the operator starts and
 updates one product even though terminal ownership remains in its independent
-process. The terminal host gets write access only to the configured workspace
+process.
+
+Content-hashed browser files are also published into a stable asset library
+under `~/.local/lib/swarm-next/assets`. Updates retain existing files and add
+the previous and incoming release assets before switching the current link. An
+open tab can therefore load a deferred module from its own release after an
+update. The current release remains the fallback source, unknown asset names
+remain 404s, and release directories stay immutable and checksum-verifiable.
+
+The terminal host gets write access only to the configured workspace
 root and application state; the remainder of home is read-only. Claude's
 documented `CLAUDE_CONFIG_DIR` redirects its credentials, settings, session
 history, and plugins into an isolated provider directory within that state.
@@ -73,6 +82,8 @@ explicit future operation.
 ## Validation
 
 - The API bind and browser root are configurable and static misses stay 404.
+- The package lifecycle retains current and previous content-hashed assets, and
+  the API serves both through the stable asset root.
 - Both SIGINT and SIGTERM cause graceful socket-owning process shutdown.
 - An isolated lifecycle smoke proves install, update, explicit rollback,
   automatic rollback after failed health, and uninstall with data retention.

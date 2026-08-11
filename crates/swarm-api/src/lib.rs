@@ -202,8 +202,35 @@ pub fn router(state: AppState) -> Router {
 /// Builds the API and serves a compiled browser application from `web_root`.
 /// Unknown files remain 404s; API misses are never rewritten to HTML.
 pub fn router_with_web_root(state: AppState, web_root: impl AsRef<FilePath>) -> Router {
-    api_router(state)
-        .fallback_service(ServeDir::new(web_root).append_index_html_on_directories(true))
+    router_with_optional_asset_root(state, web_root.as_ref().to_path_buf(), None)
+}
+
+/// Builds the API with a stable hashed-asset library retained across releases.
+pub fn router_with_asset_root(
+    state: AppState,
+    web_root: impl AsRef<FilePath>,
+    asset_root: impl AsRef<FilePath>,
+) -> Router {
+    router_with_optional_asset_root(
+        state,
+        web_root.as_ref().to_path_buf(),
+        Some(asset_root.as_ref().to_path_buf()),
+    )
+}
+
+fn router_with_optional_asset_root(
+    state: AppState,
+    web_root: PathBuf,
+    asset_root: Option<PathBuf>,
+) -> Router {
+    let app = match asset_root {
+        Some(asset_root) => api_router(state).nest_service(
+            "/assets",
+            ServeDir::new(asset_root).fallback(ServeDir::new(web_root.join("assets"))),
+        ),
+        None => api_router(state),
+    };
+    app.fallback_service(ServeDir::new(web_root).append_index_html_on_directories(true))
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-cache"),
@@ -850,6 +877,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing_api.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn packaged_router_retains_hashed_assets_for_open_tabs() {
+        let web_root = TempDir::new().unwrap();
+        let asset_root = TempDir::new().unwrap();
+        std::fs::write(web_root.path().join("index.html"), "<!doctype html>").unwrap();
+        std::fs::create_dir(web_root.path().join("assets")).unwrap();
+        std::fs::write(
+            web_root.path().join("assets/current.js"),
+            "export const current = true;",
+        )
+        .unwrap();
+        std::fs::write(
+            asset_root.path().join("previous.js"),
+            "export const previous = true;",
+        )
+        .unwrap();
+        let app = router_with_asset_root(AppState::default(), web_root.path(), asset_root.path());
+
+        let retained = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/previous.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retained.status(), StatusCode::OK);
+
+        let current = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/current.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(current.status(), StatusCode::OK);
+
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/missing.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
