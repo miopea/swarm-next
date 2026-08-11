@@ -1,33 +1,36 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 
+import { documentColorTheme, terminalTheme } from "../brand/terminalTheme";
 import type { TerminalSnapshot } from "./TerminalConnection";
 import type { Disposable, TerminalSurface } from "./TerminalController";
 
 const MAX_FIT_FRAMES = 60;
 
 export class XtermSurface implements TerminalSurface {
-  readonly #terminal = new Terminal({
-    cursorBlink: true,
-    convertEol: false,
-    fontFamily: '"Cascadia Code", "SFMono-Regular", Consolas, monospace',
-    fontSize: 14,
-    scrollback: 1_000,
-    theme: {
-      background: "#090d14",
-      foreground: "#e5e7eb",
-      cursor: "#93c5fd",
-      selectionBackground: "#1d4ed866",
-    },
-  });
+  readonly #terminal: Terminal;
   readonly #fit = new FitAddon();
+  readonly #themeObserver: MutationObserver | undefined;
   #resizeObserver: ResizeObserver | undefined;
   #element: HTMLElement | undefined;
   #restorePending = false;
   #disposed = false;
 
   constructor() {
+    this.#terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: false,
+      fontFamily: '"Atkinson Hyperlegible Mono Variable", "Cascadia Code", "SFMono-Regular", Consolas, monospace',
+      fontSize: 14,
+      minimumContrastRatio: 4.5,
+      scrollback: 1_000,
+      theme: terminalTheme(documentColorTheme()),
+    });
     this.#terminal.loadAddon(this.#fit);
+    this.#themeObserver = typeof MutationObserver === "undefined" ? undefined : new MutationObserver(() => {
+      this.#terminal.options.theme = terminalTheme(documentColorTheme());
+    });
+    this.#themeObserver?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   }
 
   open(element: HTMLElement): void {
@@ -84,6 +87,7 @@ export class XtermSurface implements TerminalSurface {
 
   dispose(): void {
     this.#disposed = true;
+    this.#themeObserver?.disconnect();
     this.#resizeObserver?.disconnect();
     this.#terminal.dispose();
   }
