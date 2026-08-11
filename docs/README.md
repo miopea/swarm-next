@@ -26,6 +26,7 @@ Read and review these documents in order:
 22. [Daily-driver readiness](20-daily-driver-readiness.md)
 23. [Apiary and Hive architecture](21-apiary-hive-architecture.md)
 24. [Live control-room events](22-live-control-room-events.md)
+25. [Privacy-safe diagnostics](23-privacy-safe-diagnostics.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do

@@ -26,7 +26,7 @@ mostly product operability rather than process survival.
 | Use direct interactions | Shortcuts, command palette, drag/drop imports | Basic buttons and forms | Add shortcuts, accessible menus, task reorder and focused drop targets |
 | Configure the product | Large multi-tab editor with overlapping concerns | No settings surface | Add a compact settings workspace for workers, runtime, appearance, and diagnostics |
 | Handle attention | Proposals, messages, activity, notifications | None | Later: one decision inbox, not multiple legacy subsystems |
-| Diagnose failures | Large logs/config surface | Strong backend bounds, little operator visibility | Add subsystem health and privacy-safe feedback before Ring 2 |
+| Diagnose failures | Large logs/config surface | Browser, API, database, terminal, provider, and integration health with sanitized preview/copy | Complete foundation; add submission transport when selected |
 
 ## First dogfood cut
 

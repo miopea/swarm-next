@@ -16,7 +16,7 @@ export class ControlRoomLiveFeed {
 
   start(
     operatorToken: string,
-    onInvalidate: () => Promise<void>,
+    onInvalidate: (page: ControlRoomEventPage) => Promise<void>,
     onStateChange: (state: LiveFeedState) => void = () => undefined,
   ) {
     this.stop();
@@ -33,7 +33,7 @@ export class ControlRoomLiveFeed {
   async #run(
     operatorToken: string,
     signal: AbortSignal,
-    onInvalidate: () => Promise<void>,
+    onInvalidate: (page: ControlRoomEventPage) => Promise<void>,
     onStateChange: (state: LiveFeedState) => void,
   ) {
     let cursor = 0;
@@ -43,7 +43,7 @@ export class ControlRoomLiveFeed {
       try {
         const page = await this.fetchPage(operatorToken, cursor, signal);
         if (signal.aborted) return;
-        if (page.reset_required || page.events.length > 0) await onInvalidate();
+        if (page.reset_required || page.events.length > 0) await onInvalidate(page);
         cursor = page.next_cursor;
         failures = 0;
         onStateChange("connected");

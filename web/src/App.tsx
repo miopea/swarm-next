@@ -13,6 +13,7 @@ import {
   stopWorker,
   transitionTask,
   updateTask,
+  type ControlRoomEvent,
   type Health,
   type HiveIdentity,
   type SessionSummary,
@@ -55,6 +56,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
   const [liveFeedState, setLiveFeedState] = useState<LiveFeedState>("connecting");
+  const [recentEvents, setRecentEvents] = useState<ControlRoomEvent[]>([]);
 
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
   useEffect(() => saveSurface(surface), [surface]);
@@ -112,13 +114,18 @@ export function App() {
     const feed = new ControlRoomLiveFeed();
     feed.start(
       operatorToken,
-      async () => {
+      async (page) => {
         const controlRoom = await loadControlRoom(operatorToken);
         if (cancelled) return;
         setHiveIdentity(controlRoom.hive);
         setSessions(controlRoom.sessions);
         setWorkers(controlRoom.workers);
         setTasks(controlRoom.tasks);
+        setRecentEvents((current) => page.reset_required
+          ? page.events.slice(-16)
+          : [...current, ...page.events].filter((event, index, events) =>
+              events.findIndex((candidate) => candidate.sequence === event.sequence) === index,
+            ).slice(-16));
         setActiveSessionId((current) =>
           current && controlRoom.sessions.some((session) => session.session_id === current)
             ? current
@@ -453,8 +460,10 @@ export function App() {
             hiveIdentity={hiveIdentity}
             liveFeedState={liveFeedState}
             health={loadState.kind === "ready" ? loadState.health : undefined}
-            runningWorkers={workers.filter((worker) => worker.running).length}
-            retainedSessions={sessions.length}
+            operatorToken={operatorToken}
+            recentEvents={recentEvents}
+            sessions={sessions}
+            workers={workers}
             onThemeChange={setColorTheme}
           />
         ) : activeSession ? (
