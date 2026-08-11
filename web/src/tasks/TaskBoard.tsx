@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 
 import type { SessionSummary, Task, TaskActivity, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -237,6 +237,22 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
   const [activity, setActivity] = useState<TaskActivityPage>();
   const [historyError, setHistoryError] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const cardRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function dismissMenu(event: PointerEvent) {
+      if (event.target instanceof Node && !cardRef.current?.contains(event.target)) setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", dismissMenu);
+    return () => document.removeEventListener("pointerdown", dismissMenu);
+  }, [menuOpen]);
+
+  function runMenuAction(action: () => void) {
+    setMenuOpen(false);
+    action();
+  }
 
   async function loadActivity() {
     setHistoryLoading(true);
@@ -260,6 +276,7 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
   }
   return (
     <article
+      ref={cardRef}
       className="task-card"
       aria-label={task.title}
       draggable={!busy && !editing && task.state !== "completed"}
@@ -267,6 +284,8 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
       onDragEnd={onDragEnd}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => { event.preventDefault(); onDropBefore(); }}
+      onContextMenu={(event) => { event.preventDefault(); setMenuOpen(true); }}
+      onKeyDown={(event) => { if (event.key === "Escape") setMenuOpen(false); }}
     >
       <div className="task-card-topline">
         <div className="task-signals">
@@ -300,12 +319,22 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
       <div className="task-actions">
         {!editing && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}
         {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
-        {!editing && <button className="text-button" aria-expanded={historyOpen} onClick={toggleHistory}>History</button>}
-        {!editing && task.state !== "completed" && <button className="text-button task-order-button" aria-label={`Move ${task.title} earlier`} disabled={busy || !canMoveEarlier} onClick={onMoveEarlier}>Earlier</button>}
-        {!editing && task.state !== "completed" && <button className="text-button task-order-button" aria-label={`Move ${task.title} later`} disabled={busy || !canMoveLater} onClick={onMoveLater}>Later</button>}
-        {task.state === "active" && <button className="text-button danger-text" disabled={busy} onClick={() => void onTransition(task, "blocked")}>Block</button>}
-        {task.state === "review" && <button className="text-button" disabled={busy} onClick={() => void onTransition(task, "active")}>Changes needed</button>}
+        {!editing && (
+          <button className="task-menu-trigger" aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)}>
+            <span aria-hidden="true">•••</span>
+          </button>
+        )}
       </div>
+      {menuOpen && (
+        <div className="task-menu" role="menu" aria-label={`${task.title} actions`}>
+          <button role="menuitem" onClick={() => runMenuAction(() => setEditing(true))}>Edit task</button>
+          <button role="menuitem" onClick={() => runMenuAction(toggleHistory)}>{historyOpen ? "Hide history" : "Show history"}</button>
+          {task.state !== "completed" && <button role="menuitem" disabled={busy || !canMoveEarlier} onClick={() => runMenuAction(onMoveEarlier)}>Move earlier</button>}
+          {task.state !== "completed" && <button role="menuitem" disabled={busy || !canMoveLater} onClick={() => runMenuAction(onMoveLater)}>Move later</button>}
+          {task.state === "active" && <button className="danger-text" role="menuitem" disabled={busy} onClick={() => runMenuAction(() => void onTransition(task, "blocked"))}>Block task</button>}
+          {task.state === "review" && <button role="menuitem" disabled={busy} onClick={() => runMenuAction(() => void onTransition(task, "active"))}>Changes needed</button>}
+        </div>
+      )}
       {historyOpen && (
         <TaskActivityPanel
           activity={activity}

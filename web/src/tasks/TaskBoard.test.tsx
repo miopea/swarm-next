@@ -87,7 +87,8 @@ test("loads task history only when the operator opens it", async () => {
   renderBoard({ onFetchActivity });
 
   expect(onFetchActivity).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "History" }));
+  fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Show history" }));
 
   await waitFor(() => expect(onFetchActivity).toHaveBeenCalledWith(task.id));
   expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Task created");
@@ -100,9 +101,12 @@ test("moves open tasks with keyboard-accessible ordering controls", () => {
   const onReorder = vi.fn().mockResolvedValue(undefined);
   renderBoard({ tasks: [second, task], onReorder });
 
-  fireEvent.click(screen.getByRole("button", { name: `Move ${task.title} later` }));
+  fireEvent.contextMenu(screen.getByRole("article", { name: task.title }));
+  expect(screen.getByRole("menu", { name: `${task.title} actions` })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Move later" }));
 
   expect(onReorder).toHaveBeenCalledWith([second.id, task.id]);
+  expect(screen.queryByRole("menu", { name: `${task.title} actions` })).not.toBeInTheDocument();
 
   onReorder.mockClear();
   const dataTransfer = { effectAllowed: "none", setData: vi.fn() };
