@@ -9,6 +9,7 @@ import {
   fetchTaskActivity,
   fetchTasks,
   fetchWorkers,
+  reorderTasks,
   startWorker,
   stopClaudeSession,
   stopWorker,
@@ -284,6 +285,11 @@ export function App() {
     await perform(async () => replaceTask(await assignTask(operatorToken, task.id, sessionId)));
   }
 
+  async function reorderOpenTasks(taskIds: string[]) {
+    if (!operatorToken) return;
+    await perform(async () => setTasks(await reorderTasks(operatorToken, taskIds)));
+  }
+
   function replaceTask(updated: Task) {
     setTasks((current) => current.map((task) => task.id === updated.id ? updated : task));
   }
@@ -466,7 +472,7 @@ export function App() {
             <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
           </form>
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} sessions={sessions} workerNames={workerNames} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} />
+          <TaskBoard tasks={tasks} sessions={sessions} workerNames={workerNames} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             colorTheme={colorTheme}

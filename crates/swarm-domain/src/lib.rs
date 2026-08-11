@@ -751,6 +751,7 @@ pub struct Task {
     pub workspace: String,
     pub state: TaskState,
     pub assigned_session_id: Option<WorkerSessionId>,
+    pub position: i64,
     pub created_at: i64,
     pub updated_at: i64,
 }

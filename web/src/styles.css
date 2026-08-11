@@ -206,6 +206,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 
 .task-actions { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
 .task-actions button { min-height: 34px; padding: 6px 10px; font-size: .75rem; }
+.task-actions .task-order-button { padding-inline: 7px; font-size: .68rem; }
 .task-history { margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line); }
 .task-history > p { margin: 0; color: var(--muted); font-size: .74rem; }
 .task-history .task-history-note { margin-bottom: 8px; color: var(--quiet); font-size: .69rem; }

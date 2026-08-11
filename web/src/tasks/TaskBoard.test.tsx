@@ -10,13 +10,13 @@ const task: Task = {
   id: "task-1",
   hive_id: "hive-1", title: "Make reload stable", workspace: "/workspace/swarm", state: "draft",
   description: "Keep terminal history attached", priority: "high",
-  assigned_session_id: null, created_at: 1, updated_at: 1,
+  assigned_session_id: null, position: 0, created_at: 1, updated_at: 1,
 };
 
 function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> = {}) {
   const props: React.ComponentProps<typeof TaskBoard> = {
     tasks: [task], sessions: [], workerNames: new Map(), busy: false,
-    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }),
+    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onReorder: vi.fn(),
     ...overrides,
   };
   render(<TaskBoard {...props} />);
@@ -93,4 +93,20 @@ test("loads task history only when the operator opens it", async () => {
   expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Task created");
   expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Draft → Ready");
   expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Showing the latest activity.");
+});
+
+test("moves open tasks with keyboard-accessible ordering controls", () => {
+  const second = { ...task, id: "task-2", title: "Second task", position: 1 };
+  const onReorder = vi.fn().mockResolvedValue(undefined);
+  renderBoard({ tasks: [second, task], onReorder });
+
+  fireEvent.click(screen.getByRole("button", { name: `Move ${task.title} later` }));
+
+  expect(onReorder).toHaveBeenCalledWith([second.id, task.id]);
+
+  onReorder.mockClear();
+  const dataTransfer = { effectAllowed: "none", setData: vi.fn() };
+  fireEvent.dragStart(screen.getByRole("article", { name: second.title }), { dataTransfer });
+  fireEvent.drop(screen.getByRole("article", { name: task.title }), { dataTransfer });
+  expect(onReorder).toHaveBeenCalledWith([second.id, task.id]);
 });

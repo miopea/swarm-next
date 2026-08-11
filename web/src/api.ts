@@ -55,6 +55,7 @@ export type Task = {
   workspace: string;
   state: TaskState;
   assigned_session_id: string | null;
+  position: number;
   created_at: number;
   updated_at: number;
 };
@@ -140,6 +141,15 @@ export async function fetchTaskActivity(
     `/api/v1/tasks/${encodeURIComponent(taskId)}/activity?limit=${encodeURIComponent(String(limit))}`,
   );
   return response.json() as Promise<TaskActivityPage>;
+}
+
+export async function reorderTasks(operatorToken: string, taskIds: string[]): Promise<Task[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/tasks/order", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_ids: taskIds }),
+  });
+  return response.json() as Promise<Task[]>;
 }
 
 export async function createTask(

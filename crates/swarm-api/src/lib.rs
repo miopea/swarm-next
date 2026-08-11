@@ -22,7 +22,9 @@ use swarm_domain::{
     ControlRoomEventKind, ProviderKind, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
     WorkerId, WorkerProfile, WorkerSessionId,
 };
-use swarm_persistence::{MAX_TASK_ACTIVITY_PAGE, TaskStore, TaskStoreError};
+use swarm_persistence::{
+    MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE, TaskStore, TaskStoreError,
+};
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, HistoryCursor, HostClient,
     HostRequest, HostResponse, JournalLimits, MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS,
@@ -251,6 +253,11 @@ struct TaskActivityQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct ReorderTasksRequest {
+    task_ids: Vec<TaskId>,
+}
+
+#[derive(Debug, Deserialize)]
 struct HistoryQuery {
     segment: Option<u64>,
     record: Option<u32>,
@@ -354,6 +361,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
+        .route("/api/v1/tasks/order", put(reorder_tasks))
         .route("/api/v1/tasks/{task_id}", patch(update_task))
         .route("/api/v1/tasks/{task_id}/activity", get(task_activity))
         .route("/api/v1/tasks/{task_id}/state", patch(transition_task))
@@ -514,6 +522,26 @@ async fn task_activity(
         .list_task_activity(parse_task_id(&task_id)?, limit)
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(activity)).into_response())
+}
+
+async fn reorder_tasks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<ReorderTasksRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    if request.task_ids.len() > MAX_OPEN_TASKS_PER_ORDER {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_task_order",
+            format!("task order cannot exceed {MAX_OPEN_TASKS_PER_ORDER} entries"),
+        ));
+    }
+    let tasks = task_store(&state)?
+        .reorder_open_tasks(&request.task_ids)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(Json(tasks).into_response())
 }
 
 async fn update_task(
@@ -1090,6 +1118,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "task_transition_rejected",
             error.to_string(),
         ),
+        TaskStoreError::InvalidTaskOrder => ApiError::new(
+            StatusCode::CONFLICT,
+            "task_order_conflict",
+            error.to_string(),
+        ),
         TaskStoreError::WorkerNotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "worker_not_found", error.to_string())
         }
@@ -1600,6 +1633,54 @@ mod tests {
             response_json(response).await["code"],
             "invalid_task_activity_limit"
         );
+    }
+
+    #[tokio::test]
+    async fn task_order_requires_the_complete_open_set() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store.create_task("First", "/workspace").unwrap();
+        let second = store.create_task("Second", "/workspace").unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(store);
+        let app = router(state);
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/tasks/order")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"task_ids":["{}"]}}"#, first.id)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(rejected).await["code"], "task_order_conflict");
+
+        let reordered = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/tasks/order")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"task_ids":["{}","{}"]}}"#,
+                        second.id, first.id
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reordered.status(), StatusCode::OK);
+        let reordered = response_json(reordered).await;
+        assert_eq!(reordered[0]["id"], second.id.to_string());
+        assert_eq!(reordered[0]["position"], 0);
+        assert_eq!(reordered[1]["id"], first.id.to_string());
+        assert_eq!(reordered[1]["position"], 1);
     }
 
     #[tokio::test]

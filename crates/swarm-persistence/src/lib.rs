@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::Path,
     str::FromStr,
     sync::{Arc, Mutex, MutexGuard},
@@ -17,10 +18,11 @@ mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 5;
+const CURRENT_SCHEMA_VERSION: i64 = 6;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
+pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
 #[derive(Clone)]
 pub struct TaskStore {
@@ -59,6 +61,8 @@ pub enum TaskStoreError {
     QueenAlreadyExists,
     #[error("worker already has an active session")]
     WorkerAlreadyRunning,
+    #[error("task order must contain every open task exactly once")]
+    InvalidTaskOrder,
     #[error("database schema version {found} is newer than supported version {supported}")]
     UnsupportedSchemaVersion { found: i64, supported: i64 },
     #[error("database integrity check failed: {0}")]
@@ -130,6 +134,7 @@ impl TaskStore {
                 migrate_task_details(&transaction)?;
                 migrate_hive_identity(&transaction)?;
                 migrate_control_room_events(&transaction)?;
+                migrate_task_ordering(&transaction)?;
                 transaction.commit()?;
             }
             1 => {
@@ -138,6 +143,7 @@ impl TaskStore {
                 migrate_task_details(&transaction)?;
                 migrate_hive_identity(&transaction)?;
                 migrate_control_room_events(&transaction)?;
+                migrate_task_ordering(&transaction)?;
                 transaction.commit()?;
             }
             2 => {
@@ -145,17 +151,25 @@ impl TaskStore {
                 migrate_task_details(&transaction)?;
                 migrate_hive_identity(&transaction)?;
                 migrate_control_room_events(&transaction)?;
+                migrate_task_ordering(&transaction)?;
                 transaction.commit()?;
             }
             3 => {
                 let transaction = connection.transaction()?;
                 migrate_hive_identity(&transaction)?;
                 migrate_control_room_events(&transaction)?;
+                migrate_task_ordering(&transaction)?;
                 transaction.commit()?;
             }
             4 => {
                 let transaction = connection.transaction()?;
                 migrate_control_room_events(&transaction)?;
+                migrate_task_ordering(&transaction)?;
+                transaction.commit()?;
+            }
+            5 => {
+                let transaction = connection.transaction()?;
+                migrate_task_ordering(&transaction)?;
                 transaction.commit()?;
             }
             CURRENT_SCHEMA_VERSION => {}
@@ -245,8 +259,9 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         transaction.execute(
-            "INSERT INTO tasks (id, hive_id, title, description, priority, workspace, state)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'draft')",
+            "INSERT INTO tasks (id, hive_id, title, description, priority, workspace, state, position)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'draft',
+                     COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0))",
             params![
                 id.to_string(),
                 hive_id.to_string(),
@@ -275,14 +290,13 @@ impl TaskStore {
         let mut statement = connection.prepare(
             "
             SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
-                   t.created_at, t.updated_at
+                   t.position, t.created_at, t.updated_at
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
             ORDER BY CASE t.state WHEN 'completed' THEN 1 ELSE 0 END,
-                     CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1
-                                     WHEN 'normal' THEN 2 ELSE 3 END,
-                     t.updated_at DESC, t.id DESC
+                     CASE t.state WHEN 'completed' THEN -t.updated_at ELSE t.position END,
+                     t.id
             ",
         )?;
         statement
@@ -301,7 +315,7 @@ impl TaskStore {
             .query_row(
                 "
                 SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
-                       t.created_at, t.updated_at
+                       t.position, t.created_at, t.updated_at
                 FROM tasks t
                 LEFT JOIN task_assignments a
                   ON a.task_id = t.id AND a.released_at IS NULL
@@ -353,6 +367,50 @@ impl TaskStore {
             events: activity,
             truncated,
         })
+    }
+
+    /// Replaces the complete open-task order for the local Hive atomically.
+    ///
+    /// # Errors
+    /// Rejects incomplete, duplicate, oversized, foreign-Hive, or completed-task input.
+    pub fn reorder_open_tasks(&self, task_ids: &[TaskId]) -> Result<Vec<Task>, TaskStoreError> {
+        if task_ids.len() > MAX_OPEN_TASKS_PER_ORDER {
+            return Err(TaskStoreError::InvalidTaskOrder);
+        }
+        let hive_id = self.local_hive_identity()?.hive.id;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let expected = {
+            let mut statement = transaction.prepare(
+                "SELECT id FROM tasks
+                 WHERE hive_id = ?1 AND state != 'completed'
+                 ORDER BY position, id",
+            )?;
+            statement
+                .query_map([hive_id.to_string()], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let supplied = task_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let unique = supplied.iter().collect::<HashSet<_>>();
+        let expected_set = expected.iter().collect::<HashSet<_>>();
+        if supplied.len() != expected.len()
+            || unique.len() != supplied.len()
+            || unique != expected_set
+        {
+            return Err(TaskStoreError::InvalidTaskOrder);
+        }
+        for (position, task_id) in supplied.iter().enumerate() {
+            let position = i64::try_from(position)
+                .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
+            transaction.execute(
+                "UPDATE tasks SET position = ?2, updated_at = unixepoch() WHERE id = ?1",
+                params![task_id, position],
+            )?;
+        }
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.list_tasks()
     }
 
     /// Replaces the supplied task details and records one atomic activity event.
@@ -830,6 +888,23 @@ fn migrate_control_room_events(transaction: &rusqlite::Transaction<'_>) -> rusql
     )
 }
 
+fn migrate_task_ordering(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "ALTER TABLE tasks ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+         WITH ranked AS (
+             SELECT id, ROW_NUMBER() OVER (
+                 PARTITION BY hive_id ORDER BY created_at, id
+             ) - 1 AS new_position
+             FROM tasks
+         )
+         UPDATE tasks SET position = (
+             SELECT new_position FROM ranked WHERE ranked.id = tasks.id
+         );
+         CREATE INDEX tasks_by_hive_position ON tasks(hive_id, position);
+         PRAGMA user_version = 6;",
+    )
+}
+
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
     if title.is_empty() || title.len() > MAX_TASK_TITLE_BYTES {
         return Err(TaskStoreError::InvalidTitle);
@@ -889,8 +964,9 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
                     Box::new(error),
                 )
             })?,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
+        position: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 
@@ -988,6 +1064,52 @@ mod tests {
             store.list_task_activity(TaskId::new(), 30),
             Err(TaskStoreError::NotFound)
         ));
+    }
+
+    #[test]
+    fn open_task_order_is_complete_atomic_and_durable() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store.create_task("First", "/workspace").unwrap();
+        let second = store.create_task("Second", "/workspace").unwrap();
+        let third = store.create_task("Third", "/workspace").unwrap();
+        assert_eq!(
+            store
+                .list_tasks()
+                .unwrap()
+                .iter()
+                .map(|task| task.position)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+
+        let reordered = store
+            .reorder_open_tasks(&[third.id, first.id, second.id])
+            .unwrap();
+        assert_eq!(
+            reordered.iter().map(|task| task.id).collect::<Vec<_>>(),
+            vec![third.id, first.id, second.id]
+        );
+        assert_eq!(
+            reordered
+                .iter()
+                .map(|task| task.position)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+
+        assert!(matches!(
+            store.reorder_open_tasks(&[first.id, second.id]),
+            Err(TaskStoreError::InvalidTaskOrder)
+        ));
+        assert_eq!(
+            store
+                .list_tasks()
+                .unwrap()
+                .iter()
+                .map(|task| task.id)
+                .collect::<Vec<_>>(),
+            vec![third.id, first.id, second.id]
+        );
     }
 
     #[test]
@@ -1344,13 +1466,19 @@ mod tests {
             let hive_id = store.local_hive_identity().unwrap().hive.id;
             let connection = store.connection().unwrap();
             connection
-                .execute_batch("DROP TABLE control_room_events; PRAGMA user_version = 4;")
+                .execute_batch(
+                    "DROP INDEX tasks_by_hive_position;
+                     ALTER TABLE tasks DROP COLUMN position;
+                     DROP TABLE control_room_events;
+                     PRAGMA user_version = 4;",
+                )
                 .unwrap();
             (task.id, hive_id)
         };
 
         let migrated = TaskStore::open(path).unwrap();
         assert_eq!(migrated.get_task(task_id).unwrap().hive_id, hive_id);
+        assert_eq!(migrated.get_task(task_id).unwrap().position, 0);
         assert!(
             migrated
                 .list_control_room_events(0)
