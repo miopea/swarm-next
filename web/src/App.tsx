@@ -13,6 +13,8 @@ import {
   type Task,
   type TaskState,
 } from "./api";
+import BeeMascot from "./brand/BeeMascot";
+import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 
@@ -33,6 +35,9 @@ export function App() {
   const [surface, setSurface] = useState<Surface>("tasks");
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
+
+  useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -202,7 +207,7 @@ export function App() {
     <main className="app-shell">
       <aside className="control-rail" aria-label="Swarm navigation">
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true"><span>S</span></div>
+          <div className="brand-mark"><BeeMascot expression="available" /></div>
           <div><p className="eyebrow">Swarm Next</p><h1>Control room</h1></div>
         </div>
 
@@ -230,7 +235,7 @@ export function App() {
                     const task = tasksBySession.get(session.session_id);
                     return (
                       <button className="worker-button" aria-current={session.session_id === activeSessionId ? "page" : undefined} key={session.session_id} onClick={() => setActiveSessionId(session.session_id)}>
-                        <span className="worker-avatar" aria-hidden="true">C</span>
+                        <span className="worker-avatar"><BeeMascot expression={session.running ? "focused" : "sleeping"} /></span>
                         <span className="worker-copy"><strong>{workerName(session.session_id)}</strong><small>{task?.title ?? "Unassigned session"}</small></span>
                         <span className={`presence ${session.running ? "online" : "offline"}`} title={session.running ? "Running" : "Exited"} />
                       </button>
@@ -261,6 +266,7 @@ export function App() {
           </div>
           <div className="header-actions">
             {busy && <span className="saving-state">Saving…</span>}
+            <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => setColorTheme((current) => current === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button" aria-label="Refresh control room" onClick={() => void refreshControlRoom()} disabled={busy}><RefreshIcon /></button>}
             {operatorToken && <button className="secondary-button" onClick={logout}>Lock</button>}
           </div>
@@ -268,7 +274,7 @@ export function App() {
         {operationError && <div className="operation-error" role="alert">{operationError}</div>}
         {!operatorToken ? (
           <form className="unlock-panel" onSubmit={(event) => void authenticate(event)}>
-            <div className="unlock-symbol" aria-hidden="true">S</div>
+            <div className="unlock-symbol"><BeeMascot expression="available" /></div>
             <p className="eyebrow">Private local runtime</p>
             <h3>Welcome back</h3>
             <p>Unlock this control room. Your credential stays in this browser tab and terminal access uses one-time grants.</p>
@@ -283,7 +289,7 @@ export function App() {
             <TerminalView key={`${operatorToken}:${activeSession.session_id}`} operatorToken={operatorToken} session={activeSession} onStop={() => void stopSession(activeSession.session_id)} busy={busy} />
           </Suspense>
         ) : (
-          <div className="terminal-empty"><div className="empty-symbol"><TerminalIcon /></div><p className="eyebrow">No active session</p><h3>Start with a task or workspace</h3><p>Launch Claude from a ready task to preserve its assignment, or start an unassigned worker from the sidebar.</p></div>
+          <div className="terminal-empty"><BeeMascot className="empty-bee" expression="sleeping" /><p className="eyebrow">No active session</p><h3>Start with a task or workspace</h3><p>Launch Claude from a ready task to preserve its assignment, or start an unassigned worker from the sidebar.</p></div>
         )}
       </section>
     </main>
@@ -308,3 +314,4 @@ function RuntimeStatus({ state }: { state: LoadState }) {
 function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>; }
 function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
 function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }
+function ThemeIcon({ theme }: { theme: ColorTheme }) { return theme === "light" ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8 8 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg>; }
