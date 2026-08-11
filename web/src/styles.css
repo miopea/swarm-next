@@ -26,6 +26,7 @@
   --blocked-soft: #e5deec;
   --focus: #687d5d;
   --terminal-frame: #111a19;
+  --terminal-text: #f5efdf;
   --radius-sm: 8px;
   --radius: 12px;
   --radius-lg: 16px;
@@ -58,6 +59,7 @@
   --blocked-soft: #373044;
   --focus: #c6d6b6;
   --terminal-frame: #0a0f0f;
+  --terminal-text: #f2ead8;
   --shadow: 0 20px 55px rgba(0, 0, 0, .24);
 }
 
@@ -240,7 +242,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .diagnostic-list > div, .shortcut-list > div { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 14px; border-top: 1px solid var(--line); }
 .diagnostic-list dt, .shortcut-list dt { color: var(--muted); font-size: .77rem; }
 .diagnostic-list dd, .shortcut-list dd { margin: 0; color: var(--text); font-size: .77rem; text-align: right; }
-.shortcuts-card { grid-column: 1 / -1; }
+.diagnostics-card, .shortcuts-card { grid-column: 1 / -1; }
+.diagnostic-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.diagnostic-preview { max-height: 320px; margin: 0; padding: 14px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-md); color: var(--terminal-text); background: var(--terminal-frame); font-family: "Atkinson Hyperlegible Mono Variable", monospace; font-size: .7rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px; padding: 2px 6px; place-items: center; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 6px; color: var(--text); background: var(--panel-raised); font-family: "Atkinson Hyperlegible Mono Variable", monospace; font-size: .7rem; }
 
 .terminal-empty { display: grid; max-width: 560px; margin: auto; padding: 40px; place-items: center; color: var(--muted); text-align: center; }
@@ -301,6 +305,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .brand-lockup { padding-bottom: 12px; }
   .surface-nav { grid-template-columns: repeat(3, 1fr); }
   .rail-context { display: none; }
+  .control-rail.surface-workers .rail-context { display: block; flex: 0 0 auto; padding-top: 8px; overflow-x: auto; overflow-y: visible; scrollbar-width: thin; }
+  .control-rail.surface-workers .rail-heading { display: none; }
+  .control-rail.surface-workers .worker-list { display: flex; width: max-content; gap: 6px; }
+  .control-rail.surface-workers .worker-row { width: 176px; flex: 0 0 176px; }
+  .control-rail.surface-workers .worker-copy small { display: none; }
   .start-worker { margin-top: 12px; padding-top: 12px; }
   .rail-footer { margin-top: 10px; }
   .workspace-header { min-height: 68px; padding: 14px 17px; }

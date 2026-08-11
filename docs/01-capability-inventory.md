@@ -75,11 +75,11 @@ Decision meanings:
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
 | GitHub | Keep/Redesign | Central coding workflow; use typed integration boundary and least-privilege credentials. |
-| Jira | Investigate | Preserve if used; simplify around links and explicit import/export rather than broad synchronization by default. |
+| Jira | Redesign | First shared Apiary backend. Use per-Hive operator identities, one project sync scope, distributed bindings, atomic claims, explicit mappings, and exception-only Keeper involvement. |
 | Outlook/email import | Investigate | Validate frequency and which parts—task creation, attachment parsing, draft replies—remain valuable. |
 | Cloudflare Tunnel | Redesign | Remote access is valuable; treat tunnel choice as deployment adapter, not core domain. |
 | Browser notifications | Keep | Useful attention channel; unify with in-app decisions and notification policy. |
-| PWA installation and share target | Investigate | Evaluate mobile usage and platform reliability before committing. |
+| PWA installation, push, and mobile terminal | Redesign | Android Chrome/Edge is a first-class dogfood surface. Keep the service worker minimal, make notifications policy-driven, and preserve terminal commands alongside long-form voice input. |
 | In-app feedback | Keep/Redesign | Critical to dogfooding; capture correlated diagnostics and privacy-safe context. |
 
 ## Platform and administration

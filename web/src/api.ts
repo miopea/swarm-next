@@ -6,9 +6,33 @@ export type TaskState = "draft" | "ready" | "active" | "blocked" | "review" | "c
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type WorkerRole = "queen" | "worker";
 export type ProviderKind = "claude_code" | "codex";
+export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed";
+export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };
+export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: number; reset_required: boolean };
+export type TerminalHostStatus = {
+  protocol_version: number;
+  host_version: string;
+  draining: boolean;
+  running_sessions: number;
+  retained_sessions: number;
+};
+export type HistoryDiagnostics = {
+  retained_bytes: number;
+  session_count: number;
+  segment_count: number;
+  dropped_records: number;
+  dropped_bytes: number;
+  recovered_truncated_bytes: number;
+  recovered_corrupt_segments: number;
+};
+export type HiveIdentity = {
+  operator: { id: string; display_name: string };
+  hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
+};
 
 export type Worker = {
   id: string;
+  hive_id: string;
   name: string;
   role: WorkerRole;
   provider: ProviderKind;
@@ -24,6 +48,7 @@ export type Worker = {
 
 export type Task = {
   id: string;
+  hive_id: string;
   title: string;
   description: string;
   priority: TaskPriority;
@@ -42,6 +67,36 @@ export type TaskDraftInput = {
 };
 
 export type TaskUpdateInput = Partial<TaskDraftInput>;
+
+export async function fetchControlRoomEvents(
+  operatorToken: string,
+  after: number,
+  signal?: AbortSignal,
+): Promise<ControlRoomEventPage> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/control-room/events?after=${encodeURIComponent(String(after))}`,
+    { signal },
+  );
+  return response.json() as Promise<ControlRoomEventPage>;
+}
+
+export async function fetchTerminalHostStatus(operatorToken: string): Promise<TerminalHostStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/terminal-host");
+  const payload = (await response.json()) as { type: "host_status"; status: TerminalHostStatus };
+  return payload.status;
+}
+
+export async function fetchHistoryDiagnostics(operatorToken: string): Promise<HistoryDiagnostics | null> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/history/diagnostics");
+  const payload = (await response.json()) as { type: "history_diagnostics"; diagnostics: HistoryDiagnostics | null };
+  return payload.diagnostics;
+}
+
+export async function fetchHive(operatorToken: string): Promise<HiveIdentity> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/hive");
+  return response.json() as Promise<HiveIdentity>;
+}
 
 export async function fetchSessions(operatorToken: string): Promise<SessionSummary[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/sessions");

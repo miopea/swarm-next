@@ -1,15 +1,21 @@
-import type { Health } from "../api";
+import type { ControlRoomEvent, Health, HiveIdentity, SessionSummary, Worker } from "../api";
 import type { ColorTheme } from "../brand/theme";
+import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
+import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 
 type Props = {
   colorTheme: ColorTheme;
   health: Health | undefined;
-  runningWorkers: number;
-  retainedSessions: number;
+  hiveIdentity: HiveIdentity | undefined;
+  liveFeedState: LiveFeedState;
+  operatorToken: string;
+  recentEvents: ControlRoomEvent[];
+  sessions: SessionSummary[];
+  workers: Worker[];
   onThemeChange: (theme: ColorTheme) => void;
 };
 
-export default function SettingsWorkspace({ colorTheme, health, runningWorkers, retainedSessions, onThemeChange }: Props) {
+export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, liveFeedState, operatorToken, recentEvents, sessions, workers, onThemeChange }: Props) {
   return (
     <div className="settings-workspace">
       <section className="settings-card" aria-labelledby="appearance-heading">
@@ -21,15 +27,28 @@ export default function SettingsWorkspace({ colorTheme, health, runningWorkers, 
         </div>
       </section>
 
+      <section className="settings-card" aria-labelledby="identity-heading">
+        <div><p className="eyebrow">Identity</p><h3 id="identity-heading">Your Hive</h3></div>
+        <p>This local boundary owns its workers, tasks, repositories, and provider sessions.</p>
+        <dl className="diagnostic-list">
+          <div><dt>Hive</dt><dd>{hiveIdentity?.hive.name ?? "Unavailable"}</dd></div>
+          <div><dt>Operator</dt><dd>{hiveIdentity?.operator.display_name ?? "Unavailable"}</dd></div>
+          <div><dt>Membership</dt><dd>{hiveIdentity?.hive.apiary_id ? "Apiary member" : "Personal Hive"}</dd></div>
+        </dl>
+      </section>
+
       <section className="settings-card" aria-labelledby="runtime-heading">
         <div><p className="eyebrow">Runtime</p><h3 id="runtime-heading">Local system</h3></div>
         <dl className="diagnostic-list">
           <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
-          <div><dt>Running workers</dt><dd>{runningWorkers}</dd></div>
-          <div><dt>Retained sessions</dt><dd>{retainedSessions}</dd></div>
+          <div><dt>Live updates</dt><dd>{liveFeedLabel(liveFeedState)}</dd></div>
+          <div><dt>Running workers</dt><dd>{workers.filter((worker) => worker.running).length}</dd></div>
+          <div><dt>Retained sessions</dt><dd>{sessions.length}</dd></div>
           <div><dt>Worker updates</dt><dd>Preserved during API releases</dd></div>
         </dl>
       </section>
+
+<DiagnosticsWorkspace operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} />
 
       <section className="settings-card shortcuts-card" aria-labelledby="shortcuts-heading">
         <div><p className="eyebrow">Keyboard</p><h3 id="shortcuts-heading">Move without losing focus</h3></div>
@@ -43,4 +62,11 @@ export default function SettingsWorkspace({ colorTheme, health, runningWorkers, 
       </section>
     </div>
   );
+}
+
+
+function liveFeedLabel(state: LiveFeedState) {
+  if (state === "connected") return "Connected";
+  if (state === "retrying") return "Reconnecting";
+  return "Connecting";
 }

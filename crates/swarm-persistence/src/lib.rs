@@ -5,7 +5,11 @@ use std::{
 };
 
 use rusqlite::{Connection, OptionalExtension, params};
-use swarm_domain::{Task, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerSessionId};
+use swarm_domain::{
+    ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
+    HiveIdentity, Operator, OperatorId, Task, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
+    WorkerSessionId,
+};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -13,7 +17,9 @@ mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 3;
+const CURRENT_SCHEMA_VERSION: i64 = 5;
+const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
+const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 
 #[derive(Clone)]
 pub struct TaskStore {
@@ -121,17 +127,34 @@ impl TaskStore {
                 )?;
                 migrate_worker_roster(&transaction)?;
                 migrate_task_details(&transaction)?;
+                migrate_hive_identity(&transaction)?;
+                migrate_control_room_events(&transaction)?;
                 transaction.commit()?;
             }
             1 => {
                 let transaction = connection.transaction()?;
                 migrate_worker_roster(&transaction)?;
                 migrate_task_details(&transaction)?;
+                migrate_hive_identity(&transaction)?;
+                migrate_control_room_events(&transaction)?;
                 transaction.commit()?;
             }
             2 => {
                 let transaction = connection.transaction()?;
                 migrate_task_details(&transaction)?;
+                migrate_hive_identity(&transaction)?;
+                migrate_control_room_events(&transaction)?;
+                transaction.commit()?;
+            }
+            3 => {
+                let transaction = connection.transaction()?;
+                migrate_hive_identity(&transaction)?;
+                migrate_control_room_events(&transaction)?;
+                transaction.commit()?;
+            }
+            4 => {
+                let transaction = connection.transaction()?;
+                migrate_control_room_events(&transaction)?;
                 transaction.commit()?;
             }
             CURRENT_SCHEMA_VERSION => {}
@@ -150,6 +173,46 @@ impl TaskStore {
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
         })
+    }
+
+    /// Returns the durable operator and Hive owned by this local installation.
+    ///
+    /// # Errors
+    /// Returns an error when identity persistence is unavailable or invalid.
+    pub fn local_hive_identity(&self) -> Result<HiveIdentity, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "
+                SELECT o.id, o.display_name, h.id, h.name, h.apiary_id
+                FROM local_hive_identity l
+                JOIN hives h ON h.id = l.hive_id
+                JOIN operators o ON o.id = h.operator_id
+                WHERE l.singleton = 1
+                ",
+                [],
+                |row| {
+                    let operator_id = parse_domain_id::<OperatorId>(&row.get::<_, String>(0)?)?;
+                    let hive_id = parse_domain_id::<HiveId>(&row.get::<_, String>(2)?)?;
+                    let apiary_id = row
+                        .get::<_, Option<String>>(4)?
+                        .map(|value| parse_domain_id::<ApiaryId>(&value))
+                        .transpose()?;
+                    Ok(HiveIdentity {
+                        operator: Operator {
+                            id: operator_id,
+                            display_name: row.get(1)?,
+                        },
+                        hive: Hive {
+                            id: hive_id,
+                            name: row.get(3)?,
+                            operator_id,
+                            apiary_id,
+                        },
+                    })
+                },
+            )
+            .map_err(TaskStoreError::from)
     }
 
     /// Creates a validated draft and its first activity event atomically.
@@ -177,13 +240,15 @@ impl TaskStore {
         validate_text(title, workspace)?;
         validate_description(description)?;
         let id = TaskId::new();
+        let hive_id = self.local_hive_identity()?.hive.id;
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         transaction.execute(
-            "INSERT INTO tasks (id, title, description, priority, workspace, state)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'draft')",
+            "INSERT INTO tasks (id, hive_id, title, description, priority, workspace, state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'draft')",
             params![
                 id.to_string(),
+                hive_id.to_string(),
                 title,
                 description,
                 priority.to_string(),
@@ -194,6 +259,7 @@ impl TaskStore {
             "INSERT INTO task_activity (task_id, kind, to_state) VALUES (?1, 'created', 'draft')",
             [id.to_string()],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
@@ -207,7 +273,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "
-            SELECT t.id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
+            SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
                    t.created_at, t.updated_at
             FROM tasks t
             LEFT JOIN task_assignments a
@@ -233,7 +299,7 @@ impl TaskStore {
         connection
             .query_row(
                 "
-                SELECT t.id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
+                SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
                        t.created_at, t.updated_at
                 FROM tasks t
                 LEFT JOIN task_assignments a
@@ -315,6 +381,7 @@ impl TaskStore {
             "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'details_updated')",
             [id.to_string()],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
@@ -381,6 +448,7 @@ impl TaskStore {
              VALUES (?1, 'state_changed', ?2, ?3)",
             params![id.to_string(), current.to_string(), target.to_string()],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
@@ -430,6 +498,7 @@ impl TaskStore {
             "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'assigned')",
             [id.to_string()],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
@@ -470,8 +539,72 @@ impl TaskStore {
                 [task_id],
             )?;
         }
+        if !task_ids.is_empty() {
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
         transaction.commit()?;
         Ok(task_ids.len())
+    }
+
+    /// Appends one content-free invalidation event and enforces the durable event bound.
+    ///
+    /// # Errors
+    /// Returns an error when the event cannot be committed atomically.
+    pub fn record_control_room_event(
+        &self,
+        kind: ControlRoomEventKind,
+    ) -> Result<ControlRoomEvent, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let event = insert_control_room_event(&transaction, kind)?;
+        transaction.commit()?;
+        Ok(event)
+    }
+
+    /// Reads a bounded resumable page of content-free control-room invalidations.
+    ///
+    /// A cursor from an evicted or replaced database requests a full snapshot reset.
+    ///
+    /// # Errors
+    /// Returns an error when the event page cannot be read or decoded.
+    pub fn list_control_room_events(
+        &self,
+        after: i64,
+    ) -> Result<ControlRoomEventPage, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let connection = self.connection()?;
+        let (earliest, latest) = connection.query_row(
+            "SELECT MIN(sequence), MAX(sequence)
+             FROM control_room_events WHERE hive_id = ?1",
+            [identity.hive.id.to_string()],
+            |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+        )?;
+        let reset_required = after != 0
+            && match (earliest, latest) {
+                (Some(first), Some(last)) => after < first.saturating_sub(1) || after > last,
+                _ => true,
+            };
+        let cursor = if reset_required { 0 } else { after.max(0) };
+        let page_limit = i64::try_from(MAX_CONTROL_ROOM_EVENT_PAGE)
+            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
+        let mut statement = connection.prepare(
+            "SELECT sequence, hive_id, kind, occurred_at
+             FROM control_room_events
+             WHERE hive_id = ?1 AND sequence > ?2
+             ORDER BY sequence ASC LIMIT ?3",
+        )?;
+        let events = statement
+            .query_map(
+                params![identity.hive.id.to_string(), cursor, page_limit],
+                control_room_event_from_row,
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = events.last().map_or(cursor, |event| event.sequence);
+        Ok(ControlRoomEventPage {
+            events,
+            next_cursor,
+            reset_required,
+        })
     }
 
     fn connection(&self) -> Result<MutexGuard<'_, Connection>, TaskStoreError> {
@@ -519,6 +652,142 @@ fn migrate_task_details(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Re
     )
 }
 
+fn migrate_hive_identity(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let operator_id = OperatorId::new();
+    let hive_id = HiveId::new();
+    transaction.execute_batch(
+        "
+        CREATE TABLE operators (
+            id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE TABLE apiaries (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            keeper_operator_id TEXT NOT NULL REFERENCES operators(id),
+            shared_work_backend TEXT NOT NULL
+                CHECK (shared_work_backend IN ('jira','native')),
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE TABLE hives (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            operator_id TEXT NOT NULL UNIQUE REFERENCES operators(id),
+            apiary_id TEXT REFERENCES apiaries(id),
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE TABLE local_hive_identity (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            hive_id TEXT NOT NULL UNIQUE REFERENCES hives(id)
+        );
+        ",
+    )?;
+    transaction.execute(
+        "INSERT INTO operators (id, display_name) VALUES (?1, 'Operator')",
+        [operator_id.to_string()],
+    )?;
+    transaction.execute(
+        "INSERT INTO hives (id, name, operator_id) VALUES (?1, 'My Hive', ?2)",
+        params![hive_id.to_string(), operator_id.to_string()],
+    )?;
+    transaction.execute(
+        "INSERT INTO local_hive_identity (singleton, hive_id) VALUES (1, ?1)",
+        [hive_id.to_string()],
+    )?;
+    transaction.execute_batch(
+        "
+        ALTER TABLE tasks ADD COLUMN hive_id TEXT REFERENCES hives(id);
+        ALTER TABLE worker_profiles ADD COLUMN hive_id TEXT REFERENCES hives(id);
+        ",
+    )?;
+    transaction.execute(
+        "UPDATE tasks SET hive_id = ?1 WHERE hive_id IS NULL",
+        [hive_id.to_string()],
+    )?;
+    transaction.execute(
+        "UPDATE worker_profiles SET hive_id = ?1 WHERE hive_id IS NULL",
+        [hive_id.to_string()],
+    )?;
+    transaction.execute_batch(
+        "
+        CREATE INDEX tasks_by_hive ON tasks(hive_id);
+        CREATE INDEX worker_profiles_by_hive ON worker_profiles(hive_id);
+        CREATE TRIGGER tasks_require_hive_insert
+            BEFORE INSERT ON tasks WHEN NEW.hive_id IS NULL
+            BEGIN SELECT RAISE(ABORT, 'task hive_id is required'); END;
+        CREATE TRIGGER tasks_require_hive_update
+            BEFORE UPDATE OF hive_id ON tasks WHEN NEW.hive_id IS NULL
+            BEGIN SELECT RAISE(ABORT, 'task hive_id is required'); END;
+        CREATE TRIGGER worker_profiles_require_hive_insert
+            BEFORE INSERT ON worker_profiles WHEN NEW.hive_id IS NULL
+            BEGIN SELECT RAISE(ABORT, 'worker hive_id is required'); END;
+        CREATE TRIGGER worker_profiles_require_hive_update
+            BEFORE UPDATE OF hive_id ON worker_profiles WHEN NEW.hive_id IS NULL
+            BEGIN SELECT RAISE(ABORT, 'worker hive_id is required'); END;
+        CREATE TRIGGER immutable_apiary_backend
+            BEFORE UPDATE OF shared_work_backend ON apiaries
+            BEGIN SELECT RAISE(ABORT, 'Apiary shared-work backend is immutable'); END;
+        PRAGMA user_version = 4;
+        ",
+    )
+}
+
+fn insert_control_room_event(
+    transaction: &rusqlite::Transaction<'_>,
+    kind: ControlRoomEventKind,
+) -> rusqlite::Result<ControlRoomEvent> {
+    transaction.execute(
+        "INSERT INTO control_room_events (hive_id, kind)
+         SELECT hive_id, ?1 FROM local_hive_identity WHERE singleton = 1",
+        [kind.to_string()],
+    )?;
+    let sequence = transaction.last_insert_rowid();
+    transaction.execute(
+        "DELETE FROM control_room_events
+         WHERE sequence <= (SELECT MAX(sequence) - ?1 FROM control_room_events)",
+        [MAX_CONTROL_ROOM_EVENTS],
+    )?;
+    transaction.query_row(
+        "SELECT sequence, hive_id, kind, occurred_at
+         FROM control_room_events WHERE sequence = ?1",
+        [sequence],
+        control_room_event_from_row,
+    )
+}
+
+fn control_room_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlRoomEvent> {
+    let kind = ControlRoomEventKind::from_str(&row.get::<_, String>(2)?)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    Ok(ControlRoomEvent {
+        sequence: row.get(0)?,
+        hive_id: parse_domain_id::<HiveId>(&row.get::<_, String>(1)?)?,
+        kind,
+        occurred_at: row.get(3)?,
+    })
+}
+
+fn migrate_control_room_events(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "
+        CREATE TABLE control_room_events (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            hive_id TEXT NOT NULL REFERENCES hives(id),
+            kind TEXT NOT NULL CHECK (
+                kind IN ('tasks_changed','workers_changed','sessions_changed','runtime_changed')
+            ),
+            occurred_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX control_room_events_by_hive_sequence
+            ON control_room_events(hive_id, sequence);
+        PRAGMA user_version = 5;
+        ",
+    )
+}
+
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
     if title.is_empty() || title.len() > MAX_TASK_TITLE_BYTES {
         return Err(TaskStoreError::InvalidTitle);
@@ -538,9 +807,10 @@ fn validate_description(description: &str) -> Result<(), TaskStoreError> {
 
 fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let id: String = row.get(0)?;
-    let priority: String = row.get(3)?;
-    let state: String = row.get(5)?;
-    let assigned_session_id: Option<String> = row.get(6)?;
+    let hive_id: String = row.get(1)?;
+    let priority: String = row.get(4)?;
+    let state: String = row.get(6)?;
+    let assigned_session_id: Option<String> = row.get(7)?;
     Ok(Task {
         id: TaskId::from_str(&id).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -549,19 +819,20 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
                 Box::new(error),
             )
         })?,
-        title: row.get(1)?,
-        description: row.get(2)?,
+        hive_id: parse_domain_id::<HiveId>(&hive_id)?,
+        title: row.get(2)?,
+        description: row.get(3)?,
         priority: TaskPriority::from_str(&priority).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                3,
+                4,
                 rusqlite::types::Type::Text,
                 Box::new(error),
             )
         })?,
-        workspace: row.get(4)?,
+        workspace: row.get(5)?,
         state: TaskState::from_str(&state).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-                5,
+                6,
                 rusqlite::types::Type::Text,
                 Box::new(error),
             )
@@ -571,14 +842,18 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             .transpose()
             .map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    6,
+                    7,
                     rusqlite::types::Type::Text,
                     Box::new(error),
                 )
             })?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
     })
+}
+
+fn parse_domain_id<T: FromStr>(value: &str) -> rusqlite::Result<T> {
+    T::from_str(value).map_err(|_| rusqlite::Error::InvalidQuery)
 }
 
 #[cfg(test)]
@@ -738,7 +1013,7 @@ mod tests {
     }
 
     #[test]
-    fn reopens_schema_v3_for_safe_rollback() {
+    fn reopens_current_schema_without_replacing_hive_identity() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("swarm-next.sqlite3");
         {
@@ -754,6 +1029,120 @@ mod tests {
     }
 
     #[test]
+    fn migrates_v3_tasks_and_workers_into_one_durable_hive() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    workspace TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    description TEXT NOT NULL DEFAULT '',
+                    priority TEXT NOT NULL DEFAULT 'normal'
+                );
+                CREATE TABLE task_assignments (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    worker_session_id TEXT NOT NULL,
+                    assigned_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    released_at INTEGER
+                );
+                CREATE TABLE task_activity (
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL,
+                    from_state TEXT,
+                    to_state TEXT,
+                    occurred_at INTEGER NOT NULL DEFAULT (unixepoch())
+                );
+                CREATE TABLE worker_profiles (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    role TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    workspace TEXT NOT NULL,
+                    autostart INTEGER NOT NULL,
+                    position INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                );
+                CREATE TABLE worker_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    worker_id TEXT NOT NULL REFERENCES worker_profiles(id) ON DELETE CASCADE,
+                    started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    ended_at INTEGER
+                );
+                INSERT INTO tasks (id, title, workspace, state)
+                    VALUES ('018f0000-0000-7000-8000-000000000001', 'Existing task', '/repo', 'ready');
+                INSERT INTO worker_profiles
+                    (id, name, role, provider, workspace, autostart, position)
+                    VALUES ('018f0000-0000-7000-8000-000000000002', 'Existing worker', 'worker', 'claude_code', '/repo', 0, 1);
+                PRAGMA user_version = 3;
+                ",
+            )
+            .unwrap();
+
+        let store = TaskStore::from_connection(connection).unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        assert_eq!(store.list_tasks().unwrap()[0].hive_id, identity.hive.id);
+        assert_eq!(
+            store.list_worker_profiles().unwrap()[0].hive_id,
+            identity.hive.id
+        );
+        store.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn hive_ownership_and_apiary_backend_constraints_fail_closed() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        let connection = store.connection().unwrap();
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO tasks (id, title, workspace, state, description, priority)
+                     VALUES (?1, 'Orphan', '/repo', 'draft', '', 'normal')",
+                    [TaskId::new().to_string()],
+                )
+                .is_err()
+        );
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO worker_profiles
+                     (id, name, role, provider, workspace, autostart, position)
+                     VALUES (?1, 'Orphan', 'worker', 'claude_code', '/repo', 0, 1)",
+                    [swarm_domain::WorkerId::new().to_string()],
+                )
+                .is_err()
+        );
+
+        let apiary_id = ApiaryId::new();
+        connection
+            .execute(
+                "INSERT INTO apiaries (id, name, keeper_operator_id, shared_work_backend)
+                 VALUES (?1, 'Test Apiary', ?2, 'jira')",
+                params![apiary_id.to_string(), identity.operator.id.to_string()],
+            )
+            .unwrap();
+        assert!(
+            connection
+                .execute(
+                    "UPDATE apiaries SET shared_work_backend = 'native' WHERE id = ?1",
+                    [apiary_id.to_string()],
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn backup_is_consistent_and_reopenable() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.sqlite3");
@@ -765,5 +1154,153 @@ mod tests {
         let restored = TaskStore::open(backup).unwrap();
         restored.verify_integrity().unwrap();
         assert_eq!(restored.get_task(task.id).unwrap().title, "Backed up");
+    }
+
+    #[test]
+    fn task_and_worker_mutations_emit_typed_content_free_events() {
+        let store = TaskStore::in_memory().unwrap();
+        assert!(store.list_control_room_events(0).unwrap().events.is_empty());
+
+        let task = store.create_task("Secret task text", "/workspace").unwrap();
+        let worker = store
+            .create_worker(
+                "Private worker name",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
+        store
+            .bind_worker_session(worker.id, WorkerSessionId::new())
+            .unwrap();
+
+        let page = store.list_control_room_events(0).unwrap();
+        assert_eq!(
+            page.events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                ControlRoomEventKind::TasksChanged,
+                ControlRoomEventKind::WorkersChanged,
+                ControlRoomEventKind::WorkersChanged,
+                ControlRoomEventKind::SessionsChanged,
+            ]
+        );
+        assert!(
+            page.events
+                .iter()
+                .all(|event| event.hive_id == task.hive_id)
+        );
+        let serialized = serde_json::to_string(&page).unwrap();
+        assert!(!serialized.contains("Secret task text"));
+        assert!(!serialized.contains("Private worker name"));
+    }
+
+    #[test]
+    fn control_room_event_log_is_bounded_and_stale_cursors_reset() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store
+            .record_control_room_event(ControlRoomEventKind::RuntimeChanged)
+            .unwrap();
+        for _ in 0..=MAX_CONTROL_ROOM_EVENTS {
+            store
+                .record_control_room_event(ControlRoomEventKind::RuntimeChanged)
+                .unwrap();
+        }
+
+        let connection = store.connection().unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM control_room_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            MAX_CONTROL_ROOM_EVENTS
+        );
+        drop(connection);
+
+        let stale = store.list_control_room_events(first.sequence).unwrap();
+        assert!(stale.reset_required);
+        assert_eq!(stale.events.len(), MAX_CONTROL_ROOM_EVENT_PAGE);
+        let future = store.list_control_room_events(i64::MAX).unwrap();
+        assert!(future.reset_required);
+    }
+
+    #[test]
+    fn migrates_schema_v4_without_losing_existing_hive_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let (task_id, hive_id) = {
+            let store = TaskStore::open(&path).unwrap();
+            let task = store.create_task("Existing v4 task", "/workspace").unwrap();
+            let hive_id = store.local_hive_identity().unwrap().hive.id;
+            let connection = store.connection().unwrap();
+            connection
+                .execute_batch("DROP TABLE control_room_events; PRAGMA user_version = 4;")
+                .unwrap();
+            (task.id, hive_id)
+        };
+
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(migrated.get_task(task_id).unwrap().hive_id, hive_id);
+        assert!(
+            migrated
+                .list_control_room_events(0)
+                .unwrap()
+                .events
+                .is_empty()
+        );
+        migrated.verify_integrity().unwrap();
+    }
+    #[test]
+    fn fresh_store_owns_tasks_and_workers_in_one_durable_hive() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let (hive_id, operator_id) = {
+            let store = TaskStore::open(&path).unwrap();
+            let identity = store.local_hive_identity().unwrap();
+            assert_eq!(identity.operator.display_name, "Operator");
+            assert_eq!(identity.hive.name, "My Hive");
+            assert_eq!(identity.hive.operator_id, identity.operator.id);
+
+            let task = store.create_task("Hive-owned task", "/workspace").unwrap();
+            let worker = store
+                .create_worker(
+                    "Violet",
+                    swarm_domain::ProviderKind::ClaudeCode,
+                    "/workspace",
+                    false,
+                    1,
+                )
+                .unwrap();
+            assert_eq!(task.hive_id, identity.hive.id);
+            assert_eq!(worker.hive_id, identity.hive.id);
+            (identity.hive.id, identity.operator.id)
+        };
+
+        let reopened = TaskStore::open(path).unwrap();
+        let identity = reopened.local_hive_identity().unwrap();
+        assert_eq!(identity.hive.id, hive_id);
+        assert_eq!(identity.operator.id, operator_id);
+        assert_eq!(reopened.list_tasks().unwrap()[0].hive_id, hive_id);
+        assert_eq!(reopened.list_worker_profiles().unwrap()[0].hive_id, hive_id);
+    }
+
+    #[test]
+    fn current_schema_requires_hive_ownership_columns() {
+        let store = TaskStore::in_memory().unwrap();
+        let connection = store.connection().unwrap();
+        for table in ["tasks", "worker_profiles"] {
+            let sql =
+                format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = 'hive_id'");
+            assert_eq!(
+                connection
+                    .query_row(&sql, [], |row| row.get::<_, i64>(0))
+                    .unwrap(),
+                1
+            );
+        }
     }
 }

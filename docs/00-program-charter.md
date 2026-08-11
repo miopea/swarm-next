@@ -35,6 +35,10 @@ The operator experiences a single application in which:
 - performance and memory use remain bounded during multi-day operation;
 - failures identify their subsystem and recover without ritual restarts;
 - installation, update, rollback, and diagnostics are one coherent workflow.
+- one-operator Hives can remain private or join an Apiary without moving their
+  workers, repositories, credentials, or normal Queen workflow;
+- Keeper and optional scoped Stewards receive useful oversight without routine
+  developer activity becoming management noise.
 
 ## Program principles
 

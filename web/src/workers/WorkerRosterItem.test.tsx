@@ -5,7 +5,7 @@ import type { Worker } from "../api";
 import WorkerRosterItem from "./WorkerRosterItem";
 
 const queen: Worker = {
-  id: "queen", name: "Queen", role: "queen", provider: "claude_code", workspace: "/workspace/queen",
+  id: "queen", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code", workspace: "/workspace/queen",
   autostart: true, position: 0, active_session_id: "queen-session", running: true, created_at: 1, updated_at: 1,
 };
 

@@ -69,7 +69,8 @@ export SWARM_OPERATOR_TOKEN="replace-with-a-long-random-development-token"
 cargo run -p swarm-api
 ```
 
-Run the browser client with `pnpm --dir web dev`. It proxies `/health` and
+Run the browser client with `pnpm --dir web dev` on the fixed development URL
+`http://127.0.0.1:8766`. It proxies `/health` and
 HTTP/WebSocket `/api` traffic to `127.0.0.1:8765`. Unlock the development UI
 with the same operator token configured for the API. The token remains in the
 current tab's session storage so refreshes stay unlocked; Lock or closing the

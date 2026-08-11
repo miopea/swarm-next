@@ -23,6 +23,11 @@ Read and review these documents in order:
 19. [M1 two-worker soak gate](17-two-worker-soak.md)
 20. [M1 minimal task workflow](18-minimal-task-workflow.md)
 21. [Visual design system](19-visual-design-system.md)
+22. [Daily-driver readiness](20-daily-driver-readiness.md)
+23. [Apiary and Hive architecture](21-apiary-hive-architecture.md)
+24. [Live control-room events](22-live-control-room-events.md)
+25. [Privacy-safe diagnostics](23-privacy-safe-diagnostics.md)
+26. [Browser dogfood acceptance](24-browser-dogfood-acceptance.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do

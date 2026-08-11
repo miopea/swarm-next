@@ -4,6 +4,7 @@ import {
   assignTask,
   createTask,
   createWorker,
+  fetchHive,
   fetchSessions,
   fetchTasks,
   fetchWorkers,
@@ -12,7 +13,9 @@ import {
   stopWorker,
   transitionTask,
   updateTask,
+  type ControlRoomEvent,
   type Health,
+  type HiveIdentity,
   type SessionSummary,
   type Task,
   type TaskDraftInput,
@@ -22,6 +25,7 @@ import {
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
+import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
@@ -40,6 +44,7 @@ export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
   const [tokenDraft, setTokenDraft] = useState("");
   const [operatorToken, setOperatorToken] = useState<string>();
+  const [hiveIdentity, setHiveIdentity] = useState<HiveIdentity>();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -50,6 +55,8 @@ export function App() {
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
+  const [liveFeedState, setLiveFeedState] = useState<LiveFeedState>("connecting");
+  const [recentEvents, setRecentEvents] = useState<ControlRoomEvent[]>([]);
 
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
   useEffect(() => saveSurface(surface), [surface]);
@@ -76,10 +83,11 @@ export function App() {
     let cancelled = false;
     setBusy(true);
     void loadControlRoom(savedToken)
-      .then(({ sessions: nextSessions, workers: nextWorkers, tasks: nextTasks }) => {
+      .then(({ hive, sessions: nextSessions, workers: nextWorkers, tasks: nextTasks }) => {
         if (cancelled) return;
         terminalWorkspace.authenticate(savedToken);
         setOperatorToken(savedToken);
+        setHiveIdentity(hive);
         setSessions(nextSessions);
         setWorkers(nextWorkers);
         setTasks(nextTasks);
@@ -97,6 +105,41 @@ export function App() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (!operatorToken) {
+      setLiveFeedState("connecting");
+      return;
+    }
+    let cancelled = false;
+    const feed = new ControlRoomLiveFeed();
+    feed.start(
+      operatorToken,
+      async (page) => {
+        const controlRoom = await loadControlRoom(operatorToken);
+        if (cancelled) return;
+        setHiveIdentity(controlRoom.hive);
+        setSessions(controlRoom.sessions);
+        setWorkers(controlRoom.workers);
+        setTasks(controlRoom.tasks);
+        setRecentEvents((current) => page.reset_required
+          ? page.events.slice(-16)
+          : [...current, ...page.events].filter((event, index, events) =>
+              events.findIndex((candidate) => candidate.sequence === event.sequence) === index,
+            ).slice(-16));
+        setActiveSessionId((current) =>
+          current && controlRoom.sessions.some((session) => session.session_id === current)
+            ? current
+            : preferredSessionId(controlRoom.workers, controlRoom.sessions),
+        );
+      },
+      setLiveFeedState,
+    );
+    return () => {
+      cancelled = true;
+      feed.stop();
+    };
+  }, [operatorToken]);
+
   async function authenticate(event: FormEvent) {
     event.preventDefault();
     if (!tokenDraft) return;
@@ -104,6 +147,7 @@ export function App() {
       const controlRoom = await loadControlRoom(tokenDraft);
       terminalWorkspace.authenticate(tokenDraft);
       setOperatorToken(tokenDraft);
+      setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
@@ -118,6 +162,7 @@ export function App() {
     if (!operatorToken) return;
     await perform(async () => {
       const controlRoom = await loadControlRoom(operatorToken);
+      setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
@@ -161,6 +206,7 @@ export function App() {
       await assignTask(operatorToken, task.id, sessionId);
       await transitionTask(operatorToken, task.id, "active");
       const controlRoom = await loadControlRoom(operatorToken);
+      setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
@@ -177,6 +223,7 @@ export function App() {
       else await stopClaudeSession(operatorToken, sessionId);
       terminalWorkspace.closeSession(sessionId);
       const controlRoom = await loadControlRoom(operatorToken);
+      setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
@@ -190,6 +237,7 @@ export function App() {
       const runningWorker = await startWorker(operatorToken, profile.id);
       const sessionId = requireActiveSession(runningWorker);
       const controlRoom = await loadControlRoom(operatorToken);
+      setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
@@ -272,6 +320,7 @@ export function App() {
     clearSavedOperatorToken();
     terminalWorkspace.logout();
     setOperatorToken(undefined);
+    setHiveIdentity(undefined);
     setSessions([]);
     setWorkers([]);
     setTasks([]);
@@ -302,7 +351,7 @@ export function App() {
 
   return (
     <main className="app-shell" onKeyDown={handleShortcut}>
-      <aside className="control-rail" aria-label="Swarm navigation">
+      <aside className={`control-rail surface-${surface}`} aria-label="Swarm navigation">
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
           <div><p className="eyebrow">Swarm Next</p><h1>Control room</h1></div>
@@ -408,9 +457,13 @@ export function App() {
         ) : surface === "settings" ? (
           <SettingsWorkspace
             colorTheme={colorTheme}
+            hiveIdentity={hiveIdentity}
+            liveFeedState={liveFeedState}
             health={loadState.kind === "ready" ? loadState.health : undefined}
-            runningWorkers={workers.filter((worker) => worker.running).length}
-            retainedSessions={sessions.length}
+            operatorToken={operatorToken}
+            recentEvents={recentEvents}
+            sessions={sessions}
+            workers={workers}
             onThemeChange={setColorTheme}
           />
         ) : activeSession ? (
@@ -428,12 +481,13 @@ export function App() {
 }
 
 async function loadControlRoom(operatorToken: string) {
-  const [sessions, workers, tasks] = await Promise.all([
+  const [hive, sessions, workers, tasks] = await Promise.all([
+    fetchHive(operatorToken),
     fetchSessions(operatorToken),
     fetchWorkers(operatorToken),
     fetchTasks(operatorToken),
   ]);
-  return { sessions, workers, tasks };
+  return { hive, sessions, workers, tasks };
 }
 
 function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): string | undefined {

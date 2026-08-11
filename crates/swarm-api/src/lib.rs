@@ -6,6 +6,7 @@ use std::{
     path::{Path as FilePath, PathBuf},
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 
 use axum::{
@@ -18,8 +19,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use swarm_domain::{
-    ProviderKind, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile,
-    WorkerSessionId,
+    ControlRoomEventKind, ProviderKind, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
+    WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{TaskStore, TaskStoreError};
 use swarm_terminal::{
@@ -27,7 +28,10 @@ use swarm_terminal::{
     HostRequest, HostResponse, JournalLimits, MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS,
     MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, TerminalSize,
 };
-use tokio::sync::{Mutex, RwLock, Semaphore};
+use tokio::{
+    sync::{Mutex, Notify, RwLock, Semaphore},
+    time::timeout,
+};
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 use attach::{ATTACH_GRANT_TTL, AttachGrantError, AttachGrantStore, MAX_ATTACH_GRANTS};
@@ -48,6 +52,7 @@ pub struct AppState {
     task_store: Option<TaskStore>,
     worker_lifecycle: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
+    control_room_notify: Arc<Notify>,
 }
 
 impl AppState {
@@ -62,6 +67,7 @@ impl AppState {
             task_store: None,
             worker_lifecycle: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
+            control_room_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -235,6 +241,11 @@ struct OutputQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct ControlRoomEventsQuery {
+    after: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct HistoryQuery {
     segment: Option<u64>,
     record: Option<u32>,
@@ -333,6 +344,8 @@ fn router_with_optional_asset_root(
 fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/api/v1/hive", get(local_hive))
+        .route("/api/v1/control-room/events", get(control_room_events))
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
@@ -392,6 +405,37 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
+async fn local_hive(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let identity = task_store(&state)?
+        .local_hive_identity()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(identity)).into_response())
+}
+
+async fn control_room_events(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ControlRoomEventsQuery>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let after = query.after.unwrap_or(0).max(0);
+    let notified = state.control_room_notify.notified();
+    let mut page = task_store(&state)?
+        .list_control_room_events(after)
+        .map_err(|error| task_store_error(&error))?;
+    if page.events.is_empty() && !page.reset_required {
+        let _ = timeout(Duration::from_secs(20), notified).await;
+        page = task_store(&state)?
+            .list_control_room_events(after)
+            .map_err(|error| task_store_error(&error))?;
+    }
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(page)).into_response())
+}
+
 async fn runtime_limits(State(state): State<Arc<AppState>>) -> Json<RuntimeLimitsResponse> {
     Json(RuntimeLimitsResponse {
         terminal: TerminalRuntimeLimits {
@@ -441,6 +485,7 @@ async fn create_task(
             &request.workspace,
         )
         .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
     Ok((StatusCode::CREATED, Json(task)).into_response())
 }
 
@@ -454,6 +499,7 @@ async fn update_task(
     let task = task_store(&state)?
         .update_task_details(parse_task_id(&task_id)?, &request)
         .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
     Ok(Json(task).into_response())
 }
 
@@ -467,6 +513,7 @@ async fn transition_task(
     let task = task_store(&state)?
         .transition_task(parse_task_id(&task_id)?, request.state)
         .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
     Ok(Json(task).into_response())
 }
 
@@ -502,6 +549,7 @@ async fn assign_task(
     let task = task_store(&state)?
         .assign_task(parse_task_id(&task_id)?, request.session_id)
         .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
     Ok(Json(task).into_response())
 }
 
@@ -550,6 +598,7 @@ async fn create_worker(
             position,
         )
         .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
     Ok((
         StatusCode::CREATED,
         Json(WorkerView {
@@ -599,6 +648,7 @@ async fn stop_worker(
             .map_err(|error| task_store_error(&error))?;
     }
     state.worker_errors.write().await.remove(&worker_id);
+    state.control_room_notify.notify_waiters();
     let profile = task_store(&state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
@@ -665,7 +715,7 @@ async fn start_session(
     Json(request): Json<StartSessionRequest>,
 ) -> Result<Json<HostResponse>, ApiError> {
     require_valid_size(request.rows, request.columns)?;
-    authorized_request(
+    let response = authorized_request(
         &state,
         &headers,
         HostRequest::StartClaude {
@@ -673,7 +723,9 @@ async fn start_session(
             size: TerminalSize::new(request.rows, request.columns),
         },
     )
-    .await
+    .await?;
+    record_session_event(&state)?;
+    Ok(response)
 }
 
 async fn read_output(
@@ -743,6 +795,7 @@ async fn stop_session(
             .release_session_assignments(session_id)
             .map_err(|error| task_store_error(&error))?;
     }
+    record_session_event(&state)?;
     Ok(response)
 }
 
@@ -792,6 +845,7 @@ async fn start_worker_process(
         return Err(task_store_error(&error));
     }
     state.worker_errors.write().await.remove(&worker_id);
+    state.control_room_notify.notify_waiters();
     let profile = task_store(state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
@@ -823,9 +877,12 @@ async fn reconcile_worker_bindings_unlocked(
         .filter(|session| session.running)
         .map(|session| session.session_id)
         .collect::<HashSet<_>>();
-    task_store(state)?
+    let released = task_store(state)?
         .release_missing_worker_sessions(&live)
         .map_err(|error| task_store_error(&error))?;
+    if released > 0 {
+        state.control_room_notify.notify_waiters();
+    }
     Ok(live)
 }
 
@@ -968,6 +1025,16 @@ fn terminal_client(state: &AppState) -> Result<&HostClient, ApiError> {
             "terminal host is not configured",
         )
     })
+}
+
+fn record_session_event(state: &AppState) -> Result<(), ApiError> {
+    if let Some(store) = &state.task_store {
+        store
+            .record_control_room_event(ControlRoomEventKind::SessionsChanged)
+            .map_err(|error| task_store_error(&error))?;
+    }
+    state.control_room_notify.notify_waiters();
+    Ok(())
 }
 
 fn task_store(state: &AppState) -> Result<&TaskStore, ApiError> {
@@ -1169,6 +1236,72 @@ mod tests {
         assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
     }
 
+    #[tokio::test]
+    async fn local_hive_identity_is_private_and_stable() {
+        let store = TaskStore::in_memory().unwrap();
+        let expected = store.local_hive_identity().unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(store);
+        let app = router(state);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/hive")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/hive").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(response).await;
+        assert_eq!(json["operator"]["id"], expected.operator.id.to_string());
+        assert_eq!(json["operator"]["display_name"], "Operator");
+        assert_eq!(json["hive"]["id"], expected.hive.id.to_string());
+        assert_eq!(json["hive"]["name"], "My Hive");
+        assert!(json["hive"]["apiary_id"].is_null());
+    }
+
+    #[tokio::test]
+    async fn control_room_event_feed_is_private_resumable_and_content_free() {
+        let store = TaskStore::in_memory().unwrap();
+        store
+            .create_task("Sensitive title", "/private/workspace")
+            .unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(store);
+        let app = router(state);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/control-room/events?after=0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/control-room/events?after=0").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(response).await;
+        assert_eq!(json["events"][0]["kind"], "tasks_changed");
+        assert!(json["next_cursor"].as_i64().unwrap() > 0);
+        assert_eq!(json["reset_required"], false);
+        let serialized = json.to_string();
+        assert!(!serialized.contains("Sensitive title"));
+        assert!(!serialized.contains("private/workspace"));
+    }
     #[tokio::test]
     async fn packaged_router_serves_only_existing_browser_assets() {
         let web_root = TempDir::new().unwrap();

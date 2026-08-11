@@ -45,6 +45,7 @@ test("keeps the operator token in the browser tab and reveals the control room",
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
@@ -72,6 +73,7 @@ test("restores tasks and workers after a refresh", async () => {
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [{ session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", running: true }] }))
     .mockResolvedValueOnce(ok([{
       id: "worker-queen", name: "Queen", role: "queen", provider: "claude_code", workspace: "/workspace/queen", autostart: true, position: 0,
@@ -96,6 +98,7 @@ test("restores the worker surface after a refresh", async () => {
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
@@ -114,6 +117,7 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
@@ -152,13 +156,28 @@ test("removes a rejected saved token and returns to unlock", async () => {
 
 test("creates a persisted task draft from the task board", async () => {
   const task = { id: "task-1", title: "Prove two workers", workspace: "/workspace", state: "draft", assigned_session_id: null, created_at: 1, updated_at: 1 };
-  const fetch = vi
-    .fn()
-    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
-    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
-    .mockResolvedValueOnce(ok([]))
-    .mockResolvedValueOnce(ok([]))
-    .mockResolvedValueOnce(ok(task));
+  const responses = [
+    ok({ status: "ok", version: "0.1.0" }),
+    ok(hiveIdentity()),
+    ok({ type: "sessions", sessions: [] }),
+    ok([]),
+    ok([]),
+    ok(task),
+  ];
+  const fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("/api/v1/control-room/events")) {
+      return new Promise((_, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    }
+    const response = responses.shift();
+    if (!response) throw new Error(`Unexpected request: ${String(url)}`);
+    return Promise.resolve(response);
+  });
   vi.stubGlobal("fetch", fetch);
   render(<App />);
   fireEvent.change(screen.getByLabelText("Operator token"), { target: { value: "secret" } });
@@ -174,6 +193,10 @@ test("creates a persisted task draft from the task board", async () => {
     expect.objectContaining({ method: "POST", body: JSON.stringify({ title: task.title, description: "", priority: "normal", workspace: task.workspace }) }),
   );
 });
+
+function hiveIdentity() {
+  return { operator: { id: "operator-1", display_name: "Operator" }, hive: { id: "hive-1", name: "My Hive", operator_id: "operator-1", apiary_id: null } };
+}
 
 function ok(payload: unknown) {
   return { ok: true, status: 200, json: async () => payload };
