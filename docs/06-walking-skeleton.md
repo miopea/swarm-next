@@ -1,6 +1,6 @@
 # Walking skeleton
 
-Status: **Accepted**
+Status: **Implementation in progress; promotion gated by two-worker soak**
 
 The first runtime milestone proves one complete, production-shaped journey. It
 is not a prototype that bypasses authentication, persistence, recovery, or

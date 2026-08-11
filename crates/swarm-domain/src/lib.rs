@@ -19,6 +19,20 @@ impl Default for WorkerId {
     }
 }
 
+impl fmt::Display for WorkerId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for WorkerId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct WorkerSessionId(Uuid);
@@ -75,6 +89,114 @@ pub struct WorkerSession {
     pub state: WorkerSessionState,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TaskId(Uuid);
+
+impl TaskId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::now_v7())
+    }
+}
+
+impl Default for TaskId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for TaskId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for TaskId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskState {
+    Draft,
+    Ready,
+    Active,
+    Blocked,
+    Review,
+    Completed,
+}
+
+impl TaskState {
+    #[must_use]
+    pub const fn can_transition_to(self, target: Self) -> bool {
+        matches!(
+            (self, target),
+            (Self::Draft, Self::Ready)
+                | (Self::Ready, Self::Active | Self::Blocked)
+                | (Self::Active, Self::Blocked | Self::Review)
+                | (Self::Blocked, Self::Ready | Self::Active)
+                | (Self::Review, Self::Active | Self::Completed)
+        )
+    }
+}
+
+impl fmt::Display for TaskState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Draft => "draft",
+            Self::Ready => "ready",
+            Self::Active => "active",
+            Self::Blocked => "blocked",
+            Self::Review => "review",
+            Self::Completed => "completed",
+        };
+        formatter.write_str(value)
+    }
+}
+
+impl FromStr for TaskState {
+    type Err = ParseTaskStateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "draft" => Ok(Self::Draft),
+            "ready" => Ok(Self::Ready),
+            "active" => Ok(Self::Active),
+            "blocked" => Ok(Self::Blocked),
+            "review" => Ok(Self::Review),
+            "completed" => Ok(Self::Completed),
+            _ => Err(ParseTaskStateError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseTaskStateError;
+
+impl fmt::Display for ParseTaskStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown task state")
+    }
+}
+
+impl std::error::Error for ParseTaskStateError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Task {
+    pub id: TaskId,
+    pub title: String,
+    pub workspace: String,
+    pub state: TaskState,
+    pub assigned_session_id: Option<WorkerSessionId>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,5 +218,14 @@ mod tests {
         };
         assert_ne!(first.id, second.id);
         assert_eq!(first.worker_id, second.worker_id);
+    }
+
+    #[test]
+    fn task_transitions_are_explicit() {
+        assert!(TaskState::Draft.can_transition_to(TaskState::Ready));
+        assert!(TaskState::Review.can_transition_to(TaskState::Completed));
+        assert!(TaskState::Blocked.can_transition_to(TaskState::Active));
+        assert!(!TaskState::Ready.can_transition_to(TaskState::Completed));
+        assert!(!TaskState::Completed.can_transition_to(TaskState::Active));
     }
 }

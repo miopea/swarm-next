@@ -1,0 +1,53 @@
+# M1 two-worker soak gate
+
+Status: **Implemented harness; promotion evidence pending**
+
+M1 is not complete merely because reload and API replacement work once. The
+promotion gate uses two real Claude sessions, repeated API replacement, and
+content-free resource samples over 24 hours.
+
+## Harness
+
+`scripts/dogfood/two-worker-soak.sh`:
+
+- starts exactly two sessions through the authenticated public API;
+- verifies both immutable session IDs remain present and running;
+- restarts only the replaceable API at a bounded interval;
+- samples API and terminal-host memory and task counts;
+- samples bounded history usage and dropped-byte counters;
+- writes a timestamped CSV plus a compact pass summary;
+- stops only the two sessions it created unless explicitly asked to retain
+  them;
+- passes the operator token through a mode-0600 temporary curl configuration,
+  never a process argument or report.
+
+Example on the dogfood host:
+
+```sh
+SWARM_OPERATOR_TOKEN='…' \
+SWARM_SOAK_WORKSPACE_A="$HOME/projects/project-a" \
+SWARM_SOAK_WORKSPACE_B="$HOME/projects/project-b" \
+SWARM_SOAK_DURATION_SECONDS=86400 \
+scripts/dogfood/two-worker-soak.sh
+```
+
+Reports default to `~/.local/state/swarm-next/soak`. The raw CSV is evidence;
+passing requires no missing session, failed API call, unbounded history, or
+sustained application-memory growth. Provider-process memory is reported with
+the terminal-host cgroup but evaluated separately from Rust-host idle memory.
+
+## Browser companion test
+
+The soak is paired with browser automation against the packaged public UI:
+
+1. attach both workers;
+2. switch repeatedly without creating replacement terminal connections;
+3. reload during output;
+4. replace the API and observe both sessions recover;
+5. verify terminal dimensions remain equal to the visible host;
+6. send input to both recovered sessions;
+7. stop both and verify zero retained live sessions.
+
+The automated harness establishes duration and resource evidence. The browser
+test establishes the end-user interaction contract; neither substitutes for
+the other.
