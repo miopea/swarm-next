@@ -11,10 +11,13 @@ import {
   stopClaudeSession,
   stopWorker,
   transitionTask,
+  updateTask,
   type Health,
   type SessionSummary,
   type Task,
+  type TaskDraftInput,
   type TaskState,
+  type TaskUpdateInput,
   type Worker,
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
@@ -195,12 +198,26 @@ export function App() {
     });
   }
 
-  async function addTask(title: string, taskWorkspace: string) {
+  async function addTask(input: TaskDraftInput) {
     if (!operatorToken) return;
     await perform(async () => {
-      const task = await createTask(operatorToken, { title, workspace: taskWorkspace });
+      const task = await createTask(operatorToken, input);
       setTasks((current) => [task, ...current]);
     });
+  }
+
+  async function editTask(task: Task, input: TaskUpdateInput) {
+    if (!operatorToken) return;
+    setBusy(true);
+    setOperationError(undefined);
+    try {
+      replaceTask(await updateTask(operatorToken, task.id, input));
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "The task could not be updated");
+      throw error;
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function moveTask(task: Task, state: TaskState) {
@@ -387,7 +404,7 @@ export function App() {
             <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
           </form>
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} sessions={sessions} workerNames={workerNames} busy={busy} onCreate={addTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} />
+          <TaskBoard tasks={tasks} sessions={sessions} workerNames={workerNames} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             colorTheme={colorTheme}

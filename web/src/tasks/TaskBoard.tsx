@@ -1,6 +1,6 @@
 import { useState, type DragEvent, type FormEvent } from "react";
 
-import type { SessionSummary, Task, TaskState } from "../api";
+import type { SessionSummary, Task, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 
 type Props = {
@@ -8,7 +8,8 @@ type Props = {
   sessions: SessionSummary[];
   workerNames: ReadonlyMap<string, string>;
   busy: boolean;
-  onCreate: (title: string, workspace: string) => Promise<void>;
+  onCreate: (input: TaskDraftInput) => Promise<void>;
+  onUpdate: (task: Task, input: TaskUpdateInput) => Promise<void>;
   onTransition: (task: Task, state: TaskState) => Promise<void>;
   onAssign: (task: Task, sessionId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
@@ -21,6 +22,13 @@ const stateLabels: Record<TaskState, string> = {
   blocked: "Blocked",
   review: "Review",
   completed: "Completed",
+};
+
+const priorityLabels: Record<TaskPriority, string> = {
+  low: "Low",
+  normal: "Normal",
+  high: "High",
+  urgent: "Urgent",
 };
 
 const validTargets: Record<TaskState, TaskState[]> = {
@@ -38,19 +46,24 @@ export default function TaskBoard({
   workerNames,
   busy,
   onCreate,
+  onUpdate,
   onTransition,
   onAssign,
   onStartWorker,
 }: Props) {
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [priority, setPriority] = useState<TaskPriority>("normal");
   const [workspace, setWorkspace] = useState("");
   const [draggedTaskId, setDraggedTaskId] = useState<string>();
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!title.trim() || !workspace.trim()) return;
-    await onCreate(title, workspace);
+    await onCreate({ title, description, priority, workspace });
     setTitle("");
+    setDescription("");
+    setPriority("normal");
     setWorkspace("");
   }
 
@@ -76,6 +89,23 @@ export default function TaskBoard({
               placeholder="What should be true when this is done?"
               maxLength={240}
             />
+          </div>
+          <div className="field-stack task-description-field">
+            <label htmlFor="task-description">Description <span>optional</span></label>
+            <textarea
+              id="task-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="Context, constraints, or what done looks like"
+              maxLength={10000}
+              rows={2}
+            />
+          </div>
+          <div className="field-stack task-priority-field">
+            <label htmlFor="task-priority">Priority</label>
+            <select id="task-priority" value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
+              {Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
           </div>
           <div className="field-stack">
             <label htmlFor="task-workspace">Workspace</label>
@@ -106,6 +136,7 @@ export default function TaskBoard({
                 sessions={sessions}
                 workerNames={workerNames}
                 busy={busy}
+                onUpdate={onUpdate}
                 onTransition={onTransition}
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
@@ -149,6 +180,7 @@ export default function TaskBoard({
                 sessions={sessions}
                 workerNames={workerNames}
                 busy={busy}
+                onUpdate={onUpdate}
                 onTransition={onTransition}
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
@@ -163,23 +195,30 @@ export default function TaskBoard({
   );
 }
 
-function TaskCard({ task, sessions, workerNames, busy, onTransition, onAssign, onStartWorker, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate"> & { task: Task; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, onAssign, onStartWorker, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate"> & { task: Task; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const runningSessions = sessions.filter((session) => session.running);
+  const [editing, setEditing] = useState(false);
   return (
     <article
       className="task-card"
       aria-label={task.title}
-      draggable={!busy && task.state !== "completed"}
+      draggable={!busy && !editing && task.state !== "completed"}
       onDragStart={(event: DragEvent<HTMLElement>) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", task.id); onDragStart(task.id); }}
       onDragEnd={onDragEnd}
     >
       <div className="task-card-topline">
-        <span className={`task-state state-${task.state}`}>{stateLabels[task.state]}</span>
+        <div className="task-signals">
+          <span className={`task-state state-${task.state}`}>{stateLabels[task.state]}</span>
+          <span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span>
+        </div>
         <code>{shortWorkspace(task.workspace)}</code>
       </div>
       <h4>{task.title}</h4>
-      {task.state !== "completed" && (
+      {task.description && !editing && <p className="task-description">{task.description}</p>}
+      {editing ? (
+        <TaskEditForm task={task} busy={busy} onUpdate={onUpdate} onCancel={() => setEditing(false)} />
+      ) : task.state !== "completed" && (
         <div className="assignment-row">
           <label htmlFor={`assignment-${task.id}`}>Worker</label>
           <select
@@ -198,11 +237,60 @@ function TaskCard({ task, sessions, workerNames, busy, onTransition, onAssign, o
         </div>
       )}
       <div className="task-actions">
-        <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />
+        {!editing && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}
+        {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
         {task.state === "active" && <button className="text-button danger-text" disabled={busy} onClick={() => void onTransition(task, "blocked")}>Block</button>}
         {task.state === "review" && <button className="text-button" disabled={busy} onClick={() => void onTransition(task, "active")}>Changes needed</button>}
       </div>
     </article>
+  );
+}
+
+function TaskEditForm({ task, busy, onUpdate, onCancel }: {
+  task: Task;
+  busy: boolean;
+  onUpdate: Props["onUpdate"];
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description);
+  const [priority, setPriority] = useState(task.priority);
+  const [workspace, setWorkspace] = useState(task.workspace);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!title.trim() || !workspace.trim()) return;
+    try {
+      await onUpdate(task, { title, description, priority, workspace });
+      onCancel();
+    } catch {
+      // The app-level alert explains the failure; retain this form for correction and retry.
+    }
+  }
+
+  return (
+    <form className="task-edit-form" aria-label={`Edit ${task.title}`} onSubmit={(event) => void submit(event)}>
+      <label htmlFor={`edit-title-${task.id}`}>Title</label>
+      <input id={`edit-title-${task.id}`} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} />
+      <label htmlFor={`edit-description-${task.id}`}>Description</label>
+      <textarea id={`edit-description-${task.id}`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={10000} rows={4} />
+      <div className="task-edit-row">
+        <div className="field-stack">
+          <label htmlFor={`edit-priority-${task.id}`}>Priority</label>
+          <select id={`edit-priority-${task.id}`} value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
+            {Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </div>
+        <div className="field-stack">
+          <label htmlFor={`edit-workspace-${task.id}`}>Workspace</label>
+          <input id={`edit-workspace-${task.id}`} value={workspace} onChange={(event) => setWorkspace(event.target.value)} />
+        </div>
+      </div>
+      <div className="task-edit-actions">
+        <button disabled={busy || !title.trim() || !workspace.trim()}>Save changes</button>
+        <button className="text-button" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
   );
 }
 

@@ -5,14 +5,15 @@ use std::{
 };
 
 use rusqlite::{Connection, OptionalExtension, params};
-use swarm_domain::{Task, TaskId, TaskState, WorkerSessionId};
+use swarm_domain::{Task, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerSessionId};
 use thiserror::Error;
 use uuid::Uuid;
 
 mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
+const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 2;
+const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Clone)]
 pub struct TaskStore {
@@ -31,6 +32,10 @@ pub enum TaskStoreError {
     NotFound,
     #[error("task title must contain 1 to {MAX_TASK_TITLE_BYTES} bytes")]
     InvalidTitle,
+    #[error("task description must not exceed {MAX_TASK_DESCRIPTION_BYTES} bytes")]
+    InvalidDescription,
+    #[error("task details update must contain at least one field")]
+    EmptyTaskDetailsUpdate,
     #[error("workspace must contain 1 to {MAX_WORKSPACE_BYTES} bytes")]
     InvalidWorkspace,
     #[error("task cannot move from {from} to {to}")]
@@ -115,11 +120,18 @@ impl TaskStore {
             ",
                 )?;
                 migrate_worker_roster(&transaction)?;
+                migrate_task_details(&transaction)?;
                 transaction.commit()?;
             }
             1 => {
                 let transaction = connection.transaction()?;
                 migrate_worker_roster(&transaction)?;
+                migrate_task_details(&transaction)?;
+                transaction.commit()?;
+            }
+            2 => {
+                let transaction = connection.transaction()?;
+                migrate_task_details(&transaction)?;
                 transaction.commit()?;
             }
             CURRENT_SCHEMA_VERSION => {}
@@ -145,15 +157,38 @@ impl TaskStore {
     /// # Errors
     /// Returns an error for invalid content or unavailable persistence.
     pub fn create_task(&self, title: &str, workspace: &str) -> Result<Task, TaskStoreError> {
+        self.create_task_with_details(title, "", TaskPriority::Normal, workspace)
+    }
+
+    /// Creates a validated draft with operator-facing context and priority.
+    ///
+    /// # Errors
+    /// Returns an error for invalid content or unavailable persistence.
+    pub fn create_task_with_details(
+        &self,
+        title: &str,
+        description: &str,
+        priority: TaskPriority,
+        workspace: &str,
+    ) -> Result<Task, TaskStoreError> {
         let title = title.trim();
+        let description = description.trim();
         let workspace = workspace.trim();
         validate_text(title, workspace)?;
+        validate_description(description)?;
         let id = TaskId::new();
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         transaction.execute(
-            "INSERT INTO tasks (id, title, workspace, state) VALUES (?1, ?2, ?3, 'draft')",
-            params![id.to_string(), title, workspace],
+            "INSERT INTO tasks (id, title, description, priority, workspace, state)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'draft')",
+            params![
+                id.to_string(),
+                title,
+                description,
+                priority.to_string(),
+                workspace
+            ],
         )?;
         transaction.execute(
             "INSERT INTO task_activity (task_id, kind, to_state) VALUES (?1, 'created', 'draft')",
@@ -172,12 +207,14 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "
-            SELECT t.id, t.title, t.workspace, t.state, a.worker_session_id,
+            SELECT t.id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
                    t.created_at, t.updated_at
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
             ORDER BY CASE t.state WHEN 'completed' THEN 1 ELSE 0 END,
+                     CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1
+                                     WHEN 'normal' THEN 2 ELSE 3 END,
                      t.updated_at DESC, t.id DESC
             ",
         )?;
@@ -196,7 +233,7 @@ impl TaskStore {
         connection
             .query_row(
                 "
-                SELECT t.id, t.title, t.workspace, t.state, a.worker_session_id,
+                SELECT t.id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
                        t.created_at, t.updated_at
                 FROM tasks t
                 LEFT JOIN task_assignments a
@@ -208,6 +245,79 @@ impl TaskStore {
             )
             .optional()?
             .ok_or(TaskStoreError::NotFound)
+    }
+
+    /// Replaces the supplied task details and records one atomic activity event.
+    ///
+    /// # Errors
+    /// Returns an error for an empty update, invalid content, an unknown task, or unavailable persistence.
+    pub fn update_task_details(
+        &self,
+        id: TaskId,
+        update: &TaskDetailsUpdate,
+    ) -> Result<Task, TaskStoreError> {
+        if update.title.is_none()
+            && update.description.is_none()
+            && update.priority.is_none()
+            && update.workspace.is_none()
+        {
+            return Err(TaskStoreError::EmptyTaskDetailsUpdate);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let current = transaction
+            .query_row(
+                "SELECT title, description, priority, workspace FROM tasks WHERE id = ?1",
+                [id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(TaskStoreError::NotFound)?;
+        let title = update
+            .title
+            .as_deref()
+            .map_or(current.0.as_str(), str::trim);
+        let description = update
+            .description
+            .as_deref()
+            .map_or(current.1.as_str(), str::trim);
+        let priority = update.priority.unwrap_or(
+            TaskPriority::from_str(&current.2)
+                .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
+        );
+        let workspace = update
+            .workspace
+            .as_deref()
+            .map_or(current.3.as_str(), str::trim);
+        validate_text(title, workspace)?;
+        validate_description(description)?;
+        transaction.execute(
+            "UPDATE tasks
+             SET title = ?2, description = ?3, priority = ?4, workspace = ?5,
+                 updated_at = unixepoch()
+             WHERE id = ?1",
+            params![
+                id.to_string(),
+                title,
+                description,
+                priority.to_string(),
+                workspace
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'details_updated')",
+            [id.to_string()],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_task(id)
     }
 
     /// Writes a consistent online backup to a separate `SQLite` file.
@@ -400,6 +510,15 @@ fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::R
     )
 }
 
+fn migrate_task_details(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "ALTER TABLE tasks ADD COLUMN description TEXT NOT NULL DEFAULT '';
+         ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'
+             CHECK (priority IN ('low','normal','high','urgent'));
+         PRAGMA user_version = 3;",
+    )
+}
+
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
     if title.is_empty() || title.len() > MAX_TASK_TITLE_BYTES {
         return Err(TaskStoreError::InvalidTitle);
@@ -410,10 +529,18 @@ fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
+fn validate_description(description: &str) -> Result<(), TaskStoreError> {
+    if description.len() > MAX_TASK_DESCRIPTION_BYTES {
+        return Err(TaskStoreError::InvalidDescription);
+    }
+    Ok(())
+}
+
 fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let id: String = row.get(0)?;
-    let state: String = row.get(3)?;
-    let assigned_session_id: Option<String> = row.get(4)?;
+    let priority: String = row.get(3)?;
+    let state: String = row.get(5)?;
+    let assigned_session_id: Option<String> = row.get(6)?;
     Ok(Task {
         id: TaskId::from_str(&id).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -423,10 +550,18 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             )
         })?,
         title: row.get(1)?,
-        workspace: row.get(2)?,
-        state: TaskState::from_str(&state).map_err(|error| {
+        description: row.get(2)?,
+        priority: TaskPriority::from_str(&priority).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
                 3,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
+        workspace: row.get(4)?,
+        state: TaskState::from_str(&state).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                5,
                 rusqlite::types::Type::Text,
                 Box::new(error),
             )
@@ -436,13 +571,13 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             .transpose()
             .map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    4,
+                    6,
                     rusqlite::types::Type::Text,
                     Box::new(error),
                 )
             })?,
-        created_at: row.get(5)?,
-        updated_at: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
@@ -472,6 +607,50 @@ mod tests {
             store.assign_task(ready.id, WorkerSessionId::new()),
             Err(TaskStoreError::CompletedTask)
         ));
+    }
+
+    #[test]
+    fn updates_only_supplied_task_details_and_records_activity() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task_with_details(
+                "Polish task cards",
+                "Make priority visible",
+                TaskPriority::High,
+                "/workspace",
+            )
+            .unwrap();
+        let updated = store
+            .update_task_details(
+                task.id,
+                &TaskDetailsUpdate {
+                    title: Some("Polish the task board".into()),
+                    priority: Some(TaskPriority::Urgent),
+                    ..TaskDetailsUpdate::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(updated.title, "Polish the task board");
+        assert_eq!(updated.description, "Make priority visible");
+        assert_eq!(updated.priority, TaskPriority::Urgent);
+        assert_eq!(updated.workspace, "/workspace");
+        assert!(matches!(
+            store.update_task_details(task.id, &TaskDetailsUpdate::default()),
+            Err(TaskStoreError::EmptyTaskDetailsUpdate)
+        ));
+        assert_eq!(
+            store
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM task_activity WHERE task_id = ?1 AND kind = 'details_updated'",
+                    [task.id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -537,6 +716,17 @@ mod tests {
         let store = TaskStore::from_connection(connection).unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         assert_eq!(queen.role, swarm_domain::WorkerRole::Queen);
+        let columns = store
+            .connection()
+            .unwrap()
+            .prepare("PRAGMA table_info(tasks)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(columns.contains(&"description".to_owned()));
+        assert!(columns.contains(&"priority".to_owned()));
         assert_eq!(
             store
                 .connection()

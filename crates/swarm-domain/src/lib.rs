@@ -271,10 +271,66 @@ impl fmt::Display for ParseTaskStateError {
 
 impl std::error::Error for ParseTaskStateError {}
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskPriority {
+    Low,
+    #[default]
+    Normal,
+    High,
+    Urgent,
+}
+
+impl fmt::Display for TaskPriority {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Low => "low",
+            Self::Normal => "normal",
+            Self::High => "high",
+            Self::Urgent => "urgent",
+        })
+    }
+}
+
+impl FromStr for TaskPriority {
+    type Err = ParseTaskPriorityError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "low" => Ok(Self::Low),
+            "normal" => Ok(Self::Normal),
+            "high" => Ok(Self::High),
+            "urgent" => Ok(Self::Urgent),
+            _ => Err(ParseTaskPriorityError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseTaskPriorityError;
+
+impl fmt::Display for ParseTaskPriorityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown task priority")
+    }
+}
+
+impl std::error::Error for ParseTaskPriorityError {}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TaskDetailsUpdate {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub priority: Option<TaskPriority>,
+    pub workspace: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub id: TaskId,
     pub title: String,
+    pub description: String,
+    pub priority: TaskPriority,
     pub workspace: String,
     pub state: TaskState,
     pub assigned_session_id: Option<WorkerSessionId>,

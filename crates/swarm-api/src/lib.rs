@@ -17,7 +17,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
-use swarm_domain::{ProviderKind, TaskId, TaskState, WorkerId, WorkerProfile, WorkerSessionId};
+use swarm_domain::{
+    ProviderKind, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile,
+    WorkerSessionId,
+};
 use swarm_persistence::{TaskStore, TaskStoreError};
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, HistoryCursor, HostClient,
@@ -209,6 +212,10 @@ struct ResizeRequest {
 #[derive(Debug, Deserialize)]
 struct CreateTaskRequest {
     title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    priority: TaskPriority,
     workspace: String,
 }
 
@@ -329,6 +336,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
+        .route("/api/v1/tasks/{task_id}", patch(update_task))
         .route("/api/v1/tasks/{task_id}/state", patch(transition_task))
         .route("/api/v1/tasks/{task_id}/assignment", put(assign_task))
         .route("/api/v1/workers", get(list_workers).post(create_worker))
@@ -426,9 +434,27 @@ async fn create_task(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let task = task_store(&state)?
-        .create_task(&request.title, &request.workspace)
+        .create_task_with_details(
+            &request.title,
+            &request.description,
+            request.priority,
+            &request.workspace,
+        )
         .map_err(|error| task_store_error(&error))?;
     Ok((StatusCode::CREATED, Json(task)).into_response())
+}
+
+async fn update_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<TaskDetailsUpdate>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task = task_store(&state)?
+        .update_task_details(parse_task_id(&task_id)?, &request)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(Json(task).into_response())
 }
 
 async fn transition_task(
@@ -959,7 +985,10 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::NotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "task_not_found", error.to_string())
         }
-        TaskStoreError::InvalidTitle | TaskStoreError::InvalidWorkspace => {
+        TaskStoreError::InvalidTitle
+        | TaskStoreError::InvalidDescription
+        | TaskStoreError::InvalidWorkspace
+        | TaskStoreError::EmptyTaskDetailsUpdate => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_task", error.to_string())
         }
         TaskStoreError::InvalidTransition { .. } | TaskStoreError::CompletedTask => ApiError::new(
@@ -1316,7 +1345,7 @@ mod tests {
                     .header("authorization", "Bearer secret")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        r#"{"title":"Recover exact terminal","workspace":"/workspace"}"#,
+                        r#"{"title":"Recover exact terminal","description":"Survive reloads","priority":"high","workspace":"/workspace"}"#,
                     ))
                     .unwrap(),
             )
@@ -1325,6 +1354,29 @@ mod tests {
         assert_eq!(created.status(), StatusCode::CREATED);
         let created = response_json(created).await;
         assert_eq!(created["state"], "draft");
+        assert_eq!(created["description"], "Survive reloads");
+        assert_eq!(created["priority"], "high");
+
+        let updated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/tasks/{}", created["id"].as_str().unwrap()))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"title":"Recover every terminal","priority":"urgent"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status(), StatusCode::OK);
+        let updated = response_json(updated).await;
+        assert_eq!(updated["title"], "Recover every terminal");
+        assert_eq!(updated["description"], "Survive reloads");
+        assert_eq!(updated["priority"], "urgent");
 
         let ready = app
             .clone()
@@ -1348,7 +1400,7 @@ mod tests {
         let listed = authorized_get(app, "/api/v1/tasks").await;
         let listed = response_json(listed).await;
         assert_eq!(listed.as_array().unwrap().len(), 1);
-        assert_eq!(listed[0]["title"], "Recover exact terminal");
+        assert_eq!(listed[0]["title"], "Recover every terminal");
     }
 
     #[tokio::test]
