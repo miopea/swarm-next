@@ -34,6 +34,10 @@ Queen, Forager, and Pollen. No legacy or operator production data participated.
 - A task-ordering pass moved two open tasks through the authenticated durable
   reorder contract. The new order survived reload, and compact Earlier/Later
   controls remained visible at 412 by 915 with a clean console.
+- Task cards now match the worker roster's accessible action-menu pattern. The
+  visible trigger and right-click open the same menu, Escape dismisses it, and
+  editing, history, ordering, and exceptional state actions remain reachable.
+  A 412 by 915 pass confirmed the reduced mobile action row and readable menu.
 
 ## Development port contract
 

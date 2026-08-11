@@ -179,7 +179,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .count-badge { display: grid; min-width: 27px; height: 25px; place-items: center; border-radius: 8px; color: var(--muted); background: var(--good-soft); font-size: .74rem; }
 .task-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
 .task-grid.compact { margin-top: 12px; opacity: .8; }
-.task-card { display: flex; min-height: 190px; flex-direction: column; padding: 17px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 7%, transparent); }
+.task-card { position: relative; display: flex; min-height: 190px; flex-direction: column; padding: 17px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 7%, transparent); }
 .task-card:hover { border-color: var(--line-strong); background: var(--panel-raised); }
 .task-card-topline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .task-signals { display: flex; align-items: center; gap: 9px; }
@@ -206,7 +206,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
 
 .task-actions { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
 .task-actions button { min-height: 34px; padding: 6px 10px; font-size: .75rem; }
-.task-actions .task-order-button { padding-inline: 7px; font-size: .68rem; }
+.task-menu-trigger { min-width: 36px; min-height: 34px; padding: 0 8px; border-color: transparent; color: var(--quiet); background: transparent; letter-spacing: 1px; }
+.task-menu-trigger:hover:not(:disabled) { border-color: transparent; color: var(--text); background: var(--panel-soft); }
+.task-menu { position: absolute; z-index: 20; right: 14px; bottom: 52px; display: grid; min-width: 178px; padding: 5px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel-raised); box-shadow: var(--shadow); }
+.task-menu button { min-height: 34px; padding: 7px 9px; border-color: transparent; color: var(--text); background: transparent; text-align: left; }
+.task-menu button:hover:not(:disabled) { border-color: transparent; background: var(--good-soft); }
+.task-menu .danger-text { color: var(--bad); }
 .task-history { margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line); }
 .task-history > p { margin: 0; color: var(--muted); font-size: .74rem; }
 .task-history .task-history-note { margin-bottom: 8px; color: var(--quiet); font-size: .69rem; }

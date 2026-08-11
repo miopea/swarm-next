@@ -23,7 +23,7 @@ mostly product operability rather than process survival.
 | Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Explicit lifecycle, editing, priority, assignment, durable ordering, focused state drops, and bounded activity history | Complete dogfood baseline; defer broad integrations |
 | See changes without refreshing | Broad WebSocket event stream | Typed, authenticated, resumable control-room invalidation feed | Complete; keep Refresh as recovery |
 | Manage workers quickly | Launch, kill, revive, groups, bulk actions | Start by path and stop | Add start/revive/stop on profiles; defer groups until measured |
-| Use direct interactions | Shortcuts, command palette, drag/drop imports | Basic buttons and forms | Add shortcuts, accessible menus, task reorder and focused drop targets |
+| Use direct interactions | Shortcuts, command palette, drag/drop imports | Keyboard switching, durable task ordering, focused state drops, and accessible worker/task action menus with right-click parity | Add command palette and broader shortcuts only where dogfood proves value |
 | Configure the product | Large multi-tab editor with overlapping concerns | No settings surface | Add a compact settings workspace for workers, runtime, appearance, and diagnostics |
 | Handle attention | Proposals, messages, activity, notifications | None | Later: one decision inbox, not multiple legacy subsystems |
 | Diagnose failures | Large logs/config surface | Browser, API, database, terminal, provider, and integration health with sanitized preview/copy | Complete foundation; add submission transport when selected |
@@ -65,9 +65,10 @@ broad automation wait for dogfood evidence.
 
 ### E. Operator controls
 
-Add keyboard navigation, an accessible action menu for each worker/task, a
-command palette, and settings for roster, runtime, appearance, and diagnostics.
-Context menus supplement visible controls; they never become the only path.
+Keyboard navigation, accessible worker/task action menus, and settings for
+roster, runtime, appearance, and diagnostics are implemented. Context menus
+supplement visible controls; they never become the only path. Add a command
+palette and broader shortcuts only where dogfood proves value.
 
 ## Explicit non-ports
 
