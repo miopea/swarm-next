@@ -1,0 +1,4 @@
+*.sh text eol=lf
+packaging/linux/swarm-next-package text eol=lf
+*.service.in text eol=lf
+*.target.in text eol=lf

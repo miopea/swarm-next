@@ -1,23 +1,36 @@
-import { lazy, Suspense, useEffect, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
 
+import {
+  assignTask,
+  createTask,
+  fetchSessions,
+  fetchTasks,
+  startClaudeSession,
+  stopClaudeSession,
+  transitionTask,
+  type Health,
+  type SessionSummary,
+  type Task,
+  type TaskState,
+} from "./api";
+import TaskBoard, { workerName } from "./tasks/TaskBoard";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 
 const TerminalView = lazy(() => import("./terminal/TerminalView"));
-
-type Health = { status: "ok"; version: string };
-type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
-type SessionSummary = { session_id: string; running: boolean };
-type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
-type SessionStartedResponse = { type: "session_started"; session_id: string };
 const OPERATOR_TOKEN_STORAGE_KEY = "swarm-next.operator-token.v1";
+
+type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
+type Surface = "tasks" | "workers";
 
 export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
   const [tokenDraft, setTokenDraft] = useState("");
   const [operatorToken, setOperatorToken] = useState<string>();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [workspace, setWorkspace] = useState("");
+  const [surface, setSurface] = useState<Surface>("tasks");
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
 
@@ -38,15 +51,15 @@ export function App() {
   useEffect(() => {
     const savedToken = readSavedOperatorToken();
     if (!savedToken) return;
-
     let cancelled = false;
     setBusy(true);
-    void fetchSessions(savedToken)
-      .then((nextSessions) => {
+    void loadControlRoom(savedToken)
+      .then(({ sessions: nextSessions, tasks: nextTasks }) => {
         if (cancelled) return;
         terminalWorkspace.authenticate(savedToken);
         setOperatorToken(savedToken);
         setSessions(nextSessions);
+        setTasks(nextTasks);
         setActiveSessionId(nextSessions[0]?.session_id);
       })
       .catch((error: unknown) => {
@@ -58,91 +71,111 @@ export function App() {
       .finally(() => {
         if (!cancelled) setBusy(false);
       });
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   async function authenticate(event: FormEvent) {
     event.preventDefault();
     if (!tokenDraft) return;
-    setBusy(true);
-    setOperationError(undefined);
-    try {
-      const nextSessions = await fetchSessions(tokenDraft);
+    await perform(async () => {
+      const controlRoom = await loadControlRoom(tokenDraft);
       terminalWorkspace.authenticate(tokenDraft);
       setOperatorToken(tokenDraft);
+      setSessions(controlRoom.sessions);
+      setTasks(controlRoom.tasks);
+      setActiveSessionId((current) => current ?? controlRoom.sessions[0]?.session_id);
       const tokenWasSaved = saveOperatorToken(tokenDraft);
       setTokenDraft("");
-      setSessions(nextSessions);
-      setActiveSessionId((current) => current ?? nextSessions[0]?.session_id);
-      if (!tokenWasSaved) {
-        setOperationError("Unlocked, but this browser blocked tab storage; refreshing will lock Swarm again.");
-      }
-    } catch (error) {
-      setOperationError(error instanceof Error ? error.message : "Authentication failed");
-    } finally {
-      setBusy(false);
-    }
+      if (!tokenWasSaved) throw new Error("Unlocked, but this browser blocked tab storage; refreshing will lock Swarm again.");
+    });
   }
 
-  async function refreshSessions() {
+  async function refreshControlRoom() {
     if (!operatorToken) return;
-    setBusy(true);
-    setOperationError(undefined);
-    try {
-      const nextSessions = await fetchSessions(operatorToken);
-      setSessions(nextSessions);
+    await perform(async () => {
+      const controlRoom = await loadControlRoom(operatorToken);
+      setSessions(controlRoom.sessions);
+      setTasks(controlRoom.tasks);
       setActiveSessionId((current) =>
-        current && nextSessions.some((session) => session.session_id === current)
+        current && controlRoom.sessions.some((session) => session.session_id === current)
           ? current
-          : nextSessions[0]?.session_id,
+          : controlRoom.sessions[0]?.session_id,
       );
-    } catch (error) {
-      setOperationError(error instanceof Error ? error.message : "Could not refresh workers");
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   async function startSession(event: FormEvent) {
     event.preventDefault();
-    if (!operatorToken || !workspace) return;
-    setBusy(true);
-    setOperationError(undefined);
-    try {
-      const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspace, rows: 24, columns: 80 }),
-      });
-      const started = (await response.json()) as SessionStartedResponse;
+    if (!operatorToken || !workspace.trim()) return;
+    await perform(async () => {
+      const sessionId = await startClaudeSession(operatorToken, workspace);
       const nextSessions = await fetchSessions(operatorToken);
       setSessions(nextSessions);
-      setActiveSessionId(started.session_id);
+      setActiveSessionId(sessionId);
       setWorkspace("");
-    } catch (error) {
-      setOperationError(error instanceof Error ? error.message : "Could not start worker");
-    } finally {
-      setBusy(false);
-    }
+      setSurface("workers");
+    });
+  }
+
+  async function startWorkerForTask(task: Task) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      const sessionId = await startClaudeSession(operatorToken, task.workspace);
+      await assignTask(operatorToken, task.id, sessionId);
+      await transitionTask(operatorToken, task.id, "active");
+      const controlRoom = await loadControlRoom(operatorToken);
+      setSessions(controlRoom.sessions);
+      setTasks(controlRoom.tasks);
+      setActiveSessionId(sessionId);
+      setSurface("workers");
+    });
   }
 
   async function stopSession(sessionId: string) {
     if (!operatorToken) return;
+    await perform(async () => {
+      await stopClaudeSession(operatorToken, sessionId);
+      terminalWorkspace.closeSession(sessionId);
+      const controlRoom = await loadControlRoom(operatorToken);
+      setSessions(controlRoom.sessions);
+      setTasks(controlRoom.tasks);
+      setActiveSessionId((current) => current === sessionId ? controlRoom.sessions[0]?.session_id : current);
+    });
+  }
+
+  async function addTask(title: string, taskWorkspace: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      const task = await createTask(operatorToken, { title, workspace: taskWorkspace });
+      setTasks((current) => [task, ...current]);
+    });
+  }
+
+  async function moveTask(task: Task, state: TaskState) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      const updated = await transitionTask(operatorToken, task.id, state);
+      replaceTask(updated);
+    });
+  }
+
+  async function setTaskWorker(task: Task, sessionId: string) {
+    if (!operatorToken) return;
+    await perform(async () => replaceTask(await assignTask(operatorToken, task.id, sessionId)));
+  }
+
+  function replaceTask(updated: Task) {
+    setTasks((current) => current.map((task) => task.id === updated.id ? updated : task));
+  }
+
+  async function perform(action: () => Promise<void>) {
     setBusy(true);
     setOperationError(undefined);
     try {
-      await authenticatedFetch(
-        operatorToken,
-        `/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}`,
-        { method: "DELETE" },
-      );
-      terminalWorkspace.closeSession(sessionId);
-      await refreshSessions();
+      await action();
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : "Could not stop worker");
+      setOperationError(error instanceof Error ? error.message : "The operation could not be completed");
+    } finally {
       setBusy(false);
     }
   }
@@ -152,138 +185,126 @@ export function App() {
     terminalWorkspace.logout();
     setOperatorToken(undefined);
     setSessions([]);
+    setTasks([]);
     setActiveSessionId(undefined);
     setOperationError(undefined);
   }
 
   const activeSession = sessions.find((session) => session.session_id === activeSessionId);
+  const openTaskCount = tasks.filter((task) => task.state !== "completed").length;
+  const tasksBySession = useMemo(
+    () => new Map(tasks.filter((task) => task.assigned_session_id).map((task) => [task.assigned_session_id, task])),
+    [tasks],
+  );
+  const activeTask = activeSession ? tasksBySession.get(activeSession.session_id) : undefined;
 
   return (
     <main className="app-shell">
-      <aside className="worker-rail" aria-label="Workers">
-        <div className="brand-mark" aria-hidden="true">S</div>
-        <div><p className="eyebrow">Swarm Next</p><h1>Workers</h1></div>
-        {!operatorToken ? (
-          <p className="empty-rail">Unlock the local runtime to view workers.</p>
-        ) : sessions.length === 0 ? (
-          <p className="empty-rail">No workers running</p>
-        ) : (
-          <div className="worker-list">
-            {sessions.map((session, index) => (
-              <button
-                className="worker-button"
-                aria-current={session.session_id === activeSessionId ? "page" : undefined}
-                key={session.session_id}
-                onClick={() => setActiveSessionId(session.session_id)}
-              >
-                <span>Worker {index + 1}</span>
-                <small>{session.running ? "Running" : "Exited"}</small>
+      <aside className="control-rail" aria-label="Swarm navigation">
+        <div className="brand-lockup">
+          <div className="brand-mark" aria-hidden="true"><span>S</span></div>
+          <div><p className="eyebrow">Swarm Next</p><h1>Control room</h1></div>
+        </div>
+
+        {operatorToken ? (
+          <>
+            <nav className="surface-nav" aria-label="Primary">
+              <button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} onClick={() => setSurface("tasks")}>
+                <span><TaskIcon /> Tasks</span><small>{openTaskCount}</small>
               </button>
-            ))}
-          </div>
-        )}
-        {operatorToken && (
-          <form className="start-worker" onSubmit={(event) => void startSession(event)}>
-            <label htmlFor="workspace">Workspace path</label>
-            <input
-              id="workspace"
-              value={workspace}
-              onChange={(event) => setWorkspace(event.target.value)}
-              placeholder="/absolute/path/to/workspace"
-            />
-            <button disabled={busy || !workspace}>Start Claude</button>
-          </form>
-        )}
+              <button className={surface === "workers" ? "selected" : ""} aria-current={surface === "workers" ? "page" : undefined} onClick={() => setSurface("workers")}>
+                <span><TerminalIcon /> Workers</span><small>{sessions.filter((session) => session.running).length}</small>
+              </button>
+            </nav>
+
+            <div className="rail-context">
+              <div className="rail-heading"><span>{surface === "tasks" ? "Open tasks" : "Live sessions"}</span></div>
+              {surface === "tasks" ? (
+                tasks.filter((task) => task.state !== "completed").length === 0 ? <p className="empty-rail">Nothing queued yet.</p> :
+                  <div className="mini-task-list">{tasks.filter((task) => task.state !== "completed").slice(0, 8).map((task) => <div key={task.id}><span className={`state-dot state-${task.state}`} /><span>{task.title}</span></div>)}</div>
+              ) : sessions.length === 0 ? (
+                <p className="empty-rail">No workers running.</p>
+              ) : (
+                <div className="worker-list">
+                  {sessions.map((session) => {
+                    const task = tasksBySession.get(session.session_id);
+                    return (
+                      <button className="worker-button" aria-current={session.session_id === activeSessionId ? "page" : undefined} key={session.session_id} onClick={() => setActiveSessionId(session.session_id)}>
+                        <span className="worker-avatar" aria-hidden="true">C</span>
+                        <span className="worker-copy"><strong>{workerName(session.session_id)}</strong><small>{task?.title ?? "Unassigned session"}</small></span>
+                        <span className={`presence ${session.running ? "online" : "offline"}`} title={session.running ? "Running" : "Exited"} />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {surface === "workers" && (
+              <form className="start-worker" onSubmit={(event) => void startSession(event)}>
+                <label htmlFor="workspace">Start an unassigned worker</label>
+                <input id="workspace" value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder="/workspace/path" />
+                <button disabled={busy || !workspace.trim()}>Start Claude</button>
+              </form>
+            )}
+          </>
+        ) : <p className="empty-rail">Unlock this runtime to access tasks and workers.</p>}
+
+        <div className="rail-footer"><RuntimeStatus state={loadState} /></div>
       </aside>
+
       <section className="workspace">
         <header className="workspace-header">
-          <div><p className="eyebrow">Persistent terminal</p><h2>Durable worker sessions</h2></div>
+          <div>
+            <p className="eyebrow">{surface === "tasks" ? "Plan and dispatch" : activeTask?.title ?? "Persistent terminal"}</p>
+            <h2>{surface === "tasks" ? "Task board" : activeSession ? workerName(activeSession.session_id) : "Worker terminal"}</h2>
+          </div>
           <div className="header-actions">
-            <RuntimeStatus state={loadState} />
-            {operatorToken && <button className="secondary-button" onClick={() => void refreshSessions()} disabled={busy}>Refresh</button>}
+            {busy && <span className="saving-state">Saving…</span>}
+            {operatorToken && <button className="icon-button" aria-label="Refresh control room" onClick={() => void refreshControlRoom()} disabled={busy}><RefreshIcon /></button>}
             {operatorToken && <button className="secondary-button" onClick={logout}>Lock</button>}
           </div>
         </header>
         {operationError && <div className="operation-error" role="alert">{operationError}</div>}
         {!operatorToken ? (
           <form className="unlock-panel" onSubmit={(event) => void authenticate(event)}>
-            <span className="terminal-prompt" aria-hidden="true">›_</span>
-            <h3>Unlock local Swarm</h3>
-            <p>The operator token stays in this browser tab and is exchanged for one-time terminal grants.</p>
+            <div className="unlock-symbol" aria-hidden="true">S</div>
+            <p className="eyebrow">Private local runtime</p>
+            <h3>Welcome back</h3>
+            <p>Unlock this control room. Your credential stays in this browser tab and terminal access uses one-time grants.</p>
             <label htmlFor="operator-token">Operator token</label>
-            <input
-              id="operator-token"
-              type="password"
-              autoComplete="off"
-              value={tokenDraft}
-              onChange={(event) => setTokenDraft(event.target.value)}
-            />
-            <button disabled={busy || !tokenDraft}>Unlock</button>
+            <input id="operator-token" type="password" autoComplete="off" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} />
+            <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
           </form>
+        ) : surface === "tasks" ? (
+          <TaskBoard tasks={tasks} sessions={sessions} busy={busy} onCreate={addTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} />
         ) : activeSession ? (
-          <Suspense fallback={<div className="terminal-empty">Loading terminal renderer…</div>}>
-            <TerminalView
-              key={`${operatorToken}:${activeSession.session_id}`}
-              operatorToken={operatorToken}
-              session={activeSession}
-              onStop={() => void stopSession(activeSession.session_id)}
-              busy={busy}
-            />
+          <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
+            <TerminalView key={`${operatorToken}:${activeSession.session_id}`} operatorToken={operatorToken} session={activeSession} onStop={() => void stopSession(activeSession.session_id)} busy={busy} />
           </Suspense>
         ) : (
-          <div className="terminal-empty">
-            <span className="terminal-prompt" aria-hidden="true">›_</span>
-            <h3>No terminal attached</h3>
-            <p>Start a Claude worker in an allowed workspace to open a persistent terminal.</p>
-          </div>
+          <div className="terminal-empty"><div className="empty-symbol"><TerminalIcon /></div><p className="eyebrow">No active session</p><h3>Start with a task or workspace</h3><p>Launch Claude from a ready task to preserve its assignment, or start an unassigned worker from the sidebar.</p></div>
         )}
       </section>
     </main>
   );
 }
 
-function readSavedOperatorToken(): string | undefined {
-  try {
-    return window.sessionStorage.getItem(OPERATOR_TOKEN_STORAGE_KEY) ?? undefined;
-  } catch {
-    return undefined;
-  }
+async function loadControlRoom(operatorToken: string) {
+  const [sessions, tasks] = await Promise.all([fetchSessions(operatorToken), fetchTasks(operatorToken)]);
+  return { sessions, tasks };
 }
 
-function saveOperatorToken(operatorToken: string): boolean {
-  try {
-    window.sessionStorage.setItem(OPERATOR_TOKEN_STORAGE_KEY, operatorToken);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function clearSavedOperatorToken() {
-  try {
-    window.sessionStorage.removeItem(OPERATOR_TOKEN_STORAGE_KEY);
-  } catch {
-    // Storage can be unavailable under hardened browser policies. Locking the
-    // in-memory workspace remains sufficient for the current page lifetime.
-  }
-}
-
-async function fetchSessions(operatorToken: string): Promise<SessionSummary[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/sessions");
-  const payload = (await response.json()) as SessionsResponse;
-  return payload.sessions;
-}
-
-async function authenticatedFetch(operatorToken: string, url: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${operatorToken}`);
-  const response = await fetch(url, { ...init, headers, cache: "no-store" });
-  if (!response.ok) throw new Error(`Runtime request returned ${response.status}`);
-  return response;
-}
+function readSavedOperatorToken(): string | undefined { try { return window.sessionStorage.getItem(OPERATOR_TOKEN_STORAGE_KEY) ?? undefined; } catch { return undefined; } }
+function saveOperatorToken(operatorToken: string): boolean { try { window.sessionStorage.setItem(OPERATOR_TOKEN_STORAGE_KEY, operatorToken); return true; } catch { return false; } }
+function clearSavedOperatorToken() { try { window.sessionStorage.removeItem(OPERATOR_TOKEN_STORAGE_KEY); } catch { /* Locking memory is sufficient when browser storage is unavailable. */ } }
 
 function RuntimeStatus({ state }: { state: LoadState }) {
-  if (state.kind === "ready") return <span className="status status-ready">Runtime {state.health.version}</span>;
-  if (state.kind === "unavailable") return <span className="status status-error">Runtime unavailable</span>;
-  return <span className="status">Connecting…</span>;
+  if (state.kind === "ready") return <span className="runtime-status"><span className="presence online" /> Runtime {state.health.version}</span>;
+  if (state.kind === "unavailable") return <span className="runtime-status error"><span className="presence offline" /> Runtime unavailable</span>;
+  return <span className="runtime-status"><span className="presence" /> Connecting…</span>;
 }
+
+function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>; }
+function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
+function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }

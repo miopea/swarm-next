@@ -1,0 +1,487 @@
+use std::{
+    path::Path,
+    str::FromStr,
+    sync::{Arc, Mutex, MutexGuard},
+};
+
+use rusqlite::{Connection, OptionalExtension, params};
+use swarm_domain::{Task, TaskId, TaskState, WorkerSessionId};
+use thiserror::Error;
+use uuid::Uuid;
+
+const MAX_TASK_TITLE_BYTES: usize = 240;
+const MAX_WORKSPACE_BYTES: usize = 4096;
+const CURRENT_SCHEMA_VERSION: i64 = 1;
+
+#[derive(Clone)]
+pub struct TaskStore {
+    connection: Arc<Mutex<Connection>>,
+}
+
+#[derive(Debug, Error)]
+pub enum TaskStoreError {
+    #[error("task persistence filesystem failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("task persistence failed: {0}")]
+    Sql(#[from] rusqlite::Error),
+    #[error("task persistence lock was poisoned")]
+    LockPoisoned,
+    #[error("task was not found")]
+    NotFound,
+    #[error("task title must contain 1 to {MAX_TASK_TITLE_BYTES} bytes")]
+    InvalidTitle,
+    #[error("workspace must contain 1 to {MAX_WORKSPACE_BYTES} bytes")]
+    InvalidWorkspace,
+    #[error("task cannot move from {from} to {to}")]
+    InvalidTransition { from: TaskState, to: TaskState },
+    #[error("completed tasks cannot be assigned")]
+    CompletedTask,
+    #[error("database schema version {found} is newer than supported version {supported}")]
+    UnsupportedSchemaVersion { found: i64, supported: i64 },
+    #[error("database integrity check failed: {0}")]
+    IntegrityFailure(String),
+}
+
+impl TaskStore {
+    /// Opens, migrates, and integrity-checks a file-backed task database.
+    ///
+    /// # Errors
+    /// Returns an error when the path, schema, migration, or integrity check is invalid.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, TaskStoreError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let connection = Connection::open(path)?;
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        Self::from_connection(connection)
+    }
+
+    /// Opens a migrated in-memory store for isolated tests and ephemeral runtimes.
+    ///
+    /// # Errors
+    /// Returns an error when `SQLite` initialization or migration fails.
+    pub fn in_memory() -> Result<Self, TaskStoreError> {
+        let connection = Connection::open_in_memory()?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        Self::from_connection(connection)
+    }
+
+    fn from_connection(mut connection: Connection) -> Result<Self, TaskStoreError> {
+        let schema_version: i64 =
+            connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        match schema_version {
+            0 => {
+                let transaction = connection.transaction()?;
+                transaction.execute_batch(
+                    "
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                workspace TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN ('draft','ready','active','blocked','review','completed')),
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+            CREATE TABLE IF NOT EXISTS task_assignments (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                worker_session_id TEXT NOT NULL,
+                assigned_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                released_at INTEGER
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS one_active_assignment_per_task
+                ON task_assignments(task_id) WHERE released_at IS NULL;
+            CREATE TABLE IF NOT EXISTS task_activity (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                from_state TEXT,
+                to_state TEXT,
+                occurred_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+            PRAGMA user_version = 1;
+            ",
+                )?;
+                transaction.commit()?;
+            }
+            CURRENT_SCHEMA_VERSION => {}
+            found => {
+                return Err(TaskStoreError::UnsupportedSchemaVersion {
+                    found,
+                    supported: CURRENT_SCHEMA_VERSION,
+                });
+            }
+        }
+        let integrity: String =
+            connection.pragma_query_value(None, "quick_check", |row| row.get(0))?;
+        if integrity != "ok" {
+            return Err(TaskStoreError::IntegrityFailure(integrity));
+        }
+        Ok(Self {
+            connection: Arc::new(Mutex::new(connection)),
+        })
+    }
+
+    /// Creates a validated draft and its first activity event atomically.
+    ///
+    /// # Errors
+    /// Returns an error for invalid content or unavailable persistence.
+    pub fn create_task(&self, title: &str, workspace: &str) -> Result<Task, TaskStoreError> {
+        let title = title.trim();
+        let workspace = workspace.trim();
+        validate_text(title, workspace)?;
+        let id = TaskId::new();
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO tasks (id, title, workspace, state) VALUES (?1, ?2, ?3, 'draft')",
+            params![id.to_string(), title, workspace],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, to_state) VALUES (?1, 'created', 'draft')",
+            [id.to_string()],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_task(id)
+    }
+
+    /// Lists tasks with their current active assignment.
+    ///
+    /// # Errors
+    /// Returns an error when persistence cannot be read safely.
+    pub fn list_tasks(&self) -> Result<Vec<Task>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "
+            SELECT t.id, t.title, t.workspace, t.state, a.worker_session_id,
+                   t.created_at, t.updated_at
+            FROM tasks t
+            LEFT JOIN task_assignments a
+              ON a.task_id = t.id AND a.released_at IS NULL
+            ORDER BY CASE t.state WHEN 'completed' THEN 1 ELSE 0 END,
+                     t.updated_at DESC, t.id DESC
+            ",
+        )?;
+        statement
+            .query_map([], task_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(TaskStoreError::from)
+    }
+
+    /// Loads one task and its current active assignment.
+    ///
+    /// # Errors
+    /// Returns `NotFound` for an unknown task or a persistence error.
+    pub fn get_task(&self, id: TaskId) -> Result<Task, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "
+                SELECT t.id, t.title, t.workspace, t.state, a.worker_session_id,
+                       t.created_at, t.updated_at
+                FROM tasks t
+                LEFT JOIN task_assignments a
+                  ON a.task_id = t.id AND a.released_at IS NULL
+                WHERE t.id = ?1
+                ",
+                [id.to_string()],
+                task_from_row,
+            )
+            .optional()?
+            .ok_or(TaskStoreError::NotFound)
+    }
+
+    /// Writes a consistent online backup to a separate `SQLite` file.
+    ///
+    /// # Errors
+    /// Returns an error when the destination or `SQLite` backup operation fails.
+    pub fn backup_to(&self, path: impl AsRef<Path>) -> Result<(), TaskStoreError> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let connection = self.connection()?;
+        connection.backup("main", path, None)?;
+        Ok(())
+    }
+
+    /// Runs `SQLite`'s quick integrity check against the live database.
+    ///
+    /// # Errors
+    /// Returns an integrity or persistence error when the check is not successful.
+    pub fn verify_integrity(&self) -> Result<(), TaskStoreError> {
+        let connection = self.connection()?;
+        let result: String =
+            connection.pragma_query_value(None, "quick_check", |row| row.get(0))?;
+        if result == "ok" {
+            Ok(())
+        } else {
+            Err(TaskStoreError::IntegrityFailure(result))
+        }
+    }
+
+    /// Applies one permitted task state transition and records its activity atomically.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown task, rejected transition, or persistence failure.
+    pub fn transition_task(&self, id: TaskId, target: TaskState) -> Result<Task, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let current: Option<String> = transaction
+            .query_row(
+                "SELECT state FROM tasks WHERE id = ?1",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let current = current.ok_or(TaskStoreError::NotFound)?;
+        let current = TaskState::from_str(&current)
+            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
+        if !current.can_transition_to(target) {
+            return Err(TaskStoreError::InvalidTransition {
+                from: current,
+                to: target,
+            });
+        }
+        transaction.execute(
+            "UPDATE tasks SET state = ?2, updated_at = unixepoch() WHERE id = ?1",
+            params![id.to_string(), target.to_string()],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, from_state, to_state)
+             VALUES (?1, 'state_changed', ?2, ?3)",
+            params![id.to_string(), current.to_string(), target.to_string()],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_task(id)
+    }
+
+    /// Replaces the current assignment with a running immutable worker-session identity.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown or completed task or unavailable persistence.
+    pub fn assign_task(
+        &self,
+        id: TaskId,
+        session_id: WorkerSessionId,
+    ) -> Result<Task, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let state: Option<String> = transaction
+            .query_row(
+                "SELECT state FROM tasks WHERE id = ?1",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let state = state.ok_or(TaskStoreError::NotFound)?;
+        if state == TaskState::Completed.to_string() {
+            return Err(TaskStoreError::CompletedTask);
+        }
+        transaction.execute(
+            "UPDATE task_assignments SET released_at = unixepoch()
+             WHERE task_id = ?1 AND released_at IS NULL",
+            [id.to_string()],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_assignments (id, task_id, worker_session_id)
+             VALUES (?1, ?2, ?3)",
+            params![
+                Uuid::now_v7().to_string(),
+                id.to_string(),
+                session_id.to_string()
+            ],
+        )?;
+        transaction.execute(
+            "UPDATE tasks SET updated_at = unixepoch() WHERE id = ?1",
+            [id.to_string()],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'assigned')",
+            [id.to_string()],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_task(id)
+    }
+
+    /// Ends every active assignment owned by one stopped worker session.
+    ///
+    /// # Errors
+    /// Returns an error when the assignment history cannot be updated atomically.
+    pub fn release_session_assignments(
+        &self,
+        session_id: WorkerSessionId,
+    ) -> Result<usize, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let mut task_ids = {
+            let mut statement = transaction.prepare(
+                "SELECT task_id FROM task_assignments
+                 WHERE worker_session_id = ?1 AND released_at IS NULL",
+            )?;
+            statement
+                .query_map([session_id.to_string()], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        task_ids.sort_unstable();
+        for task_id in &task_ids {
+            transaction.execute(
+                "UPDATE task_assignments SET released_at = unixepoch()
+                 WHERE task_id = ?1 AND worker_session_id = ?2 AND released_at IS NULL",
+                params![task_id, session_id.to_string()],
+            )?;
+            transaction.execute(
+                "UPDATE tasks SET updated_at = unixepoch() WHERE id = ?1",
+                [task_id],
+            )?;
+            transaction.execute(
+                "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'unassigned')",
+                [task_id],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(task_ids.len())
+    }
+
+    fn connection(&self) -> Result<MutexGuard<'_, Connection>, TaskStoreError> {
+        self.connection
+            .lock()
+            .map_err(|_| TaskStoreError::LockPoisoned)
+    }
+}
+
+fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
+    if title.is_empty() || title.len() > MAX_TASK_TITLE_BYTES {
+        return Err(TaskStoreError::InvalidTitle);
+    }
+    if workspace.is_empty() || workspace.len() > MAX_WORKSPACE_BYTES {
+        return Err(TaskStoreError::InvalidWorkspace);
+    }
+    Ok(())
+}
+
+fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
+    let id: String = row.get(0)?;
+    let state: String = row.get(3)?;
+    let assigned_session_id: Option<String> = row.get(4)?;
+    Ok(Task {
+        id: TaskId::from_str(&id).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
+        title: row.get(1)?,
+        workspace: row.get(2)?,
+        state: TaskState::from_str(&state).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
+        assigned_session_id: assigned_session_id
+            .map(|value| WorkerSessionId::from_str(&value))
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    4,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persists_task_lifecycle_and_assignment() {
+        let store = TaskStore::in_memory().unwrap();
+        let created = store.create_task("Fix reload", "/workspace").unwrap();
+        assert_eq!(created.state, TaskState::Draft);
+
+        let ready = store.transition_task(created.id, TaskState::Ready).unwrap();
+        let session_id = WorkerSessionId::new();
+        let assigned = store.assign_task(ready.id, session_id).unwrap();
+        assert_eq!(assigned.assigned_session_id, Some(session_id));
+        assert_eq!(store.list_tasks().unwrap().len(), 1);
+
+        store.transition_task(ready.id, TaskState::Active).unwrap();
+        store.transition_task(ready.id, TaskState::Review).unwrap();
+        let completed = store
+            .transition_task(ready.id, TaskState::Completed)
+            .unwrap();
+        assert_eq!(completed.state, TaskState::Completed);
+        assert!(matches!(
+            store.assign_task(ready.id, WorkerSessionId::new()),
+            Err(TaskStoreError::CompletedTask)
+        ));
+    }
+
+    #[test]
+    fn stopping_a_session_releases_its_assignments() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Assigned work", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        let session_id = WorkerSessionId::new();
+        store.assign_task(task.id, session_id).unwrap();
+
+        assert_eq!(store.release_session_assignments(session_id).unwrap(), 1);
+        assert_eq!(store.get_task(task.id).unwrap().assigned_session_id, None);
+        assert_eq!(store.release_session_assignments(session_id).unwrap(), 0);
+    }
+
+    #[test]
+    fn rejects_skipped_transitions_and_invalid_content() {
+        let store = TaskStore::in_memory().unwrap();
+        assert!(matches!(
+            store.create_task("", "/workspace"),
+            Err(TaskStoreError::InvalidTitle)
+        ));
+        let task = store.create_task("A task", "/workspace").unwrap();
+        assert!(matches!(
+            store.transition_task(task.id, TaskState::Completed),
+            Err(TaskStoreError::InvalidTransition { .. })
+        ));
+    }
+
+    #[test]
+    fn reopens_file_database_without_losing_tasks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let id = {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .create_task("Persistent task", "/workspace")
+                .unwrap()
+                .id
+        };
+        let reopened = TaskStore::open(path).unwrap();
+        assert_eq!(reopened.get_task(id).unwrap().title, "Persistent task");
+    }
+
+    #[test]
+    fn backup_is_consistent_and_reopenable() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.sqlite3");
+        let backup = directory.path().join("backups").join("snapshot.sqlite3");
+        let store = TaskStore::open(source).unwrap();
+        let task = store.create_task("Backed up", "/workspace").unwrap();
+        store.backup_to(&backup).unwrap();
+
+        let restored = TaskStore::open(backup).unwrap();
+        restored.verify_integrity().unwrap();
+        assert_eq!(restored.get_task(task.id).unwrap().title, "Backed up");
+    }
+}

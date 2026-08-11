@@ -12,11 +12,12 @@ use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
-use swarm_domain::WorkerSessionId;
+use swarm_domain::{TaskId, TaskState, WorkerSessionId};
+use swarm_persistence::{TaskStore, TaskStoreError};
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, HistoryCursor, HostClient,
     HostRequest, HostResponse, JournalLimits, MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS,
@@ -33,13 +34,14 @@ use terminal_socket::{
 
 const MAX_TERMINAL_WEBSOCKETS: usize = 32;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AppState {
     terminal_limits: JournalLimits,
     terminal_host: Option<HostClient>,
     operator_token: Option<Arc<str>>,
     attach_grants: Arc<AttachGrantStore>,
     websocket_limit: Arc<Semaphore>,
+    task_store: Option<TaskStore>,
 }
 
 impl AppState {
@@ -51,7 +53,14 @@ impl AppState {
             operator_token: None,
             attach_grants: Arc::new(AttachGrantStore::default()),
             websocket_limit: Arc::new(Semaphore::new(MAX_TERMINAL_WEBSOCKETS)),
+            task_store: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_task_store(mut self, task_store: TaskStore) -> Self {
+        self.task_store = Some(task_store);
+        self
     }
 
     #[must_use]
@@ -121,6 +130,22 @@ struct InputRequest {
 struct ResizeRequest {
     rows: u16,
     columns: u16,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTaskRequest {
+    title: String,
+    workspace: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TransitionTaskRequest {
+    state: TaskState,
+}
+
+#[derive(Debug, Deserialize)]
+struct AssignTaskRequest {
+    session_id: WorkerSessionId,
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,6 +227,9 @@ fn api_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
+        .route("/api/v1/tasks", get(list_tasks).post(create_task))
+        .route("/api/v1/tasks/{task_id}/state", patch(transition_task))
+        .route("/api/v1/tasks/{task_id}/assignment", put(assign_task))
         .route(
             "/api/v1/terminal/sessions",
             get(list_sessions).post(start_session),
@@ -274,6 +302,77 @@ async fn terminal_host_status(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorized_no_store_request(&state, &headers, HostRequest::HostStatus).await
+}
+
+async fn list_tasks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let tasks = task_store(&state)?
+        .list_tasks()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
+}
+
+async fn create_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateTaskRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task = task_store(&state)?
+        .create_task(&request.title, &request.workspace)
+        .map_err(|error| task_store_error(&error))?;
+    Ok((StatusCode::CREATED, Json(task)).into_response())
+}
+
+async fn transition_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<TransitionTaskRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task = task_store(&state)?
+        .transition_task(parse_task_id(&task_id)?, request.state)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(Json(task).into_response())
+}
+
+async fn assign_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<AssignTaskRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let client = terminal_client(&state)?;
+    let sessions = client
+        .request(&HostRequest::ListSessions)
+        .await
+        .map_err(|error| host_unavailable(&error))?;
+    let HostResponse::Sessions { sessions } = sessions else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected response",
+        ));
+    };
+    if !sessions
+        .iter()
+        .any(|session| session.session_id == request.session_id && session.running)
+    {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "worker_session_unavailable",
+            "task assignment requires a running worker session",
+        ));
+    }
+    let task = task_store(&state)?
+        .assign_task(parse_task_id(&task_id)?, request.session_id)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(Json(task).into_response())
 }
 
 async fn list_sessions(
@@ -399,14 +498,14 @@ async fn stop_session(
     headers: HeaderMap,
     Path(session_id): Path<String>,
 ) -> Result<Json<HostResponse>, ApiError> {
-    authorized_request(
-        &state,
-        &headers,
-        HostRequest::Stop {
-            session_id: parse_session_id(&session_id)?,
-        },
-    )
-    .await
+    let session_id = parse_session_id(&session_id)?;
+    let response = authorized_request(&state, &headers, HostRequest::Stop { session_id }).await?;
+    if let Some(store) = &state.task_store {
+        store
+            .release_session_assignments(session_id)
+            .map_err(|error| task_store_error(&error))?;
+    }
+    Ok(response)
 }
 
 async fn issue_attach_grant(
@@ -535,6 +634,41 @@ fn terminal_client(state: &AppState) -> Result<&HostClient, ApiError> {
     })
 }
 
+fn task_store(state: &AppState) -> Result<&TaskStore, ApiError> {
+    state.task_store.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "task_store_unconfigured",
+            "task persistence is not configured",
+        )
+    })
+}
+
+fn task_store_error(error: &TaskStoreError) -> ApiError {
+    match error {
+        TaskStoreError::NotFound => {
+            ApiError::new(StatusCode::NOT_FOUND, "task_not_found", error.to_string())
+        }
+        TaskStoreError::InvalidTitle | TaskStoreError::InvalidWorkspace => {
+            ApiError::new(StatusCode::BAD_REQUEST, "invalid_task", error.to_string())
+        }
+        TaskStoreError::InvalidTransition { .. } | TaskStoreError::CompletedTask => ApiError::new(
+            StatusCode::CONFLICT,
+            "task_transition_rejected",
+            error.to_string(),
+        ),
+        TaskStoreError::Io(_)
+        | TaskStoreError::Sql(_)
+        | TaskStoreError::LockPoisoned
+        | TaskStoreError::UnsupportedSchemaVersion { .. }
+        | TaskStoreError::IntegrityFailure(_) => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "task_store_unavailable",
+            "task persistence is temporarily unavailable",
+        ),
+    }
+}
+
 fn host_unavailable(error: &swarm_terminal::IpcError) -> ApiError {
     ApiError::new(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -599,6 +733,16 @@ fn parse_session_id(value: &str) -> Result<WorkerSessionId, ApiError> {
             StatusCode::BAD_REQUEST,
             "invalid_session_id",
             "session ID must be a UUID",
+        )
+    })
+}
+
+fn parse_task_id(value: &str) -> Result<TaskId, ApiError> {
+    TaskId::from_str(value).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_task_id",
+            "task ID must be a UUID",
         )
     })
 }
@@ -765,6 +909,84 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn task_routes_persist_the_minimal_lifecycle() {
+        let store = TaskStore::in_memory().unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(store);
+        let app = router(state);
+
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/tasks")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"title":"Recover exact terminal","workspace":"/workspace"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let created = response_json(created).await;
+        assert_eq!(created["state"], "draft");
+
+        let ready = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!(
+                        "/api/v1/tasks/{}/state",
+                        created["id"].as_str().unwrap()
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"state":"ready"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ready.status(), StatusCode::OK);
+        assert_eq!(response_json(ready).await["state"], "ready");
+
+        let listed = authorized_get(app, "/api/v1/tasks").await;
+        let listed = response_json(listed).await;
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["title"], "Recover exact terminal");
+    }
+
+    #[tokio::test]
+    async fn task_routes_reject_invalid_transitions() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Stateful work", "/workspace").unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(store);
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/tasks/{}/state", task.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"state":"completed"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response_json(response).await["code"],
+            "task_transition_rejected"
+        );
     }
 
     #[tokio::test]
@@ -940,6 +1162,72 @@ mod tests {
         }
 
         session.stop().unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn task_assignment_requires_and_releases_a_real_worker_session() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec!["-lc".into(), "sleep 5".into()],
+            working_directory: workspace,
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Assigned through API", "/workspace")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
+        let app = router(state);
+
+        let assigned = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/tasks/{}/assignment", task.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"session_id":"{}"}}"#,
+                        session.id()
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(assigned.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(assigned).await["assigned_session_id"],
+            session.id().to_string()
+        );
+
+        let stopped = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/terminal/sessions/{}", session.id()))
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stopped.status(), StatusCode::OK);
+        assert_eq!(store.get_task(task.id).unwrap().assigned_session_id, None);
+
         server_task.abort();
         let _ = server_task.await;
     }

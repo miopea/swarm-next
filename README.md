@@ -37,10 +37,13 @@ remove before implementation.
 
 ## Current milestone
 
-**M1: Terminal foundation**
+**M1: Durable work foundation**
 
 M1 proves bounded terminal history, immutable worker-session identity, stable
-browser attach/detach, and eventual survival across browser and API restarts.
+browser attach/detach, survival across browser and API restarts, and one
+persisted task-to-worker journey. Promotion requires the two-worker browser
+recovery test and 24-hour resource soak; implementing later product surfaces
+does not waive that evidence gate.
 
 ## Development
 

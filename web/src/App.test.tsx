@@ -14,10 +14,10 @@ afterEach(() => {
 });
 
 test("reports the connected runtime version", async () => {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: "ok", version: "0.1.0" }) }));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ status: "ok", version: "0.1.0" })));
   render(<App />);
   expect(await screen.findByText("Runtime 0.1.0")).toBeInTheDocument();
-  expect(screen.getByText("Unlock the local runtime to view workers.")).toBeInTheDocument();
+  expect(screen.getByText("Unlock this runtime to access tasks and workers.")).toBeInTheDocument();
 });
 
 test("makes runtime failure visible", async () => {
@@ -26,22 +26,22 @@ test("makes runtime failure visible", async () => {
   expect(await screen.findByText("Runtime unavailable")).toBeInTheDocument();
 });
 
-test("keeps the operator token in the browser tab and reveals the worker controls", async () => {
+test("keeps the operator token in the browser tab and reveals the control room", async () => {
   const fetch = vi
     .fn()
-    .mockResolvedValueOnce({ ok: true, json: async () => ({ status: "ok", version: "0.1.0" }) })
-    .mockResolvedValueOnce({ ok: true, json: async () => ({ type: "sessions", sessions: [] }) });
+    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
+    .mockResolvedValueOnce(ok([]));
   vi.stubGlobal("fetch", fetch);
   render(<App />);
 
   fireEvent.change(screen.getByLabelText("Operator token"), { target: { value: "secret" } });
-  fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+  fireEvent.click(screen.getByRole("button", { name: "Unlock Swarm" }));
 
-  expect(await screen.findByText("No workers running")).toBeInTheDocument();
-  expect(screen.getByLabelText("Workspace path")).toBeInTheDocument();
-  expect(fetch).toHaveBeenNthCalledWith(
-    2,
-    "/api/v1/terminal/sessions",
+  expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Give the next worker a clear outcome" })).toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/v1/tasks",
     expect.objectContaining({ cache: "no-store" }),
   );
   expect(screen.queryByDisplayValue("secret")).not.toBeInTheDocument();
@@ -51,46 +51,65 @@ test("keeps the operator token in the browser tab and reveals the worker control
   expect(window.sessionStorage.getItem("swarm-next.operator-token.v1")).toBeNull();
 });
 
-test("restores and validates the browser-tab token after a refresh", async () => {
+test("restores tasks and workers after a refresh", async () => {
   window.sessionStorage.setItem("swarm-next.operator-token.v1", "saved-secret");
   const fetch = vi
     .fn()
-    .mockResolvedValueOnce({ ok: true, json: async () => ({ status: "ok", version: "0.1.0" }) })
-    .mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ type: "sessions", sessions: [{ session_id: "session-1", running: true }] }),
-    });
+    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [{ session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", running: true }] }))
+    .mockResolvedValueOnce(ok([{ id: "task-1", title: "Stable reload", workspace: "/workspace", state: "active", assigned_session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", created_at: 1, updated_at: 1 }]));
   vi.stubGlobal("fetch", fetch);
 
   render(<App />);
 
-  expect(await screen.findByText("Worker 1")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Stable reload" })).toBeInTheDocument();
   expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
-  expect(fetch).toHaveBeenNthCalledWith(
-    2,
-    "/api/v1/terminal/sessions",
-    expect.objectContaining({
-      cache: "no-store",
-      headers: expect.objectContaining({}),
-    }),
-  );
-  const requestHeaders = fetch.mock.calls[1]?.[1]?.headers as Headers;
-  expect(requestHeaders.get("Authorization")).toBe("Bearer saved-secret");
+  const sessionRequestHeaders = fetch.mock.calls[1]?.[1]?.headers as Headers;
+  expect(sessionRequestHeaders.get("Authorization")).toBe("Bearer saved-secret");
+
+  expect(screen.getByRole("option", { name: /Claude 8093/ })).toBeInTheDocument();
 });
 
-test("removes a rejected saved token and returns to the unlock screen", async () => {
+test("removes a rejected saved token and returns to unlock", async () => {
   window.sessionStorage.setItem("swarm-next.operator-token.v1", "expired-secret");
   vi.stubGlobal(
     "fetch",
-    vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ status: "ok", version: "0.1.0" }) })
-      .mockResolvedValueOnce({ ok: false, status: 401 }),
+    vi.fn()
+      .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+      .mockResolvedValue({ ok: false, status: 401, json: async () => ({ message: "expired" }) }),
   );
 
   render(<App />);
 
   expect(await screen.findByLabelText("Operator token")).toBeInTheDocument();
-  expect(await screen.findByRole("alert")).toHaveTextContent("Runtime request returned 401");
+  expect(await screen.findByRole("alert")).toHaveTextContent("Runtime request returned 401: expired");
   expect(window.sessionStorage.getItem("swarm-next.operator-token.v1")).toBeNull();
 });
+
+test("creates a persisted task draft from the task board", async () => {
+  const task = { id: "task-1", title: "Prove two workers", workspace: "/workspace", state: "draft", assigned_session_id: null, created_at: 1, updated_at: 1 };
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok(task));
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+  fireEvent.change(screen.getByLabelText("Operator token"), { target: { value: "secret" } });
+  fireEvent.click(screen.getByRole("button", { name: "Unlock Swarm" }));
+
+  fireEvent.change(await screen.findByLabelText("Task title"), { target: { value: task.title } });
+  fireEvent.change(screen.getByLabelText("Workspace"), { target: { value: task.workspace } });
+  fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+
+  expect(await screen.findByRole("heading", { name: task.title })).toBeInTheDocument();
+  expect(fetch).toHaveBeenLastCalledWith(
+    "/api/v1/tasks",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ title: task.title, workspace: task.workspace }) }),
+  );
+});
+
+function ok(payload: unknown) {
+  return { ok: true, status: 200, json: async () => payload };
+}

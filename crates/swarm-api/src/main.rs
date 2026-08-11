@@ -1,5 +1,6 @@
 use std::{env, net::SocketAddr, path::PathBuf};
 use swarm_api::{AppState, router, router_with_web_root};
+use swarm_persistence::TaskStore;
 use swarm_terminal::{HostClient, default_terminal_socket_path};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -13,10 +14,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     let terminal_socket = env::var_os("SWARM_TERMINAL_SOCKET")
         .map_or_else(default_terminal_socket_path, PathBuf::from);
-    let state = env::var("SWARM_OPERATOR_TOKEN").map_or_else(
-        |_| AppState::default(),
-        |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
-    );
+    let state = env::var("SWARM_OPERATOR_TOKEN")
+        .map_or_else(
+            |_| AppState::default(),
+            |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
+        )
+        .with_task_store(TaskStore::open(database_path_from_env())?);
     let address = api_address_from_env()?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     info!(%address, "Swarm Next API listening");
@@ -28,6 +31,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+fn database_path_from_env() -> PathBuf {
+    env::var_os("SWARM_DATABASE_PATH").map_or_else(
+        || {
+            env::var_os("HOME").map_or_else(
+                || PathBuf::from("swarm-next.sqlite3"),
+                |home| {
+                    PathBuf::from(home)
+                        .join(".local")
+                        .join("state")
+                        .join("swarm-next")
+                        .join("swarm-next.sqlite3")
+                },
+            )
+        },
+        PathBuf::from,
+    )
 }
 
 fn api_address_from_env() -> Result<SocketAddr, Box<dyn std::error::Error>> {
