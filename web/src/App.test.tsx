@@ -171,7 +171,7 @@ test("creates a persisted task draft from the task board", async () => {
   expect(await screen.findByRole("heading", { name: task.title })).toBeInTheDocument();
   expect(fetch).toHaveBeenLastCalledWith(
     "/api/v1/tasks",
-    expect.objectContaining({ method: "POST", body: JSON.stringify({ title: task.title, workspace: task.workspace }) }),
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ title: task.title, description: "", priority: "normal", workspace: task.workspace }) }),
   );
 });
 

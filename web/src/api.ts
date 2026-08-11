@@ -3,6 +3,7 @@ export type SessionSummary = { session_id: string; running: boolean };
 export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
 export type TaskState = "draft" | "ready" | "active" | "blocked" | "review" | "completed";
+export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type WorkerRole = "queen" | "worker";
 export type ProviderKind = "claude_code" | "codex";
 
@@ -24,12 +25,23 @@ export type Worker = {
 export type Task = {
   id: string;
   title: string;
+  description: string;
+  priority: TaskPriority;
   workspace: string;
   state: TaskState;
   assigned_session_id: string | null;
   created_at: number;
   updated_at: number;
 };
+
+export type TaskDraftInput = {
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  workspace: string;
+};
+
+export type TaskUpdateInput = Partial<TaskDraftInput>;
 
 export async function fetchSessions(operatorToken: string): Promise<SessionSummary[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/sessions");
@@ -49,13 +61,30 @@ export async function fetchTasks(operatorToken: string): Promise<Task[]> {
 
 export async function createTask(
   operatorToken: string,
-  input: { title: string; workspace: string },
+  input: TaskDraftInput,
 ): Promise<Task> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+  return response.json() as Promise<Task>;
+}
+
+export async function updateTask(
+  operatorToken: string,
+  taskId: string,
+  input: TaskUpdateInput,
+): Promise<Task> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
   return response.json() as Promise<Task>;
 }
 

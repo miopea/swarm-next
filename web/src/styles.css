@@ -65,7 +65,7 @@
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 html, body, #root { height: 100%; }
 body { margin: 0; min-width: 320px; overflow: hidden; }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; border-color: var(--line); color: var(--quiet); background: var(--panel-soft); opacity: .78; }
 button:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -133,9 +133,11 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 
 .start-worker { display: grid; gap: 8px; margin: 14px 0 4px; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
 label { color: var(--muted); font-size: .75rem; font-weight: 500; }
-input, select { width: 100%; min-height: 39px; padding: 9px 11px; outline: none; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--text); background: var(--panel-raised); transition: border-color .15s, box-shadow .15s; }
-input::placeholder { color: var(--quiet); }
-input:focus, select:focus { border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent); }
+label span { color: var(--quiet); font-weight: 400; }
+input, select, textarea { width: 100%; min-height: 39px; padding: 9px 11px; outline: none; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--text); background: var(--panel-raised); transition: border-color .15s, box-shadow .15s; }
+textarea { resize: vertical; line-height: 1.45; }
+input::placeholder, textarea::placeholder { color: var(--quiet); }
+input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent); }
 button { min-height: 38px; padding: 8px 12px; border: 1px solid var(--accent-strong); border-radius: var(--radius-sm); color: #282317; background: var(--accent); transition: transform .12s, background .12s, border-color .12s; }
 button:hover:not(:disabled) { border-color: var(--accent-strong); background: color-mix(in srgb, var(--accent) 86%, var(--panel)); }
 button:active:not(:disabled) { transform: translateY(1px); }
@@ -177,10 +179,17 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-card { display: flex; min-height: 190px; flex-direction: column; padding: 17px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 7%, transparent); }
 .task-card:hover { border-color: var(--line-strong); background: var(--panel-raised); }
 .task-card-topline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.task-signals { display: flex; align-items: center; gap: 9px; }
 .task-card-topline code { overflow: hidden; color: var(--quiet); font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
 .task-state { display: inline-flex; align-items: center; gap: 6px; color: var(--state); font-size: .69rem; font-weight: 500; letter-spacing: .055em; text-transform: uppercase; }
 .task-state::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; content: ""; }
 .task-card h4 { margin: 16px 0 18px; color: var(--text); font-size: 1rem; line-height: 1.42; }
+.task-priority { padding: 3px 7px; border: 1px solid currentColor; border-radius: 999px; font-size: .63rem; font-weight: 500; letter-spacing: .035em; text-transform: uppercase; }
+.priority-low { color: var(--quiet); }
+.priority-normal { color: var(--good); }
+.priority-high { color: var(--warn); background: var(--warn-soft); }
+.priority-urgent { color: var(--bad); background: var(--bad-soft); }
+.task-description { display: -webkit-box; margin: -8px 0 17px; overflow: hidden; color: var(--muted); font-size: .78rem; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .protected-worker { display: inline-flex; align-items: center; min-height: 30px; padding: 0 10px; border: 1px solid var(--good); border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .72rem; }
 .assignment-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; margin-top: auto; }
 .assignment-row select { min-height: 34px; padding: 6px 9px; font-size: .76rem; }
@@ -194,6 +203,11 @@ button:active:not(:disabled) { transform: translateY(1px); }
 
 .task-actions { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
 .task-actions button { min-height: 34px; padding: 6px 10px; font-size: .75rem; }
+.task-edit-form { display: grid; gap: 7px; margin: -5px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); }
+.task-edit-form input, .task-edit-form select, .task-edit-form textarea { min-height: 34px; padding: 7px 9px; font-size: .78rem; }
+.task-edit-row { display: grid; grid-template-columns: minmax(90px, .45fr) minmax(150px, 1fr); gap: 8px; }
+.task-edit-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 3px; }
+.task-edit-actions button { min-height: 34px; padding: 6px 10px; font-size: .75rem; }
 .text-button { border-color: transparent; color: var(--muted); background: transparent; }
 .text-button:hover:not(:disabled) { border-color: transparent; color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
 .danger-text { color: var(--bad); }
@@ -277,6 +291,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 }
 @media (max-width: 1000px) {
   .task-compose form { grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr); }
+  .task-priority-field { max-width: 180px; }
   .task-compose form button { grid-column: 1 / -1; justify-self: end; }
 }
 @media (max-width: 680px) {
