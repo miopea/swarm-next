@@ -1,6 +1,6 @@
 # M1 minimal task workflow
 
-Status: **Implemented foundation; live validation pending**
+Status: **Implemented and browser-validated foundation**
 
 This slice turns the durable terminal foundation into the first complete work
 journey without importing the legacy task-board architecture.
@@ -14,6 +14,8 @@ The operator can:
 3. launch Claude directly from the task or assign an existing running session;
 4. move work through active, blocked, review, and completed states;
 5. reload or replace the API without losing the task or assignment.
+6. open a bounded activity timeline showing creation, edits, assignment, and
+   lifecycle transitions.
 
 Starting from a ready task creates a new immutable worker session, records a
 separate assignment, activates the task, and opens its terminal. A partial
@@ -67,8 +69,12 @@ visual conventions.
 
 - domain and persistence transitions are unit tested;
 - API create/list/transition paths are integration tested;
-- browser component tests cover authentication restore and task creation;
+- API activity reads are authenticated, bounded, ordered, and served with
+  `no-store`; unknown tasks and invalid bounds fail closed;
+- browser component tests cover authentication restore, task creation, and
+  lazy activity loading;
 - the packaged lifecycle grants only the SQLite state path write access;
-- real-browser validation covers creation, assignment, worker launch, state
-  transitions, reload, API replacement, and completion;
+- real-browser validation covers creation, editing, assignment, state
+  transitions, activity history, desktop/mobile rendering, and reload
+  persistence without console errors;
 - the two-worker soak gate remains mandatory before M1 is marked complete.

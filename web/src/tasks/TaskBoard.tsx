@@ -1,6 +1,6 @@
 import { useState, type DragEvent, type FormEvent } from "react";
 
-import type { SessionSummary, Task, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput } from "../api";
+import type { SessionSummary, Task, TaskActivity, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 
 type Props = {
@@ -13,6 +13,7 @@ type Props = {
   onTransition: (task: Task, state: TaskState) => Promise<void>;
   onAssign: (task: Task, sessionId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
+  onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
 };
 
 const stateLabels: Record<TaskState, string> = {
@@ -50,6 +51,7 @@ export default function TaskBoard({
   onTransition,
   onAssign,
   onStartWorker,
+  onFetchActivity,
 }: Props) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -140,6 +142,7 @@ export default function TaskBoard({
                 onTransition={onTransition}
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
+                onFetchActivity={onFetchActivity}
                 onDragStart={setDraggedTaskId}
                 onDragEnd={() => setDraggedTaskId(undefined)}
               />
@@ -184,6 +187,7 @@ export default function TaskBoard({
                 onTransition={onTransition}
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
+                onFetchActivity={onFetchActivity}
                 onDragStart={setDraggedTaskId}
                 onDragEnd={() => setDraggedTaskId(undefined)}
               />
@@ -195,10 +199,35 @@ export default function TaskBoard({
   );
 }
 
-function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, onAssign, onStartWorker, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate"> & { task: Task; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate"> & { task: Task; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const runningSessions = sessions.filter((session) => session.running);
   const [editing, setEditing] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [activity, setActivity] = useState<TaskActivityPage>();
+  const [historyError, setHistoryError] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  async function loadActivity() {
+    setHistoryLoading(true);
+    setHistoryError(false);
+    try {
+      setActivity(await onFetchActivity(task.id));
+    } catch {
+      setHistoryError(true);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  function toggleHistory() {
+    if (historyOpen) {
+      setHistoryOpen(false);
+      return;
+    }
+    setHistoryOpen(true);
+    void loadActivity();
+  }
   return (
     <article
       className="task-card"
@@ -239,11 +268,67 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
       <div className="task-actions">
         {!editing && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}
         {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
+        {!editing && <button className="text-button" aria-expanded={historyOpen} onClick={toggleHistory}>History</button>}
         {task.state === "active" && <button className="text-button danger-text" disabled={busy} onClick={() => void onTransition(task, "blocked")}>Block</button>}
         {task.state === "review" && <button className="text-button" disabled={busy} onClick={() => void onTransition(task, "active")}>Changes needed</button>}
       </div>
+      {historyOpen && (
+        <TaskActivityPanel
+          activity={activity}
+          loading={historyLoading}
+          failed={historyError}
+          onRetry={() => void loadActivity()}
+        />
+      )}
     </article>
   );
+}
+
+function TaskActivityPanel({ activity, loading, failed, onRetry }: {
+  activity: TaskActivityPage | undefined;
+  loading: boolean;
+  failed: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <section className="task-history" aria-label="Task history" aria-live="polite">
+      {loading ? <p>Loading history…</p> : failed ? (
+        <p>History is unavailable. <button className="text-button" type="button" onClick={onRetry}>Retry</button></p>
+      ) : activity?.events.length ? (
+        <>
+        {activity.truncated && <p className="task-history-note">Showing the latest activity.</p>}
+        <ol>
+          {activity.events.map((entry) => (
+            <li key={entry.sequence}>
+              <span>{activityLabel(entry)}</span>
+              <time dateTime={new Date(entry.occurred_at * 1000).toISOString()}>{formatActivityTime(entry.occurred_at)}</time>
+            </li>
+          ))}
+        </ol>
+        </>
+      ) : <p>No history recorded.</p>}
+    </section>
+  );
+}
+
+function activityLabel(activity: TaskActivity): string {
+  if (activity.kind === "created") return "Task created";
+  if (activity.kind === "details_updated") return "Details updated";
+  if (activity.kind === "assigned") return "Worker assigned";
+  if (activity.kind === "unassigned") return "Worker released";
+  if (activity.from_state && activity.to_state) {
+    return `${stateLabels[activity.from_state]} → ${stateLabels[activity.to_state]}`;
+  }
+  return "State updated";
+}
+
+function formatActivityTime(occurredAt: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(occurredAt * 1000));
 }
 
 function TaskEditForm({ task, busy, onUpdate, onCancel }: {

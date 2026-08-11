@@ -669,6 +669,70 @@ impl fmt::Display for ParseTaskPriorityError {
 
 impl std::error::Error for ParseTaskPriorityError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskActivityKind {
+    Created,
+    DetailsUpdated,
+    StateChanged,
+    Assigned,
+    Unassigned,
+}
+
+impl fmt::Display for TaskActivityKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Created => "created",
+            Self::DetailsUpdated => "details_updated",
+            Self::StateChanged => "state_changed",
+            Self::Assigned => "assigned",
+            Self::Unassigned => "unassigned",
+        })
+    }
+}
+
+impl FromStr for TaskActivityKind {
+    type Err = ParseTaskActivityKindError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "created" => Ok(Self::Created),
+            "details_updated" => Ok(Self::DetailsUpdated),
+            "state_changed" => Ok(Self::StateChanged),
+            "assigned" => Ok(Self::Assigned),
+            "unassigned" => Ok(Self::Unassigned),
+            _ => Err(ParseTaskActivityKindError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseTaskActivityKindError;
+
+impl fmt::Display for ParseTaskActivityKindError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown task activity kind")
+    }
+}
+
+impl std::error::Error for ParseTaskActivityKindError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TaskActivity {
+    pub sequence: i64,
+    pub task_id: TaskId,
+    pub kind: TaskActivityKind,
+    pub from_state: Option<TaskState>,
+    pub to_state: Option<TaskState>,
+    pub occurred_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TaskActivityPage {
+    pub events: Vec<TaskActivity>,
+    pub truncated: bool,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TaskDetailsUpdate {
     pub title: Option<String>,

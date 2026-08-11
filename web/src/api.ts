@@ -59,6 +59,22 @@ export type Task = {
   updated_at: number;
 };
 
+export type TaskActivityKind = "created" | "details_updated" | "state_changed" | "assigned" | "unassigned";
+
+export type TaskActivity = {
+  sequence: number;
+  task_id: string;
+  kind: TaskActivityKind;
+  from_state: TaskState | null;
+  to_state: TaskState | null;
+  occurred_at: number;
+};
+
+export type TaskActivityPage = {
+  events: TaskActivity[];
+  truncated: boolean;
+};
+
 export type TaskDraftInput = {
   title: string;
   description: string;
@@ -112,6 +128,18 @@ export async function fetchWorkers(operatorToken: string): Promise<Worker[]> {
 export async function fetchTasks(operatorToken: string): Promise<Task[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/tasks");
   return response.json() as Promise<Task[]>;
+}
+
+export async function fetchTaskActivity(
+  operatorToken: string,
+  taskId: string,
+  limit = 30,
+): Promise<TaskActivityPage> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/activity?limit=${encodeURIComponent(String(limit))}`,
+  );
+  return response.json() as Promise<TaskActivityPage>;
 }
 
 export async function createTask(

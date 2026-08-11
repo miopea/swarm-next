@@ -16,7 +16,7 @@ const task: Task = {
 function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> = {}) {
   const props: React.ComponentProps<typeof TaskBoard> = {
     tasks: [task], sessions: [], workerNames: new Map(), busy: false,
-    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(),
+    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }),
     ...overrides,
   };
   render(<TaskBoard {...props} />);
@@ -74,4 +74,23 @@ test("edits task details and retains a failed form for retry", async () => {
     workspace: task.workspace,
   }));
   expect(screen.getByRole("form", { name: `Edit ${task.title}` })).toBeInTheDocument();
+});
+
+test("loads task history only when the operator opens it", async () => {
+  const onFetchActivity = vi.fn().mockResolvedValue({
+    events: [
+      { sequence: 1, task_id: task.id, kind: "created", from_state: null, to_state: "draft", occurred_at: 1_700_000_000 },
+      { sequence: 2, task_id: task.id, kind: "state_changed", from_state: "draft", to_state: "ready", occurred_at: 1_700_000_060 },
+    ],
+    truncated: true,
+  });
+  renderBoard({ onFetchActivity });
+
+  expect(onFetchActivity).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "History" }));
+
+  await waitFor(() => expect(onFetchActivity).toHaveBeenCalledWith(task.id));
+  expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Task created");
+  expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Draft → Ready");
+  expect(screen.getByRole("region", { name: "Task history" })).toHaveTextContent("Showing the latest activity.");
 });

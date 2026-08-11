@@ -25,6 +25,12 @@ Queen, Forager, and Pollen. No legacy or operator production data participated.
 - A 412 by 915 mobile pass found and fixed a hidden-worker-roster blocker. The
   compact mobile worker strip can select Forager, attach its original session,
   and remains available after reload.
+- Mobile terminal controls provide bounded long-form composition, exact slash
+  commands, bracketed multiline paste, Enter/Esc/Tab, arrow navigation, and
+  permission-mode cycling without requiring a hardware keyboard.
+- A task-history pass created, edited, transitioned, and assigned work in the
+  rendered app. The bounded timeline remained readable at 412 by 915 and
+  returned unchanged after a full reload with no console warnings or errors.
 
 ## Development port contract
 
@@ -36,5 +42,5 @@ API port `8765`.
 ## Remaining evidence
 
 This pass proves functional redraw and recovery, not long-duration performance.
-The multi-day soak, mobile terminal composition controls, and outbound feedback
+The multi-day soak, operator-controlled task ordering, and outbound feedback
 submission transport remain separate promotion work.

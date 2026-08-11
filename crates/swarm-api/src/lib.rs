@@ -22,7 +22,7 @@ use swarm_domain::{
     ControlRoomEventKind, ProviderKind, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
     WorkerId, WorkerProfile, WorkerSessionId,
 };
-use swarm_persistence::{TaskStore, TaskStoreError};
+use swarm_persistence::{MAX_TASK_ACTIVITY_PAGE, TaskStore, TaskStoreError};
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, HistoryCursor, HostClient,
     HostRequest, HostResponse, JournalLimits, MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS,
@@ -246,6 +246,11 @@ struct ControlRoomEventsQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct TaskActivityQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
 struct HistoryQuery {
     segment: Option<u64>,
     record: Option<u32>,
@@ -350,6 +355,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
         .route("/api/v1/tasks/{task_id}", patch(update_task))
+        .route("/api/v1/tasks/{task_id}/activity", get(task_activity))
         .route("/api/v1/tasks/{task_id}/state", patch(transition_task))
         .route("/api/v1/tasks/{task_id}/assignment", put(assign_task))
         .route("/api/v1/workers", get(list_workers).post(create_worker))
@@ -487,6 +493,27 @@ async fn create_task(
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok((StatusCode::CREATED, Json(task)).into_response())
+}
+
+async fn task_activity(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Query(query): Query<TaskActivityQuery>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let limit = query.limit.unwrap_or(30);
+    if !(1..=MAX_TASK_ACTIVITY_PAGE).contains(&limit) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_task_activity_limit",
+            format!("task activity limit must be between 1 and {MAX_TASK_ACTIVITY_PAGE}"),
+        ));
+    }
+    let activity = task_store(&state)?
+        .list_task_activity(parse_task_id(&task_id)?, limit)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(activity)).into_response())
 }
 
 async fn update_task(
@@ -1530,10 +1557,49 @@ mod tests {
         assert_eq!(ready.status(), StatusCode::OK);
         assert_eq!(response_json(ready).await["state"], "ready");
 
+        let activity = authorized_get(
+            app.clone(),
+            &format!(
+                "/api/v1/tasks/{}/activity?limit=10",
+                created["id"].as_str().unwrap()
+            ),
+        )
+        .await;
+        assert_eq!(activity.status(), StatusCode::OK);
+        assert_eq!(
+            activity.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        let activity = response_json(activity).await;
+        assert!(!activity["truncated"].as_bool().unwrap());
+        assert_eq!(activity["events"].as_array().unwrap().len(), 3);
+        assert_eq!(activity["events"][0]["kind"], "created");
+        assert_eq!(activity["events"][2]["from_state"], "draft");
+        assert_eq!(activity["events"][2]["to_state"], "ready");
+
         let listed = authorized_get(app, "/api/v1/tasks").await;
         let listed = response_json(listed).await;
         assert_eq!(listed.as_array().unwrap().len(), 1);
         assert_eq!(listed[0]["title"], "Recover every terminal");
+    }
+
+    #[tokio::test]
+    async fn task_activity_rejects_invalid_limits() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Bound history", "/workspace").unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(store);
+        let response = authorized_get(
+            router(state),
+            &format!("/api/v1/tasks/{}/activity?limit=101", task.id),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response_json(response).await["code"],
+            "invalid_task_activity_limit"
+        );
     }
 
     #[tokio::test]

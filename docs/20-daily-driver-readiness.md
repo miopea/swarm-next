@@ -17,10 +17,10 @@ mostly product operability rather than process survival.
 |---|---|---|---|
 | Resume after reload | Feature-rich but observed redraw and reconnect failures | Canonical recovery verified with three live workers in an actual browser | Complete baseline; continue multi-day soak |
 | Update during work | Sidecar separation existed | Live proof preserves the same host PID, session, and interactive PTY | Complete |
-| Know who is working | Configured names, roles, groups, status labels | Ephemeral `Claude XXXX` names derived from session IDs | Add durable worker profiles |
-| Coordinate with Queen | Interactive Queen PTY plus separate headless automation | No Queen concept | Add one always-active operator Queen; defer headless conductor |
+| Know who is working | Configured names, roles, groups, status labels | Durable named worker profiles retain workspace, provider, order, and session binding | Complete dogfood baseline; add richer attention states |
+| Coordinate with Queen | Interactive Queen PTY plus separate headless automation | One durable, always-active Queen survives API/browser updates | Complete interactive baseline; defer autonomous conductor policy |
 | Move between workers | Keyboard switching and cached terminals, but redraw was flaky | Repeated Queen/worker switching preserves exact session identity on desktop and mobile | Complete baseline; continue fast-output soak |
-| Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Minimal explicit lifecycle and assignment | Add editing, detail, priority, ordering, history in small slices |
+| Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Explicit lifecycle, editing, priority, assignment, focused state drops, and bounded activity history | Add operator-controlled ordering; defer broad integrations |
 | See changes without refreshing | Broad WebSocket event stream | Typed, authenticated, resumable control-room invalidation feed | Complete; keep Refresh as recovery |
 | Manage workers quickly | Launch, kill, revive, groups, bulk actions | Start by path and stop | Add start/revive/stop on profiles; defer groups until measured |
 | Use direct interactions | Shortcuts, command palette, drag/drop imports | Basic buttons and forms | Add shortcuts, accessible menus, task reorder and focused drop targets |
@@ -58,9 +58,10 @@ client-side copies of domain state. Manual Refresh remains a recovery action.
 
 ### D. Task ergonomics
 
-Add task detail and editing, description, priority, ordering, assignment,
-activity history, and focused drag/drop. Preserve explicit state transitions.
-Email, Jira, WYSIWYG, pipelines, and broad automation wait for dogfood evidence.
+Task detail and editing, description, priority, assignment, activity history,
+and focused state drag/drop are implemented. Add operator-controlled ordering
+without weakening explicit state transitions. Email, Jira, WYSIWYG, pipelines,
+and broad automation wait for dogfood evidence.
 
 ### E. Operator controls
 
