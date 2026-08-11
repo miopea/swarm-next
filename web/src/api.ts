@@ -6,6 +6,9 @@ export type TaskState = "draft" | "ready" | "active" | "blocked" | "review" | "c
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type WorkerRole = "queen" | "worker";
 export type ProviderKind = "claude_code" | "codex";
+export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed";
+export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };
+export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: number; reset_required: boolean };
 export type HiveIdentity = {
   operator: { id: string; display_name: string };
   hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
@@ -48,6 +51,19 @@ export type TaskDraftInput = {
 };
 
 export type TaskUpdateInput = Partial<TaskDraftInput>;
+
+export async function fetchControlRoomEvents(
+  operatorToken: string,
+  after: number,
+  signal?: AbortSignal,
+): Promise<ControlRoomEventPage> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/control-room/events?after=${encodeURIComponent(String(after))}`,
+    { signal },
+  );
+  return response.json() as Promise<ControlRoomEventPage>;
+}
 
 export async function fetchHive(operatorToken: string): Promise<HiveIdentity> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/hive");

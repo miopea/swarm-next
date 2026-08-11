@@ -1,9 +1,12 @@
 use std::{collections::HashSet, str::FromStr};
 
 use rusqlite::{OptionalExtension, params};
-use swarm_domain::{HiveId, ProviderKind, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId};
+use swarm_domain::{
+    ControlRoomEventKind, HiveId, ProviderKind, WorkerId, WorkerProfile, WorkerRole,
+    WorkerSessionId,
+};
 
-use super::{MAX_WORKSPACE_BYTES, TaskStore, TaskStoreError};
+use super::{MAX_WORKSPACE_BYTES, TaskStore, TaskStoreError, insert_control_room_event};
 
 const MAX_WORKER_NAME_BYTES: usize = 80;
 
@@ -135,6 +138,8 @@ impl TaskStore {
             "UPDATE worker_profiles SET updated_at = unixepoch() WHERE id = ?1",
             [worker_id.to_string()],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::SessionsChanged)?;
         transaction.commit()?;
         Ok(())
     }
@@ -147,12 +152,19 @@ impl TaskStore {
         &self,
         session_id: WorkerSessionId,
     ) -> Result<bool, TaskStoreError> {
-        let connection = self.connection()?;
-        Ok(connection.execute(
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let released = transaction.execute(
             "UPDATE worker_sessions SET ended_at = unixepoch()
              WHERE session_id = ?1 AND ended_at IS NULL",
             [session_id.to_string()],
-        )? == 1)
+        )? == 1;
+        if released {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+            insert_control_room_event(&transaction, ControlRoomEventKind::SessionsChanged)?;
+        }
+        transaction.commit()?;
+        Ok(released)
     }
 
     /// Releases database bindings that are absent from the terminal host snapshot.
@@ -187,6 +199,10 @@ impl TaskStore {
                  WHERE session_id = ?1 AND ended_at IS NULL",
                 [session_id.to_string()],
             )?;
+        }
+        if !stale.is_empty() {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+            insert_control_room_event(&transaction, ControlRoomEventKind::SessionsChanged)?;
         }
         transaction.commit()?;
         Ok(stale.len())
@@ -224,8 +240,9 @@ impl TaskStore {
         let workspace = workspace.trim();
         validate_profile(name, workspace)?;
         let hive_id = self.local_hive_identity()?.hive.id;
-        let connection = self.connection()?;
-        let duplicate = connection
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let duplicate = transaction
             .query_row(
                 "SELECT 1 FROM worker_profiles WHERE name = ?1 COLLATE NOCASE",
                 [name],
@@ -237,7 +254,7 @@ impl TaskStore {
             return Err(TaskStoreError::DuplicateWorkerName);
         }
         if role == WorkerRole::Queen
-            && connection
+            && transaction
                 .query_row(
                     "SELECT 1 FROM worker_profiles WHERE role = 'queen'",
                     [],
@@ -249,7 +266,7 @@ impl TaskStore {
             return Err(TaskStoreError::QueenAlreadyExists);
         }
         let id = WorkerId::new();
-        connection.execute(
+        transaction.execute(
             "INSERT INTO worker_profiles
              (id, hive_id, name, role, provider, workspace, autostart, position)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -264,6 +281,8 @@ impl TaskStore {
                 position
             ],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        transaction.commit()?;
         drop(connection);
         self.get_worker_profile(id)
     }

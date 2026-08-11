@@ -21,7 +21,7 @@ mostly product operability rather than process survival.
 | Coordinate with Queen | Interactive Queen PTY plus separate headless automation | No Queen concept | Add one always-active operator Queen; defer headless conductor |
 | Move between workers | Keyboard switching and cached terminals, but redraw was flaky | One selected React terminal with controller caching | Mount a stable terminal deck and verify switching visually |
 | Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Minimal explicit lifecycle and assignment | Add editing, detail, priority, ordering, history in small slices |
-| See changes without refreshing | Broad WebSocket event stream | Manual Refresh for task/session lists | Add one typed control-room event stream |
+| See changes without refreshing | Broad WebSocket event stream | Typed, authenticated, resumable control-room invalidation feed | Complete; keep Refresh as recovery |
 | Manage workers quickly | Launch, kill, revive, groups, bulk actions | Start by path and stop | Add start/revive/stop on profiles; defer groups until measured |
 | Use direct interactions | Shortcuts, command palette, drag/drop imports | Basic buttons and forms | Add shortcuts, accessible menus, task reorder and focused drop targets |
 | Configure the product | Large multi-tab editor with overlapping concerns | No settings surface | Add a compact settings workspace for workers, runtime, appearance, and diagnostics |

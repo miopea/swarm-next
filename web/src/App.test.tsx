@@ -156,14 +156,28 @@ test("removes a rejected saved token and returns to unlock", async () => {
 
 test("creates a persisted task draft from the task board", async () => {
   const task = { id: "task-1", title: "Prove two workers", workspace: "/workspace", state: "draft", assigned_session_id: null, created_at: 1, updated_at: 1 };
-  const fetch = vi
-    .fn()
-    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
-    .mockResolvedValueOnce(ok(hiveIdentity()))
-    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
-    .mockResolvedValueOnce(ok([]))
-    .mockResolvedValueOnce(ok([]))
-    .mockResolvedValueOnce(ok(task));
+  const responses = [
+    ok({ status: "ok", version: "0.1.0" }),
+    ok(hiveIdentity()),
+    ok({ type: "sessions", sessions: [] }),
+    ok([]),
+    ok([]),
+    ok(task),
+  ];
+  const fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("/api/v1/control-room/events")) {
+      return new Promise((_, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    }
+    const response = responses.shift();
+    if (!response) throw new Error(`Unexpected request: ${String(url)}`);
+    return Promise.resolve(response);
+  });
   vi.stubGlobal("fetch", fetch);
   render(<App />);
   fireEvent.change(screen.getByLabelText("Operator token"), { target: { value: "secret" } });

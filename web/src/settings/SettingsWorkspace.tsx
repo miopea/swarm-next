@@ -1,16 +1,18 @@
 import type { Health, HiveIdentity } from "../api";
 import type { ColorTheme } from "../brand/theme";
+import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 
 type Props = {
   colorTheme: ColorTheme;
   health: Health | undefined;
   hiveIdentity: HiveIdentity | undefined;
+  liveFeedState: LiveFeedState;
   runningWorkers: number;
   retainedSessions: number;
   onThemeChange: (theme: ColorTheme) => void;
 };
 
-export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, runningWorkers, retainedSessions, onThemeChange }: Props) {
+export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, liveFeedState, runningWorkers, retainedSessions, onThemeChange }: Props) {
   return (
     <div className="settings-workspace">
       <section className="settings-card" aria-labelledby="appearance-heading">
@@ -36,6 +38,7 @@ export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, ru
         <div><p className="eyebrow">Runtime</p><h3 id="runtime-heading">Local system</h3></div>
         <dl className="diagnostic-list">
           <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
+          <div><dt>Live updates</dt><dd>{liveFeedLabel(liveFeedState)}</dd></div>
           <div><dt>Running workers</dt><dd>{runningWorkers}</dd></div>
           <div><dt>Retained sessions</dt><dd>{retainedSessions}</dd></div>
           <div><dt>Worker updates</dt><dd>Preserved during API releases</dd></div>
@@ -54,4 +57,11 @@ export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, ru
       </section>
     </div>
   );
+}
+
+
+function liveFeedLabel(state: LiveFeedState) {
+  if (state === "connected") return "Connected";
+  if (state === "retrying") return "Reconnecting";
+  return "Connecting";
 }

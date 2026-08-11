@@ -24,6 +24,7 @@ import {
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
+import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
@@ -53,6 +54,7 @@ export function App() {
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
+  const [liveFeedState, setLiveFeedState] = useState<LiveFeedState>("connecting");
 
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
   useEffect(() => saveSurface(surface), [surface]);
@@ -100,6 +102,36 @@ export function App() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!operatorToken) {
+      setLiveFeedState("connecting");
+      return;
+    }
+    let cancelled = false;
+    const feed = new ControlRoomLiveFeed();
+    feed.start(
+      operatorToken,
+      async () => {
+        const controlRoom = await loadControlRoom(operatorToken);
+        if (cancelled) return;
+        setHiveIdentity(controlRoom.hive);
+        setSessions(controlRoom.sessions);
+        setWorkers(controlRoom.workers);
+        setTasks(controlRoom.tasks);
+        setActiveSessionId((current) =>
+          current && controlRoom.sessions.some((session) => session.session_id === current)
+            ? current
+            : preferredSessionId(controlRoom.workers, controlRoom.sessions),
+        );
+      },
+      setLiveFeedState,
+    );
+    return () => {
+      cancelled = true;
+      feed.stop();
+    };
+  }, [operatorToken]);
 
   async function authenticate(event: FormEvent) {
     event.preventDefault();
@@ -419,6 +451,7 @@ export function App() {
           <SettingsWorkspace
             colorTheme={colorTheme}
             hiveIdentity={hiveIdentity}
+            liveFeedState={liveFeedState}
             health={loadState.kind === "ready" ? loadState.health : undefined}
             runningWorkers={workers.filter((worker) => worker.running).length}
             retainedSessions={sessions.length}

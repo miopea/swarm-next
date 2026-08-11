@@ -6,8 +6,9 @@ use std::{
 
 use rusqlite::{Connection, OptionalExtension, params};
 use swarm_domain::{
-    ApiaryId, Hive, HiveId, HiveIdentity, Operator, OperatorId, Task, TaskDetailsUpdate, TaskId,
-    TaskPriority, TaskState, WorkerSessionId,
+    ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
+    HiveIdentity, Operator, OperatorId, Task, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
+    WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -16,7 +17,9 @@ mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 4;
+const CURRENT_SCHEMA_VERSION: i64 = 5;
+const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
+const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 
 #[derive(Clone)]
 pub struct TaskStore {
@@ -125,6 +128,7 @@ impl TaskStore {
                 migrate_worker_roster(&transaction)?;
                 migrate_task_details(&transaction)?;
                 migrate_hive_identity(&transaction)?;
+                migrate_control_room_events(&transaction)?;
                 transaction.commit()?;
             }
             1 => {
@@ -132,17 +136,25 @@ impl TaskStore {
                 migrate_worker_roster(&transaction)?;
                 migrate_task_details(&transaction)?;
                 migrate_hive_identity(&transaction)?;
+                migrate_control_room_events(&transaction)?;
                 transaction.commit()?;
             }
             2 => {
                 let transaction = connection.transaction()?;
                 migrate_task_details(&transaction)?;
                 migrate_hive_identity(&transaction)?;
+                migrate_control_room_events(&transaction)?;
                 transaction.commit()?;
             }
             3 => {
                 let transaction = connection.transaction()?;
                 migrate_hive_identity(&transaction)?;
+                migrate_control_room_events(&transaction)?;
+                transaction.commit()?;
+            }
+            4 => {
+                let transaction = connection.transaction()?;
+                migrate_control_room_events(&transaction)?;
                 transaction.commit()?;
             }
             CURRENT_SCHEMA_VERSION => {}
@@ -247,6 +259,7 @@ impl TaskStore {
             "INSERT INTO task_activity (task_id, kind, to_state) VALUES (?1, 'created', 'draft')",
             [id.to_string()],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
@@ -368,6 +381,7 @@ impl TaskStore {
             "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'details_updated')",
             [id.to_string()],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
@@ -434,6 +448,7 @@ impl TaskStore {
              VALUES (?1, 'state_changed', ?2, ?3)",
             params![id.to_string(), current.to_string(), target.to_string()],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
@@ -483,6 +498,7 @@ impl TaskStore {
             "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'assigned')",
             [id.to_string()],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
@@ -523,8 +539,72 @@ impl TaskStore {
                 [task_id],
             )?;
         }
+        if !task_ids.is_empty() {
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
         transaction.commit()?;
         Ok(task_ids.len())
+    }
+
+    /// Appends one content-free invalidation event and enforces the durable event bound.
+    ///
+    /// # Errors
+    /// Returns an error when the event cannot be committed atomically.
+    pub fn record_control_room_event(
+        &self,
+        kind: ControlRoomEventKind,
+    ) -> Result<ControlRoomEvent, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let event = insert_control_room_event(&transaction, kind)?;
+        transaction.commit()?;
+        Ok(event)
+    }
+
+    /// Reads a bounded resumable page of content-free control-room invalidations.
+    ///
+    /// A cursor from an evicted or replaced database requests a full snapshot reset.
+    ///
+    /// # Errors
+    /// Returns an error when the event page cannot be read or decoded.
+    pub fn list_control_room_events(
+        &self,
+        after: i64,
+    ) -> Result<ControlRoomEventPage, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let connection = self.connection()?;
+        let (earliest, latest) = connection.query_row(
+            "SELECT MIN(sequence), MAX(sequence)
+             FROM control_room_events WHERE hive_id = ?1",
+            [identity.hive.id.to_string()],
+            |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+        )?;
+        let reset_required = after != 0
+            && match (earliest, latest) {
+                (Some(first), Some(last)) => after < first.saturating_sub(1) || after > last,
+                _ => true,
+            };
+        let cursor = if reset_required { 0 } else { after.max(0) };
+        let page_limit = i64::try_from(MAX_CONTROL_ROOM_EVENT_PAGE)
+            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
+        let mut statement = connection.prepare(
+            "SELECT sequence, hive_id, kind, occurred_at
+             FROM control_room_events
+             WHERE hive_id = ?1 AND sequence > ?2
+             ORDER BY sequence ASC LIMIT ?3",
+        )?;
+        let events = statement
+            .query_map(
+                params![identity.hive.id.to_string(), cursor, page_limit],
+                control_room_event_from_row,
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_cursor = events.last().map_or(cursor, |event| event.sequence);
+        Ok(ControlRoomEventPage {
+            events,
+            next_cursor,
+            reset_required,
+        })
     }
 
     fn connection(&self) -> Result<MutexGuard<'_, Connection>, TaskStoreError> {
@@ -652,6 +732,58 @@ fn migrate_hive_identity(transaction: &rusqlite::Transaction<'_>) -> rusqlite::R
             BEFORE UPDATE OF shared_work_backend ON apiaries
             BEGIN SELECT RAISE(ABORT, 'Apiary shared-work backend is immutable'); END;
         PRAGMA user_version = 4;
+        ",
+    )
+}
+
+fn insert_control_room_event(
+    transaction: &rusqlite::Transaction<'_>,
+    kind: ControlRoomEventKind,
+) -> rusqlite::Result<ControlRoomEvent> {
+    transaction.execute(
+        "INSERT INTO control_room_events (hive_id, kind)
+         SELECT hive_id, ?1 FROM local_hive_identity WHERE singleton = 1",
+        [kind.to_string()],
+    )?;
+    let sequence = transaction.last_insert_rowid();
+    transaction.execute(
+        "DELETE FROM control_room_events
+         WHERE sequence <= (SELECT MAX(sequence) - ?1 FROM control_room_events)",
+        [MAX_CONTROL_ROOM_EVENTS],
+    )?;
+    transaction.query_row(
+        "SELECT sequence, hive_id, kind, occurred_at
+         FROM control_room_events WHERE sequence = ?1",
+        [sequence],
+        control_room_event_from_row,
+    )
+}
+
+fn control_room_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ControlRoomEvent> {
+    let kind = ControlRoomEventKind::from_str(&row.get::<_, String>(2)?)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    Ok(ControlRoomEvent {
+        sequence: row.get(0)?,
+        hive_id: parse_domain_id::<HiveId>(&row.get::<_, String>(1)?)?,
+        kind,
+        occurred_at: row.get(3)?,
+    })
+}
+
+fn migrate_control_room_events(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "
+        CREATE TABLE control_room_events (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            hive_id TEXT NOT NULL REFERENCES hives(id),
+            kind TEXT NOT NULL CHECK (
+                kind IN ('tasks_changed','workers_changed','sessions_changed','runtime_changed')
+            ),
+            occurred_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE INDEX control_room_events_by_hive_sequence
+            ON control_room_events(hive_id, sequence);
+        PRAGMA user_version = 5;
         ",
     )
 }
@@ -1024,6 +1156,104 @@ mod tests {
         assert_eq!(restored.get_task(task.id).unwrap().title, "Backed up");
     }
 
+    #[test]
+    fn task_and_worker_mutations_emit_typed_content_free_events() {
+        let store = TaskStore::in_memory().unwrap();
+        assert!(store.list_control_room_events(0).unwrap().events.is_empty());
+
+        let task = store.create_task("Secret task text", "/workspace").unwrap();
+        let worker = store
+            .create_worker(
+                "Private worker name",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
+        store
+            .bind_worker_session(worker.id, WorkerSessionId::new())
+            .unwrap();
+
+        let page = store.list_control_room_events(0).unwrap();
+        assert_eq!(
+            page.events
+                .iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                ControlRoomEventKind::TasksChanged,
+                ControlRoomEventKind::WorkersChanged,
+                ControlRoomEventKind::WorkersChanged,
+                ControlRoomEventKind::SessionsChanged,
+            ]
+        );
+        assert!(
+            page.events
+                .iter()
+                .all(|event| event.hive_id == task.hive_id)
+        );
+        let serialized = serde_json::to_string(&page).unwrap();
+        assert!(!serialized.contains("Secret task text"));
+        assert!(!serialized.contains("Private worker name"));
+    }
+
+    #[test]
+    fn control_room_event_log_is_bounded_and_stale_cursors_reset() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store
+            .record_control_room_event(ControlRoomEventKind::RuntimeChanged)
+            .unwrap();
+        for _ in 0..=MAX_CONTROL_ROOM_EVENTS {
+            store
+                .record_control_room_event(ControlRoomEventKind::RuntimeChanged)
+                .unwrap();
+        }
+
+        let connection = store.connection().unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM control_room_events", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            MAX_CONTROL_ROOM_EVENTS
+        );
+        drop(connection);
+
+        let stale = store.list_control_room_events(first.sequence).unwrap();
+        assert!(stale.reset_required);
+        assert_eq!(stale.events.len(), MAX_CONTROL_ROOM_EVENT_PAGE);
+        let future = store.list_control_room_events(i64::MAX).unwrap();
+        assert!(future.reset_required);
+    }
+
+    #[test]
+    fn migrates_schema_v4_without_losing_existing_hive_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let (task_id, hive_id) = {
+            let store = TaskStore::open(&path).unwrap();
+            let task = store.create_task("Existing v4 task", "/workspace").unwrap();
+            let hive_id = store.local_hive_identity().unwrap().hive.id;
+            let connection = store.connection().unwrap();
+            connection
+                .execute_batch("DROP TABLE control_room_events; PRAGMA user_version = 4;")
+                .unwrap();
+            (task.id, hive_id)
+        };
+
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(migrated.get_task(task_id).unwrap().hive_id, hive_id);
+        assert!(
+            migrated
+                .list_control_room_events(0)
+                .unwrap()
+                .events
+                .is_empty()
+        );
+        migrated.verify_integrity().unwrap();
+    }
     #[test]
     fn fresh_store_owns_tasks_and_workers_in_one_durable_hive() {
         let directory = tempfile::tempdir().unwrap();
