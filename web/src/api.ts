@@ -6,9 +6,14 @@ export type TaskState = "draft" | "ready" | "active" | "blocked" | "review" | "c
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type WorkerRole = "queen" | "worker";
 export type ProviderKind = "claude_code" | "codex";
+export type HiveIdentity = {
+  operator: { id: string; display_name: string };
+  hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
+};
 
 export type Worker = {
   id: string;
+  hive_id: string;
   name: string;
   role: WorkerRole;
   provider: ProviderKind;
@@ -24,6 +29,7 @@ export type Worker = {
 
 export type Task = {
   id: string;
+  hive_id: string;
   title: string;
   description: string;
   priority: TaskPriority;
@@ -42,6 +48,11 @@ export type TaskDraftInput = {
 };
 
 export type TaskUpdateInput = Partial<TaskDraftInput>;
+
+export async function fetchHive(operatorToken: string): Promise<HiveIdentity> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/hive");
+  return response.json() as Promise<HiveIdentity>;
+}
 
 export async function fetchSessions(operatorToken: string): Promise<SessionSummary[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/sessions");

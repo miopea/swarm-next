@@ -7,7 +7,8 @@ import type { Task } from "../api";
 import TaskBoard from "./TaskBoard";
 
 const task: Task = {
-  id: "task-1", title: "Make reload stable", workspace: "/workspace/swarm", state: "draft",
+  id: "task-1",
+  hive_id: "hive-1", title: "Make reload stable", workspace: "/workspace/swarm", state: "draft",
   description: "Keep terminal history attached", priority: "high",
   assigned_session_id: null, created_at: 1, updated_at: 1,
 };

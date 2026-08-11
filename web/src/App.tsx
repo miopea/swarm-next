@@ -4,6 +4,7 @@ import {
   assignTask,
   createTask,
   createWorker,
+  fetchHive,
   fetchSessions,
   fetchTasks,
   fetchWorkers,
@@ -13,6 +14,7 @@ import {
   transitionTask,
   updateTask,
   type Health,
+  type HiveIdentity,
   type SessionSummary,
   type Task,
   type TaskDraftInput,
@@ -40,6 +42,7 @@ export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
   const [tokenDraft, setTokenDraft] = useState("");
   const [operatorToken, setOperatorToken] = useState<string>();
+  const [hiveIdentity, setHiveIdentity] = useState<HiveIdentity>();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -76,10 +79,11 @@ export function App() {
     let cancelled = false;
     setBusy(true);
     void loadControlRoom(savedToken)
-      .then(({ sessions: nextSessions, workers: nextWorkers, tasks: nextTasks }) => {
+      .then(({ hive, sessions: nextSessions, workers: nextWorkers, tasks: nextTasks }) => {
         if (cancelled) return;
         terminalWorkspace.authenticate(savedToken);
         setOperatorToken(savedToken);
+        setHiveIdentity(hive);
         setSessions(nextSessions);
         setWorkers(nextWorkers);
         setTasks(nextTasks);
@@ -104,6 +108,7 @@ export function App() {
       const controlRoom = await loadControlRoom(tokenDraft);
       terminalWorkspace.authenticate(tokenDraft);
       setOperatorToken(tokenDraft);
+      setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
@@ -118,6 +123,7 @@ export function App() {
     if (!operatorToken) return;
     await perform(async () => {
       const controlRoom = await loadControlRoom(operatorToken);
+      setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
@@ -161,6 +167,7 @@ export function App() {
       await assignTask(operatorToken, task.id, sessionId);
       await transitionTask(operatorToken, task.id, "active");
       const controlRoom = await loadControlRoom(operatorToken);
+      setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
@@ -177,6 +184,7 @@ export function App() {
       else await stopClaudeSession(operatorToken, sessionId);
       terminalWorkspace.closeSession(sessionId);
       const controlRoom = await loadControlRoom(operatorToken);
+      setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
@@ -190,6 +198,7 @@ export function App() {
       const runningWorker = await startWorker(operatorToken, profile.id);
       const sessionId = requireActiveSession(runningWorker);
       const controlRoom = await loadControlRoom(operatorToken);
+      setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
@@ -272,6 +281,7 @@ export function App() {
     clearSavedOperatorToken();
     terminalWorkspace.logout();
     setOperatorToken(undefined);
+    setHiveIdentity(undefined);
     setSessions([]);
     setWorkers([]);
     setTasks([]);
@@ -408,6 +418,7 @@ export function App() {
         ) : surface === "settings" ? (
           <SettingsWorkspace
             colorTheme={colorTheme}
+            hiveIdentity={hiveIdentity}
             health={loadState.kind === "ready" ? loadState.health : undefined}
             runningWorkers={workers.filter((worker) => worker.running).length}
             retainedSessions={sessions.length}
@@ -428,12 +439,13 @@ export function App() {
 }
 
 async function loadControlRoom(operatorToken: string) {
-  const [sessions, workers, tasks] = await Promise.all([
+  const [hive, sessions, workers, tasks] = await Promise.all([
+    fetchHive(operatorToken),
     fetchSessions(operatorToken),
     fetchWorkers(operatorToken),
     fetchTasks(operatorToken),
   ]);
-  return { sessions, workers, tasks };
+  return { hive, sessions, workers, tasks };
 }
 
 function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): string | undefined {

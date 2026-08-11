@@ -333,6 +333,7 @@ fn router_with_optional_asset_root(
 fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/api/v1/hive", get(local_hive))
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
@@ -390,6 +391,17 @@ async fn health() -> Json<HealthResponse> {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
     })
+}
+
+async fn local_hive(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let identity = task_store(&state)?
+        .local_hive_identity()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(identity)).into_response())
 }
 
 async fn runtime_limits(State(state): State<Arc<AppState>>) -> Json<RuntimeLimitsResponse> {
@@ -1167,6 +1179,38 @@ mod tests {
         let json = response_json(response).await;
         assert_eq!(json["status"], "ok");
         assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
+    async fn local_hive_identity_is_private_and_stable() {
+        let store = TaskStore::in_memory().unwrap();
+        let expected = store.local_hive_identity().unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(store);
+        let app = router(state);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/hive")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/hive").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(response).await;
+        assert_eq!(json["operator"]["id"], expected.operator.id.to_string());
+        assert_eq!(json["operator"]["display_name"], "Operator");
+        assert_eq!(json["hive"]["id"], expected.hive.id.to_string());
+        assert_eq!(json["hive"]["name"], "My Hive");
+        assert!(json["hive"]["apiary_id"].is_null());
     }
 
     #[tokio::test]

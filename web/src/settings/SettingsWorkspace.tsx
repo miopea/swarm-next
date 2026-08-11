@@ -1,15 +1,16 @@
-import type { Health } from "../api";
+import type { Health, HiveIdentity } from "../api";
 import type { ColorTheme } from "../brand/theme";
 
 type Props = {
   colorTheme: ColorTheme;
   health: Health | undefined;
+  hiveIdentity: HiveIdentity | undefined;
   runningWorkers: number;
   retainedSessions: number;
   onThemeChange: (theme: ColorTheme) => void;
 };
 
-export default function SettingsWorkspace({ colorTheme, health, runningWorkers, retainedSessions, onThemeChange }: Props) {
+export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, runningWorkers, retainedSessions, onThemeChange }: Props) {
   return (
     <div className="settings-workspace">
       <section className="settings-card" aria-labelledby="appearance-heading">
@@ -19,6 +20,16 @@ export default function SettingsWorkspace({ colorTheme, health, runningWorkers, 
           <button aria-pressed={colorTheme === "light"} onClick={() => onThemeChange("light")}><span className="theme-swatch light" /> Light meadow</button>
           <button aria-pressed={colorTheme === "dark"} onClick={() => onThemeChange("dark")}><span className="theme-swatch dark" /> Night hive</button>
         </div>
+      </section>
+
+      <section className="settings-card" aria-labelledby="identity-heading">
+        <div><p className="eyebrow">Identity</p><h3 id="identity-heading">Your Hive</h3></div>
+        <p>This local boundary owns its workers, tasks, repositories, and provider sessions.</p>
+        <dl className="diagnostic-list">
+          <div><dt>Hive</dt><dd>{hiveIdentity?.hive.name ?? "Unavailable"}</dd></div>
+          <div><dt>Operator</dt><dd>{hiveIdentity?.operator.display_name ?? "Unavailable"}</dd></div>
+          <div><dt>Membership</dt><dd>{hiveIdentity?.hive.apiary_id ? "Apiary member" : "Personal Hive"}</dd></div>
+        </dl>
       </section>
 
       <section className="settings-card" aria-labelledby="runtime-heading">
