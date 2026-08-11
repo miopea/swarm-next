@@ -351,7 +351,7 @@ export function App() {
 
   return (
     <main className="app-shell" onKeyDown={handleShortcut}>
-      <aside className="control-rail" aria-label="Swarm navigation">
+      <aside className={`control-rail surface-${surface}`} aria-label="Swarm navigation">
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
           <div><p className="eyebrow">Swarm Next</p><h1>Control room</h1></div>

@@ -15,11 +15,11 @@ mostly product operability rather than process survival.
 
 | Daily outcome | Legacy Swarm | Swarm Next now | Decision |
 |---|---|---|---|
-| Resume after reload | Feature-rich but observed redraw and reconnect failures | Canonical snapshot, sequence resume, durable bounded history | Keep Next model; finish browser-level redraw tests |
+| Resume after reload | Feature-rich but observed redraw and reconnect failures | Canonical recovery verified with three live workers in an actual browser | Complete baseline; continue multi-day soak |
 | Update during work | Sidecar separation existed | Live proof preserves the same host PID, session, and interactive PTY | Complete |
 | Know who is working | Configured names, roles, groups, status labels | Ephemeral `Claude XXXX` names derived from session IDs | Add durable worker profiles |
 | Coordinate with Queen | Interactive Queen PTY plus separate headless automation | No Queen concept | Add one always-active operator Queen; defer headless conductor |
-| Move between workers | Keyboard switching and cached terminals, but redraw was flaky | One selected React terminal with controller caching | Mount a stable terminal deck and verify switching visually |
+| Move between workers | Keyboard switching and cached terminals, but redraw was flaky | Repeated Queen/worker switching preserves exact session identity on desktop and mobile | Complete baseline; continue fast-output soak |
 | Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Minimal explicit lifecycle and assignment | Add editing, detail, priority, ordering, history in small slices |
 | See changes without refreshing | Broad WebSocket event stream | Typed, authenticated, resumable control-room invalidation feed | Complete; keep Refresh as recovery |
 | Manage workers quickly | Launch, kill, revive, groups, bulk actions | Start by path and stop | Add start/revive/stop on profiles; defer groups until measured |
