@@ -231,7 +231,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 :root[data-theme="dark"] .bee-head, :root[data-theme="dark"] .bee-abdomen { fill: #dfaa40; }
 
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
-@media (max-width: 1350px) {
+@media (max-width: 1450px) {
   .task-compose { grid-template-columns: 1fr; gap: 20px; }
 }
 @media (max-width: 1200px) {
