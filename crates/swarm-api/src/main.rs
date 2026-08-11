@@ -14,12 +14,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     let terminal_socket = env::var_os("SWARM_TERMINAL_SOCKET")
         .map_or_else(default_terminal_socket_path, PathBuf::from);
+    let store = TaskStore::open(database_path_from_env())?;
+    store.ensure_queen(queen_workspace_from_env().to_string_lossy().as_ref())?;
     let state = env::var("SWARM_OPERATOR_TOKEN")
         .map_or_else(
             |_| AppState::default(),
             |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
         )
-        .with_task_store(TaskStore::open(database_path_from_env())?);
+        .with_task_store(store);
+    state.supervise_workers().await;
+    let supervisor = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            supervisor.supervise_workers().await;
+        }
+    });
     let address = api_address_from_env()?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     info!(%address, "Swarm Next API listening");
@@ -35,6 +47,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+fn queen_workspace_from_env() -> PathBuf {
+    env::var_os("SWARM_QUEEN_WORKSPACE").map_or_else(
+        || {
+            env::var_os("SWARM_WORKSPACE_ROOTS")
+                .map_or_else(|| PathBuf::from("queen"), PathBuf::from)
+                .join("queen")
+        },
+        PathBuf::from,
+    )
 }
 
 fn database_path_from_env() -> PathBuf {

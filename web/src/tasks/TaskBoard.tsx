@@ -6,6 +6,7 @@ import BeeMascot from "../brand/BeeMascot";
 type Props = {
   tasks: Task[];
   sessions: SessionSummary[];
+  workerNames: ReadonlyMap<string, string>;
   busy: boolean;
   onCreate: (title: string, workspace: string) => Promise<void>;
   onTransition: (task: Task, state: TaskState) => Promise<void>;
@@ -25,6 +26,7 @@ const stateLabels: Record<TaskState, string> = {
 export default function TaskBoard({
   tasks,
   sessions,
+  workerNames,
   busy,
   onCreate,
   onTransition,
@@ -91,6 +93,7 @@ export default function TaskBoard({
                 key={task.id}
                 task={task}
                 sessions={sessions}
+                workerNames={workerNames}
                 busy={busy}
                 onTransition={onTransition}
                 onAssign={onAssign}
@@ -110,6 +113,7 @@ export default function TaskBoard({
                 key={task.id}
                 task={task}
                 sessions={sessions}
+                workerNames={workerNames}
                 busy={busy}
                 onTransition={onTransition}
                 onAssign={onAssign}
@@ -123,7 +127,7 @@ export default function TaskBoard({
   );
 }
 
-function TaskCard({ task, sessions, busy, onTransition, onAssign, onStartWorker }: Omit<Props, "tasks" | "onCreate"> & { task: Task }) {
+function TaskCard({ task, sessions, workerNames, busy, onTransition, onAssign, onStartWorker }: Omit<Props, "tasks" | "onCreate"> & { task: Task }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const runningSessions = sessions.filter((session) => session.running);
   return (
@@ -145,7 +149,7 @@ function TaskCard({ task, sessions, busy, onTransition, onAssign, onStartWorker 
             <option value="">{runningSessions.length === 0 ? "No workers running" : "Unassigned"}</option>
             {runningSessions.map((session) => (
               <option key={session.session_id} value={session.session_id}>
-                {workerName(session.session_id)} · {session.running ? "running" : "exited"}
+                {workerNames.get(session.session_id) ?? workerName(session.session_id)} · {session.running ? "running" : "exited"}
               </option>
             ))}
           </select>

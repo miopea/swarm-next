@@ -179,7 +179,7 @@ wait_for_host() {
 
 install_or_update() {
   validate_bundle
-  mkdir -p "$install_root/releases" "$config_root" "$state_root/terminal-history" "$state_root/providers/claude" "$unit_root" "$bin_root" "$workspace_root"
+  mkdir -p "$install_root/releases" "$config_root" "$state_root/terminal-history" "$state_root/providers/claude" "$unit_root" "$bin_root" "$workspace_root" "$workspace_root/queen"
   chmod 0700 "$config_root" "$state_root"
   write_initial_config
   validate_config

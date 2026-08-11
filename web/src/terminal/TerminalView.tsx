@@ -10,9 +10,10 @@ export interface TerminalViewProps {
   operatorToken: string;
   onStop: () => void;
   busy: boolean;
+  canStop?: boolean;
 }
 
-export default function TerminalView({ session, operatorToken, onStop, busy }: TerminalViewProps) {
+export default function TerminalView({ session, operatorToken, onStop, busy, canStop = true }: TerminalViewProps) {
   const mount = useRef<HTMLDivElement>(null);
   const controller = useMemo<TerminalController>(() => {
     terminalWorkspace.authenticate(operatorToken);
@@ -47,7 +48,9 @@ export default function TerminalView({ session, operatorToken, onStop, busy }: T
           <span className={`connection-state connection-${connectionState}`}>{connectionState.replace("_", " ")}</span>
           {detail && <small>{detail}</small>}
         </div>
-        <button className="danger-button" onClick={onStop} disabled={busy}>Stop worker</button>
+        {canStop ? (
+          <button className="danger-button" onClick={onStop} disabled={busy}>Stop worker</button>
+        ) : <span className="protected-worker">Always active</span>}
       </div>
       <div className="terminal-mount" ref={mount} />
     </div>

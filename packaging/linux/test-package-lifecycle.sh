@@ -83,6 +83,7 @@ grep -q "$SWARM_INSTALL_ROOT/host-current/bin/swarm-terminal-host" "$SWARM_SYSTE
 grep -q "SWARM_ASSET_ROOT=$SWARM_INSTALL_ROOT/assets" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "SWARM_DATABASE_PATH=$SWARM_STATE_ROOT/swarm-next.sqlite3" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 [ -f "$SWARM_INSTALL_ROOT/assets/app-1.0.0.js" ]
+[ -d "$SWARM_WORKSPACE_ROOT/queen" ]
 grep -q "ReadWritePaths=$SWARM_STATE_ROOT" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "CLAUDE_CONFIG_DIR=$SWARM_STATE_ROOT/providers/claude" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
 grep -q 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
