@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import {
   assignTask,
@@ -19,9 +19,11 @@ import {
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
+import SettingsWorkspace from "./settings/SettingsWorkspace";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
+import WorkerRosterItem from "./workers/WorkerRosterItem";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
@@ -29,7 +31,7 @@ const OPERATOR_TOKEN_STORAGE_KEY = "swarm-next.operator-token.v1";
 const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
-type Surface = "tasks" | "workers";
+type Surface = "tasks" | "workers" | "settings";
 
 export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
@@ -230,6 +232,25 @@ export function App() {
     }
   }
 
+  function handleShortcut(event: ReactKeyboardEvent<HTMLElement>) {
+    if (!operatorToken || !event.altKey || event.ctrlKey || event.metaKey || isTypingTarget(event.target)) return;
+    if (event.key === "1" || event.key === "2" || event.key === "3") {
+      event.preventDefault();
+      setSurface(event.key === "1" ? "tasks" : event.key === "2" ? "workers" : "settings");
+      return;
+    }
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    const running = workers.filter((worker) => worker.running && worker.active_session_id);
+    if (running.length === 0) return;
+    event.preventDefault();
+    const currentIndex = running.findIndex((worker) => worker.active_session_id === activeSessionId);
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + direction + running.length) % running.length;
+    const nextSessionId = running[nextIndex]?.active_session_id;
+    if (nextSessionId) setActiveSessionId(nextSessionId);
+    setSurface("workers");
+  }
+
   function logout() {
     clearSavedOperatorToken();
     terminalWorkspace.logout();
@@ -263,7 +284,7 @@ export function App() {
   const activeTask = activeSession ? tasksBySession.get(activeSession.session_id) : undefined;
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" onKeyDown={handleShortcut}>
       <aside className="control-rail" aria-label="Swarm navigation">
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
@@ -279,9 +300,12 @@ export function App() {
               <button className={surface === "workers" ? "selected" : ""} aria-current={surface === "workers" ? "page" : undefined} onClick={() => setSurface("workers")}>
                 <span><TerminalIcon /> Workers</span><small>{workers.filter((worker) => worker.running).length + orphanSessions.filter((session) => session.running).length}</small>
               </button>
+              <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => setSurface("settings")}>
+                <span><SettingsIcon /> Settings</span><small aria-hidden="true">3</small>
+              </button>
             </nav>
 
-            <div className="rail-context">
+            {surface !== "settings" && <div className="rail-context">
               <div className="rail-heading"><span>{surface === "tasks" ? "Open tasks" : "Live sessions"}</span></div>
               {surface === "tasks" ? (
                 tasks.filter((task) => task.state !== "completed").length === 0 ? <p className="empty-rail">Nothing queued yet.</p> :
@@ -294,20 +318,16 @@ export function App() {
                     const sessionId = worker.active_session_id;
                     const task = sessionId ? tasksBySession.get(sessionId) : undefined;
                     return (
-                      <button
-                        className="worker-button"
-                        aria-current={sessionId === activeSessionId ? "page" : undefined}
+                      <WorkerRosterItem
                         key={worker.id}
-                        onClick={() => sessionId ? setActiveSessionId(sessionId) : void startExistingWorker(worker)}
-                        disabled={busy}
-                      >
-                        <span className="worker-avatar"><BeeMascot role={worker.role === "queen" ? "queen" : "worker"} expression={worker.running ? "focused" : "sleeping"} /></span>
-                        <span className="worker-copy">
-                          <strong>{worker.name}</strong>
-                          <small>{worker.runtime_error ?? task?.title ?? (worker.role === "queen" ? "Always-active command terminal" : worker.running ? "Unassigned session" : "Stopped · click to start")}</small>
-                        </span>
-                        <span className={`presence ${worker.running ? "online" : "offline"}`} title={worker.running ? "Running" : "Stopped"} />
-                      </button>
+                        worker={worker}
+                        selected={sessionId === activeSessionId}
+                        detail={worker.runtime_error ?? task?.title ?? (worker.role === "queen" ? "Always-active command terminal" : worker.running ? "Unassigned session" : "Stopped · click to start")}
+                        busy={busy}
+                        onOpen={() => sessionId && setActiveSessionId(sessionId)}
+                        onStart={() => void startExistingWorker(worker)}
+                        onStop={() => sessionId && void stopSession(sessionId)}
+                      />
                     );
                   })}
                   {orphanSessions.map((session) => {
@@ -325,7 +345,7 @@ export function App() {
                   })}
                 </div>
               )}
-            </div>
+            </div>}
 
             {surface === "workers" && (
               <form className="start-worker" onSubmit={(event) => void startSession(event)}>
@@ -345,8 +365,8 @@ export function App() {
       <section className="workspace">
         <header className="workspace-header">
           <div>
-            <p className="eyebrow">{surface === "tasks" ? "Plan and dispatch" : activeTask?.title ?? "Persistent terminal"}</p>
-            <h2>{surface === "tasks" ? "Task board" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
+            <p className="eyebrow">{surface === "tasks" ? "Plan and dispatch" : surface === "settings" ? "Preferences and diagnostics" : activeTask?.title ?? "Persistent terminal"}</p>
+            <h2>{surface === "tasks" ? "Task board" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
           </div>
           <div className="header-actions">
             {busy && <span className="saving-state">Saving…</span>}
@@ -368,6 +388,14 @@ export function App() {
           </form>
         ) : surface === "tasks" ? (
           <TaskBoard tasks={tasks} sessions={sessions} workerNames={workerNames} busy={busy} onCreate={addTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} />
+        ) : surface === "settings" ? (
+          <SettingsWorkspace
+            colorTheme={colorTheme}
+            health={loadState.kind === "ready" ? loadState.health : undefined}
+            runningWorkers={workers.filter((worker) => worker.running).length}
+            retainedSessions={sessions.length}
+            onThemeChange={setColorTheme}
+          />
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}`}>
             <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
@@ -423,7 +451,12 @@ function RuntimeStatus({ state }: { state: LoadState }) {
 
 function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>; }
 function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
-function readSavedSurface(): Surface { try { return window.sessionStorage.getItem(SURFACE_STORAGE_KEY) === "workers" ? "workers" : "tasks"; } catch { return "tasks"; } }
+function readSavedSurface(): Surface { try { const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "workers" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
 function saveSurface(surface: Surface) { try { window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface); } catch { /* Surface persistence is a non-critical convenience. */ } }
 function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }
+function SettingsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>; }
 function ThemeIcon({ theme }: { theme: ColorTheme }) { return theme === "light" ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8 8 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg>; }
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || Boolean(target.closest("[role='menu']")));
+}
