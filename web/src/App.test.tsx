@@ -109,6 +109,31 @@ test("restores the worker surface after a refresh", async () => {
   expect(window.sessionStorage.getItem("swarm-next.surface.v1")).toBe("workers");
 });
 
+test("keyboard shortcuts switch workspaces but pause while editing a field", async () => {
+  window.sessionStorage.setItem("swarm-next.operator-token.v1", "saved-secret");
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]));
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
+  fireEvent.keyDown(screen.getByRole("button", { name: "Tasks 0" }), { key: "3", altKey: true });
+  expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Settings/ })).toHaveAttribute("aria-current", "page");
+
+  fireEvent.keyDown(screen.getByRole("button", { name: /Settings/ }), { key: "2", altKey: true });
+  expect(await screen.findByRole("heading", { name: "Worker terminal" })).toBeInTheDocument();
+
+  const workerName = screen.getByLabelText("Add a named worker");
+  workerName.focus();
+  fireEvent.keyDown(workerName, { key: "3", altKey: true });
+  expect(screen.getByRole("heading", { name: "Worker terminal" })).toBeInTheDocument();
+});
+
 test("removes a rejected saved token and returns to unlock", async () => {
   window.sessionStorage.setItem("swarm-next.operator-token.v1", "expired-secret");
   vi.stubGlobal(
