@@ -82,6 +82,11 @@ export class TerminalController {
     return { dispose: () => this.#statusSubscribers.delete(listener) };
   }
 
+  sendInput(text: string): void {
+    if (this.#disposed) throw new Error("Cannot send input to a disposed terminal");
+    this.#connection.sendInput(text);
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { MobileTerminalComposer } from "./MobileTerminalComposer";
 import { TerminalConnection, type TerminalConnectionState } from "./TerminalConnection";
 import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
@@ -53,6 +54,7 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
         ) : <span className="protected-worker">Always active</span>}
       </div>
       <div className="terminal-mount" ref={mount} />
+      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => controller.sendInput(text)} />
     </div>
   );
 }

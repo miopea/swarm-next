@@ -51,6 +51,7 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [workerNameDraft, setWorkerNameDraft] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [showWorkerForm, setShowWorkerForm] = useState(false);
   const [surface, setSurface] = useState<Surface>(readSavedSurface);
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -190,6 +191,7 @@ export function App() {
       setActiveSessionId(sessionId);
       setWorkerNameDraft("");
       setWorkspace("");
+      setShowWorkerForm(false);
       setSurface("workers");
     });
   }
@@ -414,13 +416,23 @@ export function App() {
             </div>}
 
             {surface === "workers" && (
-              <form className="start-worker" onSubmit={(event) => void startSession(event)}>
-                <label htmlFor="worker-name">Add a named worker</label>
-                <input id="worker-name" value={workerNameDraft} onChange={(event) => setWorkerNameDraft(event.target.value)} placeholder="Worker name" maxLength={80} />
-                <label className="sr-only" htmlFor="workspace">Worker workspace</label>
-                <input id="workspace" value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder="/workspace/path" />
-                <button disabled={busy || !workerNameDraft.trim() || !workspace.trim()}>Create and start</button>
-              </form>
+              <div className="start-worker-disclosure">
+                <button
+                  type="button"
+                  aria-expanded={showWorkerForm}
+                  aria-controls="start-worker-form"
+                  onClick={() => setShowWorkerForm((current) => !current)}
+                >
+                  {showWorkerForm ? "Hide worker form" : "Add worker"}
+                </button>
+                <form id="start-worker-form" className={showWorkerForm ? "start-worker mobile-expanded" : "start-worker"} onSubmit={(event) => void startSession(event)}>
+                  <label htmlFor="worker-name">Add a named worker</label>
+                  <input id="worker-name" value={workerNameDraft} onChange={(event) => setWorkerNameDraft(event.target.value)} placeholder="Worker name" maxLength={80} />
+                  <label className="sr-only" htmlFor="workspace">Worker workspace</label>
+                  <input id="workspace" value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder="/workspace/path" />
+                  <button disabled={busy || !workerNameDraft.trim() || !workspace.trim()}>Create and start</button>
+                </form>
+              </div>
             )}
           </>
         ) : <p className="empty-rail">Unlock this runtime to access tasks and workers.</p>}
