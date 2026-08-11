@@ -15,7 +15,9 @@ Swarm Next ships one release artifact containing the Rust API, terminal host,
 `swarmctl`, and compiled browser assets. Installation uses:
 
 - versioned immutable releases under `~/.local/lib/swarm-next/releases`;
-- an atomically replaced `current` symlink and one retained `previous` link;
+- an atomically replaced `current` API/browser symlink and one retained
+  `previous` link;
+- an independent `host-current` symlink for the terminal sidecar;
 - systemd user units grouped by `swarm-next.target`;
 - configuration under `~/.config/swarm-next`;
 - durable data under `~/.local/state/swarm-next`;
@@ -52,13 +54,17 @@ Only the terminal host owns the shared systemd runtime directory. The API uses
 the socket there but does not declare `RuntimeDirectory`; otherwise an API-only
 restart can make systemd remove the live host socket from beneath its owner.
 
-An update verifies its checksums and protocol before changing the active link.
-It stages the new release, begins drain through the current version's
-`swarmctl`, waits for zero live sessions with a bounded timeout, then stops the
-product target and switches atomically. A failed health check restores the
-previous link and starts the prior release. A drain timeout cancels drain and
-leaves the running release unchanged. Protocol changes are rejected until an
-explicit rolling-compatibility migration is designed.
+An update verifies its checksums and protocol before changing any active link.
+For an exact protocol match it publishes retained browser assets, switches
+`current`, and restarts only the API. The terminal-host process, socket, PTYs,
+and `host-current` link remain untouched. A failed API health check restores
+the previous API/browser link without restarting the host.
+
+The explicit `reconcile-host` action begins drain before checking session
+count, closing the race with new worker creation. It changes `host-current` and
+restarts the sidecar only at zero sessions; otherwise it cancels drain and
+defers. A failed host restart restores the old host link. Protocol changes are
+rejected until an explicit rolling-compatibility migration is designed.
 
 Uninstall removes services, commands, and packaged releases only. Configuration
 and durable state are preserved by default; data purge requires a separate,
@@ -66,8 +72,9 @@ explicit future operation.
 
 ## Consequences
 
-- Normal browser/API replacement has a clear path to preserve terminal work.
-- A terminal-host replacement waits visibly rather than terminating workers.
+- Normal browser/API replacement preserves terminal work by construction.
+- A terminal-host replacement is a separate, explicit zero-session operation
+  rather than a side effect of application deployment.
 - Root privileges and a system-wide daemon are unnecessary for the initial
   single-operator deployment.
 - The initial package uses one workspace root so its application allowlist and
@@ -87,4 +94,7 @@ explicit future operation.
 - Both SIGINT and SIGTERM cause graceful socket-owning process shutdown.
 - An isolated lifecycle smoke proves install, update, explicit rollback,
   automatic rollback after failed health, and uninstall with data retention.
+- The lifecycle smoke performs update and rollback with a simulated active
+  session and asserts that neither stops nor restarts the terminal host.
+- Host reconciliation refuses a live session and succeeds after it exits.
 - Release files are checksum-verified before installation.

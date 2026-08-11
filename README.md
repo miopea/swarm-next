@@ -93,7 +93,7 @@ unprivileged systemd user services:
 ```sh
 ./packaging/linux/build-release.sh
 tar -xzf dist/swarm-next-0.1.0-<commit>-linux-x86_64.tar.gz
-./packaging/linux/swarm-next-package install ./swarm-next-0.1.0-<commit>-linux-x86_64
+./swarm-next-0.1.0-<commit>-linux-x86_64/swarm-next-package install ./swarm-next-0.1.0-<commit>-linux-x86_64
 ```
 
 The packaged UI listens on `http://127.0.0.1:8766`. Releases are staged under
@@ -105,6 +105,10 @@ a deferred terminal module afterward. The writable workspace defaults to
 `~/swarm-workspaces`; set `SWARM_WORKSPACE_ROOT` during the first install to
 choose a different absolute path. Use `update RELEASE_DIR`, `rollback`, or
 `uninstall`. Uninstall preserves configuration and state.
+Compatible updates switch the API and browser release, then restart only
+`swarm-next-api.service`; the independently versioned terminal-host process and
+its worker PTYs stay alive. Run `swarm-next-package reconcile-host` when workers
+are idle to move the sidecar to the current release.
 
 Claude runs with an isolated profile at
 `~/.local/state/swarm-next/providers/claude`, keeping the host-wide profile
