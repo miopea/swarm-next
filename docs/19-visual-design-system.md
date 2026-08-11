@@ -36,7 +36,22 @@ State colors always pair color with text or shape:
 - neutral olive: draft and completed.
 
 The terminal interior stays near-black and contains no decorative artwork while
-output is present.
+output is present. Its ANSI palette is a terminal-specific extension of the
+same system:
+
+- sage green: additions, success, and healthy output;
+- dusty rose: deletions, errors, and destructive output;
+- honey: warnings, active prompts, and emphasized values;
+- muted blue and cyan: links, paths, commands, and informational output;
+- lavender: metadata, secondary highlights, and special values;
+- warm ivory and graduated olive neutrals: primary text, subdued output, and
+  comments.
+
+Readable normal and bright ANSI variants remain distinct and meet WCAG AA
+contrast against the near-black terminal background. Selection uses translucent
+sage,
+the cursor uses honey, and application theme changes update the mounted
+terminal without recreating its durable session.
 
 ## Character system
 

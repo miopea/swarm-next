@@ -5,6 +5,7 @@ const xterm = vi.hoisted(() => ({
   propose: vi.fn<() => { rows: number; cols: number } | undefined>(),
   resizeListener: undefined as ((size: { rows: number; cols: number }) => void) | undefined,
   terminal: undefined as { rows: number; cols: number } | undefined,
+  options: undefined as Record<string, unknown> | undefined,
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
@@ -28,8 +29,11 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     rows = 24;
     cols = 80;
+    options: Record<string, unknown>;
 
-    constructor() {
+    constructor(options: Record<string, unknown>) {
+      this.options = options;
+      xterm.options = options;
       xterm.terminal = this;
     }
 
@@ -55,6 +59,46 @@ vi.mock("@xterm/xterm", () => ({
 }));
 
 import { XtermSurface } from "./XtermSurface";
+
+test("uses the complete botanical ANSI palette", () => {
+  document.documentElement.dataset.theme = "dark";
+  const surface = new XtermSurface();
+  const theme = xterm.options?.theme as Record<string, string>;
+
+  expect(xterm.options?.minimumContrastRatio).toBe(4.5);
+  expect(theme).toMatchObject({
+    background: "#091110",
+    foreground: "#f2ead8",
+    red: "#d98b86",
+    green: "#9eb68b",
+    yellow: "#d9ad58",
+    blue: "#87afc4",
+    magenta: "#b7a0c8",
+    cyan: "#82b8ae",
+    brightRed: "#f0a09a",
+    brightGreen: "#bad19f",
+  });
+  surface.dispose();
+  delete document.documentElement.dataset.theme;
+});
+
+test("updates the palette in place when the application theme changes", async () => {
+  document.documentElement.dataset.theme = "light";
+  const surface = new XtermSurface();
+  const lightTheme = xterm.options?.theme as Record<string, string>;
+  expect(lightTheme.background).toBe("#111a18");
+
+  document.documentElement.dataset.theme = "dark";
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const darkTheme = xterm.options?.theme as Record<string, string>;
+  expect(darkTheme.background).toBe("#091110");
+  expect(darkTheme.cursor).toBe("#e7b74e");
+  expect(xterm.options?.theme).not.toBe(lightTheme);
+
+  surface.dispose();
+  delete document.documentElement.dataset.theme;
+});
 
 test("authoritative fit waits until xterm can propose real dimensions", async () => {
   const frames: FrameRequestCallback[] = [];
