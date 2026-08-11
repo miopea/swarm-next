@@ -40,11 +40,29 @@ printf 'header = "Authorization: Bearer %s"\n' "${SWARM_OPERATOR_TOKEN}" >"${cur
 
 session_a=""
 session_b=""
+wait_api() {
+  local attempts=0
+  while ! curl --fail --silent --show-error --max-time 1 "${base_url}/health" >/dev/null; do
+    attempts=$((attempts + 1))
+    if (( attempts >= 50 )); then
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
 cleanup() {
   if [[ "${SWARM_SOAK_KEEP_WORKERS:-0}" != "1" ]]; then
+    wait_api || true
     for session_id in "${session_a}" "${session_b}"; do
-      [[ -z "${session_id}" ]] || curl --silent --show-error --config "${curl_config}" \
-        --request DELETE "${base_url}/api/v1/terminal/sessions/${session_id}" >/dev/null || true
+      if [[ -n "${session_id}" ]]; then
+        curl --silent --show-error --config "${curl_config}" --request DELETE \
+          "${base_url}/api/v1/terminal/sessions/${session_id}" >/dev/null || {
+            wait_api || true
+            curl --silent --show-error --config "${curl_config}" --request DELETE \
+              "${base_url}/api/v1/terminal/sessions/${session_id}" >/dev/null || true
+          }
+      fi
     done
   fi
   rm -f "${curl_config}"
@@ -76,6 +94,7 @@ while (( $(date +%s) < deadline )); do
   now="$(date +%s)"
   if (( restart_every_seconds > 0 && now >= next_restart )); then
     systemctl --user restart swarm-next-api.service
+    wait_api
     next_restart=$((now + restart_every_seconds))
   fi
 
