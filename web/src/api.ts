@@ -3,6 +3,23 @@ export type SessionSummary = { session_id: string; running: boolean };
 export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
 export type TaskState = "draft" | "ready" | "active" | "blocked" | "review" | "completed";
+export type WorkerRole = "queen" | "worker";
+export type ProviderKind = "claude_code" | "codex";
+
+export type Worker = {
+  id: string;
+  name: string;
+  role: WorkerRole;
+  provider: ProviderKind;
+  workspace: string;
+  autostart: boolean;
+  position: number;
+  active_session_id: string | null;
+  created_at: number;
+  updated_at: number;
+  running: boolean;
+  runtime_error?: string;
+};
 
 export type Task = {
   id: string;
@@ -18,6 +35,11 @@ export async function fetchSessions(operatorToken: string): Promise<SessionSumma
   const response = await authenticatedFetch(operatorToken, "/api/v1/terminal/sessions");
   const payload = (await response.json()) as SessionsResponse;
   return payload.sessions;
+}
+
+export async function fetchWorkers(operatorToken: string): Promise<Worker[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/workers");
+  return response.json() as Promise<Worker[]>;
 }
 
 export async function fetchTasks(operatorToken: string): Promise<Task[]> {
@@ -69,6 +91,46 @@ export async function assignTask(
     },
   );
   return response.json() as Promise<Task>;
+}
+
+export async function createWorker(
+  operatorToken: string,
+  input: { name: string; workspace: string; provider?: ProviderKind; autostart?: boolean },
+): Promise<Worker> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/workers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return response.json() as Promise<Worker>;
+}
+
+export async function startWorker(
+  operatorToken: string,
+  workerId: string,
+): Promise<Worker> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/workers/${encodeURIComponent(workerId)}/start`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows: 24, columns: 80 }),
+    },
+  );
+  return response.json() as Promise<Worker>;
+}
+
+export async function stopWorker(
+  operatorToken: string,
+  workerId: string,
+): Promise<Worker> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/workers/${encodeURIComponent(workerId)}/session`,
+    { method: "DELETE" },
+  );
+  return response.json() as Promise<Worker>;
 }
 
 export async function startClaudeSession(operatorToken: string, workspace: string): Promise<string> {

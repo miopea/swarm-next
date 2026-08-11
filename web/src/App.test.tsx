@@ -46,6 +46,7 @@ test("keeps the operator token in the browser tab and reveals the control room",
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
+    .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
   vi.stubGlobal("fetch", fetch);
   render(<App />);
@@ -72,6 +73,10 @@ test("restores tasks and workers after a refresh", async () => {
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [{ session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", running: true }] }))
+    .mockResolvedValueOnce(ok([{
+      id: "worker-queen", name: "Queen", role: "queen", provider: "claude_code", workspace: "/workspace/queen", autostart: true, position: 0,
+      active_session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", running: true, created_at: 1, updated_at: 1,
+    }]))
     .mockResolvedValueOnce(ok([{ id: "task-1", title: "Stable reload", workspace: "/workspace", state: "active", assigned_session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", created_at: 1, updated_at: 1 }]));
   vi.stubGlobal("fetch", fetch);
 
@@ -82,7 +87,7 @@ test("restores tasks and workers after a refresh", async () => {
   const sessionRequestHeaders = fetch.mock.calls[1]?.[1]?.headers as Headers;
   expect(sessionRequestHeaders.get("Authorization")).toBe("Bearer saved-secret");
 
-  expect(screen.getByRole("option", { name: /Claude 8093/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /Queen/ })).toBeInTheDocument();
 });
 
 test("removes a rejected saved token and returns to unlock", async () => {
@@ -107,6 +112,7 @@ test("creates a persisted task draft from the task board", async () => {
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
+    .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok(task));
   vi.stubGlobal("fetch", fetch);

@@ -2,6 +2,7 @@ mod attach;
 mod terminal_socket;
 
 use std::{
+    collections::{HashMap, HashSet},
     path::{Path as FilePath, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -16,14 +17,14 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
-use swarm_domain::{TaskId, TaskState, WorkerSessionId};
+use swarm_domain::{ProviderKind, TaskId, TaskState, WorkerId, WorkerProfile, WorkerSessionId};
 use swarm_persistence::{TaskStore, TaskStoreError};
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, HistoryCursor, HostClient,
     HostRequest, HostResponse, JournalLimits, MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS,
     MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, TerminalSize,
 };
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, RwLock, Semaphore};
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 use attach::{ATTACH_GRANT_TTL, AttachGrantError, AttachGrantStore, MAX_ATTACH_GRANTS};
@@ -42,6 +43,8 @@ pub struct AppState {
     attach_grants: Arc<AttachGrantStore>,
     websocket_limit: Arc<Semaphore>,
     task_store: Option<TaskStore>,
+    worker_lifecycle: Arc<Mutex<()>>,
+    worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
 }
 
 impl AppState {
@@ -54,6 +57,8 @@ impl AppState {
             attach_grants: Arc::new(AttachGrantStore::default()),
             websocket_limit: Arc::new(Semaphore::new(MAX_TERMINAL_WEBSOCKETS)),
             task_store: None,
+            worker_lifecycle: Arc::new(Mutex::new(())),
+            worker_errors: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -72,6 +77,36 @@ impl AppState {
         self.terminal_host = Some(terminal_host);
         self.operator_token = Some(operator_token.into());
         self
+    }
+
+    /// Reconciles durable worker identities with the terminal host and starts autostart workers.
+    pub async fn supervise_workers(&self) {
+        if let Err(error) = reconcile_worker_bindings(self).await {
+            tracing::warn!(message = %error.message, "worker supervisor could not inspect the terminal host");
+            return;
+        }
+        let Ok(profiles) = task_store(self).and_then(|store| {
+            store
+                .list_worker_profiles()
+                .map_err(|error| task_store_error(&error))
+        }) else {
+            tracing::warn!("worker supervisor could not load the durable roster");
+            return;
+        };
+        for profile in profiles
+            .into_iter()
+            .filter(|profile| profile.autostart && profile.active_session_id.is_none())
+        {
+            if let Err(error) =
+                start_worker_process(self, profile.id, TerminalSize::default()).await
+            {
+                self.worker_errors
+                    .write()
+                    .await
+                    .insert(profile.id, error.message.clone());
+                tracing::warn!(worker_id = %profile.id, worker_name = %profile.name, message = %error.message, "autostart worker could not be started");
+            }
+        }
     }
 }
 
@@ -119,6 +154,45 @@ struct StartSessionRequest {
     workspace: PathBuf,
     rows: u16,
     columns: u16,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateWorkerRequest {
+    name: String,
+    #[serde(default = "default_provider")]
+    provider: ProviderKind,
+    workspace: String,
+    #[serde(default)]
+    autostart: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct StartWorkerRequest {
+    #[serde(default = "default_terminal_rows")]
+    rows: u16,
+    #[serde(default = "default_terminal_columns")]
+    columns: u16,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkerView {
+    #[serde(flatten)]
+    profile: WorkerProfile,
+    running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_error: Option<String>,
+}
+
+fn default_provider() -> ProviderKind {
+    ProviderKind::ClaudeCode
+}
+
+fn default_terminal_rows() -> u16 {
+    TerminalSize::default().rows
+}
+
+fn default_terminal_columns() -> u16 {
+    TerminalSize::default().columns
 }
 
 #[derive(Debug, Deserialize)]
@@ -257,6 +331,9 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
         .route("/api/v1/tasks/{task_id}/state", patch(transition_task))
         .route("/api/v1/tasks/{task_id}/assignment", put(assign_task))
+        .route("/api/v1/workers", get(list_workers).post(create_worker))
+        .route("/api/v1/workers/{worker_id}/start", post(start_worker))
+        .route("/api/v1/workers/{worker_id}/session", delete(stop_worker))
         .route(
             "/api/v1/terminal/sessions",
             get(list_sessions).post(start_session),
@@ -402,6 +479,111 @@ async fn assign_task(
     Ok(Json(task).into_response())
 }
 
+async fn list_workers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let live = reconcile_worker_bindings(&state).await?;
+    let errors = state.worker_errors.read().await;
+    let workers = task_store(&state)?
+        .list_worker_profiles()
+        .map_err(|error| task_store_error(&error))?
+        .into_iter()
+        .map(|profile| WorkerView {
+            running: profile
+                .active_session_id
+                .is_some_and(|session_id| live.contains(&session_id)),
+            runtime_error: errors.get(&profile.id).cloned(),
+            profile,
+        })
+        .collect::<Vec<_>>();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(workers)).into_response())
+}
+
+async fn create_worker(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateWorkerRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let position = task_store(&state)?
+        .list_worker_profiles()
+        .map_err(|error| task_store_error(&error))?
+        .into_iter()
+        .map(|profile| profile.position)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    let profile = task_store(&state)?
+        .create_worker(
+            &request.name,
+            request.provider,
+            &request.workspace,
+            request.autostart,
+            position,
+        )
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(WorkerView {
+            profile,
+            running: false,
+            runtime_error: None,
+        }),
+    )
+        .into_response())
+}
+
+async fn start_worker(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(worker_id): Path<String>,
+    Json(request): Json<StartWorkerRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    require_valid_size(request.rows, request.columns)?;
+    let worker = start_worker_process(
+        &state,
+        parse_worker_id(&worker_id)?,
+        TerminalSize::new(request.rows, request.columns),
+    )
+    .await?;
+    Ok(Json(worker).into_response())
+}
+
+async fn stop_worker(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(worker_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let _guard = state.worker_lifecycle.lock().await;
+    let worker_id = parse_worker_id(&worker_id)?;
+    let profile = task_store(&state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    if let Some(session_id) = profile.active_session_id {
+        request_host(&state, HostRequest::Stop { session_id }).await?;
+        task_store(&state)?
+            .release_worker_session(session_id)
+            .map_err(|error| task_store_error(&error))?;
+        task_store(&state)?
+            .release_session_assignments(session_id)
+            .map_err(|error| task_store_error(&error))?;
+    }
+    state.worker_errors.write().await.remove(&worker_id);
+    let profile = task_store(&state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(Json(WorkerView {
+        profile,
+        running: false,
+        runtime_error: None,
+    })
+    .into_response())
+}
+
 async fn list_sessions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -529,8 +711,109 @@ async fn stop_session(
     let response = authorized_request(&state, &headers, HostRequest::Stop { session_id }).await?;
     if let Some(store) = &state.task_store {
         store
+            .release_worker_session(session_id)
+            .map_err(|error| task_store_error(&error))?;
+        store
             .release_session_assignments(session_id)
             .map_err(|error| task_store_error(&error))?;
+    }
+    Ok(response)
+}
+
+async fn start_worker_process(
+    state: &AppState,
+    worker_id: WorkerId,
+    size: TerminalSize,
+) -> Result<WorkerView, ApiError> {
+    let _guard = state.worker_lifecycle.lock().await;
+    let live = reconcile_worker_bindings_unlocked(state).await?;
+    let profile = task_store(state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    if let Some(session_id) = profile.active_session_id
+        && live.contains(&session_id)
+    {
+        return Ok(WorkerView {
+            profile,
+            running: true,
+            runtime_error: None,
+        });
+    }
+    if profile.provider != ProviderKind::ClaudeCode {
+        return Err(ApiError::new(
+            StatusCode::NOT_IMPLEMENTED,
+            "provider_not_available",
+            "this worker provider is not available in the current runtime",
+        ));
+    }
+    let response = request_host(
+        state,
+        HostRequest::StartClaude {
+            workspace: PathBuf::from(&profile.workspace),
+            size,
+        },
+    )
+    .await?;
+    let HostResponse::SessionStarted { session_id } = response else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected response",
+        ));
+    };
+    if let Err(error) = task_store(state)?.bind_worker_session(worker_id, session_id) {
+        let _ = request_host(state, HostRequest::Stop { session_id }).await;
+        return Err(task_store_error(&error));
+    }
+    state.worker_errors.write().await.remove(&worker_id);
+    let profile = task_store(state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(WorkerView {
+        profile,
+        running: true,
+        runtime_error: None,
+    })
+}
+
+async fn reconcile_worker_bindings(state: &AppState) -> Result<HashSet<WorkerSessionId>, ApiError> {
+    let _guard = state.worker_lifecycle.lock().await;
+    reconcile_worker_bindings_unlocked(state).await
+}
+
+async fn reconcile_worker_bindings_unlocked(
+    state: &AppState,
+) -> Result<HashSet<WorkerSessionId>, ApiError> {
+    let response = request_host(state, HostRequest::ListSessions).await?;
+    let HostResponse::Sessions { sessions } = response else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected response",
+        ));
+    };
+    let live = sessions
+        .into_iter()
+        .filter(|session| session.running)
+        .map(|session| session.session_id)
+        .collect::<HashSet<_>>();
+    task_store(state)?
+        .release_missing_worker_sessions(&live)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(live)
+}
+
+async fn request_host(state: &AppState, request: HostRequest) -> Result<HostResponse, ApiError> {
+    let response = terminal_client(state)?
+        .request(&request)
+        .await
+        .map_err(|error| host_unavailable(&error))?;
+    if let HostResponse::Error { message, .. } = &response {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "terminal_operation_failed",
+            message,
+        ));
     }
     Ok(response)
 }
@@ -684,6 +967,20 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "task_transition_rejected",
             error.to_string(),
         ),
+        TaskStoreError::WorkerNotFound => {
+            ApiError::new(StatusCode::NOT_FOUND, "worker_not_found", error.to_string())
+        }
+        TaskStoreError::InvalidWorkerName => {
+            ApiError::new(StatusCode::BAD_REQUEST, "invalid_worker", error.to_string())
+        }
+        TaskStoreError::DuplicateWorkerName | TaskStoreError::QueenAlreadyExists => {
+            ApiError::new(StatusCode::CONFLICT, "worker_conflict", error.to_string())
+        }
+        TaskStoreError::WorkerAlreadyRunning => ApiError::new(
+            StatusCode::CONFLICT,
+            "worker_already_running",
+            error.to_string(),
+        ),
         TaskStoreError::Io(_)
         | TaskStoreError::Sql(_)
         | TaskStoreError::LockPoisoned
@@ -760,6 +1057,16 @@ fn parse_session_id(value: &str) -> Result<WorkerSessionId, ApiError> {
             StatusCode::BAD_REQUEST,
             "invalid_session_id",
             "session ID must be a UUID",
+        )
+    })
+}
+
+fn parse_worker_id(value: &str) -> Result<WorkerId, ApiError> {
+    WorkerId::from_str(value).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_worker_id",
+            "worker ID must be a UUID",
         )
     })
 }
@@ -1190,6 +1497,72 @@ mod tests {
             .filter_map(|byte| u8::try_from(byte).ok())
             .collect::<Vec<_>>();
         assert_eq!(output, b"survived-restart");
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn api_recreation_reattaches_the_durable_queen_without_a_duplicate() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec!["-lc".into(), "sleep 5".into()],
+            working_directory: workspace.clone(),
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store
+            .ensure_queen(workspace.to_string_lossy().as_ref())
+            .unwrap();
+        store.bind_worker_session(queen.id, session.id()).unwrap();
+
+        let first_state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
+        first_state.supervise_workers().await;
+        let first_workers = authorized_get(router(first_state), "/api/v1/workers").await;
+        assert_eq!(first_workers.status(), StatusCode::OK);
+        assert_eq!(first_workers.headers()[header::CACHE_CONTROL], "no-store");
+        let first_workers = response_json(first_workers).await;
+        assert_eq!(first_workers[0]["name"], "Queen");
+        assert_eq!(first_workers[0]["role"], "queen");
+        assert_eq!(first_workers[0]["running"], true);
+        assert_eq!(
+            first_workers[0]["active_session_id"],
+            session.id().to_string()
+        );
+
+        let replacement_state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store);
+        replacement_state.supervise_workers().await;
+        let response = HostClient::new(&socket)
+            .request(&HostRequest::ListSessions)
+            .await
+            .unwrap();
+        let HostResponse::Sessions { sessions } = response else {
+            panic!("terminal host should return its sessions");
+        };
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, session.id());
+        assert!(sessions[0].running);
+
+        let replacement_workers =
+            authorized_get(router(replacement_state), "/api/v1/workers").await;
+        let replacement_workers = response_json(replacement_workers).await;
+        assert_eq!(
+            replacement_workers[0]["active_session_id"],
+            session.id().to_string()
+        );
+
+        session.stop().unwrap();
         server_task.abort();
         let _ = server_task.await;
     }

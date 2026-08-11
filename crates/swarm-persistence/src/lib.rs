@@ -9,9 +9,10 @@ use swarm_domain::{Task, TaskId, TaskState, WorkerSessionId};
 use thiserror::Error;
 use uuid::Uuid;
 
+mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 1;
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Clone)]
 pub struct TaskStore {
@@ -36,6 +37,16 @@ pub enum TaskStoreError {
     InvalidTransition { from: TaskState, to: TaskState },
     #[error("completed tasks cannot be assigned")]
     CompletedTask,
+    #[error("worker was not found")]
+    WorkerNotFound,
+    #[error("worker name is invalid")]
+    InvalidWorkerName,
+    #[error("worker name already exists")]
+    DuplicateWorkerName,
+    #[error("the Queen profile already exists")]
+    QueenAlreadyExists,
+    #[error("worker already has an active session")]
+    WorkerAlreadyRunning,
     #[error("database schema version {found} is newer than supported version {supported}")]
     UnsupportedSchemaVersion { found: i64, supported: i64 },
     #[error("database integrity check failed: {0}")]
@@ -101,9 +112,14 @@ impl TaskStore {
                 to_state TEXT,
                 occurred_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
-            PRAGMA user_version = 1;
             ",
                 )?;
+                migrate_worker_roster(&transaction)?;
+                transaction.commit()?;
+            }
+            1 => {
+                let transaction = connection.transaction()?;
+                migrate_worker_roster(&transaction)?;
                 transaction.commit()?;
             }
             CURRENT_SCHEMA_VERSION => {}
@@ -355,6 +371,35 @@ impl TaskStore {
     }
 }
 
+fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS worker_profiles (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+            role TEXT NOT NULL CHECK (role IN ('queen','worker')),
+            provider TEXT NOT NULL CHECK (provider IN ('claude_code','codex')),
+            workspace TEXT NOT NULL,
+            autostart INTEGER NOT NULL CHECK (autostart IN (0,1)),
+            position INTEGER NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS one_queen_profile
+            ON worker_profiles(role) WHERE role = 'queen';
+        CREATE TABLE IF NOT EXISTS worker_sessions (
+            session_id TEXT PRIMARY KEY,
+            worker_id TEXT NOT NULL REFERENCES worker_profiles(id) ON DELETE CASCADE,
+            started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            ended_at INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS one_active_session_per_worker
+            ON worker_sessions(worker_id) WHERE ended_at IS NULL;
+        PRAGMA user_version = 2;
+        ",
+    )
+}
+
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
     if title.is_empty() || title.len() > MAX_TASK_TITLE_BYTES {
         return Err(TaskStoreError::InvalidTitle);
@@ -469,6 +514,37 @@ mod tests {
         };
         let reopened = TaskStore::open(path).unwrap();
         assert_eq!(reopened.get_task(id).unwrap().title, "Persistent task");
+    }
+
+    #[test]
+    fn migrates_the_task_only_schema_to_the_worker_roster() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    workspace TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                );
+                PRAGMA user_version = 1;
+                ",
+            )
+            .unwrap();
+        let store = TaskStore::from_connection(connection).unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        assert_eq!(queen.role, swarm_domain::WorkerRole::Queen);
+        assert_eq!(
+            store
+                .connection()
+                .unwrap()
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
     }
 
     #[test]

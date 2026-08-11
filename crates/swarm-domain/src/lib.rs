@@ -66,9 +66,94 @@ impl FromStr for WorkerSessionId {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum WorkerRole {
+    Queen,
+    Worker,
+}
+
+impl fmt::Display for WorkerRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Queen => "queen",
+            Self::Worker => "worker",
+        })
+    }
+}
+
+impl FromStr for WorkerRole {
+    type Err = ParseWorkerRoleError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "queen" => Ok(Self::Queen),
+            "worker" => Ok(Self::Worker),
+            _ => Err(ParseWorkerRoleError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseWorkerRoleError;
+
+impl fmt::Display for ParseWorkerRoleError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown worker role")
+    }
+}
+
+impl std::error::Error for ParseWorkerRoleError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     ClaudeCode,
     Codex,
+}
+
+impl fmt::Display for ProviderKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ClaudeCode => "claude_code",
+            Self::Codex => "codex",
+        })
+    }
+}
+
+impl FromStr for ProviderKind {
+    type Err = ParseProviderKindError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "claude_code" => Ok(Self::ClaudeCode),
+            "codex" => Ok(Self::Codex),
+            _ => Err(ParseProviderKindError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseProviderKindError;
+
+impl fmt::Display for ParseProviderKindError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown provider kind")
+    }
+}
+
+impl std::error::Error for ParseProviderKindError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkerProfile {
+    pub id: WorkerId,
+    pub name: String,
+    pub role: WorkerRole,
+    pub provider: ProviderKind,
+    pub workspace: String,
+    pub autostart: bool,
+    pub position: i64,
+    pub active_session_id: Option<WorkerSessionId>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -218,6 +303,24 @@ mod tests {
         };
         assert_ne!(first.id, second.id);
         assert_eq!(first.worker_id, second.worker_id);
+    }
+
+    #[test]
+    fn worker_profile_identity_outlives_its_session() {
+        let profile = WorkerProfile {
+            id: WorkerId::new(),
+            name: "Queen".into(),
+            role: WorkerRole::Queen,
+            provider: ProviderKind::ClaudeCode,
+            workspace: "/workspace/queen".into(),
+            autostart: true,
+            position: 0,
+            active_session_id: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+        assert_eq!(profile.role, WorkerRole::Queen);
+        assert!(profile.autostart);
     }
 
     #[test]
