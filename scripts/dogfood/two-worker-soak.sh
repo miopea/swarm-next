@@ -106,16 +106,18 @@ while (( $(date +%s) < deadline )); do
 
   host_status="$(api_json "${base_url}/api/v1/runtime/terminal-host")"
   history="$(api_json "${base_url}/api/v1/terminal/history/diagnostics")"
+  running_sessions="$(jq -er '.status.running_sessions | numbers' <<<"${host_status}")"
+  retained_sessions="$(jq -er '.status.retained_sessions | numbers' <<<"${host_status}")"
+  history_bytes="$(jq -er '.diagnostics.retained_bytes | numbers' <<<"${history}")"
+  dropped_history_bytes="$(jq -er '.diagnostics.dropped_bytes | numbers' <<<"${history}")"
   printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$((now - started_at))" \
     "$(systemctl --user show swarm-next-api.service -p MemoryCurrent --value)" \
     "$(systemctl --user show swarm-next-api.service -p TasksCurrent --value)" \
     "$(systemctl --user show swarm-next-terminal-host.service -p MemoryCurrent --value)" \
     "$(systemctl --user show swarm-next-terminal-host.service -p TasksCurrent --value)" \
-    "$(jq -r '.running_sessions' <<<"${host_status}")" \
-    "$(jq -r '.retained_sessions' <<<"${host_status}")" \
-    "$(jq -r '.retained_bytes' <<<"${history}")" \
-    "$(jq -r '.dropped_bytes' <<<"${history}")" >>"${samples_file}"
+    "${running_sessions}" "${retained_sessions}" \
+    "${history_bytes}" "${dropped_history_bytes}" >>"${samples_file}"
   sample_count=$((sample_count + 1))
   sleep "${sample_seconds}"
 done
