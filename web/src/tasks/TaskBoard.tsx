@@ -54,21 +54,25 @@ export default function TaskBoard({
           <p>Tasks remember the workspace, assignment, and every lifecycle transition.</p>
         </div>
         <form onSubmit={(event) => void submit(event)}>
-          <label htmlFor="task-title">Task title</label>
-          <input
-            id="task-title"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="What should be true when this is done?"
-            maxLength={240}
-          />
-          <label htmlFor="task-workspace">Workspace</label>
-          <input
-            id="task-workspace"
-            value={workspace}
-            onChange={(event) => setWorkspace(event.target.value)}
-            placeholder="/absolute/path/to/workspace"
-          />
+          <div className="field-stack task-title-field">
+            <label htmlFor="task-title">Task title</label>
+            <input
+              id="task-title"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="What should be true when this is done?"
+              maxLength={240}
+            />
+          </div>
+          <div className="field-stack">
+            <label htmlFor="task-workspace">Workspace</label>
+            <input
+              id="task-workspace"
+              value={workspace}
+              onChange={(event) => setWorkspace(event.target.value)}
+              placeholder="/absolute/path/to/workspace"
+            />
+          </div>
           <button disabled={busy || !title.trim() || !workspace.trim()}>Create draft</button>
         </form>
       </section>
@@ -99,7 +103,7 @@ export default function TaskBoard({
 
       {completedTasks.length > 0 && (
         <details className="completed-tasks">
-          <summary>{completedTasks.length} completed</summary>
+          <summary><span>Completed work</span><small>{completedTasks.length}</small></summary>
           <div className="task-grid compact">
             {completedTasks.map((task) => (
               <TaskCard
