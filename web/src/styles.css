@@ -134,6 +134,7 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .presence.offline { background: var(--bad); }
 
 .start-worker { display: grid; gap: 8px; margin: 14px 0 4px; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
+.start-worker-disclosure > button { display: none; }
 label { color: var(--muted); font-size: .75rem; font-weight: 500; }
 label span { color: var(--quiet); font-weight: 400; }
 input, select, textarea { width: 100%; min-height: 39px; padding: 9px 11px; outline: none; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--text); background: var(--panel-raised); transition: border-color .15s, box-shadow .15s; }
@@ -263,6 +264,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .terminal-mount, .terminal-surface { min-height: 0; flex: 1; }
 .terminal-mount { display: flex; overflow: hidden; padding: 10px 12px 12px; background: var(--terminal-frame); }
 .terminal-surface { width: 100%; height: 100%; }
+.mobile-terminal-composer { display: none; }
 
 .bee-mascot { display: block; overflow: visible; }
 .bee-head, .bee-abdomen { fill: #e3aa35; stroke: #302b1f; stroke-width: 2.4; }
@@ -311,6 +313,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .control-rail.surface-workers .worker-row { width: 176px; flex: 0 0 176px; }
   .control-rail.surface-workers .worker-copy small { display: none; }
   .start-worker { margin-top: 12px; padding-top: 12px; }
+  .start-worker-disclosure { padding: 9px 0 2px; border-top: 1px solid var(--line); }
+  .start-worker-disclosure > button { display: flex; width: 100%; min-height: 38px; align-items: center; justify-content: center; border-color: var(--line-strong); color: var(--text); background: var(--panel); }
+  .start-worker-disclosure .start-worker { display: none; margin-top: 9px; padding: 10px 0 2px; }
+  .start-worker-disclosure .start-worker.mobile-expanded { display: grid; }
   .rail-footer { margin-top: 10px; }
   .workspace-header { min-height: 68px; padding: 14px 17px; }
   .task-board { padding: 16px; }
@@ -321,4 +327,21 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .settings-workspace { grid-template-columns: 1fr; padding: 16px; }
   .task-drop-strip { flex-wrap: wrap; }
   .shortcuts-card { grid-column: auto; }
+  .terminal-toolbar { min-height: 44px; padding: 7px 12px; }
+  .terminal-toolbar strong { display: none; }
+  .terminal-mount { min-height: 260px; padding: 6px 7px 8px; }
+  .mobile-terminal-composer { display: grid; flex: 0 0 auto; gap: 9px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
+  .mobile-terminal-composer form { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 7px; }
+  .mobile-terminal-composer label { display: flex; grid-column: 1 / -1; justify-content: space-between; gap: 12px; }
+  .mobile-terminal-composer textarea { min-height: 66px; max-height: 116px; resize: vertical; }
+  .mobile-terminal-composer form > button { min-height: 44px; align-self: stretch; border-color: var(--accent-strong); color: var(--text); background: var(--accent-soft); }
+  .mobile-terminal-keys { display: flex; align-items: end; justify-content: space-between; gap: 10px; }
+  .mobile-terminal-keys button { min-width: 45px; min-height: 38px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--panel-raised); }
+  .terminal-dpad { display: grid; grid-template-areas: '. up .' 'left down right'; grid-template-columns: repeat(3, 45px); gap: 4px; }
+  .terminal-dpad button:nth-child(1) { grid-area: up; }
+  .terminal-dpad button:nth-child(2) { grid-area: left; }
+  .terminal-dpad button:nth-child(3) { grid-area: down; }
+  .terminal-dpad button:nth-child(4) { grid-area: right; }
+  .terminal-key-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 5px; }
+  .terminal-key-actions .mode-cycle-button { min-width: 92px; color: var(--text); background: var(--good-soft); }
 }

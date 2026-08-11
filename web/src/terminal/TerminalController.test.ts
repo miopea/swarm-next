@@ -95,6 +95,15 @@ test("reattaching a started terminal refits after its new container layout", asy
   controller.dispose();
 });
 
+test("mobile controls use the same terminal input transport", () => {
+  const connection = fakeConnection();
+  const controller = new TerminalController(fakeSurface, () => connection);
+
+  controller.sendInput("/status\r");
+
+  expect(connection.sendInput).toHaveBeenCalledWith("/status\r");
+});
+
 test("only explicit session close disposes the controller", () => {
   const surface = fakeSurface();
   const connection = fakeConnection();
