@@ -184,6 +184,14 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .protected-worker { display: inline-flex; align-items: center; min-height: 30px; padding: 0 10px; border: 1px solid var(--good); border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .72rem; }
 .assignment-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; margin-top: auto; }
 .assignment-row select { min-height: 34px; padding: 6px 9px; font-size: .76rem; }
+.task-drop-strip { position: sticky; z-index: 10; bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; max-width: 900px; margin: 18px auto 0; padding: 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: color-mix(in srgb, var(--panel-raised) 94%, transparent); box-shadow: var(--shadow); }
+.task-drop-strip > span { max-width: 330px; overflow: hidden; color: var(--muted); font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+.task-drop-strip > span strong { color: var(--text); }
+.task-drop-target { min-height: 34px; padding: 6px 11px; border-color: color-mix(in srgb, var(--state) 55%, var(--line)); color: var(--text); background: color-mix(in srgb, var(--state) 16%, var(--panel)); font-size: .75rem; }
+.task-drop-target:hover:not(:disabled) { border-color: var(--state); background: color-mix(in srgb, var(--state) 25%, var(--panel)); }
+.task-card[draggable="true"] { cursor: grab; }
+.task-card[draggable="true"]:active { cursor: grabbing; }
+
 .task-actions { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
 .task-actions button { min-height: 34px; padding: 6px 10px; font-size: .75rem; }
 .text-button { border-color: transparent; color: var(--muted); background: transparent; }
@@ -287,5 +295,6 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-compose form button { width: 100%; justify-self: stretch; }
   .empty-card { flex-direction: column; padding: 20px; text-align: center; }
   .settings-workspace { grid-template-columns: 1fr; padding: 16px; }
+  .task-drop-strip { flex-wrap: wrap; }
   .shortcuts-card { grid-column: auto; }
 }
