@@ -69,6 +69,32 @@ test("switching between sessions keeps both transports attached", async () => {
   expect(registry.size).toBe(2);
 });
 
+test("reattaching a started terminal refits after its new container layout", async () => {
+  const surface = fakeSurface();
+  vi.mocked(surface.fit)
+    .mockResolvedValueOnce({ rows: 24, columns: 80 })
+    .mockResolvedValueOnce({ rows: 38, columns: 132 });
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  const firstMount = document.createElement("div");
+  const secondMount = document.createElement("div");
+
+  controller.attach(firstMount);
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
+  expect(connection.resize).toHaveBeenLastCalledWith(24, 80);
+
+  controller.detach();
+  controller.attach(secondMount);
+
+  await vi.waitFor(() => expect(surface.fit).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(connection.resize).toHaveBeenLastCalledWith(38, 132));
+  expect(connection.start).toHaveBeenCalledTimes(1);
+  expect(connection.dispose).not.toHaveBeenCalled();
+  expect(secondMount.children).toHaveLength(1);
+
+  controller.dispose();
+});
+
 test("only explicit session close disposes the controller", () => {
   const surface = fakeSurface();
   const connection = fakeConnection();

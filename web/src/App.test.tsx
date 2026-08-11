@@ -90,6 +90,25 @@ test("restores tasks and workers after a refresh", async () => {
   expect(screen.getByRole("option", { name: /Queen/ })).toBeInTheDocument();
 });
 
+test("restores the worker surface after a refresh", async () => {
+  window.sessionStorage.setItem("swarm-next.operator-token.v1", "saved-secret");
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]));
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "Worker terminal" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Workers 0" })).toHaveAttribute("aria-current", "page");
+  expect(screen.queryByRole("heading", { name: "Task board" })).not.toBeInTheDocument();
+  expect(window.sessionStorage.getItem("swarm-next.surface.v1")).toBe("workers");
+});
+
 test("removes a rejected saved token and returns to unlock", async () => {
   window.sessionStorage.setItem("swarm-next.operator-token.v1", "expired-secret");
   vi.stubGlobal(
