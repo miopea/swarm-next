@@ -9,7 +9,7 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=SWARM_TERMINAL_SOCKET=%t/swarm-next/terminal.sock
 Environment=SWARM_TERMINAL_HISTORY_DIR=@STATE_ROOT@/terminal-history
 Environment=CLAUDE_CONFIG_DIR=@STATE_ROOT@/providers/claude
-ExecStart=@INSTALL_ROOT@/current/bin/swarm-terminal-host
+ExecStart=@INSTALL_ROOT@/host-current/bin/swarm-terminal-host
 Restart=on-failure
 RestartSec=2s
 RuntimeDirectory=swarm-next

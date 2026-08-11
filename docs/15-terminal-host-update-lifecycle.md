@@ -1,6 +1,6 @@
 # M1 terminal-host update lifecycle
 
-Status: **Implemented drain foundation**
+Status: **Implemented**
 
 This increment makes the accepted compatible-host fallback concrete. It keeps
 active workers on the existing terminal host during application updates and
@@ -57,19 +57,24 @@ Cancellation takes the same lock before allowing starts again. Status counts
 live provider processes rather than retained registry entries, so a completed
 worker cannot hold an update indefinitely.
 
-## Graceful replacement sequence
+## Package update and graceful replacement
 
-The packaged updater will:
+A normal compatible package update:
 
-1. verify the replacement host protocol is compatible;
-2. request `begin_drain` from the current host;
-3. keep the current binary and socket authoritative while running sessions are
-   non-zero;
-4. poll `host_status` with a bounded interval or cancel drain;
-5. once running sessions reach zero, send the host a graceful interrupt;
-6. wait for process exit and Unix-socket removal;
-7. start the replacement host and verify its status;
-8. roll back to the retained old binary if replacement health fails.
+1. verifies the release checksum and exact host protocol;
+2. retains the old API/browser release and its hashed assets;
+3. atomically switches the API/browser `current` pointer;
+4. restarts and health-checks only `swarm-next-api.service`;
+5. leaves `host-current`, the host PID, socket, and all worker PTYs untouched.
+
+The explicit `reconcile-host` action:
+
+1. verifies exact protocol compatibility;
+2. requests `begin_drain`, atomically preventing new worker creation;
+3. reads `host_status` and defers with drain cancellation if any session runs;
+4. at zero sessions, switches `host-current` and restarts only the host service;
+5. verifies the replacement host through same-user IPC;
+6. restores and verifies the retained host release if replacement fails.
 
 The terminal-host executable now handles graceful interrupt by dropping its
 listener, which removes its owned socket path. Abrupt process death is still a
@@ -90,3 +95,7 @@ ownership before removing a stale socket.
   existing worker, rejected a second start, cancellation worked, graceful
   interrupt removed the socket, and a replacement protocol-v5 host rebound the
   same path without manual deletion.
+- The package lifecycle smoke proves API update and rollback do not stop or
+  restart the host with an active session, host reconciliation refuses that
+  session, and later reconciliation advances the independent host pointer at
+  zero sessions.
