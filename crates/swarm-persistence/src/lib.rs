@@ -7,8 +7,8 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, params};
 use swarm_domain::{
     ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
-    HiveIdentity, Operator, OperatorId, Task, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
-    WorkerSessionId,
+    HiveIdentity, Operator, OperatorId, Task, TaskActivity, TaskActivityKind, TaskActivityPage,
+    TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -20,6 +20,7 @@ const MAX_WORKSPACE_BYTES: usize = 4096;
 const CURRENT_SCHEMA_VERSION: i64 = 5;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
+pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 
 #[derive(Clone)]
 pub struct TaskStore {
@@ -311,6 +312,47 @@ impl TaskStore {
             )
             .optional()?
             .ok_or(TaskStoreError::NotFound)
+    }
+
+    /// Lists a bounded, chronological activity history for one task.
+    ///
+    /// # Errors
+    /// Returns `NotFound` for an unknown task or a persistence error.
+    pub fn list_task_activity(
+        &self,
+        id: TaskId,
+        limit: usize,
+    ) -> Result<TaskActivityPage, TaskStoreError> {
+        let connection = self.connection()?;
+        let exists = connection
+            .query_row(
+                "SELECT 1 FROM tasks WHERE id = ?1",
+                [id.to_string()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(TaskStoreError::NotFound);
+        }
+        let limit = limit.clamp(1, MAX_TASK_ACTIVITY_PAGE);
+        let query_limit = i64::try_from(limit.saturating_add(1))
+            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
+        let mut statement = connection.prepare(
+            "SELECT sequence, task_id, kind, from_state, to_state, occurred_at
+             FROM task_activity WHERE task_id = ?1
+             ORDER BY sequence DESC LIMIT ?2",
+        )?;
+        let mut activity = statement
+            .query_map(params![id.to_string(), query_limit], task_activity_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let truncated = activity.len() > limit;
+        activity.truncate(limit);
+        activity.reverse();
+        Ok(TaskActivityPage {
+            events: activity,
+            truncated,
+        })
     }
 
     /// Replaces the supplied task details and records one atomic activity event.
@@ -852,6 +894,30 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     })
 }
 
+fn task_activity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskActivity> {
+    let kind = TaskActivityKind::from_str(&row.get::<_, String>(2)?)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let from_state = row
+        .get::<_, Option<String>>(3)?
+        .map(|value| TaskState::from_str(&value))
+        .transpose()
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let to_state = row
+        .get::<_, Option<String>>(4)?
+        .map(|value| TaskState::from_str(&value))
+        .transpose()
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    Ok(TaskActivity {
+        sequence: row.get(0)?,
+        task_id: TaskId::from_str(&row.get::<_, String>(1)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        kind,
+        from_state,
+        to_state,
+        occurred_at: row.get(5)?,
+    })
+}
+
 fn parse_domain_id<T: FromStr>(value: &str) -> rusqlite::Result<T> {
     T::from_str(value).map_err(|_| rusqlite::Error::InvalidQuery)
 }
@@ -881,6 +947,46 @@ mod tests {
         assert!(matches!(
             store.assign_task(ready.id, WorkerSessionId::new()),
             Err(TaskStoreError::CompletedTask)
+        ));
+
+        let activity = store.list_task_activity(created.id, 100).unwrap();
+        assert!(!activity.truncated);
+        assert_eq!(activity.events.len(), 6);
+        assert_eq!(activity.events[0].kind, TaskActivityKind::Created);
+        assert_eq!(activity.events[1].from_state, Some(TaskState::Draft));
+        assert_eq!(activity.events[1].to_state, Some(TaskState::Ready));
+        assert_eq!(activity.events[2].kind, TaskActivityKind::Assigned);
+        assert_eq!(activity.events[5].to_state, Some(TaskState::Completed));
+    }
+
+    #[test]
+    fn task_activity_is_bounded_and_unknown_tasks_fail_closed() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Bound history", "/workspace").unwrap();
+        for _ in 0..(MAX_TASK_ACTIVITY_PAGE + 10) {
+            store
+                .update_task_details(
+                    task.id,
+                    &TaskDetailsUpdate {
+                        description: Some("same durable detail".into()),
+                        ..TaskDetailsUpdate::default()
+                    },
+                )
+                .unwrap();
+        }
+
+        let activity = store.list_task_activity(task.id, usize::MAX).unwrap();
+        assert!(activity.truncated);
+        assert_eq!(activity.events.len(), MAX_TASK_ACTIVITY_PAGE);
+        assert!(
+            activity
+                .events
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+        assert!(matches!(
+            store.list_task_activity(TaskId::new(), 30),
+            Err(TaskStoreError::NotFound)
         ));
     }
 

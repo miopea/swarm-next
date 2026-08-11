@@ -6,6 +6,7 @@ import {
   createWorker,
   fetchHive,
   fetchSessions,
+  fetchTaskActivity,
   fetchTasks,
   fetchWorkers,
   startWorker,
@@ -465,7 +466,7 @@ export function App() {
             <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
           </form>
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} sessions={sessions} workerNames={workerNames} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} />
+          <TaskBoard tasks={tasks} sessions={sessions} workerNames={workerNames} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             colorTheme={colorTheme}

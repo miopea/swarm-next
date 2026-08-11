@@ -206,6 +206,14 @@ button:active:not(:disabled) { transform: translateY(1px); }
 
 .task-actions { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
 .task-actions button { min-height: 34px; padding: 6px 10px; font-size: .75rem; }
+.task-history { margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line); }
+.task-history > p { margin: 0; color: var(--muted); font-size: .74rem; }
+.task-history .task-history-note { margin-bottom: 8px; color: var(--quiet); font-size: .69rem; }
+.task-history ol { display: grid; margin: 0; padding: 0; gap: 8px; list-style: none; }
+.task-history li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; color: var(--muted); font-size: .73rem; }
+.task-history li::before { width: 6px; height: 6px; margin-right: 8px; border-radius: 50%; background: var(--good); content: ""; }
+.task-history li { grid-template-columns: 6px minmax(0, 1fr) auto; }
+.task-history time { color: var(--quiet); font-size: .67rem; white-space: nowrap; }
 .task-edit-form { display: grid; gap: 7px; margin: -5px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); }
 .task-edit-form input, .task-edit-form select, .task-edit-form textarea { min-height: 34px; padding: 7px 9px; font-size: .78rem; }
 .task-edit-row { display: grid; grid-template-columns: minmax(90px, .45fr) minmax(150px, 1fr); gap: 8px; }
