@@ -31,6 +31,9 @@ Queen, Forager, and Pollen. No legacy or operator production data participated.
 - A task-history pass created, edited, transitioned, and assigned work in the
   rendered app. The bounded timeline remained readable at 412 by 915 and
   returned unchanged after a full reload with no console warnings or errors.
+- A task-ordering pass moved two open tasks through the authenticated durable
+  reorder contract. The new order survived reload, and compact Earlier/Later
+  controls remained visible at 412 by 915 with a clean console.
 
 ## Development port contract
 
@@ -42,5 +45,5 @@ API port `8765`.
 ## Remaining evidence
 
 This pass proves functional redraw and recovery, not long-duration performance.
-The multi-day soak, operator-controlled task ordering, and outbound feedback
-submission transport remain separate promotion work.
+The multi-day soak and outbound feedback submission transport remain separate
+promotion work.

@@ -14,6 +14,7 @@ type Props = {
   onAssign: (task: Task, sessionId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
   onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
+  onReorder: (taskIds: string[]) => Promise<void>;
 };
 
 const stateLabels: Record<TaskState, string> = {
@@ -52,6 +53,7 @@ export default function TaskBoard({
   onAssign,
   onStartWorker,
   onFetchActivity,
+  onReorder,
 }: Props) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -69,9 +71,27 @@ export default function TaskBoard({
     setWorkspace("");
   }
 
-  const openTasks = tasks.filter((task) => task.state !== "completed");
+  const openTasks = tasks
+    .filter((task) => task.state !== "completed")
+    .sort((left, right) => left.position - right.position);
   const completedTasks = tasks.filter((task) => task.state === "completed");
   const draggedTask = tasks.find((task) => task.id === draggedTaskId);
+
+  function reorderBefore(targetTaskId: string) {
+    if (!draggedTaskId || draggedTaskId === targetTaskId) return;
+    const taskIds = openTasks.map((task) => task.id).filter((taskId) => taskId !== draggedTaskId);
+    taskIds.splice(taskIds.indexOf(targetTaskId), 0, draggedTaskId);
+    setDraggedTaskId(undefined);
+    void onReorder(taskIds);
+  }
+
+  function moveTaskAt(index: number, offset: -1 | 1) {
+    const target = index + offset;
+    if (target < 0 || target >= openTasks.length) return;
+    const taskIds = openTasks.map((task) => task.id);
+    [taskIds[index], taskIds[target]] = [taskIds[target], taskIds[index]];
+    void onReorder(taskIds);
+  }
 
   return (
     <div className="task-board">
@@ -131,7 +151,7 @@ export default function TaskBoard({
           <div className="empty-card"><BeeMascot className="empty-bee" expression="available" /><div><strong>No work queued</strong><span>Create a focused task when you are ready.</span></div></div>
         ) : (
           <div className="task-grid">
-            {openTasks.map((task) => (
+            {openTasks.map((task, index) => (
               <TaskCard
                 key={task.id}
                 task={task}
@@ -143,6 +163,11 @@ export default function TaskBoard({
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
                 onFetchActivity={onFetchActivity}
+                canMoveEarlier={index > 0}
+                canMoveLater={index < openTasks.length - 1}
+                onMoveEarlier={() => moveTaskAt(index, -1)}
+                onMoveLater={() => moveTaskAt(index, 1)}
+                onDropBefore={() => reorderBefore(task.id)}
                 onDragStart={setDraggedTaskId}
                 onDragEnd={() => setDraggedTaskId(undefined)}
               />
@@ -188,6 +213,11 @@ export default function TaskBoard({
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
                 onFetchActivity={onFetchActivity}
+                canMoveEarlier={false}
+                canMoveLater={false}
+                onMoveEarlier={() => undefined}
+                onMoveLater={() => undefined}
+                onDropBefore={() => undefined}
                 onDragStart={setDraggedTaskId}
                 onDragEnd={() => setDraggedTaskId(undefined)}
               />
@@ -199,7 +229,7 @@ export default function TaskBoard({
   );
 }
 
-function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate"> & { task: Task; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const runningSessions = sessions.filter((session) => session.running);
   const [editing, setEditing] = useState(false);
@@ -235,6 +265,8 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
       draggable={!busy && !editing && task.state !== "completed"}
       onDragStart={(event: DragEvent<HTMLElement>) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", task.id); onDragStart(task.id); }}
       onDragEnd={onDragEnd}
+      onDragOver={(event) => event.preventDefault()}
+      onDrop={(event) => { event.preventDefault(); onDropBefore(); }}
     >
       <div className="task-card-topline">
         <div className="task-signals">
@@ -269,6 +301,8 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
         {!editing && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}
         {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
         {!editing && <button className="text-button" aria-expanded={historyOpen} onClick={toggleHistory}>History</button>}
+        {!editing && task.state !== "completed" && <button className="text-button task-order-button" aria-label={`Move ${task.title} earlier`} disabled={busy || !canMoveEarlier} onClick={onMoveEarlier}>Earlier</button>}
+        {!editing && task.state !== "completed" && <button className="text-button task-order-button" aria-label={`Move ${task.title} later`} disabled={busy || !canMoveLater} onClick={onMoveLater}>Later</button>}
         {task.state === "active" && <button className="text-button danger-text" disabled={busy} onClick={() => void onTransition(task, "blocked")}>Block</button>}
         {task.state === "review" && <button className="text-button" disabled={busy} onClick={() => void onTransition(task, "active")}>Changes needed</button>}
       </div>
