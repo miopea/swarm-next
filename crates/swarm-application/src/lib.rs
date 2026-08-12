@@ -1,7 +1,8 @@
 use swarm_domain::{
-    Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
+    DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency, Task, TaskId,
+    TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
 };
-use swarm_persistence::{TaskStore, TaskStoreError};
+use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
 
 /// The durable agent identity resolved before an application command is invoked.
@@ -201,6 +202,91 @@ impl TaskService {
         }
         self.transition_operator_task(task_id, target)
     }
+    /// Lists the operator/Queen inbox, or only requests originated by a worker caller.
+    ///
+    /// # Errors
+    /// Returns a persistence or persisted-data integrity error.
+    pub fn list_visible_decisions(
+        &self,
+        principal: Option<AgentPrincipal>,
+    ) -> Result<Vec<DecisionRequest>, ApplicationError> {
+        let decisions = self.store.list_decision_requests()?;
+        Ok(match principal {
+            None
+            | Some(AgentPrincipal {
+                role: WorkerRole::Queen,
+                ..
+            }) => decisions,
+            Some(principal) => decisions
+                .into_iter()
+                .filter(|decision| decision.requesting_worker_id == principal.worker_id)
+                .collect(),
+        })
+    }
+
+    /// Creates a typed request for operator judgment using the authenticated agent identity.
+    ///
+    /// # Errors
+    /// Denies foreign task correlation and propagates validation or persistence failures.
+    pub fn create_decision(
+        &self,
+        principal: AgentPrincipal,
+        input: &DecisionRequestInput,
+    ) -> Result<DecisionRequest, ApplicationError> {
+        if principal.role != WorkerRole::Queen
+            && let Some(task_id) = input.task_id
+        {
+            let session_id = principal
+                .active_session_id
+                .ok_or(ApplicationError::WorkerNotRunning)?;
+            if self.store.get_task(task_id)?.assigned_session_id != Some(session_id) {
+                return Err(ApplicationError::NotAuthorized);
+            }
+        }
+        self.store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: principal.worker_id,
+                task_id: input.task_id,
+                kind: input.kind,
+                urgency: input.urgency,
+                title: &input.title,
+                reason: &input.reason,
+                risk: &input.risk,
+                evidence: &input.evidence,
+                suggested_action: &input.suggested_action,
+                allowed_actions: &input.allowed_actions,
+                deadline: input.deadline,
+            })
+            .map_err(Into::into)
+    }
+
+    /// Resolves one pending decision as the authenticated local operator.
+    ///
+    /// # Errors
+    /// Propagates invalid identity, state, action, integrity, or persistence failures.
+    pub fn resolve_operator_decision(
+        &self,
+        id: DecisionRequestId,
+        action: &str,
+        note: &str,
+    ) -> Result<DecisionRequest, ApplicationError> {
+        self.store
+            .resolve_decision_request(id, action, note)
+            .map_err(Into::into)
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecisionRequestInput {
+    pub task_id: Option<TaskId>,
+    pub kind: DecisionRequestKind,
+    pub urgency: DecisionUrgency,
+    pub title: String,
+    pub reason: String,
+    pub risk: String,
+    pub evidence: String,
+    pub suggested_action: String,
+    pub allowed_actions: Vec<String>,
+    pub deadline: Option<i64>,
 }
 
 fn require_queen(principal: AgentPrincipal) -> Result<(), ApplicationError> {
@@ -320,6 +406,107 @@ mod tests {
         ));
         assert!(matches!(
             service.transition_task(worker_principal, task.id, TaskState::Completed),
+            Err(ApplicationError::NotAuthorized)
+        ));
+    }
+
+    #[test]
+    fn decision_visibility_and_task_correlation_follow_agent_authority() {
+        let (service, queen, worker) = setup();
+        let session_id = WorkerSessionId::new();
+        service
+            .store()
+            .bind_worker_session(worker.id, session_id)
+            .unwrap();
+        let running_worker = service.store().get_worker_profile(worker.id).unwrap();
+        let worker_principal = AgentPrincipal::from(&running_worker);
+        let queen_principal = AgentPrincipal::from(&queen);
+        let assigned = service
+            .create_task(
+                queen_principal,
+                "Assigned",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        let foreign = service
+            .create_task(
+                queen_principal,
+                "Foreign",
+                "",
+                TaskPriority::Normal,
+                "/workspace/other",
+            )
+            .unwrap();
+        service
+            .assign_task(queen_principal, assigned.id, worker.id)
+            .unwrap();
+
+        let worker_request = service
+            .create_decision(
+                worker_principal,
+                &DecisionRequestInput {
+                    task_id: Some(assigned.id),
+                    kind: DecisionRequestKind::Input,
+                    urgency: DecisionUrgency::Normal,
+                    title: "Choose the safer path".into(),
+                    reason: "Two valid implementations remain".into(),
+                    risk: "The wrong choice adds migration work".into(),
+                    evidence: "Both prototypes pass".into(),
+                    suggested_action: "Use the durable variant".into(),
+                    allowed_actions: vec!["durable".into(), "minimal".into()],
+                    deadline: None,
+                },
+            )
+            .unwrap();
+        service
+            .create_decision(
+                queen_principal,
+                &DecisionRequestInput {
+                    task_id: None,
+                    kind: DecisionRequestKind::Approval,
+                    urgency: DecisionUrgency::TimeSensitive,
+                    title: "Approve release".into(),
+                    reason: "The release candidate is ready".into(),
+                    risk: String::new(),
+                    evidence: "All checks pass".into(),
+                    suggested_action: "Ship".into(),
+                    allowed_actions: vec!["ship".into(), "hold".into()],
+                    deadline: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            service
+                .list_visible_decisions(Some(worker_principal))
+                .unwrap(),
+            [worker_request]
+        );
+        assert_eq!(
+            service
+                .list_visible_decisions(Some(queen_principal))
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(matches!(
+            service.create_decision(
+                worker_principal,
+                &DecisionRequestInput {
+                    task_id: Some(foreign.id),
+                    kind: DecisionRequestKind::Help,
+                    urgency: DecisionUrgency::Normal,
+                    title: "Foreign work".into(),
+                    reason: "Should remain private".into(),
+                    risk: String::new(),
+                    evidence: String::new(),
+                    suggested_action: "Do not allow".into(),
+                    allowed_actions: vec!["acknowledge".into()],
+                    deadline: None,
+                },
+            ),
             Err(ApplicationError::NotAuthorized)
         ));
     }

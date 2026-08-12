@@ -246,6 +246,38 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-grid.compact .task-card { min-height: 118px; box-shadow: none; }
 .task-grid.compact .task-card h4 { margin: 15px 0 0; }
 
+.decision-inbox { min-height: 0; padding: 26px; overflow-y: auto; }
+.decision-inbox-intro { display: flex; max-width: 1180px; margin: 0 auto 20px; align-items: end; justify-content: space-between; gap: 24px; }
+.decision-inbox-intro h3 { margin: 0 0 7px; font-size: 1.25rem; }
+.decision-inbox-intro p:not(.eyebrow) { max-width: 690px; margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.55; }
+.decision-history-toggle { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; color: var(--muted); font-size: .76rem; }
+.decision-empty { display: grid; max-width: 620px; min-height: 420px; margin: 0 auto; place-items: center; align-content: center; color: var(--muted); text-align: center; }
+.decision-empty h3 { margin: 0 0 8px; color: var(--text); font-size: 1.16rem; }
+.decision-empty p:not(.eyebrow) { max-width: 500px; line-height: 1.6; }
+.decision-list { display: grid; max-width: 1180px; margin: 0 auto; gap: 14px; }
+.decision-card { display: grid; gap: 16px; padding: 21px; border: 1px solid var(--line); border-left: 4px solid var(--good); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 6%, transparent); }
+.decision-card.urgency-time_sensitive { border-left-color: var(--accent); background: color-mix(in srgb, var(--warn-soft) 22%, var(--panel)); }
+.decision-card.state-resolved { border-left-color: var(--line-strong); opacity: .82; }
+.decision-card > header { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
+.decision-requester { display: flex; min-width: 0; align-items: center; gap: 13px; }
+.decision-requester h4 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.decision-requester .eyebrow { margin-bottom: 4px; }
+.decision-bee { width: 45px; height: 45px; flex: 0 0 45px; }
+.decision-bee svg { width: 100%; height: 100%; }
+.decision-urgency { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .68rem; font-weight: 500; }
+.decision-urgency.time_sensitive { color: var(--accent-strong); background: var(--warn-soft); }
+.decision-reason { margin: 0; color: var(--text); font-size: .88rem; line-height: 1.6; }
+.decision-context { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--line); }
+.decision-context > div { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 10px; padding: 11px 8px 11px 0; border-bottom: 1px solid var(--line); }
+.decision-context dt { color: var(--muted); font-size: .72rem; }
+.decision-context dd { margin: 0; color: var(--text); font-size: .78rem; line-height: 1.45; overflow-wrap: anywhere; }
+.decision-resolution { display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: end; gap: 14px; }
+.decision-resolution label { display: grid; gap: 6px; color: var(--muted); font-size: .72rem; }
+.decision-resolution textarea { min-height: 62px; resize: vertical; }
+.decision-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 8px; }
+.primary-action { border-color: var(--accent-strong); color: var(--text); background: var(--accent-soft); }
+.primary-action:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-soft) 78%, var(--panel)); }
+.decision-resolved { margin: 0; padding: 10px 12px; border-radius: var(--radius-sm); color: var(--muted); background: var(--panel-soft); font-size: .78rem; }
 .settings-workspace { display: grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); align-content: start; gap: 14px; min-height: 0; padding: 26px; overflow-y: auto; }
 .settings-card { display: grid; align-content: start; gap: 16px; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 6%, transparent); }
 .settings-card h3 { margin: 0; font-size: 1.08rem; }
@@ -322,7 +354,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .app-shell { grid-template-rows: auto minmax(0, 1fr); grid-template-columns: 1fr; min-height: 100%; }
   .control-rail { max-height: none; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
   .brand-lockup { padding-bottom: 12px; }
-  .surface-nav { grid-template-columns: repeat(3, 1fr); }
+  .surface-nav { grid-template-columns: repeat(4, 1fr); }
   .rail-context { display: none; }
   .control-rail.surface-workers .rail-context { display: block; flex: 0 0 auto; padding-top: 8px; overflow-x: auto; overflow-y: visible; scrollbar-width: thin; }
   .control-rail.surface-workers .rail-heading { display: none; }
@@ -342,6 +374,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-compose form button { width: 100%; justify-self: stretch; }
   .empty-card { flex-direction: column; padding: 20px; text-align: center; }
   .settings-workspace { grid-template-columns: 1fr; padding: 16px; }
+  .decision-inbox { padding: 16px; }
+  .decision-inbox-intro { align-items: start; flex-direction: column; gap: 12px; }
+  .decision-context { grid-template-columns: 1fr; }
+  .decision-resolution { grid-template-columns: 1fr; }
+  .decision-actions { justify-content: stretch; }
   .task-drop-strip { flex-wrap: wrap; }
   .shortcuts-card { grid-column: auto; }
   .terminal-toolbar { min-height: 44px; padding: 7px 12px; }

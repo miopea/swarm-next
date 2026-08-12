@@ -57,3 +57,5 @@ Current decision records:
 - [ADR 0010: Apiary federation and stewardship](decisions/0010-apiary-federation-and-stewardship.md)
 - [ADR 0011: Durable provider conversation recovery](decisions/0011-provider-conversation-recovery.md)
 - [ADR 0012: Server-authoritative operator engagement leases](decisions/0012-operator-engagement-leases.md)
+- [ADR 0013: Scoped agent application bridge](decisions/0013-scoped-agent-application-bridge.md)
+- [ADR 0014: Unified operator decision inbox](decisions/0014-unified-operator-decision-inbox.md)

@@ -26,8 +26,10 @@ use rmcp::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use swarm_application::{AgentPrincipal, ApplicationError, TaskService};
-use swarm_domain::{TaskId, TaskPriority, TaskState, WorkerId, WorkerRole};
+use swarm_application::{AgentPrincipal, ApplicationError, DecisionRequestInput, TaskService};
+use swarm_domain::{
+    DecisionRequestKind, DecisionUrgency, TaskId, TaskPriority, TaskState, WorkerId, WorkerRole,
+};
 use swarm_persistence::{TaskStore, TaskStoreError};
 use tokio::sync::Notify;
 use tower::ServiceExt;
@@ -173,7 +175,12 @@ impl ServerHandler for AgentMcp {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<rmcp::RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let mut tools = vec![list_tasks_tool(), transition_task_tool()];
+        let mut tools = vec![
+            list_tasks_tool(),
+            transition_task_tool(),
+            list_decisions_tool(),
+            request_decision_tool(),
+        ];
         if self.principal.role == WorkerRole::Queen {
             tools.extend([list_workers_tool(), create_task_tool(), assign_task_tool()]);
         }
@@ -225,12 +232,44 @@ impl ServerHandler for AgentMcp {
                     .assign_task(self.principal, task_id, worker_id)
                     .and_then(structured)
             }),
+            "swarm_list_decisions" => self
+                .tasks
+                .list_visible_decisions(Some(self.principal))
+                .and_then(|decisions| structured(json!({ "decisions": decisions }))),
+            "swarm_request_decision" => {
+                parse::<RequestDecisionInput>(arguments).and_then(|input| {
+                    let task_id = input
+                        .task_id
+                        .as_deref()
+                        .map(TaskId::from_str)
+                        .transpose()
+                        .map_err(|_| ApplicationError::NotAuthorized)?;
+                    self.tasks
+                        .create_decision(
+                            self.principal,
+                            &DecisionRequestInput {
+                                task_id,
+                                kind: input.kind,
+                                urgency: input.urgency,
+                                title: input.title,
+                                reason: input.reason,
+                                risk: input.risk,
+                                evidence: input.evidence,
+                                suggested_action: input.suggested_action,
+                                allowed_actions: input.allowed_actions,
+                                deadline: input.deadline,
+                            },
+                        )
+                        .and_then(structured)
+                })
+            }
             _ => return Err(ErrorData::invalid_params("unknown Swarm tool", None)),
         };
         match result {
             Ok(result) => {
                 if request.name.as_ref() != "swarm_list_tasks"
                     && request.name.as_ref() != "swarm_list_workers"
+                    && request.name.as_ref() != "swarm_list_decisions"
                 {
                     self.changed.notify_waiters();
                 }
@@ -277,6 +316,55 @@ struct TransitionTaskInput {
     state: TaskState,
 }
 
+#[derive(Deserialize)]
+struct RequestDecisionInput {
+    task_id: Option<String>,
+    kind: DecisionRequestKind,
+    #[serde(default)]
+    urgency: DecisionUrgency,
+    title: String,
+    reason: String,
+    #[serde(default)]
+    risk: String,
+    #[serde(default)]
+    evidence: String,
+    suggested_action: String,
+    allowed_actions: Vec<String>,
+    deadline: Option<i64>,
+}
+fn list_decisions_tool() -> Tool {
+    tool(
+        "swarm_list_decisions",
+        "List decision requests visible to this agent. Queen sees the Hive inbox; workers see only requests they originated.",
+        &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        true,
+    )
+}
+
+fn request_decision_tool() -> Tool {
+    tool(
+        "swarm_request_decision",
+        "Request operator judgment without interrupting another terminal. Use only when progress genuinely needs input, approval, credentials, conflict resolution, or help.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": ["string", "null"], "format": "uuid" },
+                "kind": { "type": "string", "enum": ["input", "approval", "credentials", "conflict", "help"] },
+                "urgency": { "type": "string", "enum": ["normal", "time_sensitive"], "default": "normal" },
+                "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+                "reason": { "type": "string", "maxLength": 10000 },
+                "risk": { "type": "string", "maxLength": 10000, "default": "" },
+                "evidence": { "type": "string", "maxLength": 10000, "default": "" },
+                "suggested_action": { "type": "string", "maxLength": 10000 },
+                "allowed_actions": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
+                "deadline": { "type": ["integer", "null"] }
+            },
+            "required": ["kind", "title", "reason", "suggested_action", "allowed_actions"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
 fn list_tasks_tool() -> Tool {
     tool(
         "swarm_list_tasks",
@@ -544,7 +632,15 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(queen_names.contains(&"swarm_create_task"));
         assert!(queen_names.contains(&"swarm_assign_task"));
-        assert_eq!(worker_names, ["swarm_list_tasks", "swarm_transition_task"]);
+        assert_eq!(
+            worker_names,
+            [
+                "swarm_list_tasks",
+                "swarm_transition_task",
+                "swarm_list_decisions",
+                "swarm_request_decision"
+            ]
+        );
 
         let listed = response_json(
             handle(
@@ -610,5 +706,64 @@ mod tests {
         .await;
         assert_eq!(worker["result"]["isError"], true);
         assert_eq!(store.list_tasks().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn worker_can_request_a_decision_and_queen_sees_the_typed_inbox() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+
+        let created = response_json(
+            handle(
+                bridge.clone(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_request_decision",
+                        "arguments": {
+                            "kind": "input",
+                            "urgency": "normal",
+                            "title": "Choose an implementation",
+                            "reason": "Two valid paths remain",
+                            "risk": "A wrong choice adds migration work",
+                            "evidence": "Both prototypes pass",
+                            "suggested_action": "Use the durable path",
+                            "allowed_actions": ["durable", "minimal"]
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(created["result"]["isError"], false);
+        assert_eq!(
+            created["result"]["structuredContent"]["requesting_worker_id"],
+            worker_id.to_string()
+        );
+        assert_eq!(store.list_decision_requests().unwrap().len(), 1);
+
+        let listed = response_json(
+            handle(
+                bridge,
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_decisions", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert!(listed["result"]["structuredContent"].is_object());
+        assert_eq!(
+            listed["result"]["structuredContent"]["decisions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

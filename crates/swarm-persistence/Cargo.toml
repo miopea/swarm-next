@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 rusqlite.workspace = true
 swarm-domain = { path = "../swarm-domain" }
+serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 

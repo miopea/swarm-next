@@ -3,6 +3,8 @@ import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent, type Keyb
 import {
   assignTask,
   createTask,
+  fetchDecisions,
+  resolveDecision,
   createWorker,
   fetchHive,
   fetchSessions,
@@ -16,6 +18,7 @@ import {
   transitionTask,
   updateTask,
   type ControlRoomEvent,
+  type DecisionRequest,
   type Health,
   type HiveIdentity,
   type SessionSummary,
@@ -26,6 +29,7 @@ import {
   type Worker,
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
+import DecisionInbox from "./decisions/DecisionInbox";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
@@ -40,7 +44,7 @@ const OPERATOR_TOKEN_STORAGE_KEY = "swarm-next.operator-token.v1";
 const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
-type Surface = "tasks" | "workers" | "settings";
+type Surface = "decisions" | "tasks" | "workers" | "settings";
 
 export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
@@ -52,6 +56,7 @@ export function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [workerNameDraft, setWorkerNameDraft] = useState("");
+  const [decisions, setDecisions] = useState<DecisionRequest[]>([]);
   const [workspace, setWorkspace] = useState("");
   const [showWorkerForm, setShowWorkerForm] = useState(false);
   const [surface, setSurface] = useState<Surface>(readSavedSurface);
@@ -86,7 +91,7 @@ export function App() {
     let cancelled = false;
     setBusy(true);
     void loadControlRoom(savedToken)
-      .then(({ hive, sessions: nextSessions, workers: nextWorkers, tasks: nextTasks }) => {
+      .then(({ hive, sessions: nextSessions, workers: nextWorkers, tasks: nextTasks, decisions: nextDecisions }) => {
         if (cancelled) return;
         terminalWorkspace.authenticate(savedToken);
         setOperatorToken(savedToken);
@@ -95,6 +100,7 @@ export function App() {
         setWorkers(nextWorkers);
         setTasks(nextTasks);
         setActiveSessionId(preferredSessionId(nextWorkers, nextSessions));
+        setDecisions(nextDecisions);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -124,6 +130,7 @@ export function App() {
         setSessions(controlRoom.sessions);
         setWorkers(controlRoom.workers);
         setTasks(controlRoom.tasks);
+        setDecisions(controlRoom.decisions);
         setRecentEvents((current) => page.reset_required
           ? page.events.slice(-16)
           : [...current, ...page.events].filter((event, index, events) =>
@@ -155,6 +162,7 @@ export function App() {
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
       setActiveSessionId((current) => current ?? preferredSessionId(controlRoom.workers, controlRoom.sessions));
+      setDecisions(controlRoom.decisions);
       const tokenWasSaved = saveOperatorToken(tokenDraft);
       setTokenDraft("");
       if (!tokenWasSaved) throw new Error("Unlocked, but this browser blocked tab storage; refreshing will lock Swarm again.");
@@ -169,6 +177,7 @@ export function App() {
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
+      setDecisions(controlRoom.decisions);
       setActiveSessionId((current) =>
         current && controlRoom.sessions.some((session) => session.session_id === current)
           ? current
@@ -290,6 +299,13 @@ export function App() {
     await perform(async () => setTasks(await reorderTasks(operatorToken, taskIds)));
   }
 
+  async function resolveInboxDecision(decision: DecisionRequest, action: string, note: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      const updated = await resolveDecision(operatorToken, decision.id, action, note);
+      setDecisions((current) => current.map((item) => item.id === updated.id ? updated : item));
+    });
+  }
   function replaceTask(updated: Task) {
     setTasks((current) => current.map((task) => task.id === updated.id ? updated : task));
   }
@@ -308,9 +324,9 @@ export function App() {
 
   function handleShortcut(event: ReactKeyboardEvent<HTMLElement>) {
     if (!operatorToken || !event.altKey || event.ctrlKey || event.metaKey || isTypingTarget(event.target)) return;
-    if (event.key === "1" || event.key === "2" || event.key === "3") {
+    if (["1", "2", "3", "4"].includes(event.key)) {
       event.preventDefault();
-      setSurface(event.key === "1" ? "tasks" : event.key === "2" ? "workers" : "settings");
+      setSurface(event.key === "1" ? "decisions" : event.key === "2" ? "tasks" : event.key === "3" ? "workers" : "settings");
       return;
     }
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
@@ -333,6 +349,7 @@ export function App() {
     setSessions([]);
     setWorkers([]);
     setTasks([]);
+    setDecisions([]);
     setActiveSessionId(undefined);
     setOperationError(undefined);
   }
@@ -340,6 +357,7 @@ export function App() {
   const activeSession = sessions.find((session) => session.session_id === activeSessionId);
   const activeWorker = workers.find((worker) => worker.active_session_id === activeSessionId);
   const openTaskCount = tasks.filter((task) => task.state !== "completed").length;
+  const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
   const workerNames = useMemo(
     () => new Map(
       workers
@@ -369,6 +387,9 @@ export function App() {
         {operatorToken ? (
           <>
             <nav className="surface-nav" aria-label="Primary">
+              <button className={surface === "decisions" ? "selected" : ""} aria-current={surface === "decisions" ? "page" : undefined} onClick={() => setSurface("decisions")}>
+                <span><DecisionIcon /> Needs you</span><small>{pendingDecisionCount}</small>
+              </button>
               <button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} onClick={() => setSurface("tasks")}>
                 <span><TaskIcon /> Tasks</span><small>{openTaskCount}</small>
               </button>
@@ -380,7 +401,7 @@ export function App() {
               </button>
             </nav>
 
-            {surface !== "settings" && <div className="rail-context">
+            {surface !== "settings" && surface !== "decisions" && <div className="rail-context">
               <div className="rail-heading"><span>{surface === "tasks" ? "Open tasks" : "Live sessions"}</span></div>
               {surface === "tasks" ? (
                 tasks.filter((task) => task.state !== "completed").length === 0 ? <p className="empty-rail">Nothing queued yet.</p> :
@@ -450,8 +471,8 @@ export function App() {
       <section className="workspace">
         <header className="workspace-header">
           <div>
-            <p className="eyebrow">{surface === "tasks" ? "Plan and dispatch" : surface === "settings" ? "Preferences and diagnostics" : activeTask?.title ?? "Persistent terminal"}</p>
-            <h2>{surface === "tasks" ? "Task board" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
+            <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "tasks" ? "Plan and dispatch" : surface === "settings" ? "Preferences and diagnostics" : activeTask?.title ?? "Persistent terminal"}</p>
+            <h2>{surface === "decisions" ? "Needs you" : surface === "tasks" ? "Task board" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
           </div>
           <div className="header-actions">
             {busy && <span className="saving-state">Saving…</span>}
@@ -471,6 +492,8 @@ export function App() {
             <input id="operator-token" type="password" autoComplete="off" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} />
             <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
           </form>
+        ) : surface === "decisions" ? (
+          <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
           <TaskBoard tasks={tasks} sessions={sessions} workerNames={workerNames} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
@@ -500,13 +523,14 @@ export function App() {
 }
 
 async function loadControlRoom(operatorToken: string) {
-  const [hive, sessions, workers, tasks] = await Promise.all([
+  const [hive, sessions, workers, tasks, decisions] = await Promise.all([
     fetchHive(operatorToken),
     fetchSessions(operatorToken),
     fetchWorkers(operatorToken),
     fetchTasks(operatorToken),
+    fetchDecisions(operatorToken),
   ]);
-  return { hive, sessions, workers, tasks };
+  return { hive, sessions, workers, tasks, decisions };
 }
 
 function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): string | undefined {
@@ -515,6 +539,7 @@ function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): stri
     ?? sessions.find((session) => session.running)?.session_id;
 }
 
+function DecisionIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a7 7 0 0 0-7 7v3l-2 3h18l-2-3v-3a7 7 0 0 0-7-7ZM9 20h6"/></svg>; }
 function requireActiveSession(worker: Worker): string {
   if (!worker.active_session_id) throw new Error(`${worker.name} did not receive a terminal session`);
   return worker.active_session_id;
@@ -541,7 +566,7 @@ function RuntimeStatus({ state }: { state: LoadState }) {
 
 function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>; }
 function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
-function readSavedSurface(): Surface { try { const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "workers" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
+function readSavedSurface(): Surface { try { const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "decisions" || saved === "workers" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
 function saveSurface(surface: Surface) { try { window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface); } catch { /* Surface persistence is a non-critical convenience. */ } }
 function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }
 function SettingsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>; }
