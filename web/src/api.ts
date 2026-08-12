@@ -451,6 +451,10 @@ export async function createBrowserSession(operatorToken: string): Promise<void>
   await authenticatedFetch(operatorToken, "/api/v1/auth/session", { method: "POST" });
 }
 
+export async function validateBrowserSession(): Promise<void> {
+  await authenticatedFetch(BROWSER_SESSION_AUTH, "/api/v1/auth/session");
+}
+
 export async function revokeBrowserSession(): Promise<void> {
   await authenticatedFetch(BROWSER_SESSION_AUTH, "/api/v1/auth/session", { method: "DELETE" });
 }

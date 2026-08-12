@@ -24,6 +24,8 @@ use crate::{
 pub const MAX_TERMINAL_ROWS: u16 = 200;
 pub const MAX_TERMINAL_COLUMNS: u16 = 320;
 pub const MAX_TERMINAL_CELLS: usize = 32_000;
+pub const MIN_TERMINAL_ROWS: u16 = 4;
+pub const MIN_TERMINAL_COLUMNS: u16 = 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalSize {
@@ -48,14 +50,15 @@ impl TerminalSize {
 
     fn validate(self) -> Result<(), SessionRegistryError> {
         let cells = usize::from(self.rows) * usize::from(self.columns);
-        if self.rows == 0
-            || self.columns == 0
+        if self.rows < MIN_TERMINAL_ROWS
+            || self.columns < MIN_TERMINAL_COLUMNS
             || self.rows > MAX_TERMINAL_ROWS
             || self.columns > MAX_TERMINAL_COLUMNS
             || cells > MAX_TERMINAL_CELLS
         {
             return Err(SessionRegistryError::Terminal(format!(
-                "terminal dimensions must be non-zero and within {MAX_TERMINAL_ROWS} rows, \
+                "terminal dimensions must be at least {MIN_TERMINAL_ROWS} rows and \
+                 {MIN_TERMINAL_COLUMNS} columns, and within {MAX_TERMINAL_ROWS} rows, \
                  {MAX_TERMINAL_COLUMNS} columns, and {MAX_TERMINAL_CELLS} cells"
             )));
         }
@@ -150,6 +153,9 @@ impl ProcessTerminalSession {
         // client so live output and canonical snapshots retain ANSI styling.
         command_builder.env("TERM", "xterm-256color");
         command_builder.env("COLORTERM", "truecolor");
+        command_builder.env("FORCE_COLOR", "3");
+        command_builder.env("CLICOLOR_FORCE", "1");
+        command_builder.env_remove("NO_COLOR");
         let child = pair
             .slave
             .spawn_command(command_builder)
@@ -675,14 +681,17 @@ mod tests {
     fn provider_pty_declares_color_terminal_capabilities() {
         let session = ProcessTerminalSession::spawn(
             WorkerSessionId::new(),
-            &shell_command("printf '%s|%s' \"$TERM\" \"$COLORTERM\""),
+            &shell_command(
+                "printf '%s|%s|%s|%s|%s' \"$TERM\" \"$COLORTERM\" \"$FORCE_COLOR\" \"$CLICOLOR_FORCE\" \"${NO_COLOR-unset}\"",
+            ),
             JournalLimits::new(1024, 16),
             TerminalSize::default(),
         )
         .unwrap();
 
         assert!(
-            output_until(&session, "xterm-256color|truecolor").contains("xterm-256color|truecolor")
+            output_until(&session, "xterm-256color|truecolor|3|1|unset")
+                .contains("xterm-256color|truecolor|3|1|unset")
         );
     }
 

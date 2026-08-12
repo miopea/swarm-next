@@ -124,7 +124,7 @@ test("authoritative fit waits until xterm can propose real dimensions", async ()
   xterm.propose
     .mockReset()
     .mockReturnValueOnce(undefined)
-    .mockReturnValueOnce(undefined)
+    .mockReturnValueOnce({ rows: 1, cols: 1 })
     .mockReturnValue({ rows: 38, cols: 132 });
   const surface = new XtermSurface();
   surface.open(document.createElement("div"));
@@ -139,8 +139,36 @@ test("authoritative fit waits until xterm can propose real dimensions", async ()
   expect(xterm.fit).not.toHaveBeenCalled();
 
   frames.shift()?.(16);
+  await Promise.resolve();
+  expect(xterm.fit).not.toHaveBeenCalled();
+
+  frames.shift()?.(32);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
   expect(xterm.terminal).toMatchObject({ rows: 38, cols: 132 });
+});
+
+test("hidden or collapsing layouts cannot resize the canonical terminal", () => {
+  let observed: (() => void) | undefined;
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) { observed = callback; }
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const element = document.createElement("div");
+  document.body.append(element);
+  xterm.propose.mockReset().mockReturnValue({ rows: 1, cols: 1 });
+  const surface = new XtermSurface();
+  surface.open(element);
+  const before = { rows: xterm.terminal?.rows, cols: xterm.terminal?.cols };
+
+  observed?.();
+
+  expect(xterm.terminal).toMatchObject(before);
+  surface.dispose();
+  element.remove();
 });
 
 test("stale queued resize events cannot replace the fitted geometry", () => {

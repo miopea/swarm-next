@@ -32,3 +32,8 @@ export async function uploadTerminalImage(
 export function terminalAttachmentPaste(path: string): string {
   return `\u001b[200~${path}\u001b[201~ `;
 }
+
+export function terminalTextPaste(text: string): string {
+  const normalized = text.replace(/\r\n?/g, "\n");
+  return `\u001b[200~${normalized}\u001b[201~`;
+}

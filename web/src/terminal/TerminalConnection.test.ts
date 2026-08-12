@@ -168,6 +168,22 @@ test("does not report connected until the canonical renderer is ready", async ()
   await vi.waitFor(() => expect(handlers.onState).toHaveBeenCalledWith("connected", undefined));
 });
 
+test("a completed provider session closes without a reconnect loop", async () => {
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness([1]);
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "Resume this session"));
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].message(JSON.stringify({ type: "state", running: false }));
+  sockets[0].disconnect();
+  await vi.advanceTimersByTimeAsync(10);
+
+  expect(handlers.onRunningChange).toHaveBeenCalledWith(false);
+  expect(sockets).toHaveLength(1);
+});
+
 test("detects sequence gaps and reconnects from a fresh snapshot", async () => {
   vi.useFakeTimers();
   const { connection, handlers, sockets } = harness([1]);

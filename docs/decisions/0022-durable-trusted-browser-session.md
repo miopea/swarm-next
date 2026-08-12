@@ -21,13 +21,13 @@ secret readable by the client application.
 - The API stores the session credential in an `HttpOnly`, `SameSite=Strict`
   cookie. Remote sessions also use `Secure`; loopback development remains usable
   over HTTP.
-- The UI stores only a non-secret trusted-session marker in `localStorage`. The
-  marker tells the client to attempt cookie authentication after a PWA restart;
-  it grants no access by itself.
+- The UI attempts the cookie-authenticated session endpoint on every startup.
+  The `HttpOnly` cookie is the only durable client credential; restoration does
+  not depend on `localStorage`, tab lifetime, or an installed-PWA storage marker.
 - API requests, terminal attach-grant requests, presence, notifications, and
   reconnects all use the same cookie-authenticated boundary.
-- Lock calls `DELETE /api/v1/auth/session`, clears the cookie and local marker,
-  and discards authenticated client state.
+- Lock calls `DELETE /api/v1/auth/session`, clears the cookie, and discards
+  authenticated client state.
 - Changing the configured operator token invalidates every browser session
   derived from the previous token.
 

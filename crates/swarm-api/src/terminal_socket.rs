@@ -7,7 +7,10 @@ use futures_util::{SinkExt, StreamExt, stream::SplitStream};
 use serde::{Deserialize, Serialize};
 use swarm_domain::WorkerSessionId;
 use swarm_persistence::TaskStore;
-use swarm_terminal::{HostClient, HostRequest, HostResponse, Resume, TerminalSize};
+use swarm_terminal::{
+    HostClient, HostRequest, HostResponse, MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, Resume,
+    TerminalSize,
+};
 use tokio::sync::{Notify, mpsc};
 
 use axum::extract::ws::{Message, WebSocket};
@@ -111,12 +114,14 @@ async fn complete_initial_handshake(
                     after_sequence,
                     rows,
                     columns,
-                }) if rows > 0 && columns > 0 => (after_sequence, TerminalSize::new(rows, columns)),
+                }) if rows >= MIN_TERMINAL_ROWS && columns >= MIN_TERMINAL_COLUMNS => {
+                    (after_sequence, TerminalSize::new(rows, columns))
+                }
                 Ok(_) => {
                     send_direct_error(
                         socket,
                         "resume_required",
-                        "the first terminal message must establish a replay cursor and non-zero renderer size",
+                        "the first terminal message must establish a replay cursor and usable renderer size",
                     )
                     .await;
                     return None;
@@ -358,56 +363,21 @@ async fn handle_input(
             Ok(Message::Close(_)) | Err(_) => return,
             Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_)) => continue,
         };
-        let (request, is_operator_input) =
-            match serde_json::from_str::<ClientTerminalMessage>(&message) {
-                Ok(ClientTerminalMessage::Input { text }) => (
-                    HostRequest::Write {
-                        session_id,
-                        bytes: text.clone().into_bytes(),
-                    },
-                    !text.is_empty(),
-                ),
-                Ok(ClientTerminalMessage::Resize { rows, columns }) if rows > 0 && columns > 0 => (
-                    HostRequest::Resize {
-                        session_id,
-                        size: swarm_terminal::TerminalSize::new(rows, columns),
-                    },
-                    false,
-                ),
-                Ok(ClientTerminalMessage::Resize { .. }) => {
-                    let _ = send_control(
-                        &outbound,
-                        &ServerTerminalMessage::Error {
-                            code: "invalid_terminal_size",
-                            message: "terminal dimensions must be non-zero".into(),
-                        },
-                    )
-                    .await;
-                    continue;
-                }
-                Ok(ClientTerminalMessage::Resume { .. }) => {
-                    let _ = send_control(
-                        &outbound,
-                        &ServerTerminalMessage::Error {
-                            code: "duplicate_resume",
-                            message: "the replay cursor is immutable for an attachment".into(),
-                        },
-                    )
-                    .await;
+        let (request, is_operator_input) = match client_request(&message, session_id) {
+            Ok(request) => request,
+            Err(ClientMessageError {
+                code,
+                message,
+                close,
+            }) => {
+                let _ =
+                    send_control(&outbound, &ServerTerminalMessage::Error { code, message }).await;
+                if close {
                     return;
                 }
-                Err(error) => {
-                    let _ = send_control(
-                        &outbound,
-                        &ServerTerminalMessage::Error {
-                            code: "invalid_message",
-                            message: error.to_string(),
-                        },
-                    )
-                    .await;
-                    continue;
-                }
-            };
+                continue;
+            }
+        };
         if is_operator_input
             && !record_operator_engagement(&task_store, session_id, &control_room_notify, &outbound)
                 .await
@@ -448,6 +418,55 @@ async fn handle_input(
                 return;
             }
         }
+    }
+}
+
+struct ClientMessageError {
+    code: &'static str,
+    message: String,
+    close: bool,
+}
+
+fn client_request(
+    message: &str,
+    session_id: WorkerSessionId,
+) -> Result<(HostRequest, bool), ClientMessageError> {
+    match serde_json::from_str::<ClientTerminalMessage>(message) {
+        Ok(ClientTerminalMessage::Input { text }) => Ok((
+            HostRequest::Write {
+                session_id,
+                bytes: text.clone().into_bytes(),
+            },
+            !text.is_empty(),
+        )),
+        Ok(ClientTerminalMessage::Resize { rows, columns })
+            if rows >= MIN_TERMINAL_ROWS && columns >= MIN_TERMINAL_COLUMNS =>
+        {
+            Ok((
+                HostRequest::Resize {
+                    session_id,
+                    size: TerminalSize::new(rows, columns),
+                },
+                false,
+            ))
+        }
+        Ok(ClientTerminalMessage::Resize { .. }) => Err(ClientMessageError {
+            code: "invalid_terminal_size",
+            message: format!(
+                "terminal dimensions must be at least {MIN_TERMINAL_ROWS} rows and {MIN_TERMINAL_COLUMNS} columns"
+            ),
+            close: false,
+        }),
+        Ok(ClientTerminalMessage::Resume { .. }) => Err(ClientMessageError {
+            code: "duplicate_resume",
+            message: "the replay cursor is immutable for an attachment".into(),
+            close: true,
+        }),
+        Err(error) => Err(ClientMessageError {
+            code: "invalid_message",
+            message: error.to_string(),
+            close: false,
+        }),
     }
 }
 

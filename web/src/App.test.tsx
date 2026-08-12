@@ -48,7 +48,9 @@ test("applies and remembers the selected color theme", async () => {
 });
 
 test("reports the connected runtime version", async () => {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ status: "ok", version: "0.1.0" })));
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request) => Promise.resolve(
+    String(input) === "/health" ? ok({ status: "ok", version: "0.1.0" }) : unauthorized(),
+  )));
   render(<App />);
   expect(await screen.findByText("Runtime 0.1.0")).toBeInTheDocument();
   expect(screen.getByText("Unlock this runtime to access tasks and workers.")).toBeInTheDocument();
@@ -64,6 +66,7 @@ test("creates a durable browser session without storing the operator token", asy
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(unauthorized())
     .mockResolvedValueOnce(ok({}))
     .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
@@ -97,11 +100,10 @@ test("creates a durable browser session without storing the operator token", asy
     ([url, init]) => url === "/api/v1/auth/session" && (init as RequestInit | undefined)?.method === "POST",
   );
   expect((sessionRequest?.[1]?.headers as Headers).get("Authorization")).toBe("Bearer secret");
-  expect(window.localStorage.getItem("swarm-next.trusted-session.v1")).toBe("yes");
   expect(JSON.stringify({ local: { ...window.localStorage }, session: { ...window.sessionStorage } })).not.toContain("secret");
 
   fireEvent.click(screen.getByRole("button", { name: "Lock" }));
-  await waitFor(() => expect(window.localStorage.getItem("swarm-next.trusted-session.v1")).toBeNull());
+  await waitFor(() => expect(screen.getByLabelText("Operator token")).toBeInTheDocument());
   expect(fetch).toHaveBeenCalledWith(
     "/api/v1/auth/session",
     expect.objectContaining({ method: "DELETE", credentials: "same-origin" }),
@@ -109,10 +111,10 @@ test("creates a durable browser session without storing the operator token", asy
 });
 
 test("restores tasks and workers after a refresh", async () => {
-  window.localStorage.setItem("swarm-next.trusted-session.v1", "yes");
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({}))
     .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [{ session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", running: true }] }))
     .mockResolvedValueOnce(ok([{
@@ -136,11 +138,11 @@ test("restores tasks and workers after a refresh", async () => {
 });
 
 test("restores the worker surface after a refresh", async () => {
-  window.localStorage.setItem("swarm-next.trusted-session.v1", "yes");
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({}))
     .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
@@ -158,12 +160,12 @@ test("restores the worker surface after a refresh", async () => {
 });
 
 test("notification navigation overrides a previously saved surface", async () => {
-  window.localStorage.setItem("swarm-next.trusted-session.v1", "yes");
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   window.history.replaceState({}, "", "/?surface=decisions");
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({}))
     .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
@@ -178,10 +180,10 @@ test("notification navigation overrides a previously saved surface", async () =>
   expect(screen.getByRole("button", { name: "Needs you 0" })).toHaveAttribute("aria-current", "page");
 });
 test("keyboard shortcuts switch workspaces but pause while editing a field", async () => {
-  window.localStorage.setItem("swarm-next.trusted-session.v1", "yes");
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({}))
     .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
@@ -205,8 +207,7 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
   expect(await screen.findByRole("heading", { name: "Worker terminal" })).toBeInTheDocument();
 });
 
-test("removes a rejected trusted-session marker and returns to unlock", async () => {
-  window.localStorage.setItem("swarm-next.trusted-session.v1", "yes");
+test("quietly returns to unlock when the server has no trusted cookie", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn()
@@ -218,7 +219,6 @@ test("removes a rejected trusted-session marker and returns to unlock", async ()
 
   expect(await screen.findByLabelText("Operator token")).toBeInTheDocument();
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(window.localStorage.getItem("swarm-next.trusted-session.v1")).toBeNull();
 });
 
 test("creates a persisted task draft from the task board", async () => {
@@ -229,6 +229,7 @@ test("creates a persisted task draft from the task board", async () => {
   };
   const responses = [
     ok({ status: "ok", version: "0.1.0" }),
+    unauthorized(),
     ok({}),
     ok(hiveIdentity()),
     ok({ type: "sessions", sessions: [] }),
@@ -273,4 +274,8 @@ function hiveIdentity() {
 
 function ok(payload: unknown) {
   return { ok: true, status: 200, json: async () => payload };
+}
+
+function unauthorized() {
+  return { ok: false, status: 401, json: async () => ({ message: "not unlocked" }) };
 }

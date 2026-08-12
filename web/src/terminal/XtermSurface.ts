@@ -6,6 +6,8 @@ import type { TerminalSnapshot } from "./TerminalConnection";
 import type { Disposable, TerminalSurface } from "./TerminalController";
 
 const MAX_FIT_FRAMES = 60;
+export const MIN_TERMINAL_ROWS = 4;
+export const MIN_TERMINAL_COLUMNS = 20;
 
 export class XtermSurface implements TerminalSurface {
   readonly #terminal: Terminal;
@@ -36,8 +38,7 @@ export class XtermSurface implements TerminalSurface {
   open(element: HTMLElement): void {
     this.#element = element;
     this.#terminal.open(element);
-    this.#fit.fit();
-    this.#resizeObserver = new ResizeObserver(() => this.#fit.fit());
+    this.#resizeObserver = new ResizeObserver(() => this.#fitIfUsable());
     this.#resizeObserver.observe(element);
   }
 
@@ -53,7 +54,7 @@ export class XtermSurface implements TerminalSurface {
         await nextAnimationFrame();
         if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
         const dimensions = this.#fit.proposeDimensions();
-        if (!dimensions || dimensions.rows <= 0 || dimensions.cols <= 0) continue;
+        if (!dimensions || dimensions.rows < MIN_TERMINAL_ROWS || dimensions.cols < MIN_TERMINAL_COLUMNS) continue;
         this.#terminal.resize(dimensions.cols, dimensions.rows);
         return { rows: dimensions.rows, columns: dimensions.cols };
       }
@@ -100,6 +101,14 @@ export class XtermSurface implements TerminalSurface {
     if (!this.#restorePending) return;
     this.#restorePending = false;
     if (this.#element) this.#element.style.visibility = "";
+  }
+
+  #fitIfUsable(): void {
+    if (this.#disposed || !this.#element?.isConnected) return;
+    const dimensions = this.#fit.proposeDimensions();
+    if (!dimensions || dimensions.rows < MIN_TERMINAL_ROWS || dimensions.cols < MIN_TERMINAL_COLUMNS) return;
+    if (dimensions.rows === this.#terminal.rows && dimensions.cols === this.#terminal.cols) return;
+    this.#terminal.resize(dimensions.cols, dimensions.rows);
   }
 }
 

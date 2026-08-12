@@ -168,6 +168,29 @@ mod tests {
     }
 
     #[test]
+    fn canonical_snapshots_preserve_indexed_and_truecolor_attributes() {
+        let mut state =
+            CanonicalTerminalState::new(JournalLimits::new(512, 16), TerminalSize::new(4, 40));
+        state.push(b"\x1b[31mred \x1b[38;5;45mindexed \x1b[38;2;91;143;211mrgb".to_vec());
+        let snapshot = state.snapshot();
+        let mut restored = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
+        restored.process(&snapshot.bytes);
+
+        assert_eq!(
+            restored.screen().cell(0, 0).unwrap().fgcolor(),
+            vt100::Color::Idx(1)
+        );
+        assert_eq!(
+            restored.screen().cell(0, 4).unwrap().fgcolor(),
+            vt100::Color::Idx(45)
+        );
+        assert_eq!(
+            restored.screen().cell(0, 12).unwrap().fgcolor(),
+            vt100::Color::Rgb(91, 143, 211),
+        );
+    }
+
+    #[test]
     fn evicted_cursor_receives_snapshot_while_covered_cursor_receives_deltas() {
         let mut state =
             CanonicalTerminalState::new(JournalLimits::new(6, 2), TerminalSize::new(4, 20));

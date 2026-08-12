@@ -40,7 +40,8 @@ use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
     HistoryCursor, HostClient, HostRequest, HostResponse, JournalLimits,
     MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
-    ProcessResourceSample, TerminalSize, sample_current_process,
+    MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProcessResourceSample, TerminalSize,
+    sample_current_process,
 };
 use tokio::{
     sync::{Mutex, Notify, RwLock, Semaphore},
@@ -1642,7 +1643,21 @@ async fn list_sessions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<HostResponse>, ApiError> {
-    authorized_request(&state, &headers, HostRequest::ListSessions).await
+    authorize(&state, &headers)?;
+    let response = request_host(&state, HostRequest::ListSessions).await?;
+    let HostResponse::Sessions { sessions } = response else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected response",
+        ));
+    };
+    Ok(Json(HostResponse::Sessions {
+        sessions: sessions
+            .into_iter()
+            .filter(|session| session.running)
+            .collect(),
+    }))
 }
 
 async fn history_diagnostics(
@@ -2444,8 +2459,8 @@ fn parse_decision_id(value: &str) -> Result<DecisionRequestId, ApiError> {
 
 fn require_valid_size(rows: u16, columns: u16) -> Result<(), ApiError> {
     let cells = usize::from(rows) * usize::from(columns);
-    if rows == 0
-        || columns == 0
+    if rows < MIN_TERMINAL_ROWS
+        || columns < MIN_TERMINAL_COLUMNS
         || rows > MAX_TERMINAL_ROWS
         || columns > MAX_TERMINAL_COLUMNS
         || cells > MAX_TERMINAL_CELLS
@@ -2454,7 +2469,8 @@ fn require_valid_size(rows: u16, columns: u16) -> Result<(), ApiError> {
             StatusCode::BAD_REQUEST,
             "invalid_terminal_size",
             format!(
-                "terminal dimensions must be non-zero and within {MAX_TERMINAL_ROWS} rows, \
+                "terminal dimensions must be at least {MIN_TERMINAL_ROWS} rows and \
+                 {MIN_TERMINAL_COLUMNS} columns, and within {MAX_TERMINAL_ROWS} rows, \
                  {MAX_TERMINAL_COLUMNS} columns, and {MAX_TERMINAL_CELLS} cells"
             ),
         ));
@@ -3660,6 +3676,39 @@ mod tests {
         }
 
         session.stop().unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn active_session_list_excludes_a_completed_provider_session() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec!["-lc".into(), "exit 0".into()],
+            working_directory: workspace,
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while session.is_running().unwrap() {
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let state = AppState::default().with_terminal_host(HostClient::new(&socket), "secret");
+
+        let response = authorized_get(router(state), "/api/v1/terminal/sessions").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = response_json(response).await;
+        assert_eq!(response["sessions"], serde_json::json!([]));
+
         server_task.abort();
         let _ = server_task.await;
     }

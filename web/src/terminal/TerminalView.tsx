@@ -5,7 +5,7 @@ import { TerminalConnection, type TerminalConnectionState } from "./TerminalConn
 import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
-import { clipboardImage, terminalAttachmentPaste, uploadTerminalImage } from "./TerminalAttachments";
+import { clipboardImage, terminalAttachmentPaste, terminalTextPaste, uploadTerminalImage } from "./TerminalAttachments";
 
 export interface TerminalViewProps {
   session: { session_id: string; running: boolean };
@@ -45,8 +45,13 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
 
   async function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
     const image = clipboardImage(event.clipboardData);
-    if (!image) return;
     event.preventDefault();
+    event.stopPropagation();
+    if (!image) {
+      const text = event.clipboardData.getData("text/plain");
+      if (text) controller.sendInput(terminalTextPaste(text));
+      return;
+    }
     setAttachmentState("uploading");
     try {
       const path = await uploadTerminalImage(operatorToken, session.session_id, image);
@@ -58,7 +63,13 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
   }
 
   return (
-    <div className="terminal-panel" onPaste={(event) => void handlePaste(event)}>
+    <div
+      className="terminal-panel"
+      onKeyDownCapture={(event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") event.stopPropagation();
+      }}
+      onPasteCapture={(event) => void handlePaste(event)}
+    >
       <div className="terminal-toolbar">
         <div>
           <strong>{session.session_id}</strong>

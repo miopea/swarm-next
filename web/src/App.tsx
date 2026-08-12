@@ -25,6 +25,7 @@ import {
   stopWorker,
   transitionTask,
   updateTask,
+  validateBrowserSession,
   type ControlRoomEvent,
   type DecisionRequest,
   type Health,
@@ -56,7 +57,6 @@ import WorkerRosterItem from "./workers/WorkerRosterItem";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
-const TRUSTED_SESSION_STORAGE_KEY = "swarm-next.trusted-session.v1";
 const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
@@ -127,10 +127,9 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!hasTrustedBrowserSession()) return;
     let cancelled = false;
-    setBusy(true);
-    void loadControlRoom(BROWSER_SESSION_AUTH)
+    void validateBrowserSession()
+      .then(() => loadControlRoom(BROWSER_SESSION_AUTH))
       .then(({ hive, sessions: nextSessions, workers: nextWorkers, workspaces: nextWorkspaces, tasks: nextTasks, decisions: nextDecisions }) => {
         if (cancelled) return;
         terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
@@ -145,15 +144,11 @@ export function App() {
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        if (error instanceof Error && error.message.includes("401")) clearTrustedBrowserSession();
         terminalWorkspace.logout();
         if (!(error instanceof Error && error.message.includes("401"))) {
           setOperationError(error instanceof Error ? error.message : "Saved authentication could not be restored");
         }
       })
-      .finally(() => {
-        if (!cancelled) setBusy(false);
-      });
     return () => { cancelled = true; };
   }, []);
 
@@ -219,7 +214,6 @@ export function App() {
       setTasks(controlRoom.tasks);
       setActiveSessionId((current) => current ?? preferredSessionId(controlRoom.workers, controlRoom.sessions));
       setDecisions(controlRoom.decisions);
-      rememberTrustedBrowserSession();
       setTokenDraft("");
     });
   }
@@ -461,7 +455,6 @@ export function App() {
   async function logout() {
     await perform(async () => {
       await revokeBrowserSession();
-      clearTrustedBrowserSession();
       lockInterface();
     });
   }
@@ -485,7 +478,7 @@ export function App() {
   const openTaskCount = tasks.filter((task) => task.state !== "completed").length;
   const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
   const orphanSessions = useMemo(
-    () => sessions.filter((session) => !workers.some((worker) => worker.active_session_id === session.session_id)),
+    () => sessions.filter((session) => session.running && !workers.some((worker) => worker.active_session_id === session.session_id)),
     [sessions, workers],
   );
   const tasksBySession = useMemo(
@@ -688,10 +681,6 @@ function requireActiveSession(worker: Worker): string {
   if (!worker.active_session_id) throw new Error(`${worker.name} did not receive a terminal session`);
   return worker.active_session_id;
 }
-
-function hasTrustedBrowserSession(): boolean { try { return window.localStorage.getItem(TRUSTED_SESSION_STORAGE_KEY) === "yes"; } catch { return false; } }
-function rememberTrustedBrowserSession() { try { window.localStorage.setItem(TRUSTED_SESSION_STORAGE_KEY, "yes"); } catch { /* The cookie remains authoritative; this marker only enables automatic restoration. */ } }
-function clearTrustedBrowserSession() { try { window.localStorage.removeItem(TRUSTED_SESSION_STORAGE_KEY); } catch { /* The server has already revoked the authoritative cookie. */ } }
 
 function presenceModeLabel(mode: PresenceMode) {
   if (mode === "at_hive") return "At Hive";
