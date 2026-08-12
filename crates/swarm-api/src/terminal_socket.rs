@@ -1,8 +1,14 @@
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use futures_util::{SinkExt, StreamExt, stream::SplitStream};
 use serde::{Deserialize, Serialize};
 use swarm_domain::WorkerSessionId;
+use swarm_persistence::TaskStore;
 use swarm_terminal::{HostClient, HostRequest, HostResponse, Resume, TerminalSize};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 use axum::extract::ws::{Message, WebSocket};
 
@@ -12,6 +18,7 @@ pub const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 * 1024;
 const OUTBOUND_MESSAGE_CAPACITY: usize = 64;
 const OUTPUT_FRAME_TYPE: u8 = 1;
 const SNAPSHOT_FRAME_TYPE: u8 = 2;
+pub const OPERATOR_ENGAGEMENT_LEASE_SECONDS: i64 = 300;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -41,6 +48,8 @@ pub async fn serve_terminal_socket(
     mut socket: WebSocket,
     terminal_host: HostClient,
     session_id: WorkerSessionId,
+    task_store: TaskStore,
+    control_room_notify: Arc<Notify>,
 ) {
     let Some(after_sequence) =
         complete_initial_handshake(&mut socket, &terminal_host, session_id).await
@@ -68,6 +77,8 @@ pub async fn serve_terminal_socket(
         socket_receiver,
         terminal_host,
         session_id,
+        task_store,
+        control_room_notify,
         outbound_sender.clone(),
     ));
 
@@ -337,6 +348,8 @@ async fn handle_input(
     mut socket_receiver: SplitStream<WebSocket>,
     terminal_host: HostClient,
     session_id: WorkerSessionId,
+    task_store: TaskStore,
+    control_room_notify: Arc<Notify>,
     outbound: mpsc::Sender<Message>,
 ) {
     while let Some(message) = socket_receiver.next().await {
@@ -345,51 +358,62 @@ async fn handle_input(
             Ok(Message::Close(_)) | Err(_) => return,
             Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_)) => continue,
         };
-        let request = match serde_json::from_str::<ClientTerminalMessage>(&message) {
-            Ok(ClientTerminalMessage::Input { text }) => HostRequest::Write {
-                session_id,
-                bytes: text.into_bytes(),
-            },
-            Ok(ClientTerminalMessage::Resize { rows, columns }) if rows > 0 && columns > 0 => {
-                HostRequest::Resize {
-                    session_id,
-                    size: swarm_terminal::TerminalSize::new(rows, columns),
+        let (request, is_operator_input) =
+            match serde_json::from_str::<ClientTerminalMessage>(&message) {
+                Ok(ClientTerminalMessage::Input { text }) => (
+                    HostRequest::Write {
+                        session_id,
+                        bytes: text.clone().into_bytes(),
+                    },
+                    !text.is_empty(),
+                ),
+                Ok(ClientTerminalMessage::Resize { rows, columns }) if rows > 0 && columns > 0 => (
+                    HostRequest::Resize {
+                        session_id,
+                        size: swarm_terminal::TerminalSize::new(rows, columns),
+                    },
+                    false,
+                ),
+                Ok(ClientTerminalMessage::Resize { .. }) => {
+                    let _ = send_control(
+                        &outbound,
+                        &ServerTerminalMessage::Error {
+                            code: "invalid_terminal_size",
+                            message: "terminal dimensions must be non-zero".into(),
+                        },
+                    )
+                    .await;
+                    continue;
                 }
-            }
-            Ok(ClientTerminalMessage::Resize { .. }) => {
-                let _ = send_control(
-                    &outbound,
-                    &ServerTerminalMessage::Error {
-                        code: "invalid_terminal_size",
-                        message: "terminal dimensions must be non-zero".into(),
-                    },
-                )
-                .await;
-                continue;
-            }
-            Ok(ClientTerminalMessage::Resume { .. }) => {
-                let _ = send_control(
-                    &outbound,
-                    &ServerTerminalMessage::Error {
-                        code: "duplicate_resume",
-                        message: "the replay cursor is immutable for an attachment".into(),
-                    },
-                )
-                .await;
-                return;
-            }
-            Err(error) => {
-                let _ = send_control(
-                    &outbound,
-                    &ServerTerminalMessage::Error {
-                        code: "invalid_message",
-                        message: error.to_string(),
-                    },
-                )
-                .await;
-                continue;
-            }
-        };
+                Ok(ClientTerminalMessage::Resume { .. }) => {
+                    let _ = send_control(
+                        &outbound,
+                        &ServerTerminalMessage::Error {
+                            code: "duplicate_resume",
+                            message: "the replay cursor is immutable for an attachment".into(),
+                        },
+                    )
+                    .await;
+                    return;
+                }
+                Err(error) => {
+                    let _ = send_control(
+                        &outbound,
+                        &ServerTerminalMessage::Error {
+                            code: "invalid_message",
+                            message: error.to_string(),
+                        },
+                    )
+                    .await;
+                    continue;
+                }
+            };
+        if is_operator_input
+            && !record_operator_engagement(&task_store, session_id, &control_room_notify, &outbound)
+                .await
+        {
+            continue;
+        }
         match terminal_host.request(&request).await {
             Ok(HostResponse::Acknowledged) => {}
             Ok(HostResponse::Error { code, message }) => {
@@ -425,6 +449,36 @@ async fn handle_input(
             }
         }
     }
+}
+
+async fn record_operator_engagement(
+    task_store: &TaskStore,
+    session_id: WorkerSessionId,
+    control_room_notify: &Notify,
+    outbound: &mpsc::Sender<Message>,
+) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+        });
+    if let Ok(changed) =
+        task_store.renew_worker_engagement(session_id, now, OPERATOR_ENGAGEMENT_LEASE_SECONDS)
+    {
+        if changed {
+            control_room_notify.notify_waiters();
+        }
+        return true;
+    }
+    let _ = send_control(
+        outbound,
+        &ServerTerminalMessage::Error {
+            code: "engagement_unavailable",
+            message: "operator engagement could not be recorded; input was not sent".into(),
+        },
+    )
+    .await;
+    false
 }
 
 async fn send_control(

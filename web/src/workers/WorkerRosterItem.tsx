@@ -3,6 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import type { Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 
+const attentionPresentation = {
+  sleeping: { label: "Sleeping", expression: "sleeping", presence: "offline" },
+  buzzing: { label: "Buzzing", expression: "thinking", presence: "online" },
+  with_operator: { label: "With you", expression: "focused", presence: "engaged" },
+  blocked: { label: "Blocked", expression: "blocked", presence: "blocked" },
+} as const;
+
 type Props = {
   worker: Worker;
   selected: boolean;
@@ -15,8 +22,21 @@ type Props = {
 
 export default function WorkerRosterItem({ worker, selected, detail, busy, onOpen, onStart, onStop }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [, refreshAttention] = useState(0);
   const rowRef = useRef<HTMLDivElement>(null);
   const primaryAction = worker.running ? onOpen : onStart;
+  const engagementExpired = worker.attention_state === "with_operator"
+    && worker.engagement_expires_at !== undefined
+    && worker.engagement_expires_at * 1000 <= Date.now();
+  const attention = attentionPresentation[engagementExpired ? "buzzing" : worker.attention_state];
+
+  useEffect(() => {
+    if (worker.attention_state !== "with_operator" || worker.engagement_expires_at === undefined) return;
+    const remaining = worker.engagement_expires_at * 1000 - Date.now();
+    if (remaining <= 0) return;
+    const timer = window.setTimeout(() => refreshAttention((current) => current + 1), remaining);
+    return () => window.clearTimeout(timer);
+  }, [worker.attention_state, worker.engagement_expires_at]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -50,12 +70,12 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
         onClick={primaryAction}
         disabled={busy}
       >
-        <span className="worker-avatar"><BeeMascot role={worker.role === "queen" ? "queen" : "worker"} expression={worker.running ? "focused" : "sleeping"} /></span>
+        <span className="worker-avatar"><BeeMascot role={worker.role === "queen" ? "queen" : "worker"} expression={attention.expression} /></span>
         <span className="worker-copy">
           <strong>{worker.name}</strong>
-          <small>{detail}</small>
+          <small><span className="worker-attention-label">{attention.label}</span> · {detail}</small>
         </span>
-        <span className={`presence ${worker.running ? "online" : "offline"}`} title={worker.running ? "Running" : "Stopped"} />
+        <span className={`presence ${attention.presence}`} title={attention.label} />
       </button>
       <button
         className="worker-menu-trigger"

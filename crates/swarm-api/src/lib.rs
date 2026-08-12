@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use swarm_domain::{
     ControlRoomEventKind, ProviderConversationId, ProviderKind, TaskDetailsUpdate, TaskId,
-    TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerSessionId,
+    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE, TaskStore, TaskStoreError,
@@ -191,8 +191,31 @@ struct WorkerView {
     #[serde(flatten)]
     profile: WorkerProfile,
     running: bool,
+    attention_state: WorkerAttentionState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    engagement_expires_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     runtime_error: Option<String>,
+}
+
+fn worker_view(profile: WorkerProfile, running: bool, runtime_error: Option<String>) -> WorkerView {
+    let engagement_expires_at = profile.engagement_expires_at;
+    let attention_state = if runtime_error.is_some() {
+        WorkerAttentionState::Blocked
+    } else if !running {
+        WorkerAttentionState::Sleeping
+    } else if engagement_expires_at.is_some() {
+        WorkerAttentionState::WithOperator
+    } else {
+        WorkerAttentionState::Buzzing
+    };
+    WorkerView {
+        profile,
+        running,
+        attention_state,
+        engagement_expires_at,
+        runtime_error,
+    }
 }
 
 fn default_provider() -> ProviderKind {
@@ -620,12 +643,12 @@ async fn list_workers(
         .list_worker_profiles()
         .map_err(|error| task_store_error(&error))?
         .into_iter()
-        .map(|profile| WorkerView {
-            running: profile
+        .map(|profile| {
+            let running = profile
                 .active_session_id
-                .is_some_and(|session_id| live.contains(&session_id)),
-            runtime_error: errors.get(&profile.id).cloned(),
-            profile,
+                .is_some_and(|session_id| live.contains(&session_id));
+            let runtime_error = errors.get(&profile.id).cloned();
+            worker_view(profile, running, runtime_error)
         })
         .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(workers)).into_response())
@@ -655,15 +678,7 @@ async fn create_worker(
         )
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
-    Ok((
-        StatusCode::CREATED,
-        Json(WorkerView {
-            profile,
-            running: false,
-            runtime_error: None,
-        }),
-    )
-        .into_response())
+    Ok((StatusCode::CREATED, Json(worker_view(profile, false, None))).into_response())
 }
 
 async fn start_worker(
@@ -708,12 +723,7 @@ async fn stop_worker(
     let profile = task_store(&state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
-    Ok(Json(WorkerView {
-        profile,
-        running: false,
-        runtime_error: None,
-    })
-    .into_response())
+    Ok(Json(worker_view(profile, false, None)).into_response())
 }
 
 async fn list_sessions(
@@ -871,11 +881,7 @@ async fn start_worker_process(
     if let Some(session_id) = profile.active_session_id
         && live.contains(&session_id)
     {
-        return Ok(WorkerView {
-            profile,
-            running: true,
-            runtime_error: None,
-        });
+        return Ok(worker_view(profile, true, None));
     }
     if profile.provider != ProviderKind::ClaudeCode {
         return Err(ApiError::new(
@@ -922,11 +928,7 @@ async fn start_worker_process(
     let profile = task_store(state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
-    Ok(WorkerView {
-        profile,
-        running: true,
-        runtime_error: None,
-    })
+    Ok(worker_view(profile, true, None))
 }
 
 async fn reconcile_worker_bindings(state: &AppState) -> Result<HashSet<WorkerSessionId>, ApiError> {
@@ -1050,13 +1052,15 @@ async fn attach_terminal(
         ));
     }
     let client = terminal_client(&state)?.clone();
+    let store = task_store(&state)?.clone();
+    let control_room_notify = Arc::clone(&state.control_room_notify);
     Ok(websocket
         .protocols([TERMINAL_WEBSOCKET_PROTOCOL])
         .max_message_size(MAX_WEBSOCKET_MESSAGE_BYTES)
         .max_frame_size(MAX_WEBSOCKET_MESSAGE_BYTES)
         .on_upgrade(move |socket| async move {
             let _permit = permit;
-            serve_terminal_socket(socket, client, session_id).await;
+            serve_terminal_socket(socket, client, session_id, store, control_room_notify).await;
         }))
 }
 
@@ -1153,6 +1157,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::WorkerAlreadyRunning => ApiError::new(
             StatusCode::CONFLICT,
             "worker_already_running",
+            error.to_string(),
+        ),
+        TaskStoreError::WorkerSessionNotActive => ApiError::new(
+            StatusCode::CONFLICT,
+            "worker_session_not_active",
             error.to_string(),
         ),
         TaskStoreError::ProviderConversationUnavailable => ApiError::new(
@@ -1932,7 +1941,7 @@ mod tests {
         let command = ProviderCommand {
             executable: PathBuf::from("/bin/sh"),
             arguments: vec!["-lc".into(), "printf durable; sleep 5".into()],
-            working_directory: workspace,
+            working_directory: workspace.clone(),
         };
         let session = registry.spawn(&command, TerminalSize::default()).unwrap();
         let socket = runtime.path().join("terminal.sock");
@@ -1985,7 +1994,7 @@ mod tests {
         let command = ProviderCommand {
             executable: PathBuf::from("/bin/sh"),
             arguments: vec!["-lc".into(), "sleep 5".into()],
-            working_directory: workspace,
+            working_directory: workspace.clone(),
         };
         let session = registry.spawn(&command, TerminalSize::default()).unwrap();
         let socket = runtime.path().join("terminal.sock");
@@ -2042,6 +2051,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn websocket_replays_and_controls_a_host_owned_terminal() {
         let runtime = TempDir::new().unwrap();
         let workspace = env::temp_dir().canonicalize().unwrap();
@@ -2054,13 +2064,26 @@ mod tests {
                 "-lc".into(),
                 "printf socket-ready; read value; printf 'socket:%s' \"$value\"".into(),
             ],
-            working_directory: workspace,
+            working_directory: workspace.clone(),
         };
         let session = registry.spawn(&command, TerminalSize::default()).unwrap();
         let socket = runtime.path().join("terminal.sock");
         let host_server = HostServer::bind(&socket, registry).unwrap();
         let host_task = tokio::spawn(host_server.run());
-        let state = AppState::default().with_terminal_host(HostClient::new(&socket), "secret");
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Socket worker",
+                ProviderKind::ClaudeCode,
+                workspace.to_string_lossy().as_ref(),
+                false,
+                1,
+            )
+            .unwrap();
+        store.bind_worker_session(worker.id, session.id()).unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
         let app = router(state);
 
         let grant = issue_terminal_grant(&app, session.id()).await;
@@ -2129,6 +2152,7 @@ mod tests {
             .unwrap();
         let (after_input, _, _) = terminal_output_until(&mut websocket, "socket:hello").await;
         assert!(String::from_utf8_lossy(&after_input).contains("socket:hello"));
+        assert!(!store.worker_accepts_injection(worker.id, i64::MIN).unwrap());
 
         let mut reused_request = websocket_url.into_client_request().unwrap();
         reused_request.headers_mut().insert(

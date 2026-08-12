@@ -62,10 +62,14 @@ impl TaskStore {
             SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
                    p.position, s.session_id, p.provider_conversation_id,
                    EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
+                   e.expires_at,
                    p.created_at, p.updated_at
             FROM worker_profiles p
             LEFT JOIN worker_sessions s
               ON s.worker_id = p.id AND s.ended_at IS NULL
+            LEFT JOIN worker_engagements e
+              ON e.worker_id = p.id AND e.session_id = s.session_id
+             AND e.expires_at > unixepoch()
             ORDER BY CASE p.role WHEN 'queen' THEN 0 ELSE 1 END,
                      p.position, p.created_at, p.id
             ",
@@ -88,10 +92,14 @@ impl TaskStore {
                 SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
                        p.position, s.session_id, p.provider_conversation_id,
                        EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
+                       e.expires_at,
                        p.created_at, p.updated_at
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
+                LEFT JOIN worker_engagements e
+                  ON e.worker_id = p.id AND e.session_id = s.session_id
+                 AND e.expires_at > unixepoch()
                 WHERE p.id = ?1
                 ",
                 [id.to_string()],
@@ -183,6 +191,88 @@ impl TaskStore {
         Err(TaskStoreError::WorkerNotFound)
     }
 
+    /// Creates or renews the bounded operator engagement lease for an active session.
+    /// Returns whether durable state changed enough to require control-room invalidation.
+    ///
+    /// # Errors
+    /// Returns an error when the session is not actively bound or persistence fails.
+    pub fn renew_worker_engagement(
+        &self,
+        session_id: WorkerSessionId,
+        now: i64,
+        lease_seconds: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let worker_id = transaction
+            .query_row(
+                "SELECT worker_id FROM worker_sessions
+                 WHERE session_id = ?1 AND ended_at IS NULL",
+                [session_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::WorkerSessionNotActive)?;
+        let current_expiry = transaction
+            .query_row(
+                "SELECT expires_at FROM worker_engagements WHERE worker_id = ?1",
+                [&worker_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        let renewal_threshold = now.saturating_add(lease_seconds / 2);
+        if current_expiry.is_some_and(|expiry| expiry >= renewal_threshold) {
+            return Ok(false);
+        }
+        let expires_at = now.saturating_add(lease_seconds);
+        transaction.execute(
+            "INSERT INTO worker_engagements
+             (worker_id, session_id, engaged_at, renewed_at, expires_at)
+             VALUES (?1, ?2, ?3, ?3, ?4)
+             ON CONFLICT(worker_id) DO UPDATE SET
+                 session_id = excluded.session_id,
+                 renewed_at = excluded.renewed_at,
+                 expires_at = excluded.expires_at",
+            params![worker_id, session_id.to_string(), now, expires_at],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    /// Returns whether coordination may inject into a worker at this instant.
+    ///
+    /// # Errors
+    /// Returns an error when the worker is unknown or persistence fails.
+    pub fn worker_accepts_injection(
+        &self,
+        worker_id: WorkerId,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        let exists = connection
+            .query_row(
+                "SELECT 1 FROM worker_profiles WHERE id = ?1",
+                [worker_id.to_string()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(TaskStoreError::WorkerNotFound);
+        }
+        let engaged = connection
+            .query_row(
+                "SELECT 1 FROM worker_engagements
+                 WHERE worker_id = ?1 AND expires_at > ?2",
+                params![worker_id.to_string(), now],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(!engaged)
+    }
+
     /// Releases a session binding after its process exits or is stopped.
     ///
     /// # Errors
@@ -199,6 +289,10 @@ impl TaskStore {
             [session_id.to_string()],
         )? == 1;
         if released {
+            transaction.execute(
+                "DELETE FROM worker_engagements WHERE session_id = ?1",
+                [session_id.to_string()],
+            )?;
             insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
             insert_control_room_event(&transaction, ControlRoomEventKind::SessionsChanged)?;
         }
@@ -234,6 +328,10 @@ impl TaskStore {
         };
         for session_id in &stale {
             transaction.execute(
+                "DELETE FROM worker_engagements WHERE session_id = ?1",
+                [session_id.to_string()],
+            )?;
+            transaction.execute(
                 "UPDATE worker_sessions SET ended_at = unixepoch()
                  WHERE session_id = ?1 AND ended_at IS NULL",
                 [session_id.to_string()],
@@ -255,10 +353,14 @@ impl TaskStore {
                 SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
                        p.position, s.session_id, p.provider_conversation_id,
                        EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
+                       e.expires_at,
                        p.created_at, p.updated_at
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
+                LEFT JOIN worker_engagements e
+                  ON e.worker_id = p.id AND e.session_id = s.session_id
+                 AND e.expires_at > unixepoch()
                 WHERE p.role = ?1
                 ",
                 [role.to_string()],
@@ -373,8 +475,9 @@ fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> 
         active_session_id: session,
         provider_conversation_id,
         has_session_history: row.get::<_, i64>(10)? != 0,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        engagement_expires_at: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -487,6 +590,31 @@ mod tests {
         assert!(matches!(
             store.assign_provider_conversation(worker.id),
             Err(TaskStoreError::ProviderConversationUnavailable)
+        ));
+    }
+
+    #[test]
+    fn operator_engagement_is_exclusive_bounded_and_released_with_the_session() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Dahlia", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        assert!(store.worker_accepts_injection(worker.id, 100).unwrap());
+
+        assert!(store.renew_worker_engagement(session, 100, 300).unwrap());
+        assert!(!store.worker_accepts_injection(worker.id, 101).unwrap());
+        assert!(!store.renew_worker_engagement(session, 101, 300).unwrap());
+        assert!(store.renew_worker_engagement(session, 260, 300).unwrap());
+        assert!(!store.worker_accepts_injection(worker.id, 559).unwrap());
+        assert!(store.worker_accepts_injection(worker.id, 561).unwrap());
+
+        store.release_worker_session(session).unwrap();
+        assert!(store.worker_accepts_injection(worker.id, 261).unwrap());
+        assert!(matches!(
+            store.renew_worker_engagement(session, 262, 300),
+            Err(TaskStoreError::WorkerSessionNotActive)
         ));
     }
 }

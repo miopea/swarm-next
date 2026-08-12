@@ -132,6 +132,9 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .protected-menu-note { padding: 8px 9px; border-top: 1px solid var(--line); color: var(--muted); font-size: .7rem; }
 .presence.online { background: #58b77a; box-shadow: 0 0 0 3px color-mix(in srgb, #58b77a 14%, transparent); }
 .presence.offline { background: var(--bad); }
+.presence.engaged { background: var(--accent-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.presence.blocked { background: var(--blocked); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blocked) 18%, transparent); }
+.worker-attention-label { color: var(--text); font-weight: 650; }
 
 .start-worker { display: grid; gap: 8px; margin: 14px 0 4px; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
 .start-worker-disclosure > button { display: none; }

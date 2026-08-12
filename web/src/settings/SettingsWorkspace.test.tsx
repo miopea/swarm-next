@@ -21,7 +21,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       hiveIdentity={{ operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } }}
       health={{ status: "ok", version: "0.1.0" }}
       sessions={[{ session_id: "session-safe-id", running: true }, { session_id: "session-2", running: false }, { session_id: "session-3", running: false }]}
-      workers={[{ id: "worker-1", hive_id: "hive-1", name: "Private name", role: "worker", provider: "claude_code", workspace: "/private/workspace", autostart: false, position: 1, active_session_id: "session-safe-id", created_at: 1, updated_at: 1, running: true, runtime_error: "raw provider failure detail" }]}
+      workers={[{ id: "worker-1", hive_id: "hive-1", name: "Private name", role: "worker", provider: "claude_code", workspace: "/private/workspace", autostart: false, position: 1, active_session_id: "session-safe-id", created_at: 1, updated_at: 1, running: true, attention_state: "blocked", runtime_error: "raw provider failure detail" }]}
       onThemeChange={onThemeChange}
     />,
   );
