@@ -233,13 +233,14 @@ impl AppState {
                 client,
                 delivery.session_id,
                 decision_delivery_message(&delivery),
+                &delivery_marker(delivery.decision_id),
             )
             .await
             {
-                Ok(HostResponse::Acknowledged) => {
+                Ok(TerminalSubmission::Acknowledged) => {
                     store.complete_decision_delivery(delivery.decision_id, unix_timestamp())
                 }
-                Ok(HostResponse::Error { code, message }) => {
+                Ok(TerminalSubmission::Rejected { code, message }) => {
                     tracing::warn!(decision_id = %delivery.decision_id, worker_id = %delivery.worker_id, %code, %message, "decision delivery was rejected by terminal host");
                     store.fail_decision_delivery(
                         delivery.decision_id,
@@ -247,7 +248,7 @@ impl AppState {
                         DecisionDeliveryFailure::Retryable,
                     )
                 }
-                Ok(_) => store.fail_decision_delivery(
+                Ok(TerminalSubmission::Uncertain) => store.fail_decision_delivery(
                     delivery.decision_id,
                     unix_timestamp(),
                     DecisionDeliveryFailure::Uncertain,
@@ -286,13 +287,14 @@ impl AppState {
                 client,
                 delivery.session_id,
                 task_dispatch_message(&delivery),
+                &delivery_marker(delivery.task_id),
             )
             .await
             {
-                Ok(HostResponse::Acknowledged) => {
+                Ok(TerminalSubmission::Acknowledged) => {
                     store.complete_task_dispatch(&delivery.assignment_id, unix_timestamp())
                 }
-                Ok(HostResponse::Error { code, message }) => {
+                Ok(TerminalSubmission::Rejected { code, message }) => {
                     tracing::warn!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, %code, %message, "task briefing was rejected by terminal host");
                     store.fail_task_dispatch(
                         &delivery.assignment_id,
@@ -300,7 +302,7 @@ impl AppState {
                         TaskDispatchFailure::Retryable,
                     )
                 }
-                Ok(_) => store.fail_task_dispatch(
+                Ok(TerminalSubmission::Uncertain) => store.fail_task_dispatch(
                     &delivery.assignment_id,
                     unix_timestamp(),
                     TaskDispatchFailure::Uncertain,
@@ -338,13 +340,14 @@ impl AppState {
                 client,
                 outcome.session_id,
                 task_outcome_message(&outcome),
+                &delivery_marker(outcome.task_id),
             )
             .await
             {
-                Ok(HostResponse::Acknowledged) => {
+                Ok(TerminalSubmission::Acknowledged) => {
                     store.complete_task_outcome(&outcome.id, unix_timestamp())
                 }
-                Ok(HostResponse::Error { code, message }) => {
+                Ok(TerminalSubmission::Rejected { code, message }) => {
                     tracing::warn!(task_id = %outcome.task_id, reporter_id = %outcome.reporting_worker_id, recipient_id = %outcome.recipient_worker_id, %code, %message, "task outcome was rejected by terminal host");
                     store.fail_task_outcome(
                         &outcome.id,
@@ -352,7 +355,7 @@ impl AppState {
                         TaskOutcomeFailure::Retryable,
                     )
                 }
-                Ok(_) => store.fail_task_outcome(
+                Ok(TerminalSubmission::Uncertain) => store.fail_task_outcome(
                     &outcome.id,
                     unix_timestamp(),
                     TaskOutcomeFailure::Uncertain,
@@ -406,34 +409,107 @@ impl AppState {
     }
 }
 
-/// Submits a coordination prompt as text followed by a distinct Enter event.
+#[derive(Debug, Eq, PartialEq)]
+enum TerminalSubmission {
+    Acknowledged,
+    Rejected { code: String, message: String },
+    Uncertain,
+}
+
+/// Submits a coordination prompt after observing it in host-owned output.
 ///
 /// Claude's interactive input can render a carriage return that arrives in the
-/// same PTY write as a long prompt without accepting the prompt. Keeping Enter
-/// as its own host request matches an operator submission and prevents a task
-/// dispatch from being marked delivered while it is still sitting in the
-/// editor.
+/// same PTY read as a long prompt without accepting the prompt. This waits for
+/// the host's output sequence to advance and confirms a bounded delivery marker
+/// in the canonical snapshot before sending Enter. Ordering therefore depends
+/// on observed terminal state, never an arbitrary delay.
 async fn submit_terminal_message(
     client: &HostClient,
     session_id: WorkerSessionId,
     mut bytes: Vec<u8>,
-) -> Result<HostResponse, swarm_terminal::IpcError> {
+    marker: &[u8],
+) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
     let submit = bytes.last() == Some(&b'\r');
     if submit {
         bytes.pop();
     }
+    let baseline = match client
+        .request(&HostRequest::Read {
+            session_id,
+            after_sequence: None,
+        })
+        .await?
+    {
+        HostResponse::Output { resume, .. } => resume_sequence(&resume),
+        HostResponse::Error { code, message } => {
+            return Ok(TerminalSubmission::Rejected { code, message });
+        }
+        _ => return Ok(TerminalSubmission::Uncertain),
+    };
     let response = client
         .request(&HostRequest::Write { session_id, bytes })
         .await?;
-    if !matches!(response, HostResponse::Acknowledged) || !submit {
-        return Ok(response);
+    match response {
+        HostResponse::Acknowledged if submit => {}
+        HostResponse::Acknowledged => return Ok(TerminalSubmission::Acknowledged),
+        HostResponse::Error { code, message } => {
+            return Ok(TerminalSubmission::Rejected { code, message });
+        }
+        _ => return Ok(TerminalSubmission::Uncertain),
     }
-    client
+    if !matches!(
+        client
+            .request(&HostRequest::Wait {
+                session_id,
+                after_sequence: Some(baseline),
+            })
+            .await?,
+        HostResponse::Output { .. }
+    ) {
+        return Ok(TerminalSubmission::Uncertain);
+    }
+    let rendered = match client
+        .request(&HostRequest::Read {
+            session_id,
+            after_sequence: None,
+        })
+        .await?
+    {
+        HostResponse::Output {
+            resume: swarm_terminal::Resume::Snapshot { snapshot },
+            ..
+        } => snapshot
+            .bytes
+            .windows(marker.len())
+            .any(|part| part == marker),
+        _ => false,
+    };
+    if !rendered {
+        return Ok(TerminalSubmission::Uncertain);
+    }
+    match client
         .request(&HostRequest::Write {
             session_id,
             bytes: vec![b'\r'],
         })
         .await
+    {
+        Ok(HostResponse::Acknowledged) => Ok(TerminalSubmission::Acknowledged),
+        Ok(_) | Err(_) => Ok(TerminalSubmission::Uncertain),
+    }
+}
+
+fn resume_sequence(resume: &swarm_terminal::Resume) -> u64 {
+    match resume {
+        swarm_terminal::Resume::Snapshot { snapshot } => snapshot.sequence,
+        swarm_terminal::Resume::Deltas { frames } => {
+            frames.last().map_or(0, |frame| frame.sequence)
+        }
+    }
+}
+
+fn delivery_marker(id: impl std::fmt::Display) -> Vec<u8> {
+    id.to_string().bytes().take(8).collect()
 }
 
 fn decision_delivery_message(delivery: &DecisionDispatch) -> Vec<u8> {

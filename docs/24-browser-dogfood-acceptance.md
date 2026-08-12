@@ -154,8 +154,11 @@ unsubmitted at Queen's prompt.
   Review and delivered one durable outcome to Queen.
 - A separately submitted Enter let Queen inspect the handoff and approve the
   task as Completed.
-- Coordination delivery now sends sanitized prompt text and Enter as two
-  ordered terminal-host requests for task briefs, decision outcomes, and Queen
-  handoffs. Delivery is recorded only after both requests are acknowledged.
+- Splitting text and Enter into immediate terminal-host requests still allowed
+  the PTY to coalesce both events. Coordination delivery now writes sanitized
+  prompt text, waits for its bounded identity marker in host-owned canonical
+  output, and only then sends Enter for task briefs, decision outcomes, and
+  Queen handoffs. Delivery is recorded only after Enter is acknowledged; any
+  post-write ambiguity fails closed as Uncertain and is never replayed.
 - The real terminal-host assignment integration, strict workspace lint, and all
   164 Rust tests pass with the corrected submission boundary.
