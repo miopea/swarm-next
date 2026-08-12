@@ -28,7 +28,7 @@ cat > "$SWARM_CURL_BIN" <<'EOF'
 set -eu
 version=$(cat "$SWARM_INSTALL_ROOT/current/VERSION")
 printf '%s\n' "$version" >> "$HOME/curl.log"
-[ "$version" != "3.0.0" ]
+[ "$version" != "3.0.0" ] && [ "$version" != "6.0.0" ]
 EOF
 chmod +x "$SWARM_SYSTEMCTL_BIN" "$SWARM_CURL_BIN"
 
@@ -68,6 +68,7 @@ make_bundle 2.0.0
 make_bundle 3.0.0
 make_bundle 4.0.0 6
 make_bundle 5.0.0
+make_bundle 6.0.0 7
 package="$repo_root/packaging/linux/swarm-next-package"
 
 # Initial install owns both API/browser and terminal-host pointers.
@@ -161,6 +162,32 @@ fi
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
 [ "$(tail -n 2 "$HOME/curl.log" | tr '\n' ' ')" = "3.0.0 2.0.0 " ]
+
+# Explicit protocol migration refuses active workers, then atomically switches
+# both processes while retaining the old API and host for rollback.
+printf '1\n' > "$HOME/running-sessions"
+if "$package" migrate-protocol "$test_root/bundle-4.0.0"; then
+  echo "active protocol migration unexpectedly succeeded" >&2
+  exit 1
+fi
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
+printf '0\n' > "$HOME/running-sessions"
+: > "$HOME/systemctl.log"
+"$package" migrate-protocol "$test_root/bundle-4.0.0"
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "4.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/previous/VERSION")" = "2.0.0" ]
+grep -q '^--user stop swarm-next.target$' "$HOME/systemctl.log"
+grep -q '^--user enable --now swarm-next.target$' "$HOME/systemctl.log"
+
+# A failed protocol migration restores both independently pinned pointers.
+if "$package" migrate-protocol "$test_root/bundle-6.0.0"; then
+  echo "unhealthy protocol migration unexpectedly succeeded" >&2
+  exit 1
+fi
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "4.0.0" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ]
 
 printf 'keep\n' > "$SWARM_STATE_ROOT/operator-data"
 if SWARM_INSTALL_ROOT="$HOME/.local/lib/not-swarm" "$package" uninstall; then
