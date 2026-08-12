@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 vi.mock("./terminal/XtermSurface", () => ({ XtermSurface: class {} }));
@@ -60,16 +60,18 @@ test("makes runtime failure visible", async () => {
   expect(await screen.findByText("Runtime unavailable")).toBeInTheDocument();
 });
 
-test("keeps the operator token in the browser tab and reveals the control room", async () => {
+test("creates a durable browser session without storing the operator token", async () => {
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({}))
     .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]))
-    .mockResolvedValueOnce(ok([]));
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValue(ok({}));
   vi.stubGlobal("fetch", fetch);
   render(<App />);
 
@@ -83,14 +85,31 @@ test("keeps the operator token in the browser tab and reveals the control room",
     expect.objectContaining({ cache: "no-store" }),
   );
   expect(screen.queryByDisplayValue("secret")).not.toBeInTheDocument();
-  expect(window.sessionStorage.getItem("swarm-next.operator-token.v1")).toBe("secret");
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/v1/auth/session",
+    expect.objectContaining({
+      method: "POST",
+      credentials: "same-origin",
+      headers: expect.any(Headers),
+    }),
+  );
+  const sessionRequest = fetch.mock.calls.find(
+    ([url, init]) => url === "/api/v1/auth/session" && (init as RequestInit | undefined)?.method === "POST",
+  );
+  expect((sessionRequest?.[1]?.headers as Headers).get("Authorization")).toBe("Bearer secret");
+  expect(window.localStorage.getItem("swarm-next.trusted-session.v1")).toBe("yes");
+  expect(JSON.stringify({ local: { ...window.localStorage }, session: { ...window.sessionStorage } })).not.toContain("secret");
 
   fireEvent.click(screen.getByRole("button", { name: "Lock" }));
-  expect(window.sessionStorage.getItem("swarm-next.operator-token.v1")).toBeNull();
+  await waitFor(() => expect(window.localStorage.getItem("swarm-next.trusted-session.v1")).toBeNull());
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/v1/auth/session",
+    expect.objectContaining({ method: "DELETE", credentials: "same-origin" }),
+  );
 });
 
 test("restores tasks and workers after a refresh", async () => {
-  window.sessionStorage.setItem("swarm-next.operator-token.v1", "saved-secret");
+  window.localStorage.setItem("swarm-next.trusted-session.v1", "yes");
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
@@ -110,13 +129,14 @@ test("restores tasks and workers after a refresh", async () => {
   expect(await screen.findByRole("heading", { name: "Stable reload" })).toBeInTheDocument();
   expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument();
   const sessionRequestHeaders = fetch.mock.calls[1]?.[1]?.headers as Headers;
-  expect(sessionRequestHeaders.get("Authorization")).toBe("Bearer saved-secret");
+  expect(sessionRequestHeaders.get("Authorization")).toBeNull();
+  expect(fetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ credentials: "same-origin" }));
 
   expect(screen.getByRole("button", { name: "Workers 1" })).toBeInTheDocument();
 });
 
 test("restores the worker surface after a refresh", async () => {
-  window.sessionStorage.setItem("swarm-next.operator-token.v1", "saved-secret");
+  window.localStorage.setItem("swarm-next.trusted-session.v1", "yes");
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   const fetch = vi
     .fn()
@@ -138,7 +158,7 @@ test("restores the worker surface after a refresh", async () => {
 });
 
 test("notification navigation overrides a previously saved surface", async () => {
-  window.sessionStorage.setItem("swarm-next.operator-token.v1", "saved-secret");
+  window.localStorage.setItem("swarm-next.trusted-session.v1", "yes");
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   window.history.replaceState({}, "", "/?surface=decisions");
   const fetch = vi
@@ -158,7 +178,7 @@ test("notification navigation overrides a previously saved surface", async () =>
   expect(screen.getByRole("button", { name: "Needs you 0" })).toHaveAttribute("aria-current", "page");
 });
 test("keyboard shortcuts switch workspaces but pause while editing a field", async () => {
-  window.sessionStorage.setItem("swarm-next.operator-token.v1", "saved-secret");
+  window.localStorage.setItem("swarm-next.trusted-session.v1", "yes");
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
@@ -185,8 +205,8 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
   expect(await screen.findByRole("heading", { name: "Worker terminal" })).toBeInTheDocument();
 });
 
-test("removes a rejected saved token and returns to unlock", async () => {
-  window.sessionStorage.setItem("swarm-next.operator-token.v1", "expired-secret");
+test("removes a rejected trusted-session marker and returns to unlock", async () => {
+  window.localStorage.setItem("swarm-next.trusted-session.v1", "yes");
   vi.stubGlobal(
     "fetch",
     vi.fn()
@@ -197,8 +217,8 @@ test("removes a rejected saved token and returns to unlock", async () => {
   render(<App />);
 
   expect(await screen.findByLabelText("Operator token")).toBeInTheDocument();
-  expect(await screen.findByRole("alert")).toHaveTextContent("Runtime request returned 401: expired");
-  expect(window.sessionStorage.getItem("swarm-next.operator-token.v1")).toBeNull();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(window.localStorage.getItem("swarm-next.trusted-session.v1")).toBeNull();
 });
 
 test("creates a persisted task draft from the task board", async () => {
@@ -209,6 +229,7 @@ test("creates a persisted task draft from the task board", async () => {
   };
   const responses = [
     ok({ status: "ok", version: "0.1.0" }),
+    ok({}),
     ok(hiveIdentity()),
     ok({ type: "sessions", sessions: [] }),
     ok([worker]),

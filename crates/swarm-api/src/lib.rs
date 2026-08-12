@@ -20,7 +20,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
 };
+use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use swarm_application::{ApplicationError, TaskService};
 use swarm_domain::{
@@ -56,6 +58,8 @@ use terminal_socket::{
 const MAX_TERMINAL_WEBSOCKETS: usize = 32;
 const RESOURCE_ADVISORY_BYTES: u64 = 256 * 1024 * 1024;
 const RESOURCE_CRITICAL_BYTES: u64 = 512 * 1024 * 1024;
+const OPERATOR_SESSION_COOKIE: &str = "swarm_next_operator_session";
+const OPERATOR_SESSION_MAX_AGE_SECONDS: u64 = 30 * 24 * 60 * 60;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -794,6 +798,12 @@ fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/mcp", post(mcp))
         .route("/health", get(health))
+        .route(
+            "/api/v1/auth/session",
+            get(get_browser_session)
+                .post(create_browser_session)
+                .delete(delete_browser_session),
+        )
         .route("/api/v1/hive", get(local_hive))
         .route(
             "/api/v1/presence",
@@ -895,6 +905,50 @@ async fn health() -> Json<HealthResponse> {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
     })
+}
+
+async fn get_browser_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        StatusCode::NO_CONTENT,
+    )
+        .into_response())
+}
+
+async fn create_browser_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let cookie = browser_session_set_cookie(&state, &headers)?;
+    Ok((
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (header::SET_COOKIE, cookie),
+        ],
+        StatusCode::NO_CONTENT,
+    )
+        .into_response())
+}
+
+async fn delete_browser_session() -> Response {
+    (
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (
+                header::SET_COOKIE,
+                HeaderValue::from_static(
+                    "swarm_next_operator_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+                ),
+            ),
+        ],
+        StatusCode::NO_CONTENT,
+    )
+        .into_response()
 }
 
 async fn local_hive(
@@ -2260,21 +2314,93 @@ fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
             "operator authentication is not configured",
         )
     })?;
-    let presented = headers
+    let presented_bearer = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .unwrap_or_default();
-    let matches = presented.len() == expected.len()
-        && bool::from(presented.as_bytes().ct_eq(expected.as_bytes()));
-    if !matches {
+    let expected_session = browser_session_value(expected);
+    let presented_session = cookie_value(headers, OPERATOR_SESSION_COOKIE).unwrap_or_default();
+    let bearer_matches = presented_bearer.len() == expected.len()
+        && bool::from(presented_bearer.as_bytes().ct_eq(expected.as_bytes()));
+    let session_matches = presented_session.len() == expected_session.len()
+        && bool::from(
+            presented_session
+                .as_bytes()
+                .ct_eq(expected_session.as_bytes()),
+        );
+    if !bearer_matches && !session_matches {
         return Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
             "invalid_operator_token",
-            "a valid operator bearer token is required",
+            "a valid operator session is required",
         ));
     }
     Ok(())
+}
+
+fn browser_session_set_cookie(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<HeaderValue, ApiError> {
+    let expected = state.operator_token.as_deref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "operator_auth_unconfigured",
+            "operator authentication is not configured",
+        )
+    })?;
+    let secure = if request_is_secure(headers) {
+        "; Secure"
+    } else {
+        ""
+    };
+    HeaderValue::from_str(&format!(
+        "{OPERATOR_SESSION_COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={OPERATOR_SESSION_MAX_AGE_SECONDS}{secure}",
+        browser_session_value(expected),
+    ))
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "operator_session_unavailable",
+            "browser session could not be created",
+        )
+    })
+}
+
+fn browser_session_value(operator_token: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"swarm-next.operator-session.v1\0");
+    digest.update(operator_token.as_bytes());
+    Base64UrlUnpadded::encode_string(&digest.finalize())
+}
+
+fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .map(str::trim)
+        .find_map(|cookie| cookie.strip_prefix(name)?.strip_prefix('='))
+}
+
+fn request_is_secure(headers: &HeaderMap) -> bool {
+    if headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("https"))
+    {
+        return true;
+    }
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_none_or(|host| {
+            !host.starts_with("localhost")
+                && !host.starts_with("127.0.0.1")
+                && !host.starts_with("[::1]")
+        })
 }
 
 fn parse_session_id(value: &str) -> Result<WorkerSessionId, ApiError> {
@@ -3947,6 +4073,71 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn browser_session_survives_without_exposing_the_operator_token_to_javascript() {
+        let runtime = TempDir::new().unwrap();
+        let state = AppState::default().with_terminal_host(
+            HostClient::new(runtime.path().join("absent.sock")),
+            "durable-secret",
+        );
+        let app = router(state);
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/session")
+                    .header(header::AUTHORIZATION, "Bearer durable-secret")
+                    .header("x-forwarded-proto", "https")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::NO_CONTENT);
+        let set_cookie = created.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(set_cookie.contains("HttpOnly"));
+        assert!(set_cookie.contains("SameSite=Strict"));
+        assert!(set_cookie.contains("Max-Age=2592000"));
+        assert!(set_cookie.contains("Secure"));
+        assert!(!set_cookie.contains("durable-secret"));
+        let cookie = set_cookie.split(';').next().unwrap();
+
+        let restored = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/auth/session")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(restored.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn locking_clears_the_browser_session_without_requiring_a_live_session() {
+        let response = router(AppState::default())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/auth/session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(
+            response.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .contains("Max-Age=0")
+        );
     }
 
     async fn response_json(response: Response) -> Value {

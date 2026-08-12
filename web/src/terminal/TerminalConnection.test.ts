@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 
+import { BROWSER_SESSION_AUTH } from "../api";
 import { TerminalConnection, type TerminalConnectionHandlers } from "./TerminalConnection";
 
 class FakeWebSocket extends EventTarget {
@@ -65,7 +66,11 @@ function snapshotFrame(
   return frame.buffer;
 }
 
-function harness(retryDelaysMs: readonly number[] = [1], confirmationTimeoutMs = 3_000) {
+function harness(
+  retryDelaysMs: readonly number[] = [1],
+  confirmationTimeoutMs = 3_000,
+  operatorToken = "secret",
+) {
   const sockets: FakeWebSocket[] = [];
   const fetch = vi.fn().mockResolvedValue({
     ok: true,
@@ -84,7 +89,7 @@ function harness(retryDelaysMs: readonly number[] = [1], confirmationTimeoutMs =
   };
   const connection = new TerminalConnection({
     sessionId: "session-1",
-    operatorToken: "secret",
+    operatorToken,
     fetch,
     locationOrigin: "http://127.0.0.1:5173",
     retryDelaysMs,
@@ -129,6 +134,17 @@ test("requests a no-store grant and applies a snapshot before sequenced deltas",
   );
   expect(handlers.onOutput).toHaveBeenCalledTimes(1);
   expect(Array.from(vi.mocked(handlers.onOutput).mock.calls[0][0])).toEqual([111, 110, 101]);
+});
+
+test("uses the trusted browser cookie for terminal attach grants", async () => {
+  const { connection, fetch, handlers, sockets } = harness([1], 3_000, BROWSER_SESSION_AUTH);
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+
+  const init = fetch.mock.calls[0]?.[1] as RequestInit;
+  expect(init.credentials).toBe("same-origin");
+  expect(new Headers(init.headers).get("Authorization")).toBeNull();
+  connection.dispose();
 });
 
 test("does not report connected until the canonical renderer is ready", async () => {

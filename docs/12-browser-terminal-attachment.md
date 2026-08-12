@@ -79,7 +79,7 @@ application shell does not pay its parse and initialization cost.
 
 A local host, API, and production-equivalent Vite client were exercised with
 two real Claude Code PTYs. Both sessions remained connected while the visible
-worker was switched. After a full browser reload and memory-only token unlock,
+worker was switched. After a full browser reload and operator unlock,
 the API returned the same two session IDs and the selected terminal rebuilt its
 screen from sequenced host output, including Claude's untouched workspace-trust
 prompt. Both test workers were then stopped explicitly and the temporary host,
@@ -89,7 +89,7 @@ API, and browser processes were verified absent.
 
 - Durable time-and-byte-bounded on-disk terminal history.
 - Host upgrade descriptor handoff or explicit compatibility fallback.
-- Packaged lifecycle and user-facing authentication beyond the development
-  operator-token unlock.
+- Packaged lifecycle and authentication beyond the trusted-browser
+  operator-session boundary.
 - Longer browser-driven two-real-worker soak after canonical snapshots are
   available.

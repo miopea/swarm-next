@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent, type Keyb
 
 import {
   assignTask,
+  BROWSER_SESSION_AUTH,
+  createBrowserSession,
   createTask,
   fetchDecisions,
   resolveDecision,
@@ -16,6 +18,7 @@ import {
   fetchWorkspaces,
   reorderTasks,
   reorderWorkers,
+  revokeBrowserSession,
   setManualPresence,
   startWorker,
   stopClaudeSession,
@@ -53,7 +56,7 @@ import WorkerRosterItem from "./workers/WorkerRosterItem";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
-const OPERATOR_TOKEN_STORAGE_KEY = "swarm-next.operator-token.v1";
+const TRUSTED_SESSION_STORAGE_KEY = "swarm-next.trusted-session.v1";
 const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
@@ -124,15 +127,14 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const savedToken = readSavedOperatorToken();
-    if (!savedToken) return;
+    if (!hasTrustedBrowserSession()) return;
     let cancelled = false;
     setBusy(true);
-    void loadControlRoom(savedToken)
+    void loadControlRoom(BROWSER_SESSION_AUTH)
       .then(({ hive, sessions: nextSessions, workers: nextWorkers, workspaces: nextWorkspaces, tasks: nextTasks, decisions: nextDecisions }) => {
         if (cancelled) return;
-        terminalWorkspace.authenticate(savedToken);
-        setOperatorToken(savedToken);
+        terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
+        setOperatorToken(BROWSER_SESSION_AUTH);
         setHiveIdentity(hive);
         setSessions(nextSessions);
         setWorkers(nextWorkers);
@@ -143,9 +145,11 @@ export function App() {
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        clearSavedOperatorToken();
+        if (error instanceof Error && error.message.includes("401")) clearTrustedBrowserSession();
         terminalWorkspace.logout();
-        setOperationError(error instanceof Error ? error.message : "Saved authentication is no longer valid");
+        if (!(error instanceof Error && error.message.includes("401"))) {
+          setOperationError(error instanceof Error ? error.message : "Saved authentication could not be restored");
+        }
       })
       .finally(() => {
         if (!cancelled) setBusy(false);
@@ -204,9 +208,10 @@ export function App() {
     event.preventDefault();
     if (!tokenDraft) return;
     await perform(async () => {
-      const controlRoom = await loadControlRoom(tokenDraft);
-      terminalWorkspace.authenticate(tokenDraft);
-      setOperatorToken(tokenDraft);
+      await createBrowserSession(tokenDraft);
+      const controlRoom = await loadControlRoom(BROWSER_SESSION_AUTH);
+      terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
+      setOperatorToken(BROWSER_SESSION_AUTH);
       setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
@@ -214,9 +219,8 @@ export function App() {
       setTasks(controlRoom.tasks);
       setActiveSessionId((current) => current ?? preferredSessionId(controlRoom.workers, controlRoom.sessions));
       setDecisions(controlRoom.decisions);
-      const tokenWasSaved = saveOperatorToken(tokenDraft);
+      rememberTrustedBrowserSession();
       setTokenDraft("");
-      if (!tokenWasSaved) throw new Error("Unlocked, but this browser blocked tab storage; refreshing will lock Swarm again.");
     });
   }
 
@@ -443,8 +447,15 @@ export function App() {
     terminalWorkspace.focusSession(sessionId, shouldFocusTerminalInput());
   }
 
-  function logout() {
-    clearSavedOperatorToken();
+  async function logout() {
+    await perform(async () => {
+      await revokeBrowserSession();
+      clearTrustedBrowserSession();
+      lockInterface();
+    });
+  }
+
+  function lockInterface() {
     terminalWorkspace.logout();
     setOperatorToken(undefined);
     setHiveIdentity(undefined);
@@ -570,7 +581,7 @@ export function App() {
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
             <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => setColorTheme((current) => current === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" onClick={() => void refreshControlRoom()} disabled={busy}><RefreshIcon /></button>}
-            {operatorToken && <button className="secondary-button" onClick={logout}>Lock</button>}
+            {operatorToken && <button className="secondary-button" onClick={() => void logout()} disabled={busy}>Lock</button>}
           </div>
         </header>
         {operationError && <div className="operation-error" role="alert">{operationError}</div>}
@@ -593,7 +604,7 @@ export function App() {
             <div className="unlock-symbol"><BeeMascot expression="available" /></div>
             <p className="eyebrow">Private local runtime</p>
             <h3>Welcome back</h3>
-            <p>Unlock this control room. Your credential stays in this browser tab and terminal access uses one-time grants.</p>
+            <p>Unlock this trusted device once. Swarm keeps the credential out of browser storage and terminal access uses one-time grants.</p>
             <label htmlFor="operator-token">Operator token</label>
             <input id="operator-token" type="password" autoComplete="off" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} />
             <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
@@ -667,9 +678,9 @@ function requireActiveSession(worker: Worker): string {
   return worker.active_session_id;
 }
 
-function readSavedOperatorToken(): string | undefined { try { return window.sessionStorage.getItem(OPERATOR_TOKEN_STORAGE_KEY) ?? undefined; } catch { return undefined; } }
-function saveOperatorToken(operatorToken: string): boolean { try { window.sessionStorage.setItem(OPERATOR_TOKEN_STORAGE_KEY, operatorToken); return true; } catch { return false; } }
-function clearSavedOperatorToken() { try { window.sessionStorage.removeItem(OPERATOR_TOKEN_STORAGE_KEY); } catch { /* Locking memory is sufficient when browser storage is unavailable. */ } }
+function hasTrustedBrowserSession(): boolean { try { return window.localStorage.getItem(TRUSTED_SESSION_STORAGE_KEY) === "yes"; } catch { return false; } }
+function rememberTrustedBrowserSession() { try { window.localStorage.setItem(TRUSTED_SESSION_STORAGE_KEY, "yes"); } catch { /* The cookie remains authoritative; this marker only enables automatic restoration. */ } }
+function clearTrustedBrowserSession() { try { window.localStorage.removeItem(TRUSTED_SESSION_STORAGE_KEY); } catch { /* The server has already revoked the authoritative cookie. */ } }
 
 function presenceModeLabel(mode: PresenceMode) {
   if (mode === "at_hive") return "At Hive";

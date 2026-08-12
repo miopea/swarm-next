@@ -1,4 +1,5 @@
 export type Health = { status: "ok"; version: string };
+export const BROWSER_SESSION_AUTH = "browser-session-cookie";
 export type SessionSummary = { session_id: string; running: boolean };
 export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
@@ -446,14 +447,22 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
   );
 }
 
+export async function createBrowserSession(operatorToken: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/auth/session", { method: "POST" });
+}
+
+export async function revokeBrowserSession(): Promise<void> {
+  await authenticatedFetch(BROWSER_SESSION_AUTH, "/api/v1/auth/session", { method: "DELETE" });
+}
+
 export async function authenticatedFetch(
   operatorToken: string,
   url: string,
   init: RequestInit = {},
 ): Promise<Response> {
   const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${operatorToken}`);
-  const response = await fetch(url, { ...init, headers, cache: "no-store" });
+  if (operatorToken !== BROWSER_SESSION_AUTH) headers.set("Authorization", `Bearer ${operatorToken}`);
+  const response = await fetch(url, { ...init, headers, cache: "no-store", credentials: "same-origin" });
   if (!response.ok) {
     let detail = "";
     try {

@@ -16,8 +16,8 @@ canonical screen reconstruction.
 - If adversarial terminal state exceeds the host bound, the worker continues
   running and the terminal shows an explicit reset notice.
 
-Reload still requires the memory-only development token. Durable authentication
-and packaged lifecycle remain later milestones.
+Reload and PWA restart now recover through the trusted-browser session described
+in ADR 0022. Packaged lifecycle and multi-user identity remain later milestones.
 
 ## Synchronization contract
 

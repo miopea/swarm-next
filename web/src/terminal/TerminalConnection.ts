@@ -1,3 +1,5 @@
+import { BROWSER_SESSION_AUTH } from "../api";
+
 export type TerminalConnectionState =
   | "connecting"
   | "connected"
@@ -132,7 +134,10 @@ export class TerminalConnection {
         `/api/v1/terminal/sessions/${encodeURIComponent(this.#sessionId)}/attach-grants`,
         {
           method: "POST",
-          headers: { Authorization: `Bearer ${this.#operatorToken}` },
+          headers: this.#operatorToken === BROWSER_SESSION_AUTH
+            ? undefined
+            : { Authorization: `Bearer ${this.#operatorToken}` },
+          credentials: "same-origin",
           cache: "no-store",
           signal: grantAbortController.signal,
         },
