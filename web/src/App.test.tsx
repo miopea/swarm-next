@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 vi.mock("./terminal/XtermSurface", () => ({ XtermSurface: class {} }));
 vi.mock("./presence/PresenceController", () => ({
+  deviceClass: () => "desktop",
   PresenceController: class {
     start() {}
     stop() {}
@@ -67,6 +68,7 @@ test("keeps the operator token in the browser tab and reveals the control room",
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
   vi.stubGlobal("fetch", fetch);
   render(<App />);
@@ -98,6 +100,7 @@ test("restores tasks and workers after a refresh", async () => {
       id: "worker-queen", name: "Queen", role: "queen", provider: "claude_code", workspace: "/workspace/queen", autostart: true, position: 0,
       active_session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", running: true, created_at: 1, updated_at: 1,
     }]))
+    .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([{ id: "task-1", title: "Stable reload", workspace: "/workspace", state: "active", assigned_session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", created_at: 1, updated_at: 1 }]))
     .mockResolvedValueOnce(ok([]));
   vi.stubGlobal("fetch", fetch);
@@ -109,7 +112,7 @@ test("restores tasks and workers after a refresh", async () => {
   const sessionRequestHeaders = fetch.mock.calls[1]?.[1]?.headers as Headers;
   expect(sessionRequestHeaders.get("Authorization")).toBe("Bearer saved-secret");
 
-  expect(screen.getByRole("option", { name: /Queen/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Workers 1" })).toBeInTheDocument();
 });
 
 test("restores the worker surface after a refresh", async () => {
@@ -120,6 +123,7 @@ test("restores the worker surface after a refresh", async () => {
     .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
     .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
+    .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
@@ -144,6 +148,7 @@ test("notification navigation overrides a previously saved surface", async () =>
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
   vi.stubGlobal("fetch", fetch);
 
@@ -161,22 +166,23 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
   vi.stubGlobal("fetch", fetch);
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
+  const taskTitle = screen.getByLabelText("Task title");
+  taskTitle.focus();
+  fireEvent.keyDown(taskTitle, { key: "4", altKey: true });
+  expect(screen.getByRole("heading", { name: "Task board" })).toBeInTheDocument();
+
   fireEvent.keyDown(screen.getByRole("button", { name: "Tasks 0" }), { key: "4", altKey: true });
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Settings/ })).toHaveAttribute("aria-current", "page");
 
   fireEvent.keyDown(screen.getByRole("button", { name: /Settings/ }), { key: "3", altKey: true });
   expect(await screen.findByRole("heading", { name: "Worker terminal" })).toBeInTheDocument();
-
-  const workerName = screen.getByLabelText("Add a named worker");
-  workerName.focus();
-  fireEvent.keyDown(workerName, { key: "4", altKey: true });
-  expect(screen.getByRole("heading", { name: "Worker terminal" })).toBeInTheDocument();
 });
 
 test("removes a rejected saved token and returns to unlock", async () => {
@@ -197,11 +203,16 @@ test("removes a rejected saved token and returns to unlock", async () => {
 
 test("creates a persisted task draft from the task board", async () => {
   const task = { id: "task-1", title: "Prove two workers", workspace: "/workspace", state: "draft", assigned_session_id: null, created_at: 1, updated_at: 1 };
+  const worker = {
+    id: "worker-1", name: "Budget Bee", role: "worker", provider: "claude_code", workspace: task.workspace,
+    autostart: false, position: 1, active_session_id: null, running: false, created_at: 1, updated_at: 1,
+  };
   const responses = [
     ok({ status: "ok", version: "0.1.0" }),
     ok(hiveIdentity()),
     ok({ type: "sessions", sessions: [] }),
-    ok([]),
+    ok([worker]),
+    ok([{ name: "workspace", path: task.workspace, kind: "repository", configured_worker_id: worker.id }]),
     ok([]),
     ok([]),
     ok(task),
@@ -226,7 +237,6 @@ test("creates a persisted task draft from the task board", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Unlock Swarm" }));
 
   fireEvent.change(await screen.findByLabelText("Task title"), { target: { value: task.title } });
-  fireEvent.change(screen.getByLabelText("Workspace"), { target: { value: task.workspace } });
   fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
 
   expect(await screen.findByRole("heading", { name: task.title })).toBeInTheDocument();

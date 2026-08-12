@@ -6,6 +6,7 @@ const xterm = vi.hoisted(() => ({
   resizeListener: undefined as ((size: { rows: number; cols: number }) => void) | undefined,
   terminal: undefined as { rows: number; cols: number } | undefined,
   options: undefined as Record<string, unknown> | undefined,
+  focus: vi.fn(),
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
@@ -39,6 +40,7 @@ vi.mock("@xterm/xterm", () => ({
 
     loadAddon(): void {}
     open(): void {}
+    focus(): void { xterm.focus(); }
     reset(): void {}
     resize(columns: number, rows: number): void {
       this.cols = columns;
@@ -80,6 +82,12 @@ test("uses the complete botanical ANSI palette", () => {
   });
   surface.dispose();
   delete document.documentElement.dataset.theme;
+});
+
+test("delegates keyboard focus to xterm's input surface", () => {
+  const surface = new XtermSurface();
+  surface.focus();
+  expect(xterm.focus).toHaveBeenCalledOnce();
 });
 
 test("updates the palette in place when the application theme changes", async () => {

@@ -41,6 +41,10 @@ export class XtermSurface implements TerminalSurface {
     this.#resizeObserver.observe(element);
   }
 
+  focus(): void {
+    if (!this.#disposed) this.#terminal.focus();
+  }
+
   async fit(): Promise<{ rows: number; columns: number }> {
     try {
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");

@@ -9,7 +9,7 @@ const DEVICE_ID_STORAGE_KEY = "swarm-next.presence-device.v1";
 const HEARTBEAT_MS = 60_000;
 
 type Observe = typeof observePresence;
-export type LockDetectionState = "unsupported" | "available" | "enabled" | "denied";
+export type LockDetectionState = "unsupported" | "available" | "enabling" | "enabled" | "denied" | "error";
 
 export class PresenceController {
   #token?: string;
@@ -42,13 +42,15 @@ export class PresenceController {
     this.#deviceId = presenceDeviceId();
     this.#deviceClass = deviceClass();
     this.#state = document.visibilityState === "visible" ? "active" : "hidden";
-    this.#onLockState("IdleDetector" in window ? "available" : "unsupported");
+    const lockDetectionAvailable = this.#deviceClass === "desktop" && "IdleDetector" in window;
+    this.#onLockState(lockDetectionAvailable ? "available" : "unsupported");
     document.addEventListener("visibilitychange", this.#handleVisibility);
     window.addEventListener("pointerdown", this.#handleInteraction, { passive: true });
     window.addEventListener("keydown", this.#handleInteraction);
     window.addEventListener("touchstart", this.#handleInteraction, { passive: true });
     this.#queue(this.#state);
     this.#timer = window.setInterval(() => this.#queue(this.#state), HEARTBEAT_MS);
+    if (lockDetectionAvailable) void this.#restoreLockDetection(this.#generation);
   }
 
   stop() {
@@ -67,37 +69,54 @@ export class PresenceController {
   }
 
   async enableLockDetection(): Promise<boolean> {
-    if (!this.#token || !("IdleDetector" in window)) {
+    if (!this.#token || this.#deviceClass !== "desktop" || !("IdleDetector" in window)) {
       this.#onLockState("unsupported");
       return false;
     }
+    this.#onLockState("enabling");
     try {
       const permission = await IdleDetector.requestPermission();
       if (permission !== "granted") {
         this.#onLockState("denied");
         return false;
       }
-      this.#idleAbort?.abort();
-      const controller = new AbortController();
-      this.#idleAbort = controller;
-      const detector = new IdleDetector();
-      const update = () => {
-        this.#state = detector.screenState === "locked"
-          ? "locked"
-          : detector.userState === "idle"
-            ? "idle"
-            : document.visibilityState === "visible" ? "active" : "hidden";
-        this.#queue(this.#state);
-      };
-      detector.addEventListener("change", update, { signal: controller.signal });
-      await detector.start({ threshold: 60_000, signal: controller.signal });
-      this.#onLockState("enabled");
-      update();
+      await this.#startIdleDetector();
       return true;
     } catch {
-      if (!controllerAborted(this.#idleAbort)) this.#onLockState("denied");
+      if (!controllerAborted(this.#idleAbort)) this.#onLockState("error");
       return false;
     }
+  }
+
+  async #restoreLockDetection(generation: number) {
+    try {
+      const permission = await navigator.permissions?.query(
+        { name: "idle-detection" } as unknown as PermissionDescriptor,
+      );
+      if (generation !== this.#generation || permission?.state !== "granted") return;
+      await this.#startIdleDetector();
+    } catch {
+      // Permission restoration is optional. The explicit button remains available.
+    }
+  }
+
+  async #startIdleDetector() {
+    this.#idleAbort?.abort();
+    const controller = new AbortController();
+    this.#idleAbort = controller;
+    const detector = new IdleDetector();
+    const update = () => {
+      this.#state = detector.screenState === "locked"
+        ? "locked"
+        : detector.userState === "idle"
+          ? "idle"
+          : document.visibilityState === "visible" ? "active" : "hidden";
+      this.#queue(this.#state);
+    };
+    detector.addEventListener("change", update, { signal: controller.signal });
+    await detector.start({ threshold: 60_000, signal: controller.signal });
+    this.#onLockState("enabled");
+    update();
   }
 
   #handleVisibility = () => {

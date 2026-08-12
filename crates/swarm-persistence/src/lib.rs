@@ -114,6 +114,8 @@ pub enum TaskStoreError {
     ProviderConversationUnavailable,
     #[error("task order must contain every open task exactly once")]
     InvalidTaskOrder,
+    #[error("worker order must contain every non-Queen worker exactly once")]
+    InvalidWorkerOrder,
     #[error("database schema version {found} is newer than supported version {supported}")]
     UnsupportedSchemaVersion { found: i64, supported: i64 },
     #[error("database integrity check failed: {0}")]

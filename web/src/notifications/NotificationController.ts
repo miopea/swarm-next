@@ -9,7 +9,7 @@ import {
 } from "../api";
 import { deviceClass, presenceDeviceId } from "../presence/PresenceController";
 
-export type NotificationCapabilityState = "unsupported" | "available" | "enabled" | "denied" | "error";
+export type NotificationCapabilityState = "unsupported" | "available" | "enabling" | "enabled" | "denied" | "error";
 
 type SettingsCallback = (settings: NotificationSettings) => void;
 type StateCallback = (state: NotificationCapabilityState) => void;
@@ -56,6 +56,7 @@ export class NotificationController {
       this.#onState("unsupported");
       return false;
     }
+    this.#onState("enabling");
     try {
       const permission = await Notification.requestPermission();
       if (permission !== "granted") {
@@ -72,6 +73,7 @@ export class NotificationController {
       this.#onState("enabled");
       return true;
     } catch {
+      if (await this.#reconcileExistingSubscription()) return true;
       this.#onState("error");
       return false;
     }
@@ -95,7 +97,7 @@ export class NotificationController {
 
   async test(): Promise<void> {
     if (!this.#token) return;
-    this.#publish(await sendTestNotification(this.#token));
+    this.#publish(await sendTestNotification(this.#token, presenceDeviceId()));
   }
 
   async #save(subscription: PushSubscription) {
@@ -107,6 +109,19 @@ export class NotificationController {
       endpoint: json.endpoint,
       keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
     }));
+  }
+
+  async #reconcileExistingSubscription(): Promise<boolean> {
+    try {
+      const registration = await navigator.serviceWorker.getRegistration("/");
+      const subscription = await registration?.pushManager.getSubscription();
+      if (!subscription) return false;
+      await this.#save(subscription);
+      this.#onState("enabled");
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   #publish(settings: NotificationSettings) {

@@ -144,6 +144,12 @@ impl ProcessTerminalSession {
         let mut command_builder = CommandBuilder::new(&command.executable);
         command_builder.args(&command.arguments);
         command_builder.cwd(&command.working_directory);
+        // Provider CLIs inspect terminal capabilities before emitting styled output.
+        // The terminal host commonly runs under systemd without TERM, even though it
+        // gives the child a real PTY. Declare the xterm contract rendered by the web
+        // client so live output and canonical snapshots retain ANSI styling.
+        command_builder.env("TERM", "xterm-256color");
+        command_builder.env("COLORTERM", "truecolor");
         let child = pair
             .slave
             .spawn_command(command_builder)
@@ -663,6 +669,21 @@ mod tests {
         )
         .unwrap();
         assert!(output_until(&session, "firstsecond").contains("firstsecond"));
+    }
+
+    #[test]
+    fn provider_pty_declares_color_terminal_capabilities() {
+        let session = ProcessTerminalSession::spawn(
+            WorkerSessionId::new(),
+            &shell_command("printf '%s|%s' \"$TERM\" \"$COLORTERM\""),
+            JournalLimits::new(1024, 16),
+            TerminalSize::default(),
+        )
+        .unwrap();
+
+        assert!(
+            output_until(&session, "xterm-256color|truecolor").contains("xterm-256color|truecolor")
+        );
     }
 
     #[test]

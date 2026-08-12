@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 
-import type { SessionSummary, Task, TaskActivity, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput } from "../api";
+import type { SessionSummary, Task, TaskActivity, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 
 type Props = {
   tasks: Task[];
   sessions: SessionSummary[];
-  workerNames: ReadonlyMap<string, string>;
+  workers: Worker[];
   busy: boolean;
   onCreate: (input: TaskDraftInput) => Promise<void>;
   onUpdate: (task: Task, input: TaskUpdateInput) => Promise<void>;
   onTransition: (task: Task, state: TaskState) => Promise<void>;
-  onAssign: (task: Task, sessionId: string) => Promise<void>;
+  onAssign: (task: Task, workerId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
   onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
   onReorder: (taskIds: string[]) => Promise<void>;
@@ -57,7 +57,7 @@ const validTargets: Record<TaskState, TaskState[]> = {
 export default function TaskBoard({
   tasks,
   sessions,
-  workerNames,
+  workers,
   busy,
   onCreate,
   onUpdate,
@@ -70,18 +70,23 @@ export default function TaskBoard({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<TaskPriority>("normal");
-  const [workspace, setWorkspace] = useState("");
+  const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
+  const [workerId, setWorkerId] = useState("");
   const [draggedTaskId, setDraggedTaskId] = useState<string>();
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!title.trim() || !workspace.trim()) return;
-    await onCreate({ title, description, priority, workspace });
+    if (!title.trim() || !workerId) return;
+    await onCreate({ title, description, priority, worker_id: workerId });
     setTitle("");
     setDescription("");
     setPriority("normal");
-    setWorkspace("");
   }
+
+  useEffect(() => {
+    if (!workerId && assignableWorkers[0]) setWorkerId(assignableWorkers[0].id);
+    else if (workerId && !assignableWorkers.some((worker) => worker.id === workerId)) setWorkerId(assignableWorkers[0]?.id ?? "");
+  }, [assignableWorkers, workerId]);
 
   const openTasks = tasks
     .filter((task) => task.state !== "completed")
@@ -111,7 +116,7 @@ export default function TaskBoard({
         <div>
           <p className="eyebrow">New work</p>
           <h3 id="new-task-heading">Give the next worker a clear outcome</h3>
-          <p>Tasks remember the workspace, assignment, and every lifecycle transition.</p>
+          <p>Choose the worker. Swarm already knows which repository she owns.</p>
         </div>
         <form onSubmit={(event) => void submit(event)}>
           <div className="field-stack task-title-field">
@@ -142,15 +147,15 @@ export default function TaskBoard({
             </select>
           </div>
           <div className="field-stack">
-            <label htmlFor="task-workspace">Workspace</label>
-            <input
-              id="task-workspace"
-              value={workspace}
-              onChange={(event) => setWorkspace(event.target.value)}
-              placeholder="/absolute/path/to/workspace"
-            />
+            <label htmlFor="task-worker">Who should handle this?</label>
+            <select id="task-worker" value={workerId} onChange={(event) => setWorkerId(event.target.value)}>
+              {assignableWorkers.length === 0 && <option value="">Configure a worker first</option>}
+              {assignableWorkers.map((worker) => (
+                <option key={worker.id} value={worker.id}>{worker.name} · {repositoryName(worker.workspace)}</option>
+              ))}
+            </select>
           </div>
-          <button disabled={busy || !title.trim() || !workspace.trim()}>Create draft</button>
+          <button disabled={busy || !title.trim() || !workerId}>Create draft</button>
         </form>
       </section>
 
@@ -168,7 +173,7 @@ export default function TaskBoard({
                 key={task.id}
                 task={task}
                 sessions={sessions}
-                workerNames={workerNames}
+                workers={workers}
                 busy={busy}
                 onUpdate={onUpdate}
                 onTransition={onTransition}
@@ -218,7 +223,7 @@ export default function TaskBoard({
                 key={task.id}
                 task={task}
                 sessions={sessions}
-                workerNames={workerNames}
+                workers={workers}
                 busy={busy}
                 onUpdate={onUpdate}
                 onTransition={onTransition}
@@ -241,9 +246,10 @@ export default function TaskBoard({
   );
 }
 
-function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
-  const runningSessions = sessions.filter((session) => session.running);
+  const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
+  const targetWorker = assignableWorkers.find((worker) => worker.workspace === task.workspace);
   const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activity, setActivity] = useState<TaskActivityPage>();
@@ -304,7 +310,7 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
           <span className={`task-state state-${task.state}`}>{stateLabels[task.state]}</span>
           <span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span>
         </div>
-        <code>{shortWorkspace(task.workspace)}</code>
+        <span className="task-owner">{targetWorker?.name ?? "Choose worker"} · {repositoryName(task.workspace)}</span>
       </div>
       <h4>{task.title}</h4>
       {task.description && !editing && <p className="task-description">{task.description}</p>}
@@ -316,14 +322,14 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
           <label htmlFor={`assignment-${task.id}`}>Worker</label>
           <select
             id={`assignment-${task.id}`}
-            value={task.assigned_session_id ?? ""}
+            value={targetWorker?.id ?? ""}
             onChange={(event) => event.target.value && void onAssign(task, event.target.value)}
-            disabled={busy || runningSessions.length === 0}
+            disabled={busy || assignableWorkers.length === 0}
           >
-            <option value="">{runningSessions.length === 0 ? "No workers running" : "Unassigned"}</option>
-            {runningSessions.map((session) => (
-              <option key={session.session_id} value={session.session_id}>
-                {workerNames.get(session.session_id) ?? workerName(session.session_id)} · {session.running ? "running" : "exited"}
+            <option value="">Choose worker</option>
+            {assignableWorkers.map((worker) => (
+              <option key={worker.id} value={worker.id}>
+                {worker.name} · {worker.running ? "buzzing" : "sleeping"}
               </option>
             ))}
           </select>
@@ -341,7 +347,7 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
         </>
       )}
       <div className="task-actions">
-        {!editing && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}
+        {!editing && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} targetWorker={targetWorker} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}
         {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
         {!editing && (
           <button className="task-menu-trigger" aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)}>
@@ -430,13 +436,12 @@ function TaskEditForm({ task, busy, onUpdate, onCancel }: {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [priority, setPriority] = useState(task.priority);
-  const [workspace, setWorkspace] = useState(task.workspace);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!title.trim() || !workspace.trim()) return;
+    if (!title.trim()) return;
     try {
-      await onUpdate(task, { title, description, priority, workspace });
+      await onUpdate(task, { title, description, priority });
       onCancel();
     } catch {
       // The app-level alert explains the failure; retain this form for correction and retry.
@@ -456,28 +461,25 @@ function TaskEditForm({ task, busy, onUpdate, onCancel }: {
             {Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
         </div>
-        <div className="field-stack">
-          <label htmlFor={`edit-workspace-${task.id}`}>Workspace</label>
-          <input id={`edit-workspace-${task.id}`} value={workspace} onChange={(event) => setWorkspace(event.target.value)} />
-        </div>
       </div>
       <div className="task-edit-actions">
-        <button disabled={busy || !title.trim() || !workspace.trim()}>Save changes</button>
+        <button disabled={busy || !title.trim()}>Save changes</button>
         <button className="text-button" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
       </div>
     </form>
   );
 }
 
-function PrimaryTaskAction({ task, assigned, busy, onTransition, onStartWorker }: {
+function PrimaryTaskAction({ task, assigned, targetWorker, busy, onTransition, onStartWorker }: {
   task: Task;
   assigned: boolean;
+  targetWorker: Worker | undefined;
   busy: boolean;
   onTransition: Props["onTransition"];
   onStartWorker: Props["onStartWorker"];
 }) {
   if (task.state === "draft") return <button disabled={busy} onClick={() => void onTransition(task, "ready")}>Mark ready</button>;
-  if (task.state === "ready" && !assigned) return <button disabled={busy} onClick={() => void onStartWorker(task)}>Start with Claude</button>;
+  if (task.state === "ready" && !assigned) return <button disabled={busy || !targetWorker} onClick={() => void onStartWorker(task)}>{targetWorker ? `Wake ${targetWorker.name}` : "Choose worker"}</button>;
   if (task.state === "ready") return <button disabled={busy} onClick={() => void onTransition(task, "active")}>Start work</button>;
   if (task.state === "active") return <button disabled={busy} onClick={() => void onTransition(task, "review")}>Send to review</button>;
   if (task.state === "blocked") return <button disabled={busy} onClick={() => void onTransition(task, "active")}>Resume work</button>;
@@ -489,7 +491,7 @@ export function workerName(sessionId: string): string {
   return `Claude ${sessionId.slice(-4).toUpperCase()}`;
 }
 
-function shortWorkspace(workspace: string): string {
+function repositoryName(workspace: string): string {
   const parts = workspace.split(/[\\/]/).filter(Boolean);
   return parts.at(-1) ?? workspace;
 }

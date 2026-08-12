@@ -9,6 +9,7 @@ import type {
   Worker,
 } from "../api";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
+import { readClientFailures } from "../feedback/clientDiagnostics";
 
 export type RuntimeDiagnostics = {
   terminalHost?: TerminalHostStatus;
@@ -59,6 +60,7 @@ export function buildSanitizedDiagnosticReport({ context, health, hiveIdentity, 
       status: navigator.onLine ? "online" : "offline",
       visibility: document.visibilityState,
       live_updates: liveFeedState,
+      recent_failures: readClientFailures(),
     },
     api: health ? { status: "healthy", version: health.version } : { status: "unavailable" },
     database: {

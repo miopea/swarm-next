@@ -51,6 +51,50 @@ impl TaskStore {
         )
     }
 
+    /// Replaces the stable operator order of every non-Queen worker.
+    ///
+    /// # Errors
+    /// Rejects incomplete, duplicate, or foreign worker IDs.
+    pub fn reorder_workers(
+        &self,
+        worker_ids: &[WorkerId],
+    ) -> Result<Vec<WorkerProfile>, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let expected = {
+            let mut statement = transaction.prepare(
+                "SELECT id FROM worker_profiles WHERE role != 'queen' ORDER BY position, created_at, id",
+            )?;
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let supplied = worker_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let supplied_set = supplied.iter().collect::<HashSet<_>>();
+        let expected_set = expected.iter().collect::<HashSet<_>>();
+        if supplied.len() != expected.len()
+            || supplied_set.len() != supplied.len()
+            || supplied_set != expected_set
+        {
+            return Err(TaskStoreError::InvalidWorkerOrder);
+        }
+        for (position, worker_id) in supplied.iter().enumerate() {
+            let position = i64::try_from(position)
+                .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
+            transaction.execute(
+                "UPDATE worker_profiles SET position = ?2, updated_at = unixepoch() WHERE id = ?1",
+                params![worker_id, position],
+            )?;
+        }
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.list_worker_profiles()
+    }
+
     /// Lists the roster in stable operator order with its current session binding.
     ///
     /// # Errors
@@ -600,6 +644,44 @@ mod tests {
                 .active_session_id,
             None
         );
+    }
+
+    #[test]
+    fn worker_order_is_exact_and_never_moves_the_queen() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let violet = store
+            .create_worker(
+                "Violet",
+                ProviderKind::ClaudeCode,
+                "/workspace/violet",
+                false,
+                1,
+            )
+            .unwrap();
+        let poppy = store
+            .create_worker(
+                "Poppy",
+                ProviderKind::ClaudeCode,
+                "/workspace/poppy",
+                false,
+                2,
+            )
+            .unwrap();
+
+        let reordered = store.reorder_workers(&[poppy.id, violet.id]).unwrap();
+
+        assert_eq!(reordered[0].id, queen.id);
+        assert_eq!(reordered[1].id, poppy.id);
+        assert_eq!(reordered[2].id, violet.id);
+        assert!(matches!(
+            store.reorder_workers(&[violet.id]),
+            Err(TaskStoreError::InvalidWorkerOrder)
+        ));
+        assert!(matches!(
+            store.reorder_workers(&[violet.id, violet.id]),
+            Err(TaskStoreError::InvalidWorkerOrder)
+        ));
     }
 
     #[test]

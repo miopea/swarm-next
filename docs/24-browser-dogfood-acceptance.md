@@ -57,3 +57,36 @@ API port `8765`.
 This pass proves functional redraw and recovery, not long-duration performance.
 The multi-day soak and outbound feedback submission transport remain separate
 promotion work.
+
+## Dogfood usability correction (2026-08-12)
+
+An isolated local runtime and the rendered 1280 by 720 browser surface verified
+the first correction batch after operator dogfooding:
+
+- A named sleeping worker was created from a friendly repository catalog; no
+  workspace path entry appeared. The backend also rejected an unlisted path
+  with `422 unknown_workspace` and prevents a repository from belonging to two
+  workers.
+- Starting and switching workers moved focus to the real xterm input. The
+  selected worker, repository affinity, exact session, task, and unlocked tab
+  all survived a full navigation reload.
+- The live Claude screen rendered distinct ANSI colors after the PTY advertised
+  `TERM=xterm-256color` and `COLORTERM=truecolor`.
+- An authenticated image clipboard upload produced a private content-addressed
+  file for the selected session. File count, total bytes, per-file bytes, age,
+  type signature, and Unix permissions remain bounded and tested.
+- Task creation selected the durable worker by name and showed `Daisy ·
+  budgetbug`; neither task creation nor assignment asked the operator for a
+  filesystem path.
+- A root render boundary replaces a blank page with a safe reload action and a
+  bounded content-free failure marker that survives refresh for the diagnostic
+  bundle.
+- Notification tests are device-scoped, mobile never requests desktop
+  lock-detection permission, and the mobile policy control uses readable theme
+  cards instead of the platform's oversized select sheet.
+
+The mobile CSS correction makes the worker surface a fixed-height terminal-first
+layout: compact brand/navigation, a slim horizontal worker strip, a 52-pixel
+worker header, expanded terminal space, and compact D-pad controls. Unit and
+production-build evidence cover these rules in this local pass; a physical
+Android screenshot remains required after the batch reaches the dogfood server.

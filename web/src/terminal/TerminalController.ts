@@ -10,6 +10,7 @@ export interface Disposable {
 
 export interface TerminalSurface {
   open(element: HTMLElement): void;
+  focus(): void;
   fit(): Promise<{ rows: number; columns: number }>;
   write(bytes: Uint8Array): Promise<void>;
   restore(snapshot: TerminalSnapshot): Promise<void>;
@@ -45,11 +46,13 @@ export class TerminalController {
   #disposed = false;
   #state: TerminalConnectionState = "connecting";
   #stateDetail: string | undefined;
+  #pendingFocus: "container" | "input" | undefined;
 
   constructor(surfaceFactory: TerminalSurfaceFactory, connectionFactory: TerminalConnectionFactory) {
     this.#surface = surfaceFactory();
     this.#connection = connectionFactory();
     this.#host.className = "terminal-surface";
+    this.#host.tabIndex = -1;
     this.#surfaceSubscriptions = [
       this.#surface.onData((text) => this.#connection.sendInput(text)),
     ];
@@ -62,6 +65,7 @@ export class TerminalController {
       this.#surface.open(this.#host);
       this.#opened = true;
     }
+    this.#applyPendingFocus();
     if (this.#started) {
       this.#refitWhenAttached();
     } else {
@@ -85,6 +89,12 @@ export class TerminalController {
   sendInput(text: string): void {
     if (this.#disposed) throw new Error("Cannot send input to a disposed terminal");
     this.#connection.sendInput(text);
+  }
+
+  requestFocus(input: boolean): void {
+    if (this.#disposed) return;
+    this.#pendingFocus = input ? "input" : "container";
+    this.#applyPendingFocus();
   }
 
   dispose(): void {
@@ -168,6 +178,14 @@ export class TerminalController {
     this.#stateDetail = detail;
     for (const subscriber of this.#statusSubscribers) subscriber(state, detail);
   }
+
+  #applyPendingFocus(): void {
+    if (!this.#pendingFocus || !this.#host.parentElement || !this.#opened) return;
+    const focus = this.#pendingFocus;
+    this.#pendingFocus = undefined;
+    if (focus === "input") this.#surface.focus();
+    else this.#host.focus({ preventScroll: true });
+  }
 }
 
 export class TerminalControllerRegistry {
@@ -183,6 +201,10 @@ export class TerminalControllerRegistry {
     const controller = new TerminalController(surfaceFactory, connectionFactory);
     this.#controllers.set(sessionId, controller);
     return controller;
+  }
+
+  get(sessionId: string): TerminalController | undefined {
+    return this.#controllers.get(sessionId);
   }
 
   closeSession(sessionId: string): void {

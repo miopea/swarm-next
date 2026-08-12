@@ -1,5 +1,6 @@
 mod agent;
 mod attach;
+mod attachments;
 mod notifications;
 mod terminal_socket;
 
@@ -13,7 +14,8 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State, WebSocketUpgrade},
+    body::Bytes,
+    extract::{DefaultBodyLimit, Path, Query, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
@@ -45,6 +47,7 @@ use tokio::{
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 use attach::{ATTACH_GRANT_TTL, AttachGrantError, AttachGrantStore, MAX_ATTACH_GRANTS};
+use attachments::{AttachmentError, AttachmentStore, MAX_ATTACHMENT_BYTES};
 use terminal_socket::{
     MAX_WEBSOCKET_MESSAGE_BYTES, TERMINAL_GRANT_PROTOCOL_PREFIX, TERMINAL_WEBSOCKET_PROTOCOL,
     serve_terminal_socket,
@@ -68,6 +71,8 @@ pub struct AppState {
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     control_room_notify: Arc<Notify>,
     notification_sender: Option<notifications::NotificationSender>,
+    attachment_store: Option<AttachmentStore>,
+    workspace_roots: Arc<Vec<PathBuf>>,
 }
 
 impl AppState {
@@ -86,12 +91,26 @@ impl AppState {
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             control_room_notify: Arc::new(Notify::new()),
             notification_sender: None,
+            attachment_store: None,
+            workspace_roots: Arc::new(Vec::new()),
         }
     }
 
     #[must_use]
     pub fn with_task_store(mut self, task_store: TaskStore) -> Self {
         self.task_store = Some(task_store);
+        self
+    }
+
+    #[must_use]
+    pub fn with_attachment_store(mut self, root: PathBuf) -> Self {
+        self.attachment_store = Some(AttachmentStore::new(root));
+        self
+    }
+
+    #[must_use]
+    pub fn with_workspace_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.workspace_roots = Arc::new(roots);
         self
     }
 
@@ -571,6 +590,14 @@ struct WorkerView {
     runtime_error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct WorkspaceView {
+    name: String,
+    path: String,
+    kind: &'static str,
+    configured_worker_id: Option<WorkerId>,
+}
+
 fn worker_view(profile: WorkerProfile, running: bool, runtime_error: Option<String>) -> WorkerView {
     let engagement_expires_at = profile.engagement_expires_at;
     let attention_state = if runtime_error.is_some() {
@@ -660,6 +687,11 @@ struct TaskActivityQuery {
 #[derive(Debug, Deserialize)]
 struct ReorderTasksRequest {
     task_ids: Vec<TaskId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReorderWorkersRequest {
+    worker_ids: Vec<WorkerId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -779,7 +811,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/notifications/subscriptions/{device_id}",
             put(save_notification_subscription).delete(remove_notification_subscription),
         )
-        .route("/api/v1/notifications/test", post(test_notification))
+        .route(
+            "/api/v1/notifications/subscriptions/{device_id}/test",
+            post(test_notification),
+        )
         .route("/api/v1/control-room/events", get(control_room_events))
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/resources", get(runtime_resources))
@@ -796,6 +831,8 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/tasks/{task_id}/state", patch(transition_task))
         .route("/api/v1/tasks/{task_id}/assignment", put(assign_task))
         .route("/api/v1/workers", get(list_workers).post(create_worker))
+        .route("/api/v1/workers/order", put(reorder_workers))
+        .route("/api/v1/workspaces", get(list_workspaces))
         .route("/api/v1/workers/{worker_id}/start", post(start_worker))
         .route("/api/v1/workers/{worker_id}/session", delete(stop_worker))
         .route(
@@ -825,6 +862,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/terminal/sessions/{session_id}/input",
             post(write_input),
+        )
+        .route(
+            "/api/v1/terminal/sessions/{session_id}/attachments",
+            post(upload_terminal_attachment).layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES)),
         )
         .route(
             "/api/v1/terminal/sessions/{session_id}/size",
@@ -1035,11 +1076,26 @@ async fn remove_notification_subscription(
 async fn test_notification(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Path(device_id): Path<String>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    task_store(&state)?
-        .enqueue_test_notifications(unix_timestamp())
+    let device_id = PresenceDeviceId::from_str(&device_id).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_presence_device_id",
+            "notification device ID must be a UUID",
+        )
+    })?;
+    let queued = task_store(&state)?
+        .enqueue_device_test_notification(device_id, unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
+    if !queued {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "notification_device_not_found",
+            "this browser is not registered for notifications",
+        ));
+    }
     schedule_notification_delivery(&state);
     let settings = task_store(&state)?
         .notification_settings()
@@ -1348,16 +1404,111 @@ async fn list_workers(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(workers)).into_response())
 }
 
+async fn list_workspaces(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let profiles = task_store(&state)?
+        .list_worker_profiles()
+        .map_err(|error| task_store_error(&error))?;
+    let workspaces = workspace_catalog(&state, &profiles).await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(workspaces)).into_response())
+}
+
+async fn workspace_catalog(
+    state: &AppState,
+    profiles: &[WorkerProfile],
+) -> Result<Vec<WorkspaceView>, ApiError> {
+    let mut workspaces = Vec::new();
+    for root in state.workspace_roots.iter() {
+        let mut entries = tokio::fs::read_dir(root).await.map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "workspace_catalog_unavailable",
+                "configured repository catalog is unavailable",
+            )
+        })?;
+        while let Some(entry) = entries.next_entry().await.map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "workspace_catalog_unavailable",
+                "configured repository catalog could not be read",
+            )
+        })? {
+            if workspaces.len() >= 256 {
+                break;
+            }
+            let file_type = entry.file_type().await.map_err(|_| {
+                ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "workspace_catalog_unavailable",
+                    "configured repository catalog could not be inspected",
+                )
+            })?;
+            if !file_type.is_dir() || file_type.is_symlink() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || name == "queen" {
+                continue;
+            }
+            let path = entry.path();
+            let path_text = path.to_string_lossy().into_owned();
+            let configured_worker_id = profiles
+                .iter()
+                .find(|profile| profile.workspace == path_text)
+                .map(|profile| profile.id);
+            let kind = if tokio::fs::try_exists(path.join(".git"))
+                .await
+                .unwrap_or(false)
+            {
+                "repository"
+            } else {
+                "folder"
+            };
+            workspaces.push(WorkspaceView {
+                name,
+                path: path_text,
+                kind,
+                configured_worker_id,
+            });
+        }
+    }
+    workspaces.sort_by_key(|workspace| workspace.name.to_lowercase());
+    Ok(workspaces)
+}
+
 async fn create_worker(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(request): Json<CreateWorkerRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let position = task_store(&state)?
+    let profiles = task_store(&state)?
         .list_worker_profiles()
-        .map_err(|error| task_store_error(&error))?
-        .into_iter()
+        .map_err(|error| task_store_error(&error))?;
+    let workspace = workspace_catalog(&state, &profiles)
+        .await?
+        .iter()
+        .find(|workspace| workspace.path == request.workspace)
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unknown_workspace",
+                "choose a repository from the configured catalog",
+            )
+        })?;
+    if workspace.configured_worker_id.is_some() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "workspace_already_assigned",
+            "that repository already belongs to a worker",
+        ));
+    }
+    let position = profiles
+        .iter()
         .map(|profile| profile.position)
         .max()
         .unwrap_or(0)
@@ -1373,6 +1524,19 @@ async fn create_worker(
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok((StatusCode::CREATED, Json(worker_view(profile, false, None))).into_response())
+}
+
+async fn reorder_workers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<ReorderWorkersRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    task_store(&state)?
+        .reorder_workers(&request.worker_ids)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 async fn start_worker(
@@ -1773,6 +1937,92 @@ async fn attach_terminal(
         }))
 }
 
+#[derive(Serialize)]
+struct TerminalAttachmentResponse {
+    path: String,
+}
+
+async fn upload_terminal_attachment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let session_id = parse_session_id(&session_id)?;
+    let media_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let store = state.attachment_store.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "attachment_store_unconfigured",
+            "private attachment storage is not configured",
+        )
+    })?;
+    let HostResponse::Sessions { sessions } =
+        request_host(&state, HostRequest::ListSessions).await?
+    else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "terminal_protocol_error",
+            "terminal host returned an unexpected response",
+        ));
+    };
+    if !sessions
+        .iter()
+        .any(|session| session.session_id == session_id)
+    {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "terminal_session_not_found",
+            "terminal session does not exist",
+        ));
+    }
+    let path = store
+        .save(media_type, &body)
+        .await
+        .map_err(attachment_error)?;
+    let path = path.to_str().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "attachment_path_unavailable",
+            "private attachment path is not valid UTF-8",
+        )
+    })?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(TerminalAttachmentResponse { path: path.into() }),
+    )
+        .into_response())
+}
+
+fn attachment_error(error: AttachmentError) -> ApiError {
+    match error {
+        AttachmentError::UnsupportedType | AttachmentError::InvalidSignature => ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_attachment_type",
+            error.to_string(),
+        ),
+        AttachmentError::InvalidSize => ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_attachment_size",
+            error.to_string(),
+        ),
+        AttachmentError::Capacity => ApiError::new(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "attachment_capacity_reached",
+            error.to_string(),
+        ),
+        AttachmentError::Unavailable => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "attachment_store_unavailable",
+            error.to_string(),
+        ),
+    }
+}
+
 async fn authorized_request(
     state: &AppState,
     headers: &HeaderMap,
@@ -1904,7 +2154,7 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "task_outcome_queue_full",
             error.to_string(),
         ),
-        TaskStoreError::InvalidTaskOrder => ApiError::new(
+        TaskStoreError::InvalidTaskOrder | TaskStoreError::InvalidWorkerOrder => ApiError::new(
             StatusCode::CONFLICT,
             "task_order_conflict",
             error.to_string(),
@@ -3634,6 +3884,69 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn workspace_catalog_is_bounded_friendly_and_marks_owned_repositories() {
+        let root = TempDir::new().unwrap();
+        let daisy = root.path().join("daisy-repo");
+        let open = root.path().join("open-repo");
+        std::fs::create_dir_all(daisy.join(".git")).unwrap();
+        std::fs::create_dir_all(&open).unwrap();
+        std::fs::create_dir_all(root.path().join(".hidden")).unwrap();
+        std::fs::create_dir_all(root.path().join("queen")).unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Daisy",
+                ProviderKind::ClaudeCode,
+                daisy.to_string_lossy().as_ref(),
+                false,
+                1,
+            )
+            .unwrap();
+        let state = AppState::default()
+            .with_task_store(store.clone())
+            .with_workspace_roots(vec![root.path().to_path_buf()]);
+
+        let catalog = workspace_catalog(&state, &store.list_worker_profiles().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(catalog.len(), 2);
+        assert_eq!(catalog[0].name, "daisy-repo");
+        assert_eq!(catalog[0].kind, "repository");
+        assert_eq!(catalog[0].configured_worker_id, Some(worker.id));
+        assert_eq!(catalog[1].name, "open-repo");
+        assert_eq!(catalog[1].configured_worker_id, None);
+    }
+
+    #[tokio::test]
+    async fn terminal_attachment_upload_never_bypasses_operator_authentication() {
+        let attachments = TempDir::new().unwrap();
+        let response = router(
+            AppState::default()
+                .with_terminal_host(
+                    HostClient::new(attachments.path().join("absent.sock")),
+                    "secret",
+                )
+                .with_attachment_store(attachments.path().to_path_buf()),
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/terminal/sessions/{}/attachments",
+                    WorkerSessionId::new()
+                ))
+                .header(header::CONTENT_TYPE, "image/png")
+                .body(Body::from(b"\x89PNG\r\n\x1a\nprivate".as_slice()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     async fn response_json(response: Response) -> Value {

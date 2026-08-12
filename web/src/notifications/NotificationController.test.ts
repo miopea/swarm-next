@@ -66,6 +66,22 @@ test("a denied browser permission does not register or persist anything", async 
   expect(states.at(-1)).toBe("denied");
 });
 
+test("a test notification targets only the initiating browser device", async () => {
+  window.localStorage.setItem("swarm-next.presence-device.v1", "019fedfc-1c30-70e1-a5e2-9a3c94268093");
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(undefined) } });
+  const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(ok(settings)));
+  vi.stubGlobal("fetch", fetchMock);
+  const controller = new NotificationController();
+  await controller.start("token", vi.fn(), vi.fn());
+
+  await controller.test();
+
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/v1/notifications/subscriptions/019fedfc-1c30-70e1-a5e2-9a3c94268093/test",
+    expect.objectContaining({ method: "POST", cache: "no-store" }),
+  );
+});
+
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }

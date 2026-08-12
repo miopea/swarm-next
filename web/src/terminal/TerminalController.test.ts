@@ -10,6 +10,7 @@ import {
 function fakeSurface(): TerminalSurface {
   return {
     open: vi.fn(),
+    focus: vi.fn(),
     fit: vi.fn().mockResolvedValue({ rows: 24, columns: 80 }),
     write: vi.fn().mockResolvedValue(undefined),
     restore: vi.fn().mockResolvedValue(undefined),
@@ -18,6 +19,30 @@ function fakeSurface(): TerminalSurface {
     dispose: vi.fn(),
   };
 }
+
+test("a requested desktop focus follows the session into its mounted terminal", () => {
+  const surface = fakeSurface();
+  const controller = new TerminalController(() => surface, fakeConnection);
+
+  controller.requestFocus(true);
+  controller.attach(document.createElement("div"));
+
+  expect(surface.focus).toHaveBeenCalledOnce();
+});
+
+test("a mobile worker selection focuses the terminal region without opening its keyboard", () => {
+  const surface = fakeSurface();
+  const controller = new TerminalController(() => surface, fakeConnection);
+  const mount = document.createElement("div");
+  document.body.append(mount);
+
+  controller.requestFocus(false);
+  controller.attach(mount);
+
+  expect(surface.focus).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(mount.querySelector(".terminal-surface"));
+  mount.remove();
+});
 
 function fakeConnection(): TerminalConnectionLike {
   return { start: vi.fn(), sendInput: vi.fn(), resize: vi.fn(), dispose: vi.fn() };

@@ -64,6 +64,13 @@ export type Worker = {
   runtime_error?: string;
 };
 
+export type WorkspaceChoice = {
+  name: string;
+  path: string;
+  kind: "repository" | "folder";
+  configured_worker_id: string | null;
+};
+
 export type Task = {
   id: string;
   hive_id: string;
@@ -125,10 +132,11 @@ export type TaskDraftInput = {
   title: string;
   description: string;
   priority: TaskPriority;
-  workspace: string;
+  worker_id: string;
 };
 
-export type TaskUpdateInput = Partial<TaskDraftInput>;
+export type TaskUpdateInput = Partial<Omit<TaskDraftInput, "worker_id">> & { workspace?: string };
+export type TaskCreateInput = Omit<TaskDraftInput, "worker_id"> & { workspace: string };
 
 export async function fetchControlRoomEvents(
   operatorToken: string,
@@ -219,8 +227,12 @@ export async function removeNotificationSubscription(
   return response.json() as Promise<NotificationSettings>;
 }
 
-export async function sendTestNotification(operatorToken: string): Promise<NotificationSettings> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/notifications/test", { method: "POST" });
+export async function sendTestNotification(operatorToken: string, deviceId: string): Promise<NotificationSettings> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/notifications/subscriptions/${encodeURIComponent(deviceId)}/test`,
+    { method: "POST" },
+  );
   return response.json() as Promise<NotificationSettings>;
 }
 export async function fetchTerminalHostStatus(operatorToken: string): Promise<TerminalHostStatus> {
@@ -254,6 +266,11 @@ export async function fetchSessions(operatorToken: string): Promise<SessionSumma
 export async function fetchWorkers(operatorToken: string): Promise<Worker[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/workers");
   return response.json() as Promise<Worker[]>;
+}
+
+export async function fetchWorkspaces(operatorToken: string): Promise<WorkspaceChoice[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/workspaces");
+  return response.json() as Promise<WorkspaceChoice[]>;
 }
 
 export async function fetchTasks(operatorToken: string): Promise<Task[]> {
@@ -302,7 +319,7 @@ export async function reorderTasks(operatorToken: string, taskIds: string[]): Pr
 
 export async function createTask(
   operatorToken: string,
-  input: TaskDraftInput,
+  input: TaskCreateInput,
 ): Promise<Task> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/tasks", {
     method: "POST",
@@ -374,6 +391,14 @@ export async function createWorker(
     body: JSON.stringify(input),
   });
   return response.json() as Promise<Worker>;
+}
+
+export async function reorderWorkers(operatorToken: string, workerIds: string[]): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/workers/order", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ worker_ids: workerIds }),
+  });
 }
 
 export async function startWorker(
