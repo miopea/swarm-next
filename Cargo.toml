@@ -2,6 +2,7 @@
 members = [
   "crates/swarm-cli",
   "crates/swarm-api",
+  "crates/swarm-application",
   "crates/swarm-domain",
   "crates/swarm-persistence",
   "crates/swarm-terminal",
@@ -19,9 +20,11 @@ repository = "https://github.com/miopea/swarm-next"
 [workspace.dependencies]
 axum = { version = "0.8.9", features = ["ws"] }
 futures-util = "0.3"
+rmcp = { version = "3.1.2", default-features = false, features = ["server", "transport-streamable-http-server"] }
 getrandom = "0.3"
 nix = { version = "0.28", features = ["user"] }
 portable-pty = "0.9.0"
+sha2 = "0.10"
 rusqlite = { version = "0.37", features = ["backup", "bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

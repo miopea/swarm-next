@@ -345,6 +345,62 @@ impl TaskStore {
         Ok(stale.len())
     }
 
+    /// Creates or rotates the digest used to authenticate one agent profile.
+    ///
+    /// # Errors
+    /// Rejects non-SHA-256 digests, unknown workers, and unavailable persistence.
+    pub fn replace_worker_agent_credential(
+        &self,
+        worker_id: WorkerId,
+        token_digest: &[u8],
+    ) -> Result<(), TaskStoreError> {
+        if token_digest.len() != 32 {
+            return Err(TaskStoreError::InvalidAgentCredentialDigest);
+        }
+        let connection = self.connection()?;
+        let updated = connection.execute(
+            "INSERT INTO worker_agent_credentials (worker_id, token_digest)
+             SELECT id, ?2 FROM worker_profiles WHERE id = ?1
+             ON CONFLICT(worker_id) DO UPDATE SET
+                 token_digest = excluded.token_digest,
+                 rotated_at = unixepoch()",
+            params![worker_id.to_string(), token_digest],
+        )?;
+        if updated == 0 {
+            return Err(TaskStoreError::WorkerNotFound);
+        }
+        Ok(())
+    }
+
+    /// Resolves a digest to its durable worker profile without accepting caller-supplied identity.
+    ///
+    /// # Errors
+    /// Rejects non-SHA-256 digests and propagates persistence failures.
+    pub fn authenticate_worker_agent(
+        &self,
+        token_digest: &[u8],
+    ) -> Result<Option<WorkerProfile>, TaskStoreError> {
+        if token_digest.len() != 32 {
+            return Err(TaskStoreError::InvalidAgentCredentialDigest);
+        }
+        let worker_id = {
+            let connection = self.connection()?;
+            connection
+                .query_row(
+                    "SELECT worker_id FROM worker_agent_credentials WHERE token_digest = ?1",
+                    [token_digest],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+        };
+        worker_id
+            .map(|value| {
+                WorkerId::from_str(&value)
+                    .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
+                    .and_then(|id| self.get_worker_profile(id))
+            })
+            .transpose()
+    }
     fn profile_by_role(&self, role: WorkerRole) -> Result<Option<WorkerProfile>, TaskStoreError> {
         let connection = self.connection()?;
         connection
@@ -615,6 +671,69 @@ mod tests {
         assert!(matches!(
             store.renew_worker_engagement(session, 262, 300),
             Err(TaskStoreError::WorkerSessionNotActive)
+        ));
+    }
+
+    #[test]
+    fn agent_credentials_are_digest_only_unique_and_rotatable() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store
+            .create_worker(
+                "Violet",
+                ProviderKind::ClaudeCode,
+                "/workspace/violet",
+                false,
+                1,
+            )
+            .unwrap();
+        let second = store
+            .create_worker(
+                "Pansy",
+                ProviderKind::ClaudeCode,
+                "/workspace/pansy",
+                false,
+                2,
+            )
+            .unwrap();
+        let original = [7_u8; 32];
+        let rotated = [9_u8; 32];
+
+        store
+            .replace_worker_agent_credential(first.id, &original)
+            .unwrap();
+        assert_eq!(
+            store
+                .authenticate_worker_agent(&original)
+                .unwrap()
+                .unwrap()
+                .id,
+            first.id
+        );
+        assert!(matches!(
+            store.replace_worker_agent_credential(second.id, &original),
+            Err(TaskStoreError::Sql(_))
+        ));
+
+        store
+            .replace_worker_agent_credential(first.id, &rotated)
+            .unwrap();
+        assert!(
+            store
+                .authenticate_worker_agent(&original)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .authenticate_worker_agent(&rotated)
+                .unwrap()
+                .unwrap()
+                .id,
+            first.id
+        );
+        assert!(matches!(
+            store.authenticate_worker_agent(&[1_u8; 31]),
+            Err(TaskStoreError::InvalidAgentCredentialDigest)
         ));
     }
 }

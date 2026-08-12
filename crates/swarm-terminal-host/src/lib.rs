@@ -256,8 +256,9 @@ fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostRe
             workspace,
             size,
             conversation,
+            mcp_config,
         } => ClaudeCodeAdapter
-            .command_for(&workspace, conversation)
+            .command_for_with_mcp(&workspace, conversation, mcp_config.as_deref())
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry

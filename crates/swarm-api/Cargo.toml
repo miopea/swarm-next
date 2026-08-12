@@ -9,9 +9,12 @@ license.workspace = true
 axum.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
+rmcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 subtle.workspace = true
+sha2.workspace = true
+swarm-application = { path = "../swarm-application" }
 swarm-domain = { path = "../swarm-domain" }
 swarm-persistence = { path = "../swarm-persistence" }
 swarm-terminal = { path = "../swarm-terminal" }
@@ -19,13 +22,13 @@ thiserror.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
+tower.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
 swarm-terminal-host = { path = "../swarm-terminal-host" }
 tempfile = "3"
 tokio-tungstenite = "0.29"
-tower.workspace = true
 
 [lints]
 workspace = true

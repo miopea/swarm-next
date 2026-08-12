@@ -50,7 +50,7 @@ Decision meanings:
 
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
-| Agent-facing MCP coordination | Redesign | Keep a small, coherent tool surface based on current agent-native coordination abilities. |
+| Agent-facing MCP coordination | Redesign | Implemented task foundation: scoped per-worker credentials, role-specific discovery, and shared application services. Extend with decision requests and guarded Queen delivery rather than a broad legacy catalog. |
 | Inter-worker messages | Redesign | Preserve findings, blockers, and directed handoffs; merge with decision/activity model where possible. |
 | File ownership claims | Investigate | Modern agents and worktrees may reduce value; evaluate actual conflict prevention evidence. |
 | Cross-project tasks | Investigate | Validate use before adding cross-workspace complexity. |

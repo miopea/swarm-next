@@ -1,3 +1,4 @@
+mod agent;
 mod attach;
 mod terminal_socket;
 
@@ -18,6 +19,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
+use swarm_application::{ApplicationError, TaskService};
 use swarm_domain::{
     ControlRoomEventKind, ProviderConversationId, ProviderKind, TaskDetailsUpdate, TaskId,
     TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
@@ -53,6 +55,7 @@ pub struct AppState {
     attach_grants: Arc<AttachGrantStore>,
     websocket_limit: Arc<Semaphore>,
     task_store: Option<TaskStore>,
+    agent_bridge: Option<agent::AgentBridge>,
     worker_lifecycle: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     control_room_notify: Arc<Notify>,
@@ -68,6 +71,7 @@ impl AppState {
             attach_grants: Arc::new(AttachGrantStore::default()),
             websocket_limit: Arc::new(Semaphore::new(MAX_TERMINAL_WEBSOCKETS)),
             task_store: None,
+            agent_bridge: None,
             worker_lifecycle: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             control_room_notify: Arc::new(Notify::new()),
@@ -80,6 +84,22 @@ impl AppState {
         self
     }
 
+    #[must_use]
+    pub fn with_agent_configuration(
+        mut self,
+        config_root: PathBuf,
+        mcp_url: impl Into<Arc<str>>,
+    ) -> Self {
+        if let Some(store) = self.task_store.clone() {
+            self.agent_bridge = Some(agent::AgentBridge::new(
+                store,
+                config_root,
+                mcp_url,
+                self.control_room_notify.clone(),
+            ));
+        }
+        self
+    }
     #[must_use]
     pub fn with_terminal_host(
         mut self,
@@ -379,6 +399,7 @@ fn router_with_optional_asset_root(
 
 fn api_router(state: AppState) -> Router {
     Router::new()
+        .route("/mcp", post(mcp))
         .route("/health", get(health))
         .route("/api/v1/hive", get(local_hive))
         .route("/api/v1/control-room/events", get(control_room_events))
@@ -436,6 +457,12 @@ fn api_router(state: AppState) -> Router {
         .with_state(Arc::new(state))
 }
 
+async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request) -> Response {
+    let Some(bridge) = state.agent_bridge.clone() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    agent::handle(bridge, request).await
+}
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
@@ -503,9 +530,9 @@ async fn list_tasks(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let tasks = task_store(&state)?
+    let tasks = task_service(&state)?
         .list_tasks()
-        .map_err(|error| task_store_error(&error))?;
+        .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
 }
 
@@ -515,14 +542,14 @@ async fn create_task(
     Json(request): Json<CreateTaskRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let task = task_store(&state)?
-        .create_task_with_details(
+    let task = task_service(&state)?
+        .create_operator_task(
             &request.title,
             &request.description,
             request.priority,
             &request.workspace,
         )
-        .map_err(|error| task_store_error(&error))?;
+        .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     Ok((StatusCode::CREATED, Json(task)).into_response())
 }
@@ -575,9 +602,9 @@ async fn update_task(
     Json(request): Json<TaskDetailsUpdate>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let task = task_store(&state)?
-        .update_task_details(parse_task_id(&task_id)?, &request)
-        .map_err(|error| task_store_error(&error))?;
+    let task = task_service(&state)?
+        .update_operator_task(parse_task_id(&task_id)?, &request)
+        .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     Ok(Json(task).into_response())
 }
@@ -589,9 +616,9 @@ async fn transition_task(
     Json(request): Json<TransitionTaskRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let task = task_store(&state)?
-        .transition_task(parse_task_id(&task_id)?, request.state)
-        .map_err(|error| task_store_error(&error))?;
+    let task = task_service(&state)?
+        .transition_operator_task(parse_task_id(&task_id)?, request.state)
+        .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     Ok(Json(task).into_response())
 }
@@ -625,9 +652,9 @@ async fn assign_task(
             "task assignment requires a running worker session",
         ));
     }
-    let task = task_store(&state)?
-        .assign_task(parse_task_id(&task_id)?, request.session_id)
-        .map_err(|error| task_store_error(&error))?;
+    let task = task_service(&state)?
+        .assign_operator_task(parse_task_id(&task_id)?, request.session_id)
+        .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     Ok(Json(task).into_response())
 }
@@ -790,6 +817,7 @@ async fn start_session(
             conversation: ClaudeConversationStart::New {
                 session_id: ProviderConversationId::new(),
             },
+            mcp_config: None,
         },
     )
     .await?;
@@ -890,6 +918,19 @@ async fn start_worker_process(
             "this worker provider is not available in the current runtime",
         ));
     }
+    let mcp_config = state
+        .agent_bridge
+        .as_ref()
+        .map(|bridge| bridge.ensure_worker_config(worker_id))
+        .transpose()
+        .map_err(|error| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "agent_config_unavailable",
+                error.to_string(),
+            )
+        })?;
+
     let response = request_host(
         state,
         HostRequest::StartClaude {
@@ -909,6 +950,7 @@ async fn start_worker_process(
                     ClaudeConversationStart::New { session_id }
                 }
             },
+            mcp_config,
         },
     )
     .await?;
@@ -1124,6 +1166,25 @@ fn task_store(state: &AppState) -> Result<&TaskStore, ApiError> {
     })
 }
 
+fn task_service(state: &AppState) -> Result<TaskService, ApiError> {
+    task_store(state).map(|store| TaskService::new(store.clone()))
+}
+
+fn application_error(error: ApplicationError) -> ApiError {
+    match error {
+        ApplicationError::NotAuthorized => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "task_outcome_not_authorized",
+            error.to_string(),
+        ),
+        ApplicationError::WorkerNotRunning => ApiError::new(
+            StatusCode::CONFLICT,
+            "worker_session_not_active",
+            error.to_string(),
+        ),
+        ApplicationError::Store(error) => task_store_error(&error),
+    }
+}
 fn task_store_error(error: &TaskStoreError) -> ApiError {
     match error {
         TaskStoreError::NotFound => {
@@ -1172,6 +1233,7 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::Io(_)
         | TaskStoreError::Sql(_)
         | TaskStoreError::LockPoisoned
+        | TaskStoreError::InvalidAgentCredentialDigest
         | TaskStoreError::UnsupportedSchemaVersion { .. }
         | TaskStoreError::IntegrityFailure(_) => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
