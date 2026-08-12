@@ -37,6 +37,7 @@ import {
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
 import DecisionInbox from "./decisions/DecisionInbox";
+import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
@@ -68,6 +69,7 @@ export function App() {
   const [decisions, setDecisions] = useState<DecisionRequest[]>([]);
   const [workspace, setWorkspace] = useState("");
   const [showWorkerForm, setShowWorkerForm] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
   const [surface, setSurface] = useState<Surface>(readSavedSurface);
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -553,12 +555,27 @@ export function App() {
           <div className="header-actions">
             {busy && <span className="saving-state">Saving…</span>}
             {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
+            {operatorToken && <button className="icon-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
             <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => setColorTheme((current) => current === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button" aria-label="Refresh control room" onClick={() => void refreshControlRoom()} disabled={busy}><RefreshIcon /></button>}
             {operatorToken && <button className="secondary-button" onClick={logout}>Lock</button>}
           </div>
         </header>
         {operationError && <div className="operation-error" role="alert">{operationError}</div>}
+        {operatorToken && showFeedback ? (
+          <DogfoodFeedbackDialog
+            activeSessionId={activeSessionId}
+            health={loadState.kind === "ready" ? loadState.health : undefined}
+            hiveIdentity={hiveIdentity}
+            liveFeedState={liveFeedState}
+            onClose={() => setShowFeedback(false)}
+            operatorToken={operatorToken}
+            recentEvents={recentEvents}
+            sessions={sessions}
+            surface={surface}
+            workers={workers}
+          />
+        ) : null}
         {!operatorToken ? (
           <form className="unlock-panel" onSubmit={(event) => void authenticate(event)}>
             <div className="unlock-symbol"><BeeMascot expression="available" /></div>
@@ -627,6 +644,7 @@ function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): stri
 }
 
 function DecisionIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a7 7 0 0 0-7 7v3l-2 3h18l-2-3v-3a7 7 0 0 0-7-7ZM9 20h6"/></svg>; }
+function FeedbackIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4V5Z"/><path d="M12 8v4M12 14h.01"/></svg>; }
 function requireActiveSession(worker: Worker): string {
   if (!worker.active_session_id) throw new Error(`${worker.name} did not receive a terminal session`);
   return worker.active_session_id;

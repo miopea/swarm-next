@@ -38,6 +38,12 @@ Queen, Forager, and Pollen. No legacy or operator production data participated.
   visible trigger and right-click open the same menu, Escape dismisses it, and
   editing, history, ordering, and exceptional state actions remain reachable.
   A 412 by 915 pass confirmed the reduced mobile action row and readable menu.
+- A global feedback action now captures the operator's expected and observed
+  outcome alongside content-free surface, selected-session, subsystem,
+  resource, history, and recent-transition evidence. Desktop and 412 by 915
+  mobile passes verified preview, copy, Escape dismissal, internal scrolling,
+  and the exclusion of tokens, worker names, paths, terminal output, task text,
+  and raw provider errors from automatic collection.
 
 ## Development port contract
 

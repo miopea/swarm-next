@@ -26,7 +26,7 @@ mostly product operability rather than process survival.
 | Use direct interactions | Shortcuts, command palette, drag/drop imports | Keyboard switching, durable task ordering, focused state drops, and accessible worker/task action menus with right-click parity | Add command palette and broader shortcuts only where dogfood proves value |
 | Configure the product | Large multi-tab editor with overlapping concerns | Compact settings workspace covers runtime, terminal, appearance, and diagnostics preferences | Expand only where dogfood proves a durable need |
 | Handle attention | Proposals, messages, activity, notifications | Durable engagement guard, typed operator decisions, guarded worker handoffs, server-authoritative At Hive/Away/Night Watch presence, and bounded private Web Push | Complete baseline; verify install and notification delivery on Android Chrome/Edge |
-| Diagnose failures | Large logs/config surface | Browser, API, database, terminal, provider, integration, and separately owned API/terminal memory health with sanitized preview/copy | Complete local foundation; add submission transport when selected and validate thresholds in soak |
+| Diagnose failures | Large logs/config surface | Browser, API, database, terminal, provider, integration, and separately owned API/terminal memory health plus a global expected-versus-observed dogfood bundle with sanitized preview/copy | Complete local capture foundation; add submission transport when selected and validate thresholds in soak |
 
 ## First dogfood cut
 
