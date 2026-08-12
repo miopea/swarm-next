@@ -371,10 +371,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 }
 @media (max-width: 680px) {
   body { overflow: auto; }
-  .app-shell { grid-template-rows: auto minmax(0, 1fr); grid-template-columns: 1fr; min-height: 100%; }
-  .control-rail { max-height: none; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
+  .app-shell { grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); min-height: 100%; }
+  .control-rail { min-width: 0; max-height: none; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
   .brand-lockup { padding-bottom: 12px; }
-  .surface-nav { grid-template-columns: repeat(4, 1fr); }
+  .surface-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .surface-nav button { min-width: 0; padding-inline: 6px; }
+  .surface-nav button > span { min-width: 0; gap: 6px; }
   .rail-context { display: none; }
   .control-rail.surface-workers .rail-context { display: block; flex: 0 0 auto; padding-top: 8px; overflow-x: auto; overflow-y: visible; scrollbar-width: thin; }
   .control-rail.surface-workers .rail-heading { display: none; }
@@ -395,7 +397,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-compose form { grid-template-columns: 1fr; }
   .task-compose form button { width: 100%; justify-self: stretch; }
   .empty-card { flex-direction: column; padding: 20px; text-align: center; }
-  .settings-workspace { grid-template-columns: 1fr; padding: 16px; }
+  .settings-workspace { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); padding: 16px; overflow-x: hidden; }
+  .settings-card { min-width: 0; }
   .decision-inbox { padding: 16px; }
   .decision-inbox-intro { align-items: start; flex-direction: column; gap: 12px; }
   .decision-context { grid-template-columns: 1fr; }
