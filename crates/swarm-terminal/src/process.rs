@@ -266,7 +266,8 @@ impl ProcessTerminalSession {
         lock(&self.master)?
             .resize(size.as_pty_size())
             .map_err(terminal_error)?;
-        debug_assert!(terminal_state.resize(size));
+        let canonical_resized = terminal_state.resize(size);
+        debug_assert!(canonical_resized);
         if let Some(history) = &self.history {
             let snapshot = terminal_state.snapshot();
             if let Err(error) = history.append_checkpoint(self.id, &snapshot) {
@@ -747,6 +748,29 @@ mod tests {
         .unwrap();
         session.write_input(b"hello\n").unwrap();
         assert!(output_until(&session, "received:hello").contains("received:hello"));
+        session.stop().unwrap();
+    }
+
+    #[test]
+    fn resize_updates_pty_and_canonical_dimensions() {
+        let session = ProcessTerminalSession::spawn(
+            WorkerSessionId::new(),
+            &shell_command("sleep 5"),
+            JournalLimits::new(1024, 16),
+            TerminalSize::default(),
+        )
+        .unwrap();
+        let resized = TerminalSize::new(41, 154);
+
+        session.resize(resized).unwrap();
+
+        let Resume::Snapshot { snapshot } = session.resume_after(None).unwrap() else {
+            panic!("fresh attachment must produce a canonical snapshot");
+        };
+        assert_eq!(
+            (snapshot.rows, snapshot.columns),
+            (resized.rows, resized.columns)
+        );
         session.stop().unwrap();
     }
 

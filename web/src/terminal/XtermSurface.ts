@@ -84,10 +84,30 @@ export class XtermSurface implements TerminalSurface {
   }
 
   onResize(listener: (size: { rows: number; columns: number }) => void): Disposable {
-    return this.#terminal.onResize(({ rows, cols }) => {
-      if (rows !== this.#terminal.rows || cols !== this.#terminal.cols) return;
-      listener({ rows, columns: cols });
+    let active = true;
+    let notificationQueued = false;
+    let lastRows = this.#terminal.rows;
+    let lastColumns = this.#terminal.cols;
+    const subscription = this.#terminal.onResize(() => {
+      if (!active || notificationQueued) return;
+      notificationQueued = true;
+      queueMicrotask(() => {
+        notificationQueued = false;
+        if (!active || this.#disposed) return;
+        const rows = this.#terminal.rows;
+        const columns = this.#terminal.cols;
+        if (rows === lastRows && columns === lastColumns) return;
+        lastRows = rows;
+        lastColumns = columns;
+        listener({ rows, columns });
+      });
     });
+    return {
+      dispose: () => {
+        active = false;
+        subscription.dispose();
+      },
+    };
   }
 
   dispose(): void {
