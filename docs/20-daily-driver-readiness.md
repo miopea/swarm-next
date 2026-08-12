@@ -20,7 +20,7 @@ mostly product operability rather than process survival.
 | Know who is working | Configured names, roles, groups, status labels | Durable profiles report Sleeping, Buzzing, With you, or Blocked with matching visual treatment | Complete dogfood baseline; add Awaiting you only from a trustworthy provider signal |
 | Coordinate with Queen | Interactive Queen PTY plus separate headless automation | One durable, always-active Queen survives API/browser updates | Complete interactive baseline; defer autonomous conductor policy |
 | Move between workers | Keyboard switching and cached terminals, but redraw was flaky | Repeated Queen/worker switching preserves exact session identity on desktop and mobile | Complete baseline; continue fast-output soak |
-| Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Explicit lifecycle, editing, priority, assignment, durable ordering, focused state drops, and bounded activity history | Complete dogfood baseline; defer broad integrations |
+| Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Explicit lifecycle, editing, priority, durable ordering, focused state drops, bounded activity history, and guarded assignment briefs to quiet workers | Complete dogfood baseline; defer broad integrations |
 | See changes without refreshing | Broad WebSocket event stream | Typed, authenticated, resumable control-room invalidation feed | Complete; keep Refresh as recovery |
 | Manage workers quickly | Launch, kill, revive, groups, bulk actions | Durable profiles start, stop, and recover Claude context using exact provider identity for new profiles or `--continue` for migrated profiles | Complete dogfood baseline; defer groups until measured |
 | Use direct interactions | Shortcuts, command palette, drag/drop imports | Keyboard switching, durable task ordering, focused state drops, and accessible worker/task action menus with right-click parity | Add command palette and broader shortcuts only where dogfood proves value |
@@ -58,7 +58,7 @@ client-side copies of domain state. Manual Refresh remains a recovery action.
 
 ### D. Task ergonomics
 
-Task detail and editing, description, priority, assignment, durable ordering,
+Task detail and editing, description, priority, assignment, guarded briefing, durable ordering,
 activity history, and focused state drag/drop are implemented without
 weakening explicit state transitions. Email, Jira, WYSIWYG, pipelines, and
 broad automation wait for dogfood evidence.
@@ -85,9 +85,10 @@ Ring 1 begins when the operator can:
 2. create named workers once and start or revive them without retyping paths;
 3. switch and reload without terminal corruption;
 4. create, edit, prioritize, assign, and complete ordinary coding tasks;
-5. receive live roster/task changes without manual refresh;
-6. update API/browser code without interrupting workers;
-7. identify which subsystem failed and submit a useful sanitized report.
+5. assign a task and see its quiet worker receive one durable brief without breaking operator focus;
+6. receive live roster/task changes without manual refresh;
+7. update API/browser code without interrupting workers;
+8. identify which subsystem failed and submit a useful sanitized report.
 
 Ring 2 requires a multi-day soak with legacy still available as an independent
 fallback. Missing outcomes become evidence; they do not automatically become

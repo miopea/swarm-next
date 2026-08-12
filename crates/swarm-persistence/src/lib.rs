@@ -9,18 +9,20 @@ use rusqlite::{Connection, OptionalExtension, params};
 use swarm_domain::{
     ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
     HiveIdentity, Operator, OperatorId, Task, TaskActivity, TaskActivityKind, TaskActivityPage,
-    TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerSessionId,
+    TaskDetailsUpdate, TaskDispatchState, TaskId, TaskPriority, TaskState, WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
 
 mod decisions;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
+mod task_dispatches;
+pub use task_dispatches::{TaskDispatch, TaskDispatchFailure};
 mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 11;
+const CURRENT_SCHEMA_VERSION: i64 = 12;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -55,6 +57,8 @@ pub enum TaskStoreError {
     InvalidDecisionResolution,
     #[error("this Hive already has the maximum number of pending decisions")]
     DecisionInboxFull,
+    #[error("this Hive already has the maximum number of pending task briefings")]
+    TaskDispatchQueueFull,
     #[error("task title must contain 1 to {MAX_TASK_TITLE_BYTES} bytes")]
     InvalidTitle,
     #[error("task description must not exceed {MAX_TASK_DESCRIPTION_BYTES} bytes")]
@@ -121,7 +125,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=10 => {
+            0..=11 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -275,6 +279,7 @@ impl TaskStore {
         let mut statement = connection.prepare(
             "
             SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
+                   (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
                    t.position, t.created_at, t.updated_at
             FROM tasks t
             LEFT JOIN task_assignments a
@@ -300,6 +305,7 @@ impl TaskStore {
             .query_row(
                 "
                 SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
+                   (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
                        t.position, t.created_at, t.updated_at
                 FROM tasks t
                 LEFT JOIN task_assignments a
@@ -562,18 +568,47 @@ impl TaskStore {
             return Err(TaskStoreError::CompletedTask);
         }
         transaction.execute(
+            "DELETE FROM task_dispatches WHERE assignment_id IN (
+                 SELECT id FROM task_assignments WHERE task_id = ?1 AND released_at IS NULL
+             ) AND state = 'queued'",
+            [id.to_string()],
+        )?;
+        transaction.execute(
             "UPDATE task_assignments SET released_at = unixepoch()
              WHERE task_id = ?1 AND released_at IS NULL",
             [id.to_string()],
         )?;
+        let queued: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
+            [],
+            |row| row.get(0),
+        )?;
+        if queued >= 256 {
+            return Err(TaskStoreError::TaskDispatchQueueFull);
+        }
+        let assignment_id = Uuid::now_v7().to_string();
         transaction.execute(
             "INSERT INTO task_assignments (id, task_id, worker_session_id)
              VALUES (?1, ?2, ?3)",
-            params![
-                Uuid::now_v7().to_string(),
-                id.to_string(),
-                session_id.to_string()
-            ],
+            params![assignment_id, id.to_string(), session_id.to_string()],
+        )?;
+        let dispatch_inserted = transaction.execute(
+            "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
+             SELECT ?1, ?2, ws.worker_id, 'queued'
+             FROM worker_sessions ws
+             WHERE ws.session_id = ?3 AND ws.ended_at IS NULL",
+            params![assignment_id, id.to_string(), session_id.to_string()],
+        )?;
+        if dispatch_inserted != 1 {
+            return Err(TaskStoreError::WorkerSessionNotActive);
+        }
+        transaction.execute(
+            "DELETE FROM task_dispatches WHERE assignment_id IN (
+                 SELECT assignment_id FROM task_dispatches
+                 WHERE state IN ('delivered','uncertain')
+                 ORDER BY updated_at DESC, assignment_id DESC LIMIT -1 OFFSET 1024
+             )",
+            [],
         )?;
         transaction.execute(
             "UPDATE tasks SET updated_at = unixepoch() WHERE id = ?1",
@@ -609,6 +644,13 @@ impl TaskStore {
                 .collect::<Result<Vec<_>, _>>()?
         };
         task_ids.sort_unstable();
+        transaction.execute(
+            "DELETE FROM task_dispatches WHERE assignment_id IN (
+                 SELECT id FROM task_assignments
+                 WHERE worker_session_id = ?1 AND released_at IS NULL
+             ) AND state = 'queued'",
+            [session_id.to_string()],
+        )?;
         for task_id in &task_ids {
             transaction.execute(
                 "UPDATE task_assignments SET released_at = unixepoch()
@@ -730,7 +772,10 @@ fn migrate_schema(
     if schema_version < 10 {
         migrate_decision_requests(transaction)?;
     }
-    migrate_decision_deliveries(transaction)
+    if schema_version < 11 {
+        migrate_decision_deliveries(transaction)?;
+    }
+    migrate_task_dispatches(transaction)
 }
 
 fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -1021,6 +1066,25 @@ fn migrate_decision_deliveries(transaction: &rusqlite::Transaction<'_>) -> rusql
          PRAGMA user_version = 11;",
     )
 }
+fn migrate_task_dispatches(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_dispatches (
+             assignment_id TEXT PRIMARY KEY REFERENCES task_assignments(id) ON DELETE CASCADE,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+             state TEXT NOT NULL CHECK (state IN ('queued','dispatching','delivered','uncertain')),
+             attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 3),
+             attempted_at INTEGER,
+             delivered_at INTEGER,
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             CHECK ((state = 'delivered' AND delivered_at IS NOT NULL)
+                 OR (state <> 'delivered' AND delivered_at IS NULL))
+         );
+         CREATE INDEX IF NOT EXISTS task_dispatches_queue
+             ON task_dispatches(state, updated_at, assignment_id);
+         PRAGMA user_version = 12;",
+    )
+}
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
     if title.is_empty() || title.len() > MAX_TASK_TITLE_BYTES {
         return Err(TaskStoreError::InvalidTitle);
@@ -1044,6 +1108,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let priority: String = row.get(4)?;
     let state: String = row.get(6)?;
     let assigned_session_id: Option<String> = row.get(7)?;
+    let dispatch_state: Option<String> = row.get(8)?;
     Ok(Task {
         id: TaskId::from_str(&id).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -1080,9 +1145,19 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
                     Box::new(error),
                 )
             })?,
-        position: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
+        dispatch_state: dispatch_state
+            .map(|value| TaskDispatchState::from_str(&value))
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    8,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
+        position: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
     })
 }
 
@@ -1125,7 +1200,9 @@ mod tests {
         assert_eq!(created.state, TaskState::Draft);
 
         let ready = store.transition_task(created.id, TaskState::Ready).unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
         let session_id = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session_id).unwrap();
         let assigned = store.assign_task(ready.id, session_id).unwrap();
         assert_eq!(assigned.assigned_session_id, Some(session_id));
         assert_eq!(store.list_tasks().unwrap().len(), 1);
@@ -1277,7 +1354,9 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let task = store.create_task("Assigned work", "/workspace").unwrap();
         store.transition_task(task.id, TaskState::Ready).unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
         let session_id = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session_id).unwrap();
         store.assign_task(task.id, session_id).unwrap();
 
         assert_eq!(store.release_session_assignments(session_id).unwrap(), 1);
@@ -1721,6 +1800,40 @@ mod tests {
         assert_eq!(tables, 1);
     }
 
+    #[test]
+    fn migrates_schema_v11_to_durable_task_dispatches() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch("DROP TABLE task_dispatches; PRAGMA user_version = 11;")
+                .unwrap();
+        }
+
+        let migrated = TaskStore::open(path).unwrap();
+        let tables = migrated
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'task_dispatches'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 1);
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+    }
     #[test]
     fn fresh_store_owns_tasks_and_workers_in_one_durable_hive() {
         let directory = tempfile::tempdir().unwrap();

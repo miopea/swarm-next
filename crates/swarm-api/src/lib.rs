@@ -27,7 +27,7 @@ use swarm_domain::{
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE,
-    TaskStore, TaskStoreError,
+    TaskDispatch, TaskDispatchFailure, TaskStore, TaskStoreError,
 };
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
@@ -59,7 +59,7 @@ pub struct AppState {
     task_store: Option<TaskStore>,
     agent_bridge: Option<agent::AgentBridge>,
     worker_lifecycle: Arc<Mutex<()>>,
-    decision_delivery: Arc<Mutex<()>>,
+    coordination_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     control_room_notify: Arc<Notify>,
 }
@@ -76,7 +76,7 @@ impl AppState {
             task_store: None,
             agent_bridge: None,
             worker_lifecycle: Arc::new(Mutex::new(())),
-            decision_delivery: Arc::new(Mutex::new(())),
+            coordination_delivery: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             control_room_notify: Arc::new(Notify::new()),
         }
@@ -143,17 +143,21 @@ impl AppState {
                 tracing::warn!(worker_id = %profile.id, worker_name = %profile.name, message = %error.message, "autostart worker could not be started");
             }
         }
-        self.deliver_decisions().await;
+        self.deliver_coordination().await;
     }
 
-    /// Delivers resolved outcomes only to running workers without a live operator lease.
-    pub async fn deliver_decisions(&self) {
-        let _guard = self.decision_delivery.lock().await;
+    /// Delivers durable coordination only to running workers without a live operator lease.
+    pub async fn deliver_coordination(&self) {
+        let _guard = self.coordination_delivery.lock().await;
         let (Some(store), Some(client)) = (&self.task_store, &self.terminal_host) else {
             return;
         };
-        let now = unix_timestamp();
-        let deliveries = match store.claim_decision_deliveries(now) {
+        self.deliver_decision_outcomes(store, client).await;
+        self.deliver_task_briefs(store, client).await;
+    }
+
+    async fn deliver_decision_outcomes(&self, store: &TaskStore, client: &HostClient) {
+        let deliveries = match store.claim_decision_deliveries(unix_timestamp()) {
             Ok(deliveries) => deliveries,
             Err(error) => {
                 tracing::warn!(message = %error, "decision delivery queue could not be claimed");
@@ -203,6 +207,56 @@ impl AppState {
         }
     }
 
+    async fn deliver_task_briefs(&self, store: &TaskStore, client: &HostClient) {
+        let deliveries = match store.claim_task_dispatches(unix_timestamp()) {
+            Ok(deliveries) => deliveries,
+            Err(error) => {
+                tracing::warn!(message = %error, "task dispatch queue could not be claimed");
+                return;
+            }
+        };
+        for delivery in deliveries {
+            let request = HostRequest::Write {
+                session_id: delivery.session_id,
+                bytes: task_dispatch_message(&delivery),
+            };
+            let outcome = match client.request(&request).await {
+                Ok(HostResponse::Acknowledged) => {
+                    store.complete_task_dispatch(&delivery.assignment_id, unix_timestamp())
+                }
+                Ok(HostResponse::Error { code, message }) => {
+                    tracing::warn!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, %code, %message, "task briefing was rejected by terminal host");
+                    store.fail_task_dispatch(
+                        &delivery.assignment_id,
+                        unix_timestamp(),
+                        TaskDispatchFailure::Retryable,
+                    )
+                }
+                Ok(_) => store.fail_task_dispatch(
+                    &delivery.assignment_id,
+                    unix_timestamp(),
+                    TaskDispatchFailure::Uncertain,
+                ),
+                Err(error) => {
+                    tracing::warn!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, message = %error, "task briefing result is uncertain");
+                    store.fail_task_dispatch(
+                        &delivery.assignment_id,
+                        unix_timestamp(),
+                        TaskDispatchFailure::Uncertain,
+                    )
+                }
+            };
+            match outcome {
+                Ok(true) => self.control_room_notify.notify_waiters(),
+                Ok(false) => {
+                    tracing::warn!(task_id = %delivery.task_id, "task briefing claim was no longer active");
+                }
+                Err(error) => {
+                    tracing::warn!(task_id = %delivery.task_id, message = %error, "task briefing outcome could not be persisted");
+                }
+            }
+        }
+    }
     /// Makes crash-interrupted delivery explicit before any new dispatch is attempted.
     ///
     /// # Errors
@@ -211,6 +265,15 @@ impl AppState {
         self.task_store
             .as_ref()
             .map_or(Ok(0), TaskStore::recover_inflight_decision_deliveries)
+    }
+    /// Makes crash-interrupted task briefings explicit before new dispatch.
+    ///
+    /// # Errors
+    /// Returns a persistence error when recovery cannot be recorded.
+    pub fn recover_task_dispatches(&self) -> Result<usize, TaskStoreError> {
+        self.task_store
+            .as_ref()
+            .map_or(Ok(0), TaskStore::recover_inflight_task_dispatches)
     }
 }
 
@@ -228,6 +291,20 @@ fn decision_delivery_message(delivery: &DecisionDispatch) -> Vec<u8> {
     .into_bytes()
 }
 
+fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
+    let title = terminal_safe_text(&delivery.title);
+    let description = if delivery.description.is_empty() {
+        "No additional brief.".into()
+    } else {
+        terminal_safe_text(&delivery.description)
+    };
+    let workspace = terminal_safe_text(&delivery.workspace);
+    format!(
+        "[Swarm task {} assigned] {}. Priority: {}. Workspace: {}. Brief: {} Use swarm_list_tasks for the authoritative current assignment; if it is not visible, the assignment changed.\r",
+        delivery.task_id, title, delivery.priority, workspace, description,
+    )
+    .into_bytes()
+}
 fn terminal_safe_text(value: &str) -> String {
     value
         .chars()
@@ -578,7 +655,9 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
     let Some(bridge) = state.agent_bridge.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    agent::handle(bridge, request).await
+    let response = agent::handle(bridge, request).await;
+    state.deliver_coordination().await;
+    response
 }
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
@@ -665,7 +744,7 @@ async fn resolve_decision(
         .resolve_operator_decision(decision_id, &request.action, &request.note)
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
-    state.deliver_decisions().await;
+    state.deliver_coordination().await;
     let decision = task_store(&state)?
         .get_decision_request(decision_id)
         .map_err(|error| task_store_error(&error))?;
@@ -802,6 +881,10 @@ async fn assign_task(
         .assign_operator_task(parse_task_id(&task_id)?, request.session_id)
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
+    state.deliver_coordination().await;
+    let task = task_store(&state)?
+        .get_task(task.id)
+        .map_err(|error| task_store_error(&error))?;
     Ok(Json(task).into_response())
 }
 
@@ -1363,6 +1446,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "task_transition_rejected",
             error.to_string(),
         ),
+        TaskStoreError::TaskDispatchQueueFull => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "task_dispatch_queue_full",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidTaskOrder => ApiError::new(
             StatusCode::CONFLICT,
             "task_order_conflict",
@@ -1558,6 +1646,24 @@ mod tests {
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));
         assert!(String::from_utf8_lossy(&message).contains("ship now"));
+    }
+    #[test]
+    fn task_dispatch_is_one_sanitized_terminal_submission() {
+        let dispatch = TaskDispatch {
+            assignment_id: "assignment-1".into(),
+            task_id: TaskId::new(),
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            title: "polish\nmobile".into(),
+            description: "keep\u{1b}[31m context\rstable".into(),
+            priority: TaskPriority::High,
+            workspace: "/workspace/petal".into(),
+        };
+        let message = task_dispatch_message(&dispatch);
+        assert_eq!(message.last(), Some(&b'\r'));
+        assert!(!message[..message.len() - 1].contains(&b'\n'));
+        assert!(!message.contains(&0x1b));
+        assert!(String::from_utf8_lossy(&message).contains("polish mobile"));
     }
     #[tokio::test]
     async fn health_is_versioned() {
@@ -2396,6 +2502,7 @@ mod tests {
         let _ = server_task.await;
     }
 
+    #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn task_assignment_requires_and_releases_a_real_worker_session() {
         let runtime = TempDir::new().unwrap();
@@ -2405,7 +2512,10 @@ mod tests {
         );
         let command = ProviderCommand {
             executable: PathBuf::from("/bin/sh"),
-            arguments: vec!["-lc".into(), "sleep 5".into()],
+            arguments: vec![
+                "-lc".into(),
+                "read value; printf 'received:%s' \"$value\"; sleep 5".into(),
+            ],
             working_directory: workspace.clone(),
         };
         let session = registry.spawn(&command, TerminalSize::default()).unwrap();
@@ -2413,6 +2523,16 @@ mod tests {
         let server = HostServer::bind(&socket, registry).unwrap();
         let server_task = tokio::spawn(server.run());
         let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                workspace.to_string_lossy().as_ref(),
+                false,
+                1,
+            )
+            .unwrap();
+        store.bind_worker_session(worker.id, session.id()).unwrap();
         let task = store
             .create_task("Assigned through API", "/workspace")
             .unwrap();
@@ -2443,6 +2563,42 @@ mod tests {
             response_json(assigned).await["assigned_session_id"],
             session.id().to_string()
         );
+        assert_eq!(
+            store.get_task(task.id).unwrap().dispatch_state,
+            Some(swarm_domain::TaskDispatchState::Delivered)
+        );
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let mut after_sequence = None;
+        let mut output = Vec::new();
+        loop {
+            let response = HostClient::new(&socket)
+                .request(&HostRequest::Read {
+                    session_id: session.id(),
+                    after_sequence,
+                })
+                .await
+                .unwrap();
+            let HostResponse::Output { resume, .. } = response else {
+                panic!("terminal host should return assigned worker output");
+            };
+            match resume {
+                swarm_terminal::Resume::Deltas { frames } => {
+                    for frame in frames {
+                        after_sequence = Some(frame.sequence);
+                        output.extend_from_slice(&frame.bytes);
+                    }
+                }
+                swarm_terminal::Resume::Snapshot { snapshot } => {
+                    after_sequence = Some(snapshot.sequence);
+                    output = snapshot.bytes;
+                }
+            }
+            if String::from_utf8_lossy(&output).contains("[Swarm task") {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
 
         let stopped = app
             .oneshot(

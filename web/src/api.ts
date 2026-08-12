@@ -58,6 +58,7 @@ export type Task = {
   workspace: string;
   state: TaskState;
   assigned_session_id: string | null;
+  dispatch_state?: "queued" | "dispatching" | "delivered" | "uncertain" | null;
   position: number;
   created_at: number;
   updated_at: number;
