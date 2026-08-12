@@ -64,7 +64,11 @@ The explicit `reconcile-host` action begins drain before checking session
 count, closing the race with new worker creation. It changes `host-current` and
 restarts the sidecar only at zero sessions; otherwise it cancels drain and
 defers. A failed host restart restores the old host link. Protocol changes are
-rejected until an explicit rolling-compatibility migration is designed.
+rejected by ordinary update. The explicit `migrate-protocol` action likewise
+drains first and refuses active sessions, then stops the product target,
+switches `current` and `host-current` together, and verifies both host and API.
+Any failure restores both independently pinned links and starts the previous
+release; configuration and durable state never move.
 
 Uninstall removes services, commands, and packaged releases only. Configuration
 and durable state are preserved by default; data purge requires a separate,
@@ -84,7 +88,8 @@ explicit future operation.
 - User lingering or an active login session is an operator prerequisite if the
   application must survive logout; enabling lingering is deliberately outside
   this unprivileged installer.
-- Exact protocol matching limits rolling upgrades for now but fails closed.
+- Protocol changes require a brief, explicit zero-worker maintenance window;
+  ordinary exact-protocol updates remain sidecar-preserving.
 
 ## Validation
 
@@ -97,4 +102,6 @@ explicit future operation.
 - The lifecycle smoke performs update and rollback with a simulated active
   session and asserts that neither stops nor restarts the terminal host.
 - Host reconciliation refuses a live session and succeeds after it exits.
+- Protocol migration refuses a live session, switches both process pointers at
+  zero sessions, and restores both after failed health verification.
 - Release files are checksum-verified before installation.

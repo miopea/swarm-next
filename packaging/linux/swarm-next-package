@@ -18,6 +18,7 @@ workspace_root=${SWARM_WORKSPACE_ROOT:-}
 [ -n "$workspace_root" ] || workspace_root="$home_dir/swarm-workspaces"
 drain_release=
 rollback_release=
+rollback_host_release=
 
 die() { printf 'swarm-next-package: %s\n' "$*" >&2; exit 1; }
 run_systemctl() { "$systemctl_bin" --user "$@"; }
@@ -26,14 +27,19 @@ terminal_socket() { printf '%s/swarm-next/terminal.sock\n' "${XDG_RUNTIME_DIR:-/
 on_exit() {
   result=$?
   trap - EXIT
-  if [ -n "$drain_release" ]; then
-    SWARM_TERMINAL_SOCKET=$(terminal_socket) \
-      "$drain_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
-  fi
-  if [ -n "$rollback_release" ] && [ -d "$rollback_release" ]; then
+  if [ -n "$rollback_host_release" ] && [ -d "$rollback_host_release" ]; then
+    activate_link "$rollback_release" >/dev/null 2>&1 || true
+    activate_host_link "$rollback_host_release" >/dev/null 2>&1 || true
+    install_units "$rollback_release" >/dev/null 2>&1 || true
+    run_systemctl enable --now swarm-next.target >/dev/null 2>&1 || true
+  elif [ -n "$rollback_release" ] && [ -d "$rollback_release" ]; then
     activate_link "$rollback_release" >/dev/null 2>&1 || true
     install_units "$rollback_release" >/dev/null 2>&1 || true
     run_systemctl restart swarm-next-api.service >/dev/null 2>&1 || true
+  fi
+  if [ -n "$drain_release" ]; then
+    SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+      "$drain_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
   fi
   exit "$result"
 }
@@ -281,6 +287,45 @@ reconcile_host() {
   die "terminal host restart failed; previous host release restored"
 }
 
+migrate_protocol() {
+  validate_bundle
+  validate_config
+  new_release=$(install_release)
+  old_release=$(release_from_link "$install_root/current")
+  host_release=$(release_from_link "$install_root/host-current")
+  [ -n "$old_release" ] || die "no current release is installed"
+  [ -n "$host_release" ] || die "no terminal host release is installed"
+  [ "$(cat "$host_release/PROTOCOL")" != "$protocol" ] || die "protocol is unchanged; use update and reconcile-host"
+
+  SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" drain >/dev/null
+  drain_release=$host_release
+  status=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" status)
+  running=$(printf '%s\n' "$status" | sed -n 's/.*"running_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+  case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
+  [ "$running" -eq 0 ] || die "protocol migration deferred; $running sessions remain"
+
+  previous_release=$(release_from_link "$install_root/previous")
+  [ -z "$previous_release" ] || publish_assets "$previous_release"
+  publish_assets "$old_release"
+  publish_assets "$new_release"
+  [ "$old_release" = "$new_release" ] || ln -sfn "$old_release" "$install_root/previous"
+
+  rollback_release=$old_release
+  rollback_host_release=$host_release
+  run_systemctl stop swarm-next.target || true
+  activate_link "$new_release"
+  activate_host_link "$new_release"
+  install_units "$new_release"
+  if run_systemctl enable --now swarm-next.target && wait_for_host "$new_release" && wait_for_health; then
+    drain_release=
+    rollback_release=
+    rollback_host_release=
+    printf 'Swarm Next protocol migrated to %s and is healthy at %s\n' "$version" "$health_url"
+    return
+  fi
+  die "protocol migration failed health verification; previous release will be restored"
+}
+
 uninstall_product() {
   run_systemctl disable --now swarm-next.target 2>/dev/null || true
   rm -f "$unit_root/swarm-next-terminal-host.service" "$unit_root/swarm-next-api.service" "$unit_root/swarm-next.target"
@@ -295,6 +340,7 @@ case "$action" in
   install|update) install_or_update;;
   rollback) rollback;;
   reconcile-host) reconcile_host;;
+  migrate-protocol) migrate_protocol;;
   uninstall) uninstall_product;;
-  *) die "usage: swarm-next-package <install|update> RELEASE_DIR | rollback | reconcile-host | uninstall";;
+  *) die "usage: swarm-next-package <install|update|migrate-protocol> RELEASE_DIR | rollback | reconcile-host | uninstall";;
 esac

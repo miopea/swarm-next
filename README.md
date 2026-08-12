@@ -110,6 +110,10 @@ Compatible updates switch the API and browser release, then restart only
 `swarm-next-api.service`; the independently versioned terminal-host process and
 its worker PTYs stay alive. Run `swarm-next-package reconcile-host` when workers
 are idle to move the sidecar to the current release.
+When a release changes the terminal protocol, stop all Swarm Next workers and
+run `swarm-next-package migrate-protocol RELEASE_DIR`. The migration drains the
+old host, refuses active sessions, switches the API and sidecar together, and
+restores both previous pointers if health verification fails.
 
 Claude runs with an isolated profile at
 `~/.local/state/swarm-next/providers/claude`, keeping the host-wide profile
