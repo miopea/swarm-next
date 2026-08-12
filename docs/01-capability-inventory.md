@@ -34,7 +34,7 @@ Decision meanings:
 | Routine approval drones | Remove | Provider-native permissions own provider tool approval. Keep only typed Swarm-level operator decisions. |
 | Idle detection and nudging | Redesign | Valuable only where provider session status is authoritative enough; avoid screen-scraping heuristics where possible. |
 | Crash/revival automation | Redesign | Becomes worker lifecycle recovery, not a drone. |
-| Host pressure management | Redesign | Becomes platform resource policy with explicit thresholds, quotas, and operator visibility. |
+| Host pressure management | Redesign | Observation-first API and terminal-host memory evidence now has explicit thresholds and operator visibility; automated recovery waits for soak evidence and a safe target. |
 | Context-pressure handling | Investigate | Reassess against current provider compaction and context-management capabilities. |
 | Completion verification | Redesign | Preserve as an optional verification policy; deterministic checks before model review. |
 | Queen task assignment | Redesign | Preserve assisted coordination but clarify recommendation, authorization, and execution. |

@@ -13,7 +13,7 @@ use tokio::{
 
 use crate::{
     ClaudeConversationStart, HistoryCursor, HistoryDiagnostics, HistoryPage, HistorySessionSummary,
-    Resume, TerminalSize,
+    ProcessResourceSample, Resume, TerminalSize,
 };
 
 pub const PROTOCOL_VERSION: u16 = 7;
@@ -80,6 +80,8 @@ pub struct TerminalHostStatus {
     pub draining: bool,
     pub running_sessions: usize,
     pub retained_sessions: usize,
+    #[serde(default)]
+    pub resources: Option<ProcessResourceSample>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -177,5 +179,19 @@ impl HostClient {
             return Err(IpcError::EmptyResponse);
         }
         Ok(serde_json::from_slice(&response)?)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_host_status_without_resources_remains_compatible() {
+        let status: TerminalHostStatus = serde_json::from_str(
+            r#"{"protocol_version":7,"host_version":"0.1.0","draining":false,"running_sessions":1,"retained_sessions":1}"#,
+        )
+        .unwrap();
+        assert_eq!(status.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(status.resources, None);
     }
 }

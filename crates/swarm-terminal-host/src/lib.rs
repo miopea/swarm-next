@@ -337,6 +337,7 @@ fn terminal_host_status(
         draining: registry.is_draining(),
         running_sessions: registry.running_session_count()?,
         retained_sessions: registry.len()?,
+        resources: Some(swarm_terminal::sample_current_process()),
     })
 }
 

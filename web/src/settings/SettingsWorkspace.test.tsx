@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import SettingsWorkspace from "./SettingsWorkspace";
+import { resourceLabel } from "./DiagnosticsWorkspace";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -16,6 +17,16 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 5, host_version: "0.1.0", draining: false, running_sessions: 1, retained_sessions: 3 } });
+    if (url.includes("runtime/resources")) return ok({
+      sampled_at: 1,
+      policy: {
+        mode: "observe_only",
+        advisory_bytes: 268_435_456,
+        critical_bytes: 536_870_912,
+      },
+      api: { resident_memory_bytes: 18_874_368, pressure: "normal" },
+      terminal_host: { resident_memory_bytes: 9_437_184, pressure: "normal" },
+    });
     return ok({ type: "history_diagnostics", diagnostics: { retained_bytes: 42, session_count: 3, segment_count: 1, dropped_records: 0, dropped_bytes: 0, recovered_truncated_bytes: 0, recovered_corrupt_segments: 0 } });
   }));
   render(
@@ -61,11 +72,15 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
   const terminalHost = await screen.findByText("Terminal host");
   expect(terminalHost.parentElement).toHaveTextContent("Terminal hostHealthy · 0.1.0");
+  expect((await screen.findByText("API memory")).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
+  expect(screen.getByText("Terminal memory").parentElement).toHaveTextContent("Terminal memoryNormal · 9.0 MiB");
 
   fireEvent.click(screen.getByRole("button", { name: "Preview report" }));
   const preview = screen.getByLabelText("Sanitized diagnostic report");
   expect(preview).toHaveTextContent("session-safe-id");
   expect(preview).toHaveTextContent("workers_changed");
+  expect(preview).toHaveTextContent("observe_only");
+  expect(preview).toHaveTextContent("18874368");
   expect(preview).not.toHaveTextContent("Private name");
   expect(preview).not.toHaveTextContent("/private/workspace");
   expect(preview).not.toHaveTextContent("secret-token");
@@ -76,6 +91,15 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(onThemeChange).toHaveBeenCalledWith("dark");
 });
 
+test("uses distinct readable labels for every resource pressure state", () => {
+  const resource = (pressure: "normal" | "advisory" | "critical", bytes = 10 * 1024 * 1024) =>
+    ({ pressure, resident_memory_bytes: bytes });
+  expect(resourceLabel(resource("normal"))).toBe("Normal · 10.0 MiB");
+  expect(resourceLabel(resource("advisory"))).toBe("Watch · 10.0 MiB");
+  expect(resourceLabel(resource("critical"))).toBe("Critical · 10.0 MiB");
+  expect(resourceLabel({ pressure: "unavailable", resident_memory_bytes: null })).toBe("Unavailable");
+  expect(resourceLabel(undefined)).toBe("Unavailable");
+});
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
