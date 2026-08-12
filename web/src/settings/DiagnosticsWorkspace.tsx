@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 
 import {
   fetchHistoryDiagnostics,
+  fetchRuntimeResources,
   fetchTerminalHostStatus,
   type ControlRoomEvent,
   type Health,
   type HistoryDiagnostics,
   type HiveIdentity,
+  type RuntimeResources,
   type SessionSummary,
   type TerminalHostStatus,
   type Worker,
@@ -26,6 +28,7 @@ type Props = {
 type RuntimeDiagnostics = {
   terminalHost?: TerminalHostStatus;
   history?: HistoryDiagnostics | null;
+  resources?: RuntimeResources;
   loaded: boolean;
 };
 
@@ -39,11 +42,13 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
     void Promise.allSettled([
       fetchTerminalHostStatus(operatorToken),
       fetchHistoryDiagnostics(operatorToken),
-    ]).then(([host, history]) => {
+      fetchRuntimeResources(operatorToken),
+    ]).then(([host, history, resources]) => {
       if (cancelled) return;
       setRuntime({
         terminalHost: host.status === "fulfilled" ? host.value : undefined,
         history: history.status === "fulfilled" ? history.value : undefined,
+        resources: resources.status === "fulfilled" ? resources.value : undefined,
         loaded: true,
       });
     });
@@ -55,6 +60,8 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
   const terminalStatus = !runtime.loaded ? "Checking…" : runtime.terminalHost
     ? runtime.terminalHost.draining ? "Updating safely" : `Healthy · ${runtime.terminalHost.host_version}`
     : "Unavailable";
+  const apiMemory = resourceLabel(runtime.resources?.api);
+  const hostMemory = resourceLabel(runtime.resources?.terminal_host);
 
   function buildPreview() {
     const report = {
@@ -82,6 +89,11 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
         launch_failures: launchFailures,
         session_ids: sessions.map((session) => session.session_id),
       },
+      runtime_resources: runtime.resources ? {
+        policy: runtime.resources.policy,
+        api: runtime.resources.api,
+        terminal_host: runtime.resources.terminal_host,
+      } : { status: runtime.loaded ? "unavailable" : "checking" },
       terminal_history: runtime.history ?? { status: runtime.loaded ? "unavailable" : "checking" },
       integrations: { status: "not_configured" },
       recent_state_transitions: recentEvents.slice(-16).map(({ sequence, kind, occurred_at }) => ({ sequence, kind, occurred_at })),
@@ -112,6 +124,8 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
         <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
         <div><dt>Database</dt><dd>{hiveIdentity ? "Healthy" : "Unavailable"}</dd></div>
         <div><dt>Terminal host</dt><dd>{terminalStatus}</dd></div>
+        <div><dt>API memory</dt><dd className={resourceClass(runtime.resources?.api.pressure)}>{apiMemory}</dd></div>
+        <div><dt>Terminal memory</dt><dd className={resourceClass(runtime.resources?.terminal_host.pressure)}>{hostMemory}</dd></div>
         <div><dt>Provider</dt><dd>{providerStatus}</dd></div>
         <div><dt>Integrations</dt><dd>Not configured</dd></div>
       </dl>
@@ -123,4 +137,23 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
       {preview ? <pre className="diagnostic-preview" aria-label="Sanitized diagnostic report">{preview}</pre> : null}
     </section>
   );
+}
+export function resourceLabel(resource: RuntimeResources["api"] | undefined) {
+  if (!resource || resource.resident_memory_bytes === null) return "Unavailable";
+  const memory = formatBytes(resource.resident_memory_bytes);
+  if (resource.pressure === "critical") return `Critical · ${memory}`;
+  if (resource.pressure === "advisory") return `Watch · ${memory}`;
+  return `Normal · ${memory}`;
+}
+
+function resourceClass(pressure: RuntimeResources["api"]["pressure"] | undefined) {
+  if (pressure === "critical") return "resource-pressure critical";
+  if (pressure === "advisory") return "resource-pressure advisory";
+  if (pressure === "normal") return "resource-pressure normal";
+  return "resource-pressure unavailable";
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }

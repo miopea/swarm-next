@@ -3,6 +3,7 @@ mod ipc;
 mod journal;
 mod process;
 mod provider;
+mod resources;
 mod state;
 
 pub use history::{
@@ -23,6 +24,7 @@ pub use provider::{
     ClaudeCodeAdapter, ClaudeConversationStart, ProviderCommand, ProviderCommandError,
     ProviderTerminalAdapter,
 };
+pub use resources::{ProcessResourceSample, sample_current_process};
 pub use state::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, CanonicalTerminalState,
     MAX_CANONICAL_SNAPSHOT_BYTES, Resume, TerminalSnapshot,

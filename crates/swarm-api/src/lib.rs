@@ -36,7 +36,7 @@ use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
     HistoryCursor, HostClient, HostRequest, HostResponse, JournalLimits,
     MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
-    TerminalSize,
+    ProcessResourceSample, TerminalSize, sample_current_process,
 };
 use tokio::{
     sync::{Mutex, Notify, RwLock, Semaphore},
@@ -51,6 +51,8 @@ use terminal_socket::{
 };
 
 const MAX_TERMINAL_WEBSOCKETS: usize = 32;
+const RESOURCE_ADVISORY_BYTES: u64 = 256 * 1024 * 1024;
+const RESOURCE_CRITICAL_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -468,6 +470,36 @@ struct TerminalRuntimeLimits {
 }
 
 #[derive(Debug, Serialize)]
+struct RuntimeResourcesResponse {
+    sampled_at: i64,
+    policy: ResourcePolicyResponse,
+    api: ProcessResourceResponse,
+    terminal_host: ProcessResourceResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct ResourcePolicyResponse {
+    mode: &'static str,
+    advisory_bytes: u64,
+    critical_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ResourcePressure {
+    Normal,
+    Advisory,
+    Critical,
+    Unavailable,
+}
+
+#[derive(Debug, Serialize)]
+struct ProcessResourceResponse {
+    resident_memory_bytes: Option<u64>,
+    pressure: ResourcePressure,
+}
+
+#[derive(Debug, Serialize)]
 struct AttachGrantResponse {
     grant: String,
     protocol: &'static str,
@@ -750,6 +782,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/notifications/test", post(test_notification))
         .route("/api/v1/control-room/events", get(control_room_events))
         .route("/api/v1/runtime/limits", get(runtime_limits))
+        .route("/api/v1/runtime/resources", get(runtime_resources))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
         .route("/api/v1/decisions", get(list_decisions))
@@ -1084,6 +1117,46 @@ async fn terminal_host_status(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorized_no_store_request(&state, &headers, HostRequest::HostStatus).await
+}
+
+async fn runtime_resources(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let terminal_host = if let Some(client) = &state.terminal_host {
+        match client.request(&HostRequest::HostStatus).await {
+            Ok(HostResponse::HostStatus { status }) => resource_response(status.resources),
+            Ok(_) | Err(_) => resource_response(None),
+        }
+    } else {
+        resource_response(None)
+    };
+    let response = RuntimeResourcesResponse {
+        sampled_at: unix_timestamp(),
+        policy: ResourcePolicyResponse {
+            mode: "observe_only",
+            advisory_bytes: RESOURCE_ADVISORY_BYTES,
+            critical_bytes: RESOURCE_CRITICAL_BYTES,
+        },
+        api: resource_response(Some(sample_current_process())),
+        terminal_host,
+    };
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
+}
+
+fn resource_response(sample: Option<ProcessResourceSample>) -> ProcessResourceResponse {
+    let resident_memory_bytes = sample.and_then(|sample| sample.resident_memory_bytes);
+    let pressure = match resident_memory_bytes {
+        Some(bytes) if bytes >= RESOURCE_CRITICAL_BYTES => ResourcePressure::Critical,
+        Some(bytes) if bytes >= RESOURCE_ADVISORY_BYTES => ResourcePressure::Advisory,
+        Some(_) => ResourcePressure::Normal,
+        None => ResourcePressure::Unavailable,
+    };
+    ProcessResourceResponse {
+        resident_memory_bytes,
+        pressure,
+    }
 }
 
 async fn list_decisions(
@@ -2104,6 +2177,32 @@ mod tests {
         assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
     }
 
+    #[test]
+    fn resource_pressure_classification_is_explicit_at_each_boundary() {
+        let sample = |resident_memory_bytes| {
+            resource_response(Some(ProcessResourceSample {
+                resident_memory_bytes,
+            }))
+        };
+        assert_eq!(
+            sample(Some(RESOURCE_ADVISORY_BYTES - 1)).pressure,
+            ResourcePressure::Normal
+        );
+        assert_eq!(
+            sample(Some(RESOURCE_ADVISORY_BYTES)).pressure,
+            ResourcePressure::Advisory
+        );
+        assert_eq!(
+            sample(Some(RESOURCE_CRITICAL_BYTES)).pressure,
+            ResourcePressure::Critical
+        );
+        assert_eq!(sample(None).pressure, ResourcePressure::Unavailable);
+        assert_eq!(
+            resource_response(None).pressure,
+            ResourcePressure::Unavailable
+        );
+    }
+
     #[tokio::test]
     async fn local_hive_identity_is_private_and_stable() {
         let store = TaskStore::in_memory().unwrap();
@@ -2950,14 +3049,54 @@ mod tests {
         );
         assert_eq!(json["diagnostics"]["retained_bytes"], 0);
         assert!(json.get("bytes").is_none());
-        let status_response = authorized_get(app, "/api/v1/runtime/terminal-host").await;
+        let status_response = authorized_get(app.clone(), "/api/v1/runtime/terminal-host").await;
         assert_eq!(status_response.headers()[header::CACHE_CONTROL], "no-store");
         let status = response_json(status_response).await;
         assert_eq!(status["status"]["protocol_version"], PROTOCOL_VERSION);
         assert_eq!(status["status"]["draining"], false);
         assert_eq!(status["status"]["running_sessions"], 0);
+
+        let resources = authorized_get(app.clone(), "/api/v1/runtime/resources").await;
+        assert_eq!(resources.status(), StatusCode::OK);
+        assert_eq!(resources.headers()[header::CACHE_CONTROL], "no-store");
+        let resources = response_json(resources).await;
+        assert_eq!(resources["policy"]["mode"], "observe_only");
+        assert_eq!(
+            resources["policy"]["advisory_bytes"],
+            RESOURCE_ADVISORY_BYTES
+        );
+        assert_eq!(
+            resources["policy"]["critical_bytes"],
+            RESOURCE_CRITICAL_BYTES
+        );
+        assert_eq!(resources["api"]["pressure"], "normal");
+        assert_eq!(resources["terminal_host"]["pressure"], "normal");
+        assert!(resources["api"]["resident_memory_bytes"].as_u64().is_some());
+        assert!(
+            resources["terminal_host"]["resident_memory_bytes"]
+                .as_u64()
+                .is_some()
+        );
+
         server_task.abort();
         let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn runtime_resources_fail_closed_without_operator_authentication() {
+        let response = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret"),
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/runtime/resources")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

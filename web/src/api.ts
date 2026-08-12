@@ -23,6 +23,14 @@ export type TerminalHostStatus = {
   draining: boolean;
   running_sessions: number;
   retained_sessions: number;
+  resources?: { resident_memory_bytes: number | null } | null;
+};
+export type ResourcePressure = "normal" | "advisory" | "critical" | "unavailable";
+export type RuntimeResources = {
+  sampled_at: number;
+  policy: { mode: "observe_only"; advisory_bytes: number; critical_bytes: number };
+  api: { resident_memory_bytes: number | null; pressure: ResourcePressure };
+  terminal_host: { resident_memory_bytes: number | null; pressure: ResourcePressure };
 };
 export type HistoryDiagnostics = {
   retained_bytes: number;
@@ -219,6 +227,11 @@ export async function fetchTerminalHostStatus(operatorToken: string): Promise<Te
   const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/terminal-host");
   const payload = (await response.json()) as { type: "host_status"; status: TerminalHostStatus };
   return payload.status;
+}
+
+export async function fetchRuntimeResources(operatorToken: string): Promise<RuntimeResources> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/resources");
+  return response.json() as Promise<RuntimeResources>;
 }
 
 export async function fetchHistoryDiagnostics(operatorToken: string): Promise<HistoryDiagnostics | null> {

@@ -64,3 +64,4 @@ Current decision records:
 - [ADR 0017: Guarded worker outcomes to Queen](decisions/0017-guarded-worker-outcomes-to-queen.md)
 - [ADR 0018: Layered operator presence](decisions/0018-layered-operator-presence.md)
 - [ADR 0019: Policy-driven mobile attention](decisions/0019-policy-driven-mobile-attention.md)
+- [ADR 0020: Owned runtime resource evidence](decisions/0020-owned-runtime-resource-evidence.md)
