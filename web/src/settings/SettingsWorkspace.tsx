@@ -30,14 +30,15 @@ type Props = {
   onDisableNotifications: () => Promise<void>;
   onTestNotification: () => Promise<void>;
   onCreateWorker: (name: string, workspace: string) => Promise<void>;
+  onUpdateWorker: (workerId: string, name: string, autostart: boolean) => Promise<void>;
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
 };
 
-export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, lockDetectionState, notificationSettings, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onReorderWorkers }: Props) {
+export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, lockDetectionState, notificationSettings, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers }: Props) {
   const mobile = deviceClass() === "mobile";
   return (
     <div className="settings-workspace">
-      <WorkerSettings workers={workers} workspaces={workspaces} busy={busy} onCreate={onCreateWorker} onReorder={onReorderWorkers} />
+      <WorkerSettings workers={workers} workspaces={workspaces} busy={busy} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onReorder={onReorderWorkers} />
       <section className="settings-card presence-settings" aria-labelledby="presence-heading">
         <div><p className="eyebrow">Presence</p><h3 id="presence-heading">Let attention follow you</h3></div>
         <p>Automatic presence uses this device's activity, visibility, and expiry. A manual mode stays in effect until you return to Automatic.</p>

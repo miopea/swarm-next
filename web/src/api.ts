@@ -394,6 +394,23 @@ export async function createWorker(
   return response.json() as Promise<Worker>;
 }
 
+export async function updateWorker(
+  operatorToken: string,
+  workerId: string,
+  input: { name?: string; autostart?: boolean },
+): Promise<Worker> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/workers/${encodeURIComponent(workerId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  return response.json() as Promise<Worker>;
+}
+
 export async function reorderWorkers(operatorToken: string, workerIds: string[]): Promise<void> {
   await authenticatedFetch(operatorToken, "/api/v1/workers/order", {
     method: "PUT",

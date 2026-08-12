@@ -90,3 +90,18 @@ layout: compact brand/navigation, a slim horizontal worker strip, a 52-pixel
 worker header, expanded terminal space, and compact D-pad controls. Unit and
 production-build evidence cover these rules in this local pass; a physical
 Android screenshot remains required after the batch reaches the dogfood server.
+
+## Durable roster maintenance (2026-08-12)
+
+An isolated runtime on port `8767` exercised the production-built web surface against
+the newly built API contract rather than mocked data:
+
+- Settings renamed Daisy to Marigold and enabled her always-active policy while
+  preserving the assigned `budgetbug` repository and provider conversation.
+- A full reload retained the new name and policy.
+- Desktop settings kept edit and ordering controls on one calm row with no
+  horizontal overflow. Native drag ordering supplements visible arrow actions.
+- At 412 by 915, the edit form remained readable, the repository boundary was
+  explicit, touch ordering moved Poppy before Marigold, and the order survived
+  reload with zero horizontal overflow.
+- Browser logs contained no warnings or errors during edit, reorder, and reload.

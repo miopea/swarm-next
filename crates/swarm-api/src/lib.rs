@@ -576,6 +576,12 @@ struct CreateWorkerRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct UpdateWorkerRequest {
+    name: Option<String>,
+    autostart: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
 struct StartWorkerRequest {
     #[serde(default = "default_terminal_rows")]
     rows: u16,
@@ -843,6 +849,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/tasks/{task_id}/assignment", put(assign_task))
         .route("/api/v1/workers", get(list_workers).post(create_worker))
         .route("/api/v1/workers/order", put(reorder_workers))
+        .route("/api/v1/workers/{worker_id}", patch(update_worker))
         .route("/api/v1/workspaces", get(list_workspaces))
         .route("/api/v1/workers/{worker_id}/start", post(start_worker))
         .route("/api/v1/workers/{worker_id}/session", delete(stop_worker))
@@ -1594,6 +1601,25 @@ async fn reorder_workers(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+async fn update_worker(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(worker_id): Path<String>,
+    Json(request): Json<UpdateWorkerRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let profile = task_store(&state)?
+        .update_worker_profile(
+            parse_worker_id(&worker_id)?,
+            request.name.as_deref(),
+            request.autostart,
+        )
+        .map_err(|error| task_store_error(&error))?;
+    let running = profile.active_session_id.is_some();
+    state.control_room_notify.notify_waiters();
+    Ok(Json(worker_view(profile, running, None)).into_response())
+}
+
 async fn start_worker(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2231,10 +2257,12 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::WorkerNotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "worker_not_found", error.to_string())
         }
-        TaskStoreError::InvalidWorkerName => {
+        TaskStoreError::InvalidWorkerName | TaskStoreError::EmptyWorkerUpdate => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_worker", error.to_string())
         }
-        TaskStoreError::DuplicateWorkerName | TaskStoreError::QueenAlreadyExists => {
+        TaskStoreError::DuplicateWorkerName
+        | TaskStoreError::QueenAlreadyExists
+        | TaskStoreError::QueenProfileImmutable => {
             ApiError::new(StatusCode::CONFLICT, "worker_conflict", error.to_string())
         }
         TaskStoreError::WorkerAlreadyRunning => ApiError::new(
@@ -2938,6 +2966,52 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn worker_preferences_update_without_changing_repository_or_conversation() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Daisy",
+                ProviderKind::ClaudeCode,
+                "/workspace/daisy",
+                false,
+                1,
+            )
+            .unwrap();
+        let conversation = worker.provider_conversation_id;
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/workers/{}", worker.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"Clover","autostart":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = response_json(response).await;
+        assert_eq!(response["name"], "Clover");
+        assert_eq!(response["autostart"], true);
+        assert_eq!(response["workspace"], worker.workspace);
+        assert_eq!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id,
+            conversation
+        );
     }
 
     #[tokio::test]
