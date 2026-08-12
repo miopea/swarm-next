@@ -141,3 +141,21 @@ snapshots therefore remained at `80×24` while Claude painted for the wider PTY.
 - A fresh optimized host and production web build changed a new worker from the
   `80×24` launch default to `155×41`, survived reload without corruption, then
   changed to `43×24` at 412 by 915 with readable output and zero overflow.
+
+## Guarded coordination submission recovery (2026-08-12)
+
+The first production task-assignment dogfood pass created one isolated task,
+assigned it to a quiet durable worker, and observed the complete brief rendered
+at Claude's prompt. The dispatch ledger reported Delivered, but Claude had not
+accepted the prompt. The same behavior left the worker's Review handoff sitting
+unsubmitted at Queen's prompt.
+
+- A separately submitted Enter advanced the worker from Ready to Active to
+  Review and delivered one durable outcome to Queen.
+- A separately submitted Enter let Queen inspect the handoff and approve the
+  task as Completed.
+- Coordination delivery now sends sanitized prompt text and Enter as two
+  ordered terminal-host requests for task briefs, decision outcomes, and Queen
+  handoffs. Delivery is recorded only after both requests are acknowledged.
+- The real terminal-host assignment integration, strict workspace lint, and all
+  164 Rust tests pass with the corrected submission boundary.

@@ -229,11 +229,13 @@ impl AppState {
             }
         };
         for delivery in deliveries {
-            let request = HostRequest::Write {
-                session_id: delivery.session_id,
-                bytes: decision_delivery_message(&delivery),
-            };
-            let outcome = match client.request(&request).await {
+            let outcome = match submit_terminal_message(
+                client,
+                delivery.session_id,
+                decision_delivery_message(&delivery),
+            )
+            .await
+            {
                 Ok(HostResponse::Acknowledged) => {
                     store.complete_decision_delivery(delivery.decision_id, unix_timestamp())
                 }
@@ -280,11 +282,13 @@ impl AppState {
             }
         };
         for delivery in deliveries {
-            let request = HostRequest::Write {
-                session_id: delivery.session_id,
-                bytes: task_dispatch_message(&delivery),
-            };
-            let outcome = match client.request(&request).await {
+            let outcome = match submit_terminal_message(
+                client,
+                delivery.session_id,
+                task_dispatch_message(&delivery),
+            )
+            .await
+            {
                 Ok(HostResponse::Acknowledged) => {
                     store.complete_task_dispatch(&delivery.assignment_id, unix_timestamp())
                 }
@@ -330,11 +334,13 @@ impl AppState {
             }
         };
         for outcome in outcomes {
-            let request = HostRequest::Write {
-                session_id: outcome.session_id,
-                bytes: task_outcome_message(&outcome),
-            };
-            let result = match client.request(&request).await {
+            let result = match submit_terminal_message(
+                client,
+                outcome.session_id,
+                task_outcome_message(&outcome),
+            )
+            .await
+            {
                 Ok(HostResponse::Acknowledged) => {
                     store.complete_task_outcome(&outcome.id, unix_timestamp())
                 }
@@ -398,6 +404,36 @@ impl AppState {
             .as_ref()
             .map_or(Ok(0), TaskStore::recover_inflight_task_outcomes)
     }
+}
+
+/// Submits a coordination prompt as text followed by a distinct Enter event.
+///
+/// Claude's interactive input can render a carriage return that arrives in the
+/// same PTY write as a long prompt without accepting the prompt. Keeping Enter
+/// as its own host request matches an operator submission and prevents a task
+/// dispatch from being marked delivered while it is still sitting in the
+/// editor.
+async fn submit_terminal_message(
+    client: &HostClient,
+    session_id: WorkerSessionId,
+    mut bytes: Vec<u8>,
+) -> Result<HostResponse, swarm_terminal::IpcError> {
+    let submit = bytes.last() == Some(&b'\r');
+    if submit {
+        bytes.pop();
+    }
+    let response = client
+        .request(&HostRequest::Write { session_id, bytes })
+        .await?;
+    if !matches!(response, HostResponse::Acknowledged) || !submit {
+        return Ok(response);
+    }
+    client
+        .request(&HostRequest::Write {
+            session_id,
+            bytes: vec![b'\r'],
+        })
+        .await
 }
 
 fn decision_delivery_message(delivery: &DecisionDispatch) -> Vec<u8> {

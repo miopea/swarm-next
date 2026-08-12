@@ -28,7 +28,9 @@ Creating an assignment atomically creates one bounded task-dispatch outbox row.
   within one API instance.
 - The one-line terminal payload contains task identity, title, priority,
   workspace, bounded description, and an MCP retrieval hint. Control characters
-  are replaced before the single terminal submission.
+  are replaced before the single terminal submission. The PTY transport writes
+  the prompt text and its Enter key as two ordered requests so provider line
+  editors cannot render a brief without accepting it.
 - A terminal-host acknowledgement marks the brief Delivered. A definitive host
   rejection retries at most three times. Unexpected or transport outcomes are
   Uncertain immediately.

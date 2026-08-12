@@ -35,7 +35,9 @@ Queen in the same transaction as the task state and activity note.
   and 1,024 retained final rows.
 - The terminal payload contains reporting worker, task identity and title,
   target state, bounded note, and an MCP retrieval hint. It is sanitized and
-  sent as one terminal submission.
+  sent as one terminal submission. The PTY transport writes the prompt text
+  and its Enter key as two ordered requests so provider line editors cannot
+  render a handoff without accepting it.
 - Acknowledgement marks Delivered. A definitive rejection retries at most three
   times. Unexpected or transport outcomes become Uncertain immediately.
 - API startup converts interrupted Dispatching rows to Uncertain and never
