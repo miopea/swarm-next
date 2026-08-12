@@ -48,6 +48,7 @@ test("keeps the operator token in the browser tab and reveals the control room",
     .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
   vi.stubGlobal("fetch", fetch);
   render(<App />);
@@ -79,7 +80,8 @@ test("restores tasks and workers after a refresh", async () => {
       id: "worker-queen", name: "Queen", role: "queen", provider: "claude_code", workspace: "/workspace/queen", autostart: true, position: 0,
       active_session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", running: true, created_at: 1, updated_at: 1,
     }]))
-    .mockResolvedValueOnce(ok([{ id: "task-1", title: "Stable reload", workspace: "/workspace", state: "active", assigned_session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", created_at: 1, updated_at: 1 }]));
+    .mockResolvedValueOnce(ok([{ id: "task-1", title: "Stable reload", workspace: "/workspace", state: "active", assigned_session_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093", created_at: 1, updated_at: 1 }]))
+    .mockResolvedValueOnce(ok([]));
   vi.stubGlobal("fetch", fetch);
 
   render(<App />);
@@ -101,6 +103,7 @@ test("restores the worker surface after a refresh", async () => {
     .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
   vi.stubGlobal("fetch", fetch);
 
@@ -120,21 +123,22 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
     .mockResolvedValueOnce(ok(hiveIdentity()))
     .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
     .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
     .mockResolvedValueOnce(ok([]));
   vi.stubGlobal("fetch", fetch);
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
-  fireEvent.keyDown(screen.getByRole("button", { name: "Tasks 0" }), { key: "3", altKey: true });
+  fireEvent.keyDown(screen.getByRole("button", { name: "Tasks 0" }), { key: "4", altKey: true });
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /Settings/ })).toHaveAttribute("aria-current", "page");
 
-  fireEvent.keyDown(screen.getByRole("button", { name: /Settings/ }), { key: "2", altKey: true });
+  fireEvent.keyDown(screen.getByRole("button", { name: /Settings/ }), { key: "3", altKey: true });
   expect(await screen.findByRole("heading", { name: "Worker terminal" })).toBeInTheDocument();
 
   const workerName = screen.getByLabelText("Add a named worker");
   workerName.focus();
-  fireEvent.keyDown(workerName, { key: "3", altKey: true });
+  fireEvent.keyDown(workerName, { key: "4", altKey: true });
   expect(screen.getByRole("heading", { name: "Worker terminal" })).toBeInTheDocument();
 });
 
@@ -160,6 +164,7 @@ test("creates a persisted task draft from the task board", async () => {
     ok({ status: "ok", version: "0.1.0" }),
     ok(hiveIdentity()),
     ok({ type: "sessions", sessions: [] }),
+    ok([]),
     ok([]),
     ok([]),
     ok(task),

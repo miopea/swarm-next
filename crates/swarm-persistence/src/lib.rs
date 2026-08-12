@@ -14,11 +14,13 @@ use swarm_domain::{
 use thiserror::Error;
 use uuid::Uuid;
 
+mod decisions;
+pub use decisions::NewDecisionRequest;
 mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 9;
+const CURRENT_SCHEMA_VERSION: i64 = 10;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -39,6 +41,20 @@ pub enum TaskStoreError {
     LockPoisoned,
     #[error("task was not found")]
     NotFound,
+    #[error("decision request was not found")]
+    DecisionNotFound,
+    #[error("decision request content is invalid")]
+    InvalidDecisionContent,
+    #[error("decision request must offer 1 to 6 unique actions")]
+    InvalidDecisionActions,
+    #[error("decision request deadline is invalid")]
+    InvalidDecisionDeadline,
+    #[error("decision request is already resolved")]
+    DecisionAlreadyResolved,
+    #[error("decision resolution must use one of the allowed actions")]
+    InvalidDecisionResolution,
+    #[error("this Hive already has the maximum number of pending decisions")]
+    DecisionInboxFull,
     #[error("task title must contain 1 to {MAX_TASK_TITLE_BYTES} bytes")]
     InvalidTitle,
     #[error("task description must not exceed {MAX_TASK_DESCRIPTION_BYTES} bytes")]
@@ -105,7 +121,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=8 => {
+            0..=9 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -708,7 +724,10 @@ fn migrate_schema(
     if schema_version < 8 {
         migrate_worker_engagements(transaction)?;
     }
-    migrate_agent_credentials(transaction)
+    if schema_version < 9 {
+        migrate_agent_credentials(transaction)?;
+    }
+    migrate_decision_requests(transaction)
 }
 
 fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -931,6 +950,53 @@ fn migrate_agent_credentials(transaction: &rusqlite::Transaction<'_>) -> rusqlit
              rotated_at INTEGER NOT NULL DEFAULT (unixepoch())
          );
          PRAGMA user_version = 9;",
+    )
+}
+fn migrate_decision_requests(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "ALTER TABLE control_room_events RENAME TO control_room_events_v9;
+         CREATE TABLE control_room_events (
+             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+             hive_id TEXT NOT NULL REFERENCES hives(id),
+             kind TEXT NOT NULL CHECK (
+                 kind IN ('tasks_changed','workers_changed','sessions_changed','runtime_changed','decisions_changed')
+             ),
+             occurred_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         INSERT INTO control_room_events (sequence, hive_id, kind, occurred_at)
+             SELECT sequence, hive_id, kind, occurred_at FROM control_room_events_v9;
+         DROP TABLE control_room_events_v9;
+         CREATE INDEX control_room_events_by_hive_sequence
+             ON control_room_events(hive_id, sequence);
+         CREATE TABLE IF NOT EXISTS decision_requests (
+             id TEXT PRIMARY KEY,
+             hive_id TEXT NOT NULL REFERENCES hives(id),
+             requesting_worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+             task_id TEXT REFERENCES tasks(id),
+             kind TEXT NOT NULL CHECK (kind IN ('input','approval','credentials','conflict','help')),
+             urgency TEXT NOT NULL CHECK (urgency IN ('normal','time_sensitive')),
+             title TEXT NOT NULL,
+             reason TEXT NOT NULL,
+             risk TEXT NOT NULL,
+             evidence TEXT NOT NULL,
+             suggested_action TEXT NOT NULL,
+             allowed_actions TEXT NOT NULL,
+             deadline INTEGER,
+             state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','resolved')),
+             resolution_action TEXT,
+             resolution_note TEXT NOT NULL DEFAULT '',
+             resolved_by_operator_id TEXT REFERENCES operators(id),
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             resolved_at INTEGER,
+             CHECK ((state = 'pending' AND resolution_action IS NULL AND resolved_at IS NULL)
+                 OR (state = 'resolved' AND resolution_action IS NOT NULL AND resolved_at IS NOT NULL))
+         );
+         CREATE INDEX IF NOT EXISTS decision_requests_inbox
+             ON decision_requests(hive_id, state, urgency, deadline, created_at DESC);
+         CREATE INDEX IF NOT EXISTS decision_requests_by_worker
+             ON decision_requests(requesting_worker_id, state, created_at DESC);
+         PRAGMA user_version = 10;",
     )
 }
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {

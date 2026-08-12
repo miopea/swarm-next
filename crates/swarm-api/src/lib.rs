@@ -21,8 +21,9 @@ use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use swarm_application::{ApplicationError, TaskService};
 use swarm_domain::{
-    ControlRoomEventKind, ProviderConversationId, ProviderKind, TaskDetailsUpdate, TaskId,
-    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    ControlRoomEventKind, DecisionRequestId, ProviderConversationId, ProviderKind,
+    TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId,
+    WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE, TaskStore, TaskStoreError,
@@ -275,6 +276,12 @@ struct CreateTaskRequest {
 struct TransitionTaskRequest {
     state: TaskState,
 }
+#[derive(Debug, Deserialize)]
+struct ResolveDecisionRequest {
+    action: String,
+    #[serde(default)]
+    note: String,
+}
 
 #[derive(Debug, Deserialize)]
 struct AssignTaskRequest {
@@ -406,6 +413,11 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
+        .route("/api/v1/decisions", get(list_decisions))
+        .route(
+            "/api/v1/decisions/{decision_id}/resolution",
+            patch(resolve_decision),
+        )
         .route("/api/v1/tasks/order", put(reorder_tasks))
         .route("/api/v1/tasks/{task_id}", patch(update_task))
         .route("/api/v1/tasks/{task_id}/activity", get(task_activity))
@@ -525,6 +537,34 @@ async fn terminal_host_status(
     authorized_no_store_request(&state, &headers, HostRequest::HostStatus).await
 }
 
+async fn list_decisions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let decisions = task_service(&state)?
+        .list_visible_decisions(None)
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(decisions)).into_response())
+}
+
+async fn resolve_decision(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(decision_id): Path<String>,
+    Json(request): Json<ResolveDecisionRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let decision = task_service(&state)?
+        .resolve_operator_decision(
+            parse_decision_id(&decision_id)?,
+            &request.action,
+            &request.note,
+        )
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(Json(decision).into_response())
+}
 async fn list_tasks(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1190,6 +1230,22 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::NotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "task_not_found", error.to_string())
         }
+        TaskStoreError::DecisionNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "decision_not_found",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidDecisionContent
+        | TaskStoreError::InvalidDecisionActions
+        | TaskStoreError::InvalidDecisionDeadline
+        | TaskStoreError::InvalidDecisionResolution => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_decision",
+            error.to_string(),
+        ),
+        TaskStoreError::DecisionAlreadyResolved | TaskStoreError::DecisionInboxFull => {
+            ApiError::new(StatusCode::CONFLICT, "decision_conflict", error.to_string())
+        }
         TaskStoreError::InvalidTitle
         | TaskStoreError::InvalidDescription
         | TaskStoreError::InvalidWorkspace
@@ -1327,6 +1383,15 @@ fn parse_task_id(value: &str) -> Result<TaskId, ApiError> {
             StatusCode::BAD_REQUEST,
             "invalid_task_id",
             "task ID must be a UUID",
+        )
+    })
+}
+fn parse_decision_id(value: &str) -> Result<DecisionRequestId, ApiError> {
+    DecisionRequestId::from_str(value).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_decision_id",
+            "decision ID must be a UUID",
         )
     })
 }
@@ -1708,6 +1773,68 @@ mod tests {
         let listed = response_json(listed).await;
         assert_eq!(listed.as_array().unwrap().len(), 1);
         assert_eq!(listed[0]["title"], "Recover every terminal");
+    }
+
+    #[tokio::test]
+    async fn decision_routes_are_operator_only_and_resolve_allowed_actions() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let actions = vec!["ship".to_string(), "hold".to_string()];
+        let decision = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::TimeSensitive,
+                title: "Approve the release",
+                reason: "The candidate is ready",
+                risk: "Users wait if held",
+                evidence: "All checks pass",
+                suggested_action: "Ship",
+                allowed_actions: &actions,
+                deadline: None,
+            })
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/decisions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let listed = response_json(authorized_get(app.clone(), "/api/v1/decisions").await).await;
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["state"], "pending");
+
+        let resolved = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/decisions/{}/resolution", decision.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"action":"ship","note":"Proceed"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resolved.status(), StatusCode::OK);
+        let resolved = response_json(resolved).await;
+        assert_eq!(resolved["state"], "resolved");
+        assert_eq!(resolved["resolution_action"], "ship");
+        assert_eq!(resolved["resolution_note"], "Proceed");
+        assert!(resolved["resolved_by_operator_id"].is_string());
     }
 
     #[tokio::test]

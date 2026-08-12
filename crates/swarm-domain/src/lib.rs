@@ -301,6 +301,7 @@ pub enum ControlRoomEventKind {
     WorkersChanged,
     SessionsChanged,
     RuntimeChanged,
+    DecisionsChanged,
 }
 
 impl fmt::Display for ControlRoomEventKind {
@@ -310,6 +311,7 @@ impl fmt::Display for ControlRoomEventKind {
             Self::WorkersChanged => "workers_changed",
             Self::SessionsChanged => "sessions_changed",
             Self::RuntimeChanged => "runtime_changed",
+            Self::DecisionsChanged => "decisions_changed",
         })
     }
 }
@@ -323,6 +325,7 @@ impl FromStr for ControlRoomEventKind {
             "workers_changed" => Ok(Self::WorkersChanged),
             "sessions_changed" => Ok(Self::SessionsChanged),
             "runtime_changed" => Ok(Self::RuntimeChanged),
+            "decisions_changed" => Ok(Self::DecisionsChanged),
             _ => Err(ParseControlRoomEventKindError),
         }
     }
@@ -775,6 +778,171 @@ pub struct Task {
     pub updated_at: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DecisionRequestId(Uuid);
+
+impl DecisionRequestId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::now_v7())
+    }
+}
+
+impl Default for DecisionRequestId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for DecisionRequestId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for DecisionRequestId {
+    type Err = uuid::Error;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionRequestKind {
+    Input,
+    Approval,
+    Credentials,
+    Conflict,
+    Help,
+}
+
+impl fmt::Display for DecisionRequestKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Input => "input",
+            Self::Approval => "approval",
+            Self::Credentials => "credentials",
+            Self::Conflict => "conflict",
+            Self::Help => "help",
+        })
+    }
+}
+
+impl FromStr for DecisionRequestKind {
+    type Err = ParseDecisionRequestKindError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "input" => Ok(Self::Input),
+            "approval" => Ok(Self::Approval),
+            "credentials" => Ok(Self::Credentials),
+            "conflict" => Ok(Self::Conflict),
+            "help" => Ok(Self::Help),
+            _ => Err(ParseDecisionRequestKindError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseDecisionRequestKindError;
+impl fmt::Display for ParseDecisionRequestKindError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown decision request kind")
+    }
+}
+impl std::error::Error for ParseDecisionRequestKindError {}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionUrgency {
+    #[default]
+    Normal,
+    TimeSensitive,
+}
+impl fmt::Display for DecisionUrgency {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Normal => "normal",
+            Self::TimeSensitive => "time_sensitive",
+        })
+    }
+}
+impl FromStr for DecisionUrgency {
+    type Err = ParseDecisionUrgencyError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "normal" => Ok(Self::Normal),
+            "time_sensitive" => Ok(Self::TimeSensitive),
+            _ => Err(ParseDecisionUrgencyError),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseDecisionUrgencyError;
+impl fmt::Display for ParseDecisionUrgencyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown decision urgency")
+    }
+}
+impl std::error::Error for ParseDecisionUrgencyError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionRequestState {
+    Pending,
+    Resolved,
+}
+impl fmt::Display for DecisionRequestState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Pending => "pending",
+            Self::Resolved => "resolved",
+        })
+    }
+}
+impl FromStr for DecisionRequestState {
+    type Err = ParseDecisionRequestStateError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "resolved" => Ok(Self::Resolved),
+            _ => Err(ParseDecisionRequestStateError),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseDecisionRequestStateError;
+impl fmt::Display for ParseDecisionRequestStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown decision request state")
+    }
+}
+impl std::error::Error for ParseDecisionRequestStateError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DecisionRequest {
+    pub id: DecisionRequestId,
+    pub hive_id: HiveId,
+    pub requesting_worker_id: WorkerId,
+    pub task_id: Option<TaskId>,
+    pub kind: DecisionRequestKind,
+    pub urgency: DecisionUrgency,
+    pub title: String,
+    pub reason: String,
+    pub risk: String,
+    pub evidence: String,
+    pub suggested_action: String,
+    pub allowed_actions: Vec<String>,
+    pub deadline: Option<i64>,
+    pub state: DecisionRequestState,
+    pub resolution_action: Option<String>,
+    pub resolution_note: String,
+    pub resolved_by_operator_id: Option<OperatorId>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub resolved_at: Option<i64>,
+}
 #[cfg(test)]
 mod tests {
     use super::*;

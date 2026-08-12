@@ -1,0 +1,95 @@
+import { useMemo, useState } from "react";
+
+import type { DecisionRequest, Task, Worker } from "../api";
+import BeeMascot from "../brand/BeeMascot";
+
+const kindLabel = {
+  input: "Input",
+  approval: "Approval",
+  credentials: "Credentials",
+  conflict: "Conflict",
+  help: "Help",
+};
+
+type Props = {
+  decisions: DecisionRequest[];
+  tasks: Task[];
+  workers: Worker[];
+  busy: boolean;
+  onResolve: (decision: DecisionRequest, action: string, note: string) => Promise<void>;
+};
+
+export default function DecisionInbox({ decisions, tasks, workers, busy, onResolve }: Props) {
+  const [showResolved, setShowResolved] = useState(false);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const taskNames = useMemo(() => new Map(tasks.map((task) => [task.id, task.title])), [tasks]);
+  const workerNames = useMemo(() => new Map(workers.map((worker) => [worker.id, worker.name])), [workers]);
+  const visible = decisions.filter((decision) => showResolved || decision.state === "pending");
+  const pending = decisions.filter((decision) => decision.state === "pending").length;
+
+  return (
+    <section className="decision-inbox" aria-labelledby="decision-inbox-heading">
+      <div className="decision-inbox-intro">
+        <div>
+          <p className="eyebrow">One calm queue</p>
+          <h3 id="decision-inbox-heading">What needs you</h3>
+          <p>Workers ask here instead of interrupting another terminal. Resolve the judgment; Swarm keeps the context.</p>
+        </div>
+        <label className="decision-history-toggle">
+          <input type="checkbox" checked={showResolved} onChange={(event) => setShowResolved(event.target.checked)} />
+          Show resolved
+        </label>
+      </div>
+
+      {visible.length === 0 ? (
+        <div className="decision-empty">
+          <BeeMascot className="empty-bee" expression="available" />
+          <p className="eyebrow">All clear</p>
+          <h3>{pending === 0 ? "Nothing needs your attention" : "No matching requests"}</h3>
+          <p>Routine worker activity stays quiet. Only judgment, credentials, conflicts, or requested help land here.</p>
+        </div>
+      ) : (
+        <div className="decision-list">
+          {visible.map((decision) => {
+            const requester = workerNames.get(decision.requesting_worker_id) ?? "Worker";
+            const note = notes[decision.id] ?? "";
+            return (
+              <article className={`decision-card urgency-${decision.urgency} state-${decision.state}`} key={decision.id}>
+                <header>
+                  <div className="decision-requester">
+                    <span className="decision-bee"><BeeMascot expression={decision.urgency === "time_sensitive" ? "blocked" : "focused"} /></span>
+                    <div><p className="eyebrow">{requester} · {kindLabel[decision.kind]}</p><h4>{decision.title}</h4></div>
+                  </div>
+                  <span className={`decision-urgency ${decision.urgency}`}>{decision.urgency === "time_sensitive" ? "Time-sensitive" : "When ready"}</span>
+                </header>
+                <p className="decision-reason">{decision.reason}</p>
+                <dl className="decision-context">
+                  {decision.task_id && <div><dt>Task</dt><dd>{taskNames.get(decision.task_id) ?? "Linked task"}</dd></div>}
+                  {decision.risk && <div><dt>Risk</dt><dd>{decision.risk}</dd></div>}
+                  {decision.evidence && <div><dt>Evidence</dt><dd>{decision.evidence}</dd></div>}
+                  <div><dt>Suggested</dt><dd>{decision.suggested_action}</dd></div>
+                </dl>
+                {decision.state === "pending" ? (
+                  <div className="decision-resolution">
+                    <label><span>Optional note</span><textarea value={note} maxLength={4000} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
+                    <div className="decision-actions">
+                      {decision.allowed_actions.map((action, index) => (
+                        <button key={action} className={index === 0 ? "primary-action" : "secondary-button"} disabled={busy} onClick={() => void onResolve(decision, action, note)}>{humanize(action)}</button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="decision-resolved"><strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function humanize(value: string): string {
+  return value.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
+}

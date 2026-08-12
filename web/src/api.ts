@@ -7,7 +7,7 @@ export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type WorkerRole = "queen" | "worker";
 export type ProviderKind = "claude_code" | "codex";
 export type WorkerAttentionState = "sleeping" | "buzzing" | "with_operator" | "blocked";
-export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed";
+export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed" | "decisions_changed";
 export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };
 export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: number; reset_required: boolean };
 export type TerminalHostStatus = {
@@ -61,6 +61,29 @@ export type Task = {
   position: number;
   created_at: number;
   updated_at: number;
+};
+
+export type DecisionRequest = {
+  id: string;
+  hive_id: string;
+  requesting_worker_id: string;
+  task_id: string | null;
+  kind: "input" | "approval" | "credentials" | "conflict" | "help";
+  urgency: "normal" | "time_sensitive";
+  title: string;
+  reason: string;
+  risk: string;
+  evidence: string;
+  suggested_action: string;
+  allowed_actions: string[];
+  deadline: number | null;
+  state: "pending" | "resolved";
+  resolution_action: string | null;
+  resolution_note: string;
+  resolved_by_operator_id: string | null;
+  created_at: number;
+  updated_at: number;
+  resolved_at: number | null;
 };
 
 export type TaskActivityKind = "created" | "details_updated" | "state_changed" | "assigned" | "unassigned";
@@ -134,6 +157,24 @@ export async function fetchTasks(operatorToken: string): Promise<Task[]> {
   return response.json() as Promise<Task[]>;
 }
 
+export async function fetchDecisions(operatorToken: string): Promise<DecisionRequest[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/decisions");
+  return response.json() as Promise<DecisionRequest[]>;
+}
+
+export async function resolveDecision(
+  operatorToken: string,
+  decisionId: string,
+  action: string,
+  note = "",
+): Promise<DecisionRequest> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/decisions/${encodeURIComponent(decisionId)}/resolution`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, note }) },
+  );
+  return response.json() as Promise<DecisionRequest>;
+}
 export async function fetchTaskActivity(
   operatorToken: string,
   taskId: string,
