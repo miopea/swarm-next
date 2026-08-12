@@ -199,6 +199,11 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .protected-worker { display: inline-flex; align-items: center; min-height: 30px; padding: 0 10px; border: 1px solid var(--good); border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .72rem; }
 .assignment-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; margin-top: auto; }
 .assignment-row select { min-height: 34px; padding: 6px 9px; font-size: .76rem; }
+.task-dispatch { display: inline-flex; align-items: center; gap: 7px; width: fit-content; margin: 8px 0 0; color: var(--muted); font-size: .69rem; line-height: 1.35; }
+.task-dispatch::before { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: currentColor; content: ""; }
+.task-dispatch-queued, .task-dispatch-dispatching { color: var(--warn); }
+.task-dispatch-delivered { color: var(--good); }
+.task-dispatch-uncertain { color: var(--bad); }
 .task-drop-strip { position: sticky; z-index: 10; bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; max-width: 900px; margin: 18px auto 0; padding: 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: color-mix(in srgb, var(--panel-raised) 94%, transparent); box-shadow: var(--shadow); }
 .task-drop-strip > span { max-width: 330px; overflow: hidden; color: var(--muted); font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
 .task-drop-strip > span strong { color: var(--text); }
@@ -385,7 +390,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .decision-resolution { grid-template-columns: 1fr; }
   .decision-resolved { align-items: flex-start; flex-direction: column; }
   .decision-actions { justify-content: stretch; }
-  .task-drop-strip { flex-wrap: wrap; }
+  .task-dispatch { display: inline-flex; align-items: center; gap: 7px; width: fit-content; margin: 8px 0 0; color: var(--muted); font-size: .69rem; line-height: 1.35; }
+.task-dispatch::before { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: currentColor; content: ""; }
+.task-dispatch-queued, .task-dispatch-dispatching { color: var(--warn); }
+.task-dispatch-delivered { color: var(--good); }
+.task-dispatch-uncertain { color: var(--bad); }
+.task-drop-strip { flex-wrap: wrap; }
   .shortcuts-card { grid-column: auto; }
   .terminal-toolbar { min-height: 44px; padding: 7px 12px; }
   .terminal-toolbar strong { display: none; }

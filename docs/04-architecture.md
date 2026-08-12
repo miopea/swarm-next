@@ -36,7 +36,7 @@ deployment boundary, not a second product backend.
 - `tasks`: task lifecycle, dependencies, assignment, history.
 - `workers`: durable worker identity and worker-session lifecycle.
 - `terminal`: PTY ownership, canonical terminal state, synchronization.
-- `orchestration`: recommendations, policies, dispatch, verification.
+- `orchestration`: recommendations, policies, bounded guarded dispatch, verification.
 - `decisions`: unified operator attention, resolution, and guarded durable delivery.
 - `messages`: findings, handoffs, blockers, operator communication.
 - `integrations`: external adapters and synchronization boundaries.

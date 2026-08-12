@@ -114,3 +114,16 @@ test("moves open tasks with keyboard-accessible ordering controls", () => {
   fireEvent.drop(screen.getByRole("article", { name: task.title }), { dataTransfer });
   expect(onReorder).toHaveBeenCalledWith([second.id, task.id]);
 });
+test.each([
+  ["queued", "Briefing waits for a quiet moment"],
+  ["dispatching", "Briefing worker"],
+  ["delivered", "Worker briefed"],
+  ["uncertain", "Briefing uncertain — task remains authoritative"],
+] as const)("renders the %s task briefing state", (dispatchState, label) => {
+  renderBoard({
+    tasks: [{ ...task, assigned_session_id: "session-1", dispatch_state: dispatchState }],
+    sessions: [{ session_id: "session-1", running: true }],
+  });
+
+  expect(screen.getByRole("status")).toHaveTextContent(label);
+});

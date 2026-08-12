@@ -66,6 +66,13 @@ The time-bounded relationship between a task and worker session. Modeling it
 separately preserves history and avoids contradictory fields on tasks and
 workers.
 
+### Task dispatch
+
+The durable outbox record for briefing the worker-session named by an
+assignment. Its Queued, Dispatching, Delivered, or Uncertain state describes
+terminal delivery only; it never overrides task lifecycle or assignment truth.
+Operator engagement defers a dispatch, and ambiguous delivery is not replayed
+automatically.
 ### Activity event
 
 An immutable record of a material domain transition. Events support audit,

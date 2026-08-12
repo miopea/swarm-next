@@ -33,6 +33,12 @@ const priorityLabels: Record<TaskPriority, string> = {
   urgent: "Urgent",
 };
 
+const dispatchLabels = {
+  queued: "Briefing waits for a quiet moment",
+  dispatching: "Briefing worker",
+  delivered: "Worker briefed",
+  uncertain: "Briefing uncertain — task remains authoritative",
+} as const;
 const validTargets: Record<TaskState, TaskState[]> = {
   draft: ["ready"],
   ready: ["active", "blocked"],
@@ -299,6 +305,7 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
       {editing ? (
         <TaskEditForm task={task} busy={busy} onUpdate={onUpdate} onCancel={() => setEditing(false)} />
       ) : task.state !== "completed" && (
+        <>
         <div className="assignment-row">
           <label htmlFor={`assignment-${task.id}`}>Worker</label>
           <select
@@ -315,6 +322,12 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
             ))}
           </select>
         </div>
+        {task.dispatch_state && (
+          <p className={`task-dispatch task-dispatch-${task.dispatch_state}`} role="status">
+            {dispatchLabels[task.dispatch_state]}
+          </p>
+        )}
+        </>
       )}
       <div className="task-actions">
         {!editing && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}

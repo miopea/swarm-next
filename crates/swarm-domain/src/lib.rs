@@ -645,6 +645,50 @@ impl fmt::Display for ParseTaskStateError {
 
 impl std::error::Error for ParseTaskStateError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskDispatchState {
+    Queued,
+    Dispatching,
+    Delivered,
+    Uncertain,
+}
+
+impl fmt::Display for TaskDispatchState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Queued => "queued",
+            Self::Dispatching => "dispatching",
+            Self::Delivered => "delivered",
+            Self::Uncertain => "uncertain",
+        })
+    }
+}
+
+impl FromStr for TaskDispatchState {
+    type Err = ParseTaskDispatchStateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "queued" => Ok(Self::Queued),
+            "dispatching" => Ok(Self::Dispatching),
+            "delivered" => Ok(Self::Delivered),
+            "uncertain" => Ok(Self::Uncertain),
+            _ => Err(ParseTaskDispatchStateError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseTaskDispatchStateError;
+
+impl fmt::Display for ParseTaskDispatchStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown task dispatch state")
+    }
+}
+
+impl std::error::Error for ParseTaskDispatchStateError {}
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskPriority {
@@ -773,6 +817,7 @@ pub struct Task {
     pub workspace: String,
     pub state: TaskState,
     pub assigned_session_id: Option<WorkerSessionId>,
+    pub dispatch_state: Option<TaskDispatchState>,
     pub position: i64,
     pub created_at: i64,
     pub updated_at: i64,
