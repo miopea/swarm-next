@@ -163,3 +163,8 @@ unsubmitted at Queen's prompt.
   ambiguity fails closed as Uncertain and is never replayed.
 - The real terminal-host assignment integration, strict workspace lint, and all
   164 Rust tests pass with the corrected submission boundary.
+- Release `0.1.0-9c575f070c44` then proved the production path without manual
+  terminal input: an operator engagement kept the task Queued; expiry delivered
+  that same assignment once; the worker moved Ready to Active to Review; Queen
+  received the guarded outcome and approved Completed. A subsequent API restart
+  preserved the completed task, both worker session IDs, and terminal-host PID.
