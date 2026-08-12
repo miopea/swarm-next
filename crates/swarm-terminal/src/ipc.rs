@@ -12,10 +12,11 @@ use tokio::{
 };
 
 use crate::{
-    HistoryCursor, HistoryDiagnostics, HistoryPage, HistorySessionSummary, Resume, TerminalSize,
+    ClaudeConversationStart, HistoryCursor, HistoryDiagnostics, HistoryPage, HistorySessionSummary,
+    Resume, TerminalSize,
 };
 
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -35,6 +36,7 @@ pub enum HostRequest {
     StartClaude {
         workspace: PathBuf,
         size: TerminalSize,
+        conversation: ClaudeConversationStart,
     },
     ListSessions,
     HistoryDiagnostics,

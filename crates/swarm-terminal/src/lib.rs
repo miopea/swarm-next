@@ -20,7 +20,8 @@ pub use process::{
     SessionRegistry, SessionRegistryError, TerminalSize,
 };
 pub use provider::{
-    ClaudeCodeAdapter, ProviderCommand, ProviderCommandError, ProviderTerminalAdapter,
+    ClaudeCodeAdapter, ClaudeConversationStart, ProviderCommand, ProviderCommandError,
+    ProviderTerminalAdapter,
 };
 pub use state::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, CanonicalTerminalState,

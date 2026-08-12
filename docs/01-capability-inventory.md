@@ -18,7 +18,7 @@ Decision meanings:
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
 | Persistent agent terminals | Redesign | Core value. Server-owned terminal sessions with sequence-based attach and bounded history. |
-| Worker launch and lifecycle | Redesign | Core value. Immutable worker-session identity; explicit lifecycle and recovery. |
+| Worker launch and lifecycle | Redesign | Core value. Immutable worker-session identity plus separate durable provider-conversation identity; explicit lifecycle and recovery. |
 | Multi-worker control room | Redesign | Core value. React workspace with instant switching and stable retained sessions. |
 | Task board | Redesign | Preserve work management while simplifying task types, transitions, and presentation. |
 | Task assignment | Redesign | Preserve manual and assisted assignment; separate recommendations from execution policy. |

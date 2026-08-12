@@ -43,8 +43,10 @@ by rebuilding legacy behavior in advance.
   federation UI and distributed coordination follow the local dogfood slice.
 - Tasks require title, workspace, state, and optional assignee; richer metadata
   waits for observed need.
-- Terminal sessions survive browser and API restarts but not an explicit worker
-  stop.
+- Live terminal sessions survive browser and API restarts. Worker profiles also
+  recover Claude conversation context after stop, crash, or reboot: exact
+  session identity for new profiles and workspace `--continue` for migrated
+  profiles whose exact identity is not known.
 - Provider-native permission policy owns tool approvals.
 - No production history import in the first slice; legacy remains readable in
   the old application.
