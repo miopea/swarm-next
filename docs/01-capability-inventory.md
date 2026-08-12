@@ -18,7 +18,7 @@ Decision meanings:
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
 | Persistent agent terminals | Redesign | Core value. Server-owned terminal sessions with sequence-based attach, bounded history, explicit color capabilities, desktop paste, and private bounded image attachments. |
-| Worker launch and lifecycle | Redesign | Core value. Immutable worker-session identity plus separate durable provider-conversation identity; durable named repository roster, explicit ordering, lifecycle, and recovery. |
+| Worker launch and lifecycle | Redesign | Core value. Immutable worker-session identity plus separate durable provider-conversation identity; durable named repository roster, bounded recursive path completion, direct canonical path entry, explicit ordering, lifecycle, and recovery. |
 | Multi-worker control room | Redesign | Core value. React workspace with instant switching and stable retained sessions. |
 | Task board | Redesign | Preserve work management while simplifying task types, transitions, and presentation. |
 | Task assignment | Redesign | Preserve manual and assisted assignment; separate recommendations from execution policy. |
@@ -78,7 +78,7 @@ Decision meanings:
 | Jira | Redesign | First shared Apiary backend. Use per-Hive operator identities, one project sync scope, distributed bindings, atomic claims, explicit mappings, and exception-only Keeper involvement. |
 | Outlook/email import | Investigate | Validate frequency and which parts—task creation, attachment parsing, draft replies—remain valuable. |
 | Cloudflare Tunnel | Redesign | Remote access is valuable; treat tunnel choice as deployment adapter, not core domain. |
-| Browser notifications | Keep | Implemented as a bounded, durable Web Push adapter for Needs you: presence-gated, generic encrypted payloads, explicit opt-in, and configurable policy. |
+| Browser notifications | Keep | Implemented as a bounded, durable Web Push adapter for Needs you: presence-gated, generic encrypted payloads, explicit opt-in, configurable policy, and an eagerly refreshed current brand icon. |
 | PWA installation, push, and mobile terminal | Redesign | Android Chrome/Edge is a first-class dogfood surface. Push-only service worker and install manifest are implemented; preserve terminal commands alongside long-form voice input and continue rendered mobile acceptance. |
 | In-app feedback | Keep/Redesign | Critical to dogfooding; capture correlated diagnostics, bounded content-free browser failure markers, and privacy-safe context. Chat remains the richer path for screenshots until outbound attachment transport exists. |
 

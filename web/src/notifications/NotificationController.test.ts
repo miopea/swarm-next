@@ -43,13 +43,31 @@ test("explicit enable registers the push-only worker and persists a browser subs
   await controller.start("token", vi.fn(), (state) => states.push(state));
 
   expect(await controller.enable()).toBe(true);
-  expect(register).toHaveBeenCalledWith("/sw.js", { scope: "/" });
+  expect(register).toHaveBeenCalledWith("/sw.js", { scope: "/", updateViaCache: "none" });
   expect(pushManager.subscribe).toHaveBeenCalledWith(expect.objectContaining({ userVisibleOnly: true }));
   expect(fetchMock).toHaveBeenLastCalledWith(
     expect.stringContaining("/notifications/subscriptions/"),
     expect.objectContaining({ method: "PUT", cache: "no-store" }),
   );
   expect(states.at(-1)).toBe("enabled");
+});
+
+test("startup refreshes an existing push worker without requesting permission again", async () => {
+  const update = vi.fn().mockResolvedValue(undefined);
+  const subscription = {
+    toJSON: () => ({ endpoint: "https://fcm.googleapis.com/push/existing", keys: { p256dh: "key", auth: "auth" } }),
+  } as unknown as PushSubscription;
+  const registration = { update, pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) } };
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(registration), register: vi.fn() } });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(ok(settings))
+    .mockResolvedValueOnce(ok({ ...settings, subscription_count: 1 }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  await new NotificationController().start("token", vi.fn(), vi.fn());
+
+  expect(update).toHaveBeenCalledOnce();
+  expect(Notification.requestPermission).not.toHaveBeenCalled();
 });
 
 test("a denied browser permission does not register or persist anything", async () => {

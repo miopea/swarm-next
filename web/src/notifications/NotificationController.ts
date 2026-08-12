@@ -36,6 +36,13 @@ export class NotificationController {
       this.#publish(settings);
       if (!supportsPush()) return;
       const registration = await navigator.serviceWorker.getRegistration("/");
+      if (registration) {
+        try {
+          await registration.update();
+        } catch {
+          // An existing push subscription remains usable while temporarily offline.
+        }
+      }
       const subscription = await registration?.pushManager.getSubscription();
       if (!subscription || generation !== this.#generation) return;
       await this.#save(subscription);
@@ -63,7 +70,7 @@ export class NotificationController {
         this.#onState("denied");
         return false;
       }
-      const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" });
       const existing = await registration.pushManager.getSubscription();
       const subscription = existing ?? await registration.pushManager.subscribe({
         userVisibleOnly: true,
