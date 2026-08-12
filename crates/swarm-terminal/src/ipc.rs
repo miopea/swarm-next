@@ -16,7 +16,7 @@ use crate::{
     Resume, TerminalSize,
 };
 
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -37,6 +37,7 @@ pub enum HostRequest {
         workspace: PathBuf,
         size: TerminalSize,
         conversation: ClaudeConversationStart,
+        mcp_config: Option<PathBuf>,
     },
     ListSessions,
     HistoryDiagnostics,

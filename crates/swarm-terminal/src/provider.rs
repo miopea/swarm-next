@@ -22,6 +22,8 @@ pub struct ProviderCommand {
 pub enum ProviderCommandError {
     #[error("workspace must be an absolute path")]
     WorkspaceNotAbsolute,
+    #[error("MCP configuration path must be valid UTF-8")]
+    McpConfigNotUtf8,
 }
 
 pub trait ProviderTerminalAdapter {
@@ -35,6 +37,19 @@ pub trait ProviderTerminalAdapter {
         &self,
         workspace: &Path,
         conversation: ClaudeConversationStart,
+    ) -> Result<ProviderCommand, ProviderCommandError> {
+        self.command_for_with_mcp(workspace, conversation, None)
+    }
+
+    /// Builds a provider command with an optional explicit MCP configuration.
+    ///
+    /// # Errors
+    /// Returns an error for a relative workspace or a non-UTF-8 MCP configuration path.
+    fn command_for_with_mcp(
+        &self,
+        workspace: &Path,
+        conversation: ClaudeConversationStart,
+        mcp_config: Option<&Path>,
     ) -> Result<ProviderCommand, ProviderCommandError>;
 }
 
@@ -42,15 +57,16 @@ pub trait ProviderTerminalAdapter {
 pub struct ClaudeCodeAdapter;
 
 impl ProviderTerminalAdapter for ClaudeCodeAdapter {
-    fn command_for(
+    fn command_for_with_mcp(
         &self,
         workspace: &Path,
         conversation: ClaudeConversationStart,
+        mcp_config: Option<&Path>,
     ) -> Result<ProviderCommand, ProviderCommandError> {
         if !workspace.is_absolute() {
             return Err(ProviderCommandError::WorkspaceNotAbsolute);
         }
-        let arguments = match conversation {
+        let mut arguments = match conversation {
             ClaudeConversationStart::New { session_id } => {
                 vec!["--session-id".into(), session_id.to_string()]
             }
@@ -59,6 +75,13 @@ impl ProviderTerminalAdapter for ClaudeCodeAdapter {
             }
             ClaudeConversationStart::Continue => vec!["--continue".into()],
         };
+        if let Some(config) = mcp_config {
+            let config = config
+                .to_str()
+                .ok_or(ProviderCommandError::McpConfigNotUtf8)?;
+            arguments.push("--mcp-config".into());
+            arguments.push(config.into());
+        }
         Ok(ProviderCommand {
             executable: PathBuf::from("claude"),
             arguments,
@@ -107,6 +130,27 @@ mod tests {
         assert_eq!(command.arguments, ["--continue"]);
     }
 
+    #[test]
+    fn claude_loads_the_private_mcp_config_in_every_recovery_mode() {
+        let config = Path::new("/state/swarm-next/agents/worker.json");
+        for start in [
+            ClaudeConversationStart::New {
+                session_id: ProviderConversationId::new(),
+            },
+            ClaudeConversationStart::Resume {
+                session_id: ProviderConversationId::new(),
+            },
+            ClaudeConversationStart::Continue,
+        ] {
+            let command = ClaudeCodeAdapter
+                .command_for_with_mcp(Path::new("/workspace/example"), start, Some(config))
+                .unwrap();
+            assert_eq!(
+                &command.arguments[command.arguments.len() - 2..],
+                ["--mcp-config", "/state/swarm-next/agents/worker.json"]
+            );
+        }
+    }
     #[test]
     fn relative_workspace_fails_closed() {
         assert_eq!(

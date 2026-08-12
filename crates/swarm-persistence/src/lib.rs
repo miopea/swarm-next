@@ -18,7 +18,7 @@ mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 8;
+const CURRENT_SCHEMA_VERSION: i64 = 9;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -61,6 +61,8 @@ pub enum TaskStoreError {
     QueenAlreadyExists,
     #[error("worker already has an active session")]
     WorkerAlreadyRunning,
+    #[error("agent credential digest must be exactly 32 bytes")]
+    InvalidAgentCredentialDigest,
     #[error("worker session is not active")]
     WorkerSessionNotActive,
     #[error("provider conversation cannot be assigned after worker history exists")]
@@ -103,7 +105,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=7 => {
+            0..=8 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -703,7 +705,10 @@ fn migrate_schema(
     if schema_version < 7 {
         migrate_provider_conversations(transaction)?;
     }
-    migrate_worker_engagements(transaction)
+    if schema_version < 8 {
+        migrate_worker_engagements(transaction)?;
+    }
+    migrate_agent_credentials(transaction)
 }
 
 fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -917,6 +922,17 @@ fn migrate_worker_engagements(transaction: &rusqlite::Transaction<'_>) -> rusqli
     )
 }
 
+fn migrate_agent_credentials(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS worker_agent_credentials (
+             worker_id TEXT PRIMARY KEY REFERENCES worker_profiles(id) ON DELETE CASCADE,
+             token_digest BLOB NOT NULL UNIQUE CHECK (length(token_digest) = 32),
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             rotated_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         PRAGMA user_version = 9;",
+    )
+}
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
     if title.is_empty() || title.len() > MAX_TASK_TITLE_BYTES {
         return Err(TaskStoreError::InvalidTitle);

@@ -14,14 +14,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     let terminal_socket = env::var_os("SWARM_TERMINAL_SOCKET")
         .map_or_else(default_terminal_socket_path, PathBuf::from);
-    let store = TaskStore::open(database_path_from_env())?;
+    let database_path = database_path_from_env();
+    let address = api_address_from_env()?;
+    let agent_config_root = agent_config_root_from_env(&database_path);
+    let store = TaskStore::open(&database_path)?;
     store.ensure_queen(queen_workspace_from_env().to_string_lossy().as_ref())?;
     let state = env::var("SWARM_OPERATOR_TOKEN")
         .map_or_else(
             |_| AppState::default(),
             |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
         )
-        .with_task_store(store);
+        .with_task_store(store)
+        .with_agent_configuration(agent_config_root, mcp_url_from_env(address));
     state.supervise_workers().await;
     let supervisor = state.clone();
     tokio::spawn(async move {
@@ -32,7 +36,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             supervisor.supervise_workers().await;
         }
     });
-    let address = api_address_from_env()?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     info!(%address, "Swarm Next API listening");
     let app = match (
@@ -78,6 +81,21 @@ fn database_path_from_env() -> PathBuf {
     )
 }
 
+fn agent_config_root_from_env(database_path: &std::path::Path) -> PathBuf {
+    env::var_os("SWARM_AGENT_CONFIG_ROOT").map_or_else(
+        || {
+            database_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("agents")
+        },
+        PathBuf::from,
+    )
+}
+
+fn mcp_url_from_env(address: SocketAddr) -> String {
+    env::var("SWARM_MCP_URL").unwrap_or_else(|_| format!("http://127.0.0.1:{}/mcp", address.port()))
+}
 fn api_address_from_env() -> Result<SocketAddr, Box<dyn std::error::Error>> {
     env::var("SWARM_API_BIND").map_or_else(
         |_| Ok(SocketAddr::from(([127, 0, 0, 1], 8765))),
