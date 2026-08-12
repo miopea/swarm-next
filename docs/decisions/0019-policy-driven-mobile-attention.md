@@ -22,6 +22,8 @@ inbox.
   every pending decision or disable delivery.
 - Device registration always follows an explicit browser permission action.
   Startup never registers a service worker or requests notification permission.
+- An explicit test targets only the initiating device subscription. It never
+  broadcasts to every desktop and phone registered with the Hive.
 - Push payloads are encrypted and content-free: generic title/body, a stable
   replacement tag, urgency, and a navigation target. Repository names, task
   titles, evidence, credentials, terminal output, and decision details never

@@ -4,8 +4,12 @@ import "@fontsource-variable/atkinson-hyperlegible-mono";
 import "@fontsource-variable/atkinson-hyperlegible-next";
 import "@xterm/xterm/css/xterm.css";
 import { App } from "./App";
+import AppErrorBoundary from "./feedback/AppErrorBoundary";
+import { installClientFailureCapture } from "./feedback/clientDiagnostics";
 import "./styles.css";
 
+installClientFailureCapture();
+
 createRoot(document.getElementById("root")!).render(
-  <StrictMode><App /></StrictMode>,
+  <StrictMode><AppErrorBoundary><App /></AppErrorBoundary></StrictMode>,
 );

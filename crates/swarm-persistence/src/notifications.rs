@@ -269,6 +269,36 @@ impl TaskStore {
             .map_err(|_| TaskStoreError::IntegrityFailure("notification count overflow".into()))
     }
 
+    /// Queues one explicit generic test for the selected browser device only.
+    ///
+    /// # Errors
+    /// Returns a bounded-capacity or persistence failure.
+    pub fn enqueue_device_test_notification(
+        &self,
+        device_id: PresenceDeviceId,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        if available_delivery_slots(&transaction)? < 1 {
+            return Err(TaskStoreError::NotificationQueueFull);
+        }
+        let operator_id = local_operator_id(&transaction)?;
+        let inserted = transaction.execute(
+            "INSERT INTO notification_deliveries (
+                 operator_id, subscription_id, decision_id, urgency, kind,
+                 state, attempts, available_at, created_at
+             )
+             SELECT operator_id, device_id, NULL, 'time_sensitive', 'test',
+                    'queued', 0, ?3, ?3
+             FROM notification_subscriptions
+             WHERE operator_id = ?1 AND device_id = ?2",
+            params![operator_id.to_string(), device_id.to_string(), now],
+        )?;
+        transaction.commit()?;
+        Ok(inserted == 1)
+    }
+
     /// Recovers crash-interrupted sends for idempotent tagged retry.
     ///
     /// # Errors
@@ -700,6 +730,35 @@ mod tests {
             usize::try_from(MAX_NOTIFICATION_CLAIMS).unwrap()
         );
         assert!(claimed.iter().all(|delivery| delivery.test));
+    }
+
+    #[test]
+    fn explicit_test_targets_only_the_selected_device() {
+        let store = TaskStore::in_memory().unwrap();
+        let selected = PresenceDeviceId::new();
+        let other = PresenceDeviceId::new();
+        store
+            .save_notification_subscription(
+                &subscription(selected, "https://fcm.googleapis.com/fcm/send/selected"),
+                1,
+            )
+            .unwrap();
+        store
+            .save_notification_subscription(
+                &subscription(other, "https://fcm.googleapis.com/fcm/send/other"),
+                2,
+            )
+            .unwrap();
+
+        assert!(store.enqueue_device_test_notification(selected, 3).unwrap());
+        let claimed = store.claim_notification_deliveries(3).unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].subscription_id, selected);
+        assert!(
+            !store
+                .enqueue_device_test_notification(PresenceDeviceId::new(), 4)
+                .unwrap()
+        );
     }
 
     #[test]

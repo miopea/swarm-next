@@ -1,4 +1,5 @@
 export type Health = { status: "ok"; version: string };
+export const BROWSER_SESSION_AUTH = "browser-session-cookie";
 export type SessionSummary = { session_id: string; running: boolean };
 export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
@@ -64,6 +65,13 @@ export type Worker = {
   runtime_error?: string;
 };
 
+export type WorkspaceChoice = {
+  name: string;
+  path: string;
+  kind: "repository" | "folder";
+  configured_worker_id: string | null;
+};
+
 export type Task = {
   id: string;
   hive_id: string;
@@ -125,10 +133,11 @@ export type TaskDraftInput = {
   title: string;
   description: string;
   priority: TaskPriority;
-  workspace: string;
+  worker_id: string;
 };
 
-export type TaskUpdateInput = Partial<TaskDraftInput>;
+export type TaskUpdateInput = Partial<Omit<TaskDraftInput, "worker_id">> & { workspace?: string };
+export type TaskCreateInput = Omit<TaskDraftInput, "worker_id"> & { workspace: string };
 
 export async function fetchControlRoomEvents(
   operatorToken: string,
@@ -219,8 +228,12 @@ export async function removeNotificationSubscription(
   return response.json() as Promise<NotificationSettings>;
 }
 
-export async function sendTestNotification(operatorToken: string): Promise<NotificationSettings> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/notifications/test", { method: "POST" });
+export async function sendTestNotification(operatorToken: string, deviceId: string): Promise<NotificationSettings> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/notifications/subscriptions/${encodeURIComponent(deviceId)}/test`,
+    { method: "POST" },
+  );
   return response.json() as Promise<NotificationSettings>;
 }
 export async function fetchTerminalHostStatus(operatorToken: string): Promise<TerminalHostStatus> {
@@ -254,6 +267,11 @@ export async function fetchSessions(operatorToken: string): Promise<SessionSumma
 export async function fetchWorkers(operatorToken: string): Promise<Worker[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/workers");
   return response.json() as Promise<Worker[]>;
+}
+
+export async function fetchWorkspaces(operatorToken: string): Promise<WorkspaceChoice[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/workspaces");
+  return response.json() as Promise<WorkspaceChoice[]>;
 }
 
 export async function fetchTasks(operatorToken: string): Promise<Task[]> {
@@ -302,7 +320,7 @@ export async function reorderTasks(operatorToken: string, taskIds: string[]): Pr
 
 export async function createTask(
   operatorToken: string,
-  input: TaskDraftInput,
+  input: TaskCreateInput,
 ): Promise<Task> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/tasks", {
     method: "POST",
@@ -376,6 +394,14 @@ export async function createWorker(
   return response.json() as Promise<Worker>;
 }
 
+export async function reorderWorkers(operatorToken: string, workerIds: string[]): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/workers/order", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ worker_ids: workerIds }),
+  });
+}
+
 export async function startWorker(
   operatorToken: string,
   workerId: string,
@@ -421,14 +447,26 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
   );
 }
 
+export async function createBrowserSession(operatorToken: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/auth/session", { method: "POST" });
+}
+
+export async function validateBrowserSession(): Promise<void> {
+  await authenticatedFetch(BROWSER_SESSION_AUTH, "/api/v1/auth/session");
+}
+
+export async function revokeBrowserSession(): Promise<void> {
+  await authenticatedFetch(BROWSER_SESSION_AUTH, "/api/v1/auth/session", { method: "DELETE" });
+}
+
 export async function authenticatedFetch(
   operatorToken: string,
   url: string,
   init: RequestInit = {},
 ): Promise<Response> {
   const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${operatorToken}`);
-  const response = await fetch(url, { ...init, headers, cache: "no-store" });
+  if (operatorToken !== BROWSER_SESSION_AUTH) headers.set("Authorization", `Bearer ${operatorToken}`);
+  const response = await fetch(url, { ...init, headers, cache: "no-store", credentials: "same-origin" });
   if (!response.ok) {
     let detail = "";
     try {

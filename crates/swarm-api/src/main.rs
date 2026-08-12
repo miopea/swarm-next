@@ -15,15 +15,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let terminal_socket = env::var_os("SWARM_TERMINAL_SOCKET")
         .map_or_else(default_terminal_socket_path, PathBuf::from);
     let database_path = database_path_from_env();
+    let workspace_roots = workspace_roots_from_env()?;
     let address = api_address_from_env()?;
     let agent_config_root = agent_config_root_from_env(&database_path);
     let store = TaskStore::open(&database_path)?;
-    store.ensure_queen(queen_workspace_from_env().to_string_lossy().as_ref())?;
+    store.ensure_queen(
+        queen_workspace_from_roots(&workspace_roots)
+            .to_string_lossy()
+            .as_ref(),
+    )?;
     let state = env::var("SWARM_OPERATOR_TOKEN")
         .map_or_else(
             |_| AppState::default(),
             |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
         )
+        .with_attachment_store(attachment_root_from_database(&database_path))
+        .with_workspace_roots(workspace_roots)
         .with_task_store(store)
         .with_notifications(vapid_subject_from_env())?
         .with_agent_configuration(agent_config_root, mcp_url_from_env(address));
@@ -86,11 +93,24 @@ fn vapid_subject_from_env() -> String {
         .unwrap_or_else(|_| "mailto:operator@swarm-next.local".to_owned())
 }
 
-fn queen_workspace_from_env() -> PathBuf {
+fn workspace_roots_from_env() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let roots = env::var_os("SWARM_WORKSPACE_ROOTS").map_or_else(
+        || env::current_dir().map(|directory| vec![directory]),
+        |value| Ok(env::split_paths(&value).collect::<Vec<_>>()),
+    )?;
+    if roots.is_empty() || roots.iter().any(|root| !root.is_absolute()) {
+        return Err("SWARM_WORKSPACE_ROOTS must contain at least one absolute path".into());
+    }
+    Ok(roots)
+}
+
+fn queen_workspace_from_roots(roots: &[PathBuf]) -> PathBuf {
     env::var_os("SWARM_QUEEN_WORKSPACE").map_or_else(
         || {
-            env::var_os("SWARM_WORKSPACE_ROOTS")
-                .map_or_else(|| PathBuf::from("queen"), PathBuf::from)
+            roots
+                .first()
+                .cloned()
+                .unwrap_or_else(|| PathBuf::from("."))
                 .join("queen")
         },
         PathBuf::from,
@@ -125,6 +145,13 @@ fn agent_config_root_from_env(database_path: &std::path::Path) -> PathBuf {
         },
         PathBuf::from,
     )
+}
+
+fn attachment_root_from_database(database_path: &std::path::Path) -> PathBuf {
+    database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("attachments")
 }
 
 fn mcp_url_from_env(address: SocketAddr) -> String {

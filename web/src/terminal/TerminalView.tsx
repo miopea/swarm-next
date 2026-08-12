@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
 
 import { MobileTerminalComposer } from "./MobileTerminalComposer";
 import { TerminalConnection, type TerminalConnectionState } from "./TerminalConnection";
 import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
+import { clipboardImage, terminalAttachmentPaste, terminalTextPaste, uploadTerminalImage } from "./TerminalAttachments";
 
 export interface TerminalViewProps {
   session: { session_id: string; running: boolean };
@@ -26,6 +27,7 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
   }, [operatorToken, session.session_id]);
   const [connectionState, setConnectionState] = useState<TerminalConnectionState>("connecting");
   const [detail, setDetail] = useState<string>();
+  const [attachmentState, setAttachmentState] = useState<"idle" | "uploading" | "ready" | "error">("idle");
 
   useEffect(() => {
     const element = mount.current;
@@ -41,13 +43,43 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
     };
   }, [controller]);
 
+  async function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
+    const image = clipboardImage(event.clipboardData);
+    event.preventDefault();
+    event.stopPropagation();
+    if (!image) {
+      const text = event.clipboardData.getData("text/plain");
+      if (text) controller.sendInput(terminalTextPaste(text));
+      return;
+    }
+    setAttachmentState("uploading");
+    try {
+      const path = await uploadTerminalImage(operatorToken, session.session_id, image);
+      controller.sendInput(terminalAttachmentPaste(path));
+      setAttachmentState("ready");
+    } catch {
+      setAttachmentState("error");
+    }
+  }
+
   return (
-    <div className="terminal-panel">
+    <div
+      className="terminal-panel"
+      onKeyDownCapture={(event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") event.stopPropagation();
+      }}
+      onPasteCapture={(event) => void handlePaste(event)}
+    >
       <div className="terminal-toolbar">
         <div>
           <strong>{session.session_id}</strong>
           <span className={`connection-state connection-${connectionState}`}>{connectionState.replace("_", " ")}</span>
           {detail && <small>{detail}</small>}
+          {attachmentState !== "idle" && (
+            <small className={`attachment-state attachment-${attachmentState}`} role="status">
+              {attachmentState === "uploading" ? "Adding image…" : attachmentState === "ready" ? "Image added · press Enter when ready" : "Image could not be added"}
+            </small>
+          )}
         </div>
         {canStop ? (
           <button className="danger-button" onClick={onStop} disabled={busy}>Stop worker</button>

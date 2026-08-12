@@ -6,6 +6,7 @@ const xterm = vi.hoisted(() => ({
   resizeListener: undefined as ((size: { rows: number; cols: number }) => void) | undefined,
   terminal: undefined as { rows: number; cols: number } | undefined,
   options: undefined as Record<string, unknown> | undefined,
+  focus: vi.fn(),
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
@@ -39,6 +40,7 @@ vi.mock("@xterm/xterm", () => ({
 
     loadAddon(): void {}
     open(): void {}
+    focus(): void { xterm.focus(); }
     reset(): void {}
     resize(columns: number, rows: number): void {
       this.cols = columns;
@@ -82,6 +84,12 @@ test("uses the complete botanical ANSI palette", () => {
   delete document.documentElement.dataset.theme;
 });
 
+test("delegates keyboard focus to xterm's input surface", () => {
+  const surface = new XtermSurface();
+  surface.focus();
+  expect(xterm.focus).toHaveBeenCalledOnce();
+});
+
 test("updates the palette in place when the application theme changes", async () => {
   document.documentElement.dataset.theme = "light";
   const surface = new XtermSurface();
@@ -116,7 +124,7 @@ test("authoritative fit waits until xterm can propose real dimensions", async ()
   xterm.propose
     .mockReset()
     .mockReturnValueOnce(undefined)
-    .mockReturnValueOnce(undefined)
+    .mockReturnValueOnce({ rows: 1, cols: 1 })
     .mockReturnValue({ rows: 38, cols: 132 });
   const surface = new XtermSurface();
   surface.open(document.createElement("div"));
@@ -131,8 +139,36 @@ test("authoritative fit waits until xterm can propose real dimensions", async ()
   expect(xterm.fit).not.toHaveBeenCalled();
 
   frames.shift()?.(16);
+  await Promise.resolve();
+  expect(xterm.fit).not.toHaveBeenCalled();
+
+  frames.shift()?.(32);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
   expect(xterm.terminal).toMatchObject({ rows: 38, cols: 132 });
+});
+
+test("hidden or collapsing layouts cannot resize the canonical terminal", () => {
+  let observed: (() => void) | undefined;
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) { observed = callback; }
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const element = document.createElement("div");
+  document.body.append(element);
+  xterm.propose.mockReset().mockReturnValue({ rows: 1, cols: 1 });
+  const surface = new XtermSurface();
+  surface.open(element);
+  const before = { rows: xterm.terminal?.rows, cols: xterm.terminal?.cols };
+
+  observed?.();
+
+  expect(xterm.terminal).toMatchObject(before);
+  surface.dispose();
+  element.remove();
 });
 
 test("stale queued resize events cannot replace the fitted geometry", () => {

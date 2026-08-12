@@ -1,5 +1,6 @@
 mod agent;
 mod attach;
+mod attachments;
 mod notifications;
 mod terminal_socket;
 
@@ -13,12 +14,15 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State, WebSocketUpgrade},
+    body::Bytes,
+    extract::{DefaultBodyLimit, Path, Query, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
 };
+use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use swarm_application::{ApplicationError, TaskService};
 use swarm_domain::{
@@ -36,7 +40,8 @@ use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
     HistoryCursor, HostClient, HostRequest, HostResponse, JournalLimits,
     MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
-    ProcessResourceSample, TerminalSize, sample_current_process,
+    MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProcessResourceSample, TerminalSize,
+    sample_current_process,
 };
 use tokio::{
     sync::{Mutex, Notify, RwLock, Semaphore},
@@ -45,6 +50,7 @@ use tokio::{
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 use attach::{ATTACH_GRANT_TTL, AttachGrantError, AttachGrantStore, MAX_ATTACH_GRANTS};
+use attachments::{AttachmentError, AttachmentStore, MAX_ATTACHMENT_BYTES};
 use terminal_socket::{
     MAX_WEBSOCKET_MESSAGE_BYTES, TERMINAL_GRANT_PROTOCOL_PREFIX, TERMINAL_WEBSOCKET_PROTOCOL,
     serve_terminal_socket,
@@ -53,6 +59,8 @@ use terminal_socket::{
 const MAX_TERMINAL_WEBSOCKETS: usize = 32;
 const RESOURCE_ADVISORY_BYTES: u64 = 256 * 1024 * 1024;
 const RESOURCE_CRITICAL_BYTES: u64 = 512 * 1024 * 1024;
+const OPERATOR_SESSION_COOKIE: &str = "swarm_next_operator_session";
+const OPERATOR_SESSION_MAX_AGE_SECONDS: u64 = 30 * 24 * 60 * 60;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -68,6 +76,8 @@ pub struct AppState {
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     control_room_notify: Arc<Notify>,
     notification_sender: Option<notifications::NotificationSender>,
+    attachment_store: Option<AttachmentStore>,
+    workspace_roots: Arc<Vec<PathBuf>>,
 }
 
 impl AppState {
@@ -86,12 +96,26 @@ impl AppState {
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             control_room_notify: Arc::new(Notify::new()),
             notification_sender: None,
+            attachment_store: None,
+            workspace_roots: Arc::new(Vec::new()),
         }
     }
 
     #[must_use]
     pub fn with_task_store(mut self, task_store: TaskStore) -> Self {
         self.task_store = Some(task_store);
+        self
+    }
+
+    #[must_use]
+    pub fn with_attachment_store(mut self, root: PathBuf) -> Self {
+        self.attachment_store = Some(AttachmentStore::new(root));
+        self
+    }
+
+    #[must_use]
+    pub fn with_workspace_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.workspace_roots = Arc::new(roots);
         self
     }
 
@@ -571,6 +595,14 @@ struct WorkerView {
     runtime_error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct WorkspaceView {
+    name: String,
+    path: String,
+    kind: &'static str,
+    configured_worker_id: Option<WorkerId>,
+}
+
 fn worker_view(profile: WorkerProfile, running: bool, runtime_error: Option<String>) -> WorkerView {
     let engagement_expires_at = profile.engagement_expires_at;
     let attention_state = if runtime_error.is_some() {
@@ -660,6 +692,11 @@ struct TaskActivityQuery {
 #[derive(Debug, Deserialize)]
 struct ReorderTasksRequest {
     task_ids: Vec<TaskId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReorderWorkersRequest {
+    worker_ids: Vec<WorkerId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -762,6 +799,12 @@ fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/mcp", post(mcp))
         .route("/health", get(health))
+        .route(
+            "/api/v1/auth/session",
+            get(get_browser_session)
+                .post(create_browser_session)
+                .delete(delete_browser_session),
+        )
         .route("/api/v1/hive", get(local_hive))
         .route(
             "/api/v1/presence",
@@ -779,7 +822,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/notifications/subscriptions/{device_id}",
             put(save_notification_subscription).delete(remove_notification_subscription),
         )
-        .route("/api/v1/notifications/test", post(test_notification))
+        .route(
+            "/api/v1/notifications/subscriptions/{device_id}/test",
+            post(test_notification),
+        )
         .route("/api/v1/control-room/events", get(control_room_events))
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/resources", get(runtime_resources))
@@ -796,6 +842,8 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/tasks/{task_id}/state", patch(transition_task))
         .route("/api/v1/tasks/{task_id}/assignment", put(assign_task))
         .route("/api/v1/workers", get(list_workers).post(create_worker))
+        .route("/api/v1/workers/order", put(reorder_workers))
+        .route("/api/v1/workspaces", get(list_workspaces))
         .route("/api/v1/workers/{worker_id}/start", post(start_worker))
         .route("/api/v1/workers/{worker_id}/session", delete(stop_worker))
         .route(
@@ -827,6 +875,10 @@ fn api_router(state: AppState) -> Router {
             post(write_input),
         )
         .route(
+            "/api/v1/terminal/sessions/{session_id}/attachments",
+            post(upload_terminal_attachment).layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES)),
+        )
+        .route(
             "/api/v1/terminal/sessions/{session_id}/size",
             put(resize_terminal),
         )
@@ -854,6 +906,50 @@ async fn health() -> Json<HealthResponse> {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
     })
+}
+
+async fn get_browser_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        StatusCode::NO_CONTENT,
+    )
+        .into_response())
+}
+
+async fn create_browser_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let cookie = browser_session_set_cookie(&state, &headers)?;
+    Ok((
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (header::SET_COOKIE, cookie),
+        ],
+        StatusCode::NO_CONTENT,
+    )
+        .into_response())
+}
+
+async fn delete_browser_session() -> Response {
+    (
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (
+                header::SET_COOKIE,
+                HeaderValue::from_static(
+                    "swarm_next_operator_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+                ),
+            ),
+        ],
+        StatusCode::NO_CONTENT,
+    )
+        .into_response()
 }
 
 async fn local_hive(
@@ -1035,11 +1131,26 @@ async fn remove_notification_subscription(
 async fn test_notification(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Path(device_id): Path<String>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    task_store(&state)?
-        .enqueue_test_notifications(unix_timestamp())
+    let device_id = PresenceDeviceId::from_str(&device_id).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_presence_device_id",
+            "notification device ID must be a UUID",
+        )
+    })?;
+    let queued = task_store(&state)?
+        .enqueue_device_test_notification(device_id, unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
+    if !queued {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "notification_device_not_found",
+            "this browser is not registered for notifications",
+        ));
+    }
     schedule_notification_delivery(&state);
     let settings = task_store(&state)?
         .notification_settings()
@@ -1348,16 +1459,111 @@ async fn list_workers(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(workers)).into_response())
 }
 
+async fn list_workspaces(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let profiles = task_store(&state)?
+        .list_worker_profiles()
+        .map_err(|error| task_store_error(&error))?;
+    let workspaces = workspace_catalog(&state, &profiles).await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(workspaces)).into_response())
+}
+
+async fn workspace_catalog(
+    state: &AppState,
+    profiles: &[WorkerProfile],
+) -> Result<Vec<WorkspaceView>, ApiError> {
+    let mut workspaces = Vec::new();
+    for root in state.workspace_roots.iter() {
+        let mut entries = tokio::fs::read_dir(root).await.map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "workspace_catalog_unavailable",
+                "configured repository catalog is unavailable",
+            )
+        })?;
+        while let Some(entry) = entries.next_entry().await.map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "workspace_catalog_unavailable",
+                "configured repository catalog could not be read",
+            )
+        })? {
+            if workspaces.len() >= 256 {
+                break;
+            }
+            let file_type = entry.file_type().await.map_err(|_| {
+                ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "workspace_catalog_unavailable",
+                    "configured repository catalog could not be inspected",
+                )
+            })?;
+            if !file_type.is_dir() || file_type.is_symlink() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || name == "queen" {
+                continue;
+            }
+            let path = entry.path();
+            let path_text = path.to_string_lossy().into_owned();
+            let configured_worker_id = profiles
+                .iter()
+                .find(|profile| profile.workspace == path_text)
+                .map(|profile| profile.id);
+            let kind = if tokio::fs::try_exists(path.join(".git"))
+                .await
+                .unwrap_or(false)
+            {
+                "repository"
+            } else {
+                "folder"
+            };
+            workspaces.push(WorkspaceView {
+                name,
+                path: path_text,
+                kind,
+                configured_worker_id,
+            });
+        }
+    }
+    workspaces.sort_by_key(|workspace| workspace.name.to_lowercase());
+    Ok(workspaces)
+}
+
 async fn create_worker(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(request): Json<CreateWorkerRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let position = task_store(&state)?
+    let profiles = task_store(&state)?
         .list_worker_profiles()
-        .map_err(|error| task_store_error(&error))?
-        .into_iter()
+        .map_err(|error| task_store_error(&error))?;
+    let workspace = workspace_catalog(&state, &profiles)
+        .await?
+        .iter()
+        .find(|workspace| workspace.path == request.workspace)
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unknown_workspace",
+                "choose a repository from the configured catalog",
+            )
+        })?;
+    if workspace.configured_worker_id.is_some() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "workspace_already_assigned",
+            "that repository already belongs to a worker",
+        ));
+    }
+    let position = profiles
+        .iter()
         .map(|profile| profile.position)
         .max()
         .unwrap_or(0)
@@ -1373,6 +1579,19 @@ async fn create_worker(
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok((StatusCode::CREATED, Json(worker_view(profile, false, None))).into_response())
+}
+
+async fn reorder_workers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<ReorderWorkersRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    task_store(&state)?
+        .reorder_workers(&request.worker_ids)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 async fn start_worker(
@@ -1424,7 +1643,21 @@ async fn list_sessions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<HostResponse>, ApiError> {
-    authorized_request(&state, &headers, HostRequest::ListSessions).await
+    authorize(&state, &headers)?;
+    let response = request_host(&state, HostRequest::ListSessions).await?;
+    let HostResponse::Sessions { sessions } = response else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected response",
+        ));
+    };
+    Ok(Json(HostResponse::Sessions {
+        sessions: sessions
+            .into_iter()
+            .filter(|session| session.running)
+            .collect(),
+    }))
 }
 
 async fn history_diagnostics(
@@ -1773,6 +2006,92 @@ async fn attach_terminal(
         }))
 }
 
+#[derive(Serialize)]
+struct TerminalAttachmentResponse {
+    path: String,
+}
+
+async fn upload_terminal_attachment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let session_id = parse_session_id(&session_id)?;
+    let media_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let store = state.attachment_store.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "attachment_store_unconfigured",
+            "private attachment storage is not configured",
+        )
+    })?;
+    let HostResponse::Sessions { sessions } =
+        request_host(&state, HostRequest::ListSessions).await?
+    else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "terminal_protocol_error",
+            "terminal host returned an unexpected response",
+        ));
+    };
+    if !sessions
+        .iter()
+        .any(|session| session.session_id == session_id)
+    {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "terminal_session_not_found",
+            "terminal session does not exist",
+        ));
+    }
+    let path = store
+        .save(media_type, &body)
+        .await
+        .map_err(attachment_error)?;
+    let path = path.to_str().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "attachment_path_unavailable",
+            "private attachment path is not valid UTF-8",
+        )
+    })?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(TerminalAttachmentResponse { path: path.into() }),
+    )
+        .into_response())
+}
+
+fn attachment_error(error: AttachmentError) -> ApiError {
+    match error {
+        AttachmentError::UnsupportedType | AttachmentError::InvalidSignature => ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_attachment_type",
+            error.to_string(),
+        ),
+        AttachmentError::InvalidSize => ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_attachment_size",
+            error.to_string(),
+        ),
+        AttachmentError::Capacity => ApiError::new(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "attachment_capacity_reached",
+            error.to_string(),
+        ),
+        AttachmentError::Unavailable => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "attachment_store_unavailable",
+            error.to_string(),
+        ),
+    }
+}
+
 async fn authorized_request(
     state: &AppState,
     headers: &HeaderMap,
@@ -1904,7 +2223,7 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "task_outcome_queue_full",
             error.to_string(),
         ),
-        TaskStoreError::InvalidTaskOrder => ApiError::new(
+        TaskStoreError::InvalidTaskOrder | TaskStoreError::InvalidWorkerOrder => ApiError::new(
             StatusCode::CONFLICT,
             "task_order_conflict",
             error.to_string(),
@@ -2010,21 +2329,93 @@ fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
             "operator authentication is not configured",
         )
     })?;
-    let presented = headers
+    let presented_bearer = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .unwrap_or_default();
-    let matches = presented.len() == expected.len()
-        && bool::from(presented.as_bytes().ct_eq(expected.as_bytes()));
-    if !matches {
+    let expected_session = browser_session_value(expected);
+    let presented_session = cookie_value(headers, OPERATOR_SESSION_COOKIE).unwrap_or_default();
+    let bearer_matches = presented_bearer.len() == expected.len()
+        && bool::from(presented_bearer.as_bytes().ct_eq(expected.as_bytes()));
+    let session_matches = presented_session.len() == expected_session.len()
+        && bool::from(
+            presented_session
+                .as_bytes()
+                .ct_eq(expected_session.as_bytes()),
+        );
+    if !bearer_matches && !session_matches {
         return Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
             "invalid_operator_token",
-            "a valid operator bearer token is required",
+            "a valid operator session is required",
         ));
     }
     Ok(())
+}
+
+fn browser_session_set_cookie(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<HeaderValue, ApiError> {
+    let expected = state.operator_token.as_deref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "operator_auth_unconfigured",
+            "operator authentication is not configured",
+        )
+    })?;
+    let secure = if request_is_secure(headers) {
+        "; Secure"
+    } else {
+        ""
+    };
+    HeaderValue::from_str(&format!(
+        "{OPERATOR_SESSION_COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={OPERATOR_SESSION_MAX_AGE_SECONDS}{secure}",
+        browser_session_value(expected),
+    ))
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "operator_session_unavailable",
+            "browser session could not be created",
+        )
+    })
+}
+
+fn browser_session_value(operator_token: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"swarm-next.operator-session.v1\0");
+    digest.update(operator_token.as_bytes());
+    Base64UrlUnpadded::encode_string(&digest.finalize())
+}
+
+fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .map(str::trim)
+        .find_map(|cookie| cookie.strip_prefix(name)?.strip_prefix('='))
+}
+
+fn request_is_secure(headers: &HeaderMap) -> bool {
+    if headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("https"))
+    {
+        return true;
+    }
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_none_or(|host| {
+            !host.starts_with("localhost")
+                && !host.starts_with("127.0.0.1")
+                && !host.starts_with("[::1]")
+        })
 }
 
 fn parse_session_id(value: &str) -> Result<WorkerSessionId, ApiError> {
@@ -2068,8 +2459,8 @@ fn parse_decision_id(value: &str) -> Result<DecisionRequestId, ApiError> {
 
 fn require_valid_size(rows: u16, columns: u16) -> Result<(), ApiError> {
     let cells = usize::from(rows) * usize::from(columns);
-    if rows == 0
-        || columns == 0
+    if rows < MIN_TERMINAL_ROWS
+        || columns < MIN_TERMINAL_COLUMNS
         || rows > MAX_TERMINAL_ROWS
         || columns > MAX_TERMINAL_COLUMNS
         || cells > MAX_TERMINAL_CELLS
@@ -2078,7 +2469,8 @@ fn require_valid_size(rows: u16, columns: u16) -> Result<(), ApiError> {
             StatusCode::BAD_REQUEST,
             "invalid_terminal_size",
             format!(
-                "terminal dimensions must be non-zero and within {MAX_TERMINAL_ROWS} rows, \
+                "terminal dimensions must be at least {MIN_TERMINAL_ROWS} rows and \
+                 {MIN_TERMINAL_COLUMNS} columns, and within {MAX_TERMINAL_ROWS} rows, \
                  {MAX_TERMINAL_COLUMNS} columns, and {MAX_TERMINAL_CELLS} cells"
             ),
         ));
@@ -3288,6 +3680,39 @@ mod tests {
         let _ = server_task.await;
     }
 
+    #[tokio::test]
+    async fn active_session_list_excludes_a_completed_provider_session() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec!["-lc".into(), "exit 0".into()],
+            working_directory: workspace,
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while session.is_running().unwrap() {
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let state = AppState::default().with_terminal_host(HostClient::new(&socket), "secret");
+
+        let response = authorized_get(router(state), "/api/v1/terminal/sessions").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = response_json(response).await;
+        assert_eq!(response["sessions"], serde_json::json!([]));
+
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
     async fn task_assignment_requires_and_releases_a_real_worker_session() {
@@ -3634,6 +4059,134 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn workspace_catalog_is_bounded_friendly_and_marks_owned_repositories() {
+        let root = TempDir::new().unwrap();
+        let daisy = root.path().join("daisy-repo");
+        let open = root.path().join("open-repo");
+        std::fs::create_dir_all(daisy.join(".git")).unwrap();
+        std::fs::create_dir_all(&open).unwrap();
+        std::fs::create_dir_all(root.path().join(".hidden")).unwrap();
+        std::fs::create_dir_all(root.path().join("queen")).unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Daisy",
+                ProviderKind::ClaudeCode,
+                daisy.to_string_lossy().as_ref(),
+                false,
+                1,
+            )
+            .unwrap();
+        let state = AppState::default()
+            .with_task_store(store.clone())
+            .with_workspace_roots(vec![root.path().to_path_buf()]);
+
+        let catalog = workspace_catalog(&state, &store.list_worker_profiles().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(catalog.len(), 2);
+        assert_eq!(catalog[0].name, "daisy-repo");
+        assert_eq!(catalog[0].kind, "repository");
+        assert_eq!(catalog[0].configured_worker_id, Some(worker.id));
+        assert_eq!(catalog[1].name, "open-repo");
+        assert_eq!(catalog[1].configured_worker_id, None);
+    }
+
+    #[tokio::test]
+    async fn terminal_attachment_upload_never_bypasses_operator_authentication() {
+        let attachments = TempDir::new().unwrap();
+        let response = router(
+            AppState::default()
+                .with_terminal_host(
+                    HostClient::new(attachments.path().join("absent.sock")),
+                    "secret",
+                )
+                .with_attachment_store(attachments.path().to_path_buf()),
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/terminal/sessions/{}/attachments",
+                    WorkerSessionId::new()
+                ))
+                .header(header::CONTENT_TYPE, "image/png")
+                .body(Body::from(b"\x89PNG\r\n\x1a\nprivate".as_slice()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn browser_session_survives_without_exposing_the_operator_token_to_javascript() {
+        let runtime = TempDir::new().unwrap();
+        let state = AppState::default().with_terminal_host(
+            HostClient::new(runtime.path().join("absent.sock")),
+            "durable-secret",
+        );
+        let app = router(state);
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/session")
+                    .header(header::AUTHORIZATION, "Bearer durable-secret")
+                    .header("x-forwarded-proto", "https")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::NO_CONTENT);
+        let set_cookie = created.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(set_cookie.contains("HttpOnly"));
+        assert!(set_cookie.contains("SameSite=Strict"));
+        assert!(set_cookie.contains("Max-Age=2592000"));
+        assert!(set_cookie.contains("Secure"));
+        assert!(!set_cookie.contains("durable-secret"));
+        let cookie = set_cookie.split(';').next().unwrap();
+
+        let restored = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/auth/session")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(restored.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn locking_clears_the_browser_session_without_requiring_a_live_session() {
+        let response = router(AppState::default())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/v1/auth/session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(
+            response.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .contains("Max-Age=0")
+        );
     }
 
     async fn response_json(response: Response) -> Value {

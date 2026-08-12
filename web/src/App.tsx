@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent, type Keyb
 
 import {
   assignTask,
+  BROWSER_SESSION_AUTH,
+  createBrowserSession,
   createTask,
   fetchDecisions,
   resolveDecision,
@@ -13,13 +15,17 @@ import {
   fetchTaskActivity,
   fetchTasks,
   fetchWorkers,
+  fetchWorkspaces,
   reorderTasks,
+  reorderWorkers,
+  revokeBrowserSession,
   setManualPresence,
   startWorker,
   stopClaudeSession,
   stopWorker,
   transitionTask,
   updateTask,
+  validateBrowserSession,
   type ControlRoomEvent,
   type DecisionRequest,
   type Health,
@@ -34,6 +40,7 @@ import {
   type TaskState,
   type TaskUpdateInput,
   type Worker,
+  type WorkspaceChoice,
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
 import DecisionInbox from "./decisions/DecisionInbox";
@@ -50,7 +57,6 @@ import WorkerRosterItem from "./workers/WorkerRosterItem";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
-const OPERATOR_TOKEN_STORAGE_KEY = "swarm-next.operator-token.v1";
 const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
@@ -63,12 +69,10 @@ export function App() {
   const [hiveIdentity, setHiveIdentity] = useState<HiveIdentity>();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceChoice[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>();
-  const [workerNameDraft, setWorkerNameDraft] = useState("");
   const [decisions, setDecisions] = useState<DecisionRequest[]>([]);
-  const [workspace, setWorkspace] = useState("");
-  const [showWorkerForm, setShowWorkerForm] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [surface, setSurface] = useState<Surface>(readSavedSurface);
   const [operationError, setOperationError] = useState<string>();
@@ -123,31 +127,28 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const savedToken = readSavedOperatorToken();
-    if (!savedToken) return;
     let cancelled = false;
-    setBusy(true);
-    void loadControlRoom(savedToken)
-      .then(({ hive, sessions: nextSessions, workers: nextWorkers, tasks: nextTasks, decisions: nextDecisions }) => {
+    void validateBrowserSession()
+      .then(() => loadControlRoom(BROWSER_SESSION_AUTH))
+      .then(({ hive, sessions: nextSessions, workers: nextWorkers, workspaces: nextWorkspaces, tasks: nextTasks, decisions: nextDecisions }) => {
         if (cancelled) return;
-        terminalWorkspace.authenticate(savedToken);
-        setOperatorToken(savedToken);
+        terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
+        setOperatorToken(BROWSER_SESSION_AUTH);
         setHiveIdentity(hive);
         setSessions(nextSessions);
         setWorkers(nextWorkers);
+        setWorkspaces(nextWorkspaces);
         setTasks(nextTasks);
         setActiveSessionId(preferredSessionId(nextWorkers, nextSessions));
         setDecisions(nextDecisions);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
-        clearSavedOperatorToken();
         terminalWorkspace.logout();
-        setOperationError(error instanceof Error ? error.message : "Saved authentication is no longer valid");
+        if (!(error instanceof Error && error.message.includes("401"))) {
+          setOperationError(error instanceof Error ? error.message : "Saved authentication could not be restored");
+        }
       })
-      .finally(() => {
-        if (!cancelled) setBusy(false);
-      });
     return () => { cancelled = true; };
   }, []);
 
@@ -174,6 +175,7 @@ export function App() {
         setHiveIdentity(controlRoom.hive);
         setSessions(controlRoom.sessions);
         setWorkers(controlRoom.workers);
+        setWorkspaces(controlRoom.workspaces);
         setTasks(controlRoom.tasks);
         setDecisions(controlRoom.decisions);
         if (refreshedPresence) setPresence(refreshedPresence);
@@ -201,18 +203,18 @@ export function App() {
     event.preventDefault();
     if (!tokenDraft) return;
     await perform(async () => {
-      const controlRoom = await loadControlRoom(tokenDraft);
-      terminalWorkspace.authenticate(tokenDraft);
-      setOperatorToken(tokenDraft);
+      await createBrowserSession(tokenDraft);
+      const controlRoom = await loadControlRoom(BROWSER_SESSION_AUTH);
+      terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
+      setOperatorToken(BROWSER_SESSION_AUTH);
       setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
+      setWorkspaces(controlRoom.workspaces);
       setTasks(controlRoom.tasks);
       setActiveSessionId((current) => current ?? preferredSessionId(controlRoom.workers, controlRoom.sessions));
       setDecisions(controlRoom.decisions);
-      const tokenWasSaved = saveOperatorToken(tokenDraft);
       setTokenDraft("");
-      if (!tokenWasSaved) throw new Error("Unlocked, but this browser blocked tab storage; refreshing will lock Swarm again.");
     });
   }
 
@@ -222,10 +224,10 @@ export function App() {
   }
 
   async function enableLockDetection() {
-    const enabled = await presenceController.enableLockDetection();
-    if (!enabled && lockDetectionState !== "denied") {
-      setOperationError("This browser did not grant operating-system lock detection. Presence still uses activity, visibility, and expiry.");
-    }
+    await perform(async () => {
+      const enabled = await presenceController.enableLockDetection();
+      if (!enabled) throw new Error("Computer lock detection did not start. Presence still uses activity, visibility, and expiry.");
+    });
   }
   async function changeNotificationPolicy(policy: NotificationPolicy) {
     await perform(() => notificationController.changePolicy(policy));
@@ -252,6 +254,7 @@ export function App() {
       setHiveIdentity(controlRoom.hive);
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
+      setWorkspaces(controlRoom.workspaces);
       setTasks(controlRoom.tasks);
       setDecisions(controlRoom.decisions);
       setActiveSessionId((current) =>
@@ -262,35 +265,36 @@ export function App() {
     });
   }
 
-  async function startSession(event: FormEvent) {
-    event.preventDefault();
-    if (!operatorToken || !workerNameDraft.trim() || !workspace.trim()) return;
+  async function configureWorker(name: string, workspace: string) {
+    if (!operatorToken) return;
     await perform(async () => {
-      const profile = await createWorker(operatorToken, {
-        name: workerNameDraft,
-        workspace,
-      });
-      const runningWorker = await startWorker(operatorToken, profile.id);
-      const sessionId = requireActiveSession(runningWorker);
+      await createWorker(operatorToken, { name, workspace });
       const controlRoom = await loadControlRoom(operatorToken);
-      setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
-      setActiveSessionId(sessionId);
-      setWorkerNameDraft("");
-      setWorkspace("");
-      setShowWorkerForm(false);
-      setSurface("workers");
+      setWorkspaces(controlRoom.workspaces);
+    });
+  }
+
+  async function reorderWorkerProfiles(workerIds: string[]) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await reorderWorkers(operatorToken, workerIds);
+      const order = new Map(workerIds.map((workerId, index) => [workerId, index]));
+      setWorkers((current) => [...current].sort((left, right) => {
+        if (left.role === "queen") return -1;
+        if (right.role === "queen") return 1;
+        return (order.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(right.id) ?? Number.MAX_SAFE_INTEGER);
+      }));
     });
   }
 
   async function startWorkerForTask(task: Task) {
     if (!operatorToken) return;
+    let startedSessionId: string | undefined;
     await perform(async () => {
-      const profile = await createWorker(operatorToken, {
-        name: availableTaskWorkerName(task.title, workers),
-        workspace: task.workspace,
-      });
-      const runningWorker = await startWorker(operatorToken, profile.id);
+      const profile = workers.find((worker) => worker.workspace === task.workspace && worker.role !== "queen");
+      if (!profile) throw new Error("Choose a configured worker for this task before starting it.");
+      const runningWorker = profile.running ? profile : await startWorker(operatorToken, profile.id);
       const sessionId = requireActiveSession(runningWorker);
       await assignTask(operatorToken, task.id, sessionId);
       await transitionTask(operatorToken, task.id, "active");
@@ -301,7 +305,9 @@ export function App() {
       setTasks(controlRoom.tasks);
       setActiveSessionId(sessionId);
       setSurface("workers");
+      startedSessionId = sessionId;
     });
+    if (startedSessionId) focusTerminalAfterRender(startedSessionId);
   }
 
   async function stopSession(sessionId: string) {
@@ -322,6 +328,7 @@ export function App() {
 
   async function startExistingWorker(profile: Worker) {
     if (!operatorToken) return;
+    let startedSessionId: string | undefined;
     await perform(async () => {
       const runningWorker = await startWorker(operatorToken, profile.id);
       const sessionId = requireActiveSession(runningWorker);
@@ -332,13 +339,23 @@ export function App() {
       setTasks(controlRoom.tasks);
       setActiveSessionId(sessionId);
       setSurface("workers");
+      startedSessionId = sessionId;
     });
+    if (startedSessionId) focusTerminalAfterRender(startedSessionId);
   }
 
   async function addTask(input: TaskDraftInput) {
     if (!operatorToken) return;
     await perform(async () => {
-      const task = await createTask(operatorToken, input);
+      const worker = workers.find((candidate) => candidate.id === input.worker_id && candidate.role !== "queen");
+      if (!worker) throw new Error("Choose a configured worker for this task.");
+      let task = await createTask(operatorToken, {
+        title: input.title,
+        description: input.description,
+        priority: input.priority,
+        workspace: worker.workspace,
+      });
+      if (worker.active_session_id) task = await assignTask(operatorToken, task.id, worker.active_session_id);
       setTasks((current) => [task, ...current]);
     });
   }
@@ -365,9 +382,15 @@ export function App() {
     });
   }
 
-  async function setTaskWorker(task: Task, sessionId: string) {
+  async function setTaskWorker(task: Task, workerId: string) {
     if (!operatorToken) return;
-    await perform(async () => replaceTask(await assignTask(operatorToken, task.id, sessionId)));
+    await perform(async () => {
+      const worker = workers.find((candidate) => candidate.id === workerId && candidate.role !== "queen");
+      if (!worker) throw new Error("That worker is no longer configured.");
+      let updated = await updateTask(operatorToken, task.id, { workspace: worker.workspace });
+      if (worker.active_session_id) updated = await assignTask(operatorToken, task.id, worker.active_session_id);
+      replaceTask(updated);
+    });
   }
 
   async function reorderOpenTasks(taskIds: string[]) {
@@ -413,12 +436,30 @@ export function App() {
     const direction = event.key === "ArrowDown" ? 1 : -1;
     const nextIndex = currentIndex < 0 ? 0 : (currentIndex + direction + running.length) % running.length;
     const nextSessionId = running[nextIndex]?.active_session_id;
-    if (nextSessionId) setActiveSessionId(nextSessionId);
-    setSurface("workers");
+    if (nextSessionId) openWorker(nextSessionId);
   }
 
-  function logout() {
-    clearSavedOperatorToken();
+  function openWorker(sessionId: string) {
+    setActiveSessionId(sessionId);
+    setSurface("workers");
+    terminalWorkspace.focusSession(sessionId, shouldFocusTerminalInput());
+  }
+
+  function focusTerminalAfterRender(sessionId: string) {
+    const input = shouldFocusTerminalInput();
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => terminalWorkspace.focusSession(sessionId, input));
+    });
+  }
+
+  async function logout() {
+    await perform(async () => {
+      await revokeBrowserSession();
+      lockInterface();
+    });
+  }
+
+  function lockInterface() {
     terminalWorkspace.logout();
     setOperatorToken(undefined);
     setHiveIdentity(undefined);
@@ -436,16 +477,8 @@ export function App() {
   const activeWorker = workers.find((worker) => worker.active_session_id === activeSessionId);
   const openTaskCount = tasks.filter((task) => task.state !== "completed").length;
   const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
-  const workerNames = useMemo(
-    () => new Map(
-      workers
-        .filter((worker) => worker.active_session_id)
-        .map((worker) => [worker.active_session_id as string, worker.name]),
-    ),
-    [workers],
-  );
   const orphanSessions = useMemo(
-    () => sessions.filter((session) => !workers.some((worker) => worker.active_session_id === session.session_id)),
+    () => sessions.filter((session) => session.running && !workers.some((worker) => worker.active_session_id === session.session_id)),
     [sessions, workers],
   );
   const tasksBySession = useMemo(
@@ -453,6 +486,14 @@ export function App() {
     [tasks],
   );
   const activeTask = activeSession ? tasksBySession.get(activeSession.session_id) : undefined;
+
+  useEffect(() => {
+    if (surface !== "workers" || !activeSessionId) return;
+    const frame = requestAnimationFrame(() => {
+      terminalWorkspace.focusSession(activeSessionId, shouldFocusTerminalInput());
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [surface, activeSessionId]);
 
   return (
     <main className="app-shell" onKeyDown={handleShortcut}>
@@ -498,7 +539,7 @@ export function App() {
                         selected={sessionId === activeSessionId}
                         detail={worker.runtime_error ?? task?.title ?? (worker.role === "queen" ? "Always-active command terminal" : worker.running ? "Unassigned session" : "Stopped · click to start")}
                         busy={busy}
-                        onOpen={() => sessionId && setActiveSessionId(sessionId)}
+                        onOpen={() => sessionId && openWorker(sessionId)}
                         onStart={() => void startExistingWorker(worker)}
                         onStop={() => sessionId && void stopSession(sessionId)}
                       />
@@ -507,7 +548,7 @@ export function App() {
                   {orphanSessions.map((session) => {
                     const task = tasksBySession.get(session.session_id);
                     return (
-                      <button className="worker-button" aria-current={session.session_id === activeSessionId ? "page" : undefined} key={session.session_id} onClick={() => setActiveSessionId(session.session_id)}>
+                      <button className="worker-button" aria-current={session.session_id === activeSessionId ? "page" : undefined} key={session.session_id} onClick={() => openWorker(session.session_id)}>
                         <span className="worker-avatar"><BeeMascot expression={session.running ? "focused" : "sleeping"} /></span>
                         <span className="worker-copy">
                           <strong>{workerName(session.session_id)}</strong>
@@ -523,21 +564,7 @@ export function App() {
 
             {surface === "workers" && (
               <div className="start-worker-disclosure">
-                <button
-                  type="button"
-                  aria-expanded={showWorkerForm}
-                  aria-controls="start-worker-form"
-                  onClick={() => setShowWorkerForm((current) => !current)}
-                >
-                  {showWorkerForm ? "Hide worker form" : "Add worker"}
-                </button>
-                <form id="start-worker-form" className={showWorkerForm ? "start-worker mobile-expanded" : "start-worker"} onSubmit={(event) => void startSession(event)}>
-                  <label htmlFor="worker-name">Add a named worker</label>
-                  <input id="worker-name" value={workerNameDraft} onChange={(event) => setWorkerNameDraft(event.target.value)} placeholder="Worker name" maxLength={80} />
-                  <label className="sr-only" htmlFor="workspace">Worker workspace</label>
-                  <input id="workspace" value={workspace} onChange={(event) => setWorkspace(event.target.value)} placeholder="/workspace/path" />
-                  <button disabled={busy || !workerNameDraft.trim() || !workspace.trim()}>Create and start</button>
-                </form>
+                <button type="button" onClick={() => setSurface("settings")}>Manage workers</button>
               </div>
             )}
           </>
@@ -555,10 +582,10 @@ export function App() {
           <div className="header-actions">
             {busy && <span className="saving-state">Saving…</span>}
             {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
-            {operatorToken && <button className="icon-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
+            {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
             <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => setColorTheme((current) => current === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
-            {operatorToken && <button className="icon-button" aria-label="Refresh control room" onClick={() => void refreshControlRoom()} disabled={busy}><RefreshIcon /></button>}
-            {operatorToken && <button className="secondary-button" onClick={logout}>Lock</button>}
+            {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" onClick={() => void refreshControlRoom()} disabled={busy}><RefreshIcon /></button>}
+            {operatorToken && <button className="secondary-button" onClick={() => void logout()} disabled={busy}>Lock</button>}
           </div>
         </header>
         {operationError && <div className="operation-error" role="alert">{operationError}</div>}
@@ -581,7 +608,7 @@ export function App() {
             <div className="unlock-symbol"><BeeMascot expression="available" /></div>
             <p className="eyebrow">Private local runtime</p>
             <h3>Welcome back</h3>
-            <p>Unlock this control room. Your credential stays in this browser tab and terminal access uses one-time grants.</p>
+            <p>Unlock this trusted device once. Swarm keeps the credential out of browser storage and terminal access uses one-time grants.</p>
             <label htmlFor="operator-token">Operator token</label>
             <input id="operator-token" type="password" autoComplete="off" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} />
             <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
@@ -589,9 +616,10 @@ export function App() {
         ) : surface === "decisions" ? (
           <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} sessions={sessions} workerNames={workerNames} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
+          <TaskBoard tasks={tasks} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
+            busy={busy}
             colorTheme={colorTheme}
             hiveIdentity={hiveIdentity}
             liveFeedState={liveFeedState}
@@ -604,6 +632,7 @@ export function App() {
             notificationState={notificationState}
             sessions={sessions}
             workers={workers}
+            workspaces={workspaces}
             onThemeChange={setColorTheme}
             onPresenceChange={changePresenceMode}
             onEnableLockDetection={enableLockDetection}
@@ -611,6 +640,8 @@ export function App() {
             onEnableNotifications={enableNotifications}
             onDisableNotifications={disableNotifications}
             onTestNotification={testNotification}
+            onCreateWorker={configureWorker}
+            onReorderWorkers={reorderWorkerProfiles}
           />
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}`}>
@@ -627,14 +658,15 @@ export function App() {
 }
 
 async function loadControlRoom(operatorToken: string) {
-  const [hive, sessions, workers, tasks, decisions] = await Promise.all([
+  const [hive, sessions, workers, workspaces, tasks, decisions] = await Promise.all([
     fetchHive(operatorToken),
     fetchSessions(operatorToken),
     fetchWorkers(operatorToken),
+    fetchWorkspaces(operatorToken),
     fetchTasks(operatorToken),
     fetchDecisions(operatorToken),
   ]);
-  return { hive, sessions, workers, tasks, decisions };
+  return { hive, sessions, workers, workspaces, tasks, decisions };
 }
 
 function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): string | undefined {
@@ -649,19 +681,6 @@ function requireActiveSession(worker: Worker): string {
   if (!worker.active_session_id) throw new Error(`${worker.name} did not receive a terminal session`);
   return worker.active_session_id;
 }
-
-function availableTaskWorkerName(title: string, workers: Worker[]): string {
-  const base = title.trim().slice(0, 72) || "Task worker";
-  const names = new Set(workers.map((worker) => worker.name.toLocaleLowerCase()));
-  if (!names.has(base.toLocaleLowerCase())) return base;
-  let suffix = 2;
-  while (names.has(`${base} ${suffix}`.toLocaleLowerCase())) suffix += 1;
-  return `${base} ${suffix}`.slice(0, 80);
-}
-
-function readSavedOperatorToken(): string | undefined { try { return window.sessionStorage.getItem(OPERATOR_TOKEN_STORAGE_KEY) ?? undefined; } catch { return undefined; } }
-function saveOperatorToken(operatorToken: string): boolean { try { window.sessionStorage.setItem(OPERATOR_TOKEN_STORAGE_KEY, operatorToken); return true; } catch { return false; } }
-function clearSavedOperatorToken() { try { window.sessionStorage.removeItem(OPERATOR_TOKEN_STORAGE_KEY); } catch { /* Locking memory is sufficient when browser storage is unavailable. */ } }
 
 function presenceModeLabel(mode: PresenceMode) {
   if (mode === "at_hive") return "At Hive";
@@ -685,4 +704,8 @@ function ThemeIcon({ theme }: { theme: ColorTheme }) { return theme === "light" 
 
 function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || Boolean(target.closest("[role='menu']")));
+}
+
+function shouldFocusTerminalInput(): boolean {
+  return !window.matchMedia?.("(pointer: coarse)").matches;
 }

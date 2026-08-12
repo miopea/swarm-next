@@ -1,3 +1,5 @@
+import { BROWSER_SESSION_AUTH } from "../api";
+
 export type TerminalConnectionState =
   | "connecting"
   | "connected"
@@ -73,6 +75,7 @@ export class TerminalConnection {
   #recovering = false;
   #connectionConfirmed = false;
   #rendererConfirmed = false;
+  #processExited = false;
   #size: { rows: number; columns: number } | undefined;
 
   constructor(options: TerminalConnectionOptions) {
@@ -132,7 +135,10 @@ export class TerminalConnection {
         `/api/v1/terminal/sessions/${encodeURIComponent(this.#sessionId)}/attach-grants`,
         {
           method: "POST",
-          headers: { Authorization: `Bearer ${this.#operatorToken}` },
+          headers: this.#operatorToken === BROWSER_SESSION_AUTH
+            ? undefined
+            : { Authorization: `Bearer ${this.#operatorToken}` },
+          credentials: "same-origin",
           cache: "no-store",
           signal: grantAbortController.signal,
         },
@@ -202,6 +208,7 @@ export class TerminalConnection {
     }
     if (message.type === "state" && typeof message.running === "boolean") {
       if (this.#hasCanonicalState) this.#confirmRenderedConnection();
+      this.#processExited = !message.running;
       this.#handlers?.onRunningChange(message.running);
     } else if (message.type === "error") {
       this.#handlers?.onState("error", message.message ?? message.code ?? "terminal protocol error");
@@ -296,7 +303,7 @@ export class TerminalConnection {
     if (socket !== this.#socket) return;
     this.#clearConfirmationTimer();
     this.#socket = undefined;
-    if (!this.#disposed && !this.#fatal) this.#scheduleReconnect("terminal connection closed");
+    if (!this.#disposed && !this.#fatal && !this.#processExited) this.#scheduleReconnect("terminal connection closed");
   }
 
   #handleSocketError(socket: WebSocket): void {

@@ -3,7 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 afterEach(cleanup);
 
-import type { Task } from "../api";
+import type { Task, Worker } from "../api";
 import TaskBoard from "./TaskBoard";
 
 const task: Task = {
@@ -12,10 +12,15 @@ const task: Task = {
   description: "Keep terminal history attached", priority: "high",
   assigned_session_id: null, position: 0, created_at: 1, updated_at: 1,
 };
+const worker: Worker = {
+  id: "worker-1", hive_id: "hive-1", name: "Daisy", role: "worker", provider: "claude_code",
+  workspace: "/workspace/swarm", autostart: false, position: 1, active_session_id: null,
+  created_at: 1, updated_at: 1, running: false, attention_state: "sleeping",
+};
 
 function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> = {}) {
   const props: React.ComponentProps<typeof TaskBoard> = {
-    tasks: [task], sessions: [], workerNames: new Map(), busy: false,
+    tasks: [task], sessions: [], workers: [worker], busy: false,
     onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onReorder: vi.fn(),
     ...overrides,
   };
@@ -46,14 +51,14 @@ test("creates a task with useful context and priority", () => {
   fireEvent.change(screen.getByLabelText("Task title"), { target: { value: "Ship task editing" } });
   fireEvent.change(screen.getByLabelText(/Description/), { target: { value: "Keep failed forms open" } });
   fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "urgent" } });
-  fireEvent.change(screen.getByLabelText("Workspace"), { target: { value: "/workspace/swarm" } });
+  fireEvent.change(screen.getByLabelText("Who should handle this?"), { target: { value: worker.id } });
   fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
 
   expect(onCreate).toHaveBeenCalledWith({
     title: "Ship task editing",
     description: "Keep failed forms open",
     priority: "urgent",
-    workspace: "/workspace/swarm",
+    worker_id: worker.id,
   });
 });
 
@@ -71,7 +76,6 @@ test("edits task details and retains a failed form for retry", async () => {
     title: "Make every reload stable",
     description: task.description,
     priority: "urgent",
-    workspace: task.workspace,
   }));
   expect(screen.getByRole("form", { name: `Edit ${task.title}` })).toBeInTheDocument();
 });

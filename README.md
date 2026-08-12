@@ -72,9 +72,11 @@ cargo run -p swarm-api
 Run the browser client with `pnpm --dir web dev` on the fixed development URL
 `http://127.0.0.1:8766`. It proxies `/health` and
 HTTP/WebSocket `/api` traffic to `127.0.0.1:8765`. Unlock the development UI
-with the same operator token configured for the API. The token remains in the
-current tab's session storage so refreshes stay unlocked; Lock or closing the
-tab clears it. Do not commit or log operator tokens.
+with the same operator token configured for the API. A successful unlock creates
+a 30-day, same-origin, HttpOnly browser session so refreshes and PWA restarts
+stay unlocked. The raw operator token is never saved in Web Storage. Use Lock to
+revoke the trusted-browser session; rotating `SWARM_OPERATOR_TOKEN` also
+invalidates it. Do not commit or log operator tokens.
 
 Inspect or drive the terminal-host update drain through the typed lifecycle
 client. It never kills workers or deletes sockets:
