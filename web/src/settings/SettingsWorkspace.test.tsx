@@ -53,6 +53,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       onDisableNotifications={onDisableNotifications}
       onTestNotification={onTestNotification}
       onCreateWorker={vi.fn().mockResolvedValue(undefined)}
+      onUpdateWorker={vi.fn().mockResolvedValue(undefined)}
       onReorderWorkers={vi.fn().mockResolvedValue(undefined)}
     />,
   );

@@ -102,6 +102,10 @@ pub enum TaskStoreError {
     InvalidWorkerName,
     #[error("worker name already exists")]
     DuplicateWorkerName,
+    #[error("worker update must contain a name or startup preference")]
+    EmptyWorkerUpdate,
+    #[error("the Queen profile is managed by Swarm and cannot be edited")]
+    QueenProfileImmutable,
     #[error("the Queen profile already exists")]
     QueenAlreadyExists,
     #[error("worker already has an active session")]

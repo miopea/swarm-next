@@ -51,6 +51,69 @@ impl TaskStore {
         )
     }
 
+    /// Updates operator-owned worker preferences without changing repository or conversation identity.
+    ///
+    /// # Errors
+    /// Rejects the managed Queen, empty updates, invalid or duplicate names, and unknown workers.
+    pub fn update_worker_profile(
+        &self,
+        worker_id: WorkerId,
+        name: Option<&str>,
+        autostart: Option<bool>,
+    ) -> Result<WorkerProfile, TaskStoreError> {
+        if name.is_none() && autostart.is_none() {
+            return Err(TaskStoreError::EmptyWorkerUpdate);
+        }
+        let name = name.map(str::trim);
+        if let Some(name) = name {
+            validate_worker_name(name)?;
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let role = transaction
+            .query_row(
+                "SELECT role FROM worker_profiles WHERE id = ?1",
+                [worker_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::WorkerNotFound)?;
+        if role == WorkerRole::Queen.to_string() {
+            return Err(TaskStoreError::QueenProfileImmutable);
+        }
+        if let Some(name) = name {
+            let duplicate = transaction
+                .query_row(
+                    "SELECT 1 FROM worker_profiles WHERE id != ?1 AND name = ?2 COLLATE NOCASE",
+                    params![worker_id.to_string(), name],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if duplicate {
+                return Err(TaskStoreError::DuplicateWorkerName);
+            }
+            transaction.execute(
+                "UPDATE worker_profiles SET name = ?2 WHERE id = ?1",
+                params![worker_id.to_string(), name],
+            )?;
+        }
+        if let Some(autostart) = autostart {
+            transaction.execute(
+                "UPDATE worker_profiles SET autostart = ?2 WHERE id = ?1",
+                params![worker_id.to_string(), autostart],
+            )?;
+        }
+        transaction.execute(
+            "UPDATE worker_profiles SET updated_at = unixepoch() WHERE id = ?1",
+            [worker_id.to_string()],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_worker_profile(worker_id)
+    }
+
     /// Replaces the stable operator order of every non-Queen worker.
     ///
     /// # Errors
@@ -535,11 +598,16 @@ impl TaskStore {
 }
 
 fn validate_profile(name: &str, workspace: &str) -> Result<(), TaskStoreError> {
-    if name.is_empty() || name.len() > MAX_WORKER_NAME_BYTES || name.chars().any(char::is_control) {
-        return Err(TaskStoreError::InvalidWorkerName);
-    }
+    validate_worker_name(name)?;
     if workspace.is_empty() || workspace.len() > MAX_WORKSPACE_BYTES {
         return Err(TaskStoreError::InvalidWorkspace);
+    }
+    Ok(())
+}
+
+fn validate_worker_name(name: &str) -> Result<(), TaskStoreError> {
+    if name.is_empty() || name.len() > MAX_WORKER_NAME_BYTES || name.chars().any(char::is_control) {
+        return Err(TaskStoreError::InvalidWorkerName);
     }
     Ok(())
 }
@@ -681,6 +749,67 @@ mod tests {
         assert!(matches!(
             store.reorder_workers(&[violet.id, violet.id]),
             Err(TaskStoreError::InvalidWorkerOrder)
+        ));
+    }
+
+    #[test]
+    fn operator_can_rename_a_worker_and_choose_reboot_startup() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Daisy",
+                ProviderKind::ClaudeCode,
+                "/workspace/daisy",
+                false,
+                1,
+            )
+            .unwrap();
+        let conversation = worker.provider_conversation_id;
+
+        let updated = store
+            .update_worker_profile(worker.id, Some(" Clover "), Some(true))
+            .unwrap();
+
+        assert_eq!(updated.name, "Clover");
+        assert!(updated.autostart);
+        assert_eq!(updated.workspace, worker.workspace);
+        assert_eq!(updated.provider_conversation_id, conversation);
+    }
+
+    #[test]
+    fn worker_maintenance_rejects_queen_duplicates_and_empty_updates() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let daisy = store
+            .create_worker(
+                "Daisy",
+                ProviderKind::ClaudeCode,
+                "/workspace/daisy",
+                false,
+                1,
+            )
+            .unwrap();
+        let poppy = store
+            .create_worker(
+                "Poppy",
+                ProviderKind::ClaudeCode,
+                "/workspace/poppy",
+                false,
+                2,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            store.update_worker_profile(queen.id, Some("Empress"), None),
+            Err(TaskStoreError::QueenProfileImmutable)
+        ));
+        assert!(matches!(
+            store.update_worker_profile(daisy.id, Some("poppy"), None),
+            Err(TaskStoreError::DuplicateWorkerName)
+        ));
+        assert!(matches!(
+            store.update_worker_profile(poppy.id, None, None),
+            Err(TaskStoreError::EmptyWorkerUpdate)
         ));
     }
 

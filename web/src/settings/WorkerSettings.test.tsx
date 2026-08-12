@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 
 import type { Worker } from "../api";
@@ -10,6 +10,7 @@ const studio = worker("studio", "Poppy", "/projects/sculpt-studio", 2);
 
 test("configures and reorders durable workers without exposing path entry", async () => {
   const onCreate = vi.fn().mockResolvedValue(undefined);
+  const onUpdate = vi.fn().mockResolvedValue(undefined);
   const onReorder = vi.fn().mockResolvedValue(undefined);
   render(
     <WorkerSettings
@@ -21,6 +22,7 @@ test("configures and reorders durable workers without exposing path entry", asyn
       ]}
       busy={false}
       onCreate={onCreate}
+      onUpdate={onUpdate}
       onReorder={onReorder}
     />,
   );
@@ -34,6 +36,36 @@ test("configures and reorders durable workers without exposing path entry", asyn
   fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "/projects/public-website" } });
   fireEvent.click(screen.getByRole("button", { name: "Add sleeping worker" }));
   expect(onCreate).toHaveBeenCalledWith("Clover", "/projects/public-website");
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+  const editForm = screen.getByRole("form", { name: "Edit Daisy" });
+  fireEvent.change(within(editForm).getByLabelText("Worker name"), { target: { value: "Marigold" } });
+  fireEvent.click(within(editForm).getByLabelText("Keep this worker active automatically"));
+  fireEvent.click(within(editForm).getByRole("button", { name: "Save" }));
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", true);
+});
+
+test("desktop drag ordering keeps accessible arrow controls as a fallback", () => {
+  const onReorder = vi.fn().mockResolvedValue(undefined);
+  const { container } = render(
+    <WorkerSettings
+      workers={[queen, budget, studio]}
+      workspaces={[]}
+      busy={false}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onReorder={onReorder}
+    />,
+  );
+  const rendered = within(container);
+  const source = rendered.getByRole("button", { name: "Move Poppy earlier" }).closest(".configured-worker")!;
+  const target = rendered.getByRole("button", { name: "Move Daisy later" }).closest(".configured-worker")!;
+  const dataTransfer = { effectAllowed: "", setData: vi.fn() };
+  fireEvent.dragStart(source, { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer });
+  fireEvent.drop(target, { dataTransfer });
+  expect(onReorder).toHaveBeenCalledWith([studio.id, budget.id]);
+  expect(rendered.getByRole("button", { name: "Move Poppy earlier" })).toBeInTheDocument();
 });
 
 function worker(id: string, name: string, workspace: string, position: number, role: Worker["role"] = "worker"): Worker {

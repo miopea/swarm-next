@@ -24,6 +24,7 @@ import {
   stopClaudeSession,
   stopWorker,
   transitionTask,
+  updateWorker,
   updateTask,
   validateBrowserSession,
   type ControlRoomEvent,
@@ -285,6 +286,14 @@ export function App() {
         if (right.role === "queen") return 1;
         return (order.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(right.id) ?? Number.MAX_SAFE_INTEGER);
       }));
+    });
+  }
+
+  async function maintainWorkerProfile(workerId: string, name: string, autostart: boolean) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      const updated = await updateWorker(operatorToken, workerId, { name, autostart });
+      setWorkers((current) => current.map((worker) => worker.id === updated.id ? updated : worker));
     });
   }
 
@@ -641,6 +650,7 @@ export function App() {
             onDisableNotifications={disableNotifications}
             onTestNotification={testNotification}
             onCreateWorker={configureWorker}
+            onUpdateWorker={maintainWorkerProfile}
             onReorderWorkers={reorderWorkerProfiles}
           />
         ) : activeSession ? (
