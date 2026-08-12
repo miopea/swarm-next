@@ -171,7 +171,7 @@ test("hidden or collapsing layouts cannot resize the canonical terminal", () => 
   element.remove();
 });
 
-test("stale queued resize events cannot replace the fitted geometry", () => {
+test("resize events publish the settled renderer geometry and coalesce stale events", async () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -189,10 +189,18 @@ test("stale queued resize events cannot replace the fitted geometry", () => {
   surface.onResize(listener);
 
   xterm.resizeListener?.({ rows: 24, cols: 80 });
+  await Promise.resolve();
   expect(listener).not.toHaveBeenCalled();
 
   xterm.resizeListener?.({ rows: 38, cols: 132 });
-  expect(listener).toHaveBeenCalledWith({ rows: 38, columns: 132 });
+  if (xterm.terminal) {
+    xterm.terminal.rows = 41;
+    xterm.terminal.cols = 154;
+  }
+  xterm.resizeListener?.({ rows: 41, cols: 154 });
+  await Promise.resolve();
+  expect(listener).toHaveBeenCalledOnce();
+  expect(listener).toHaveBeenCalledWith({ rows: 41, columns: 154 });
 });
 
 test("snapshot geometry stays hidden until the visible renderer is refitted", async () => {

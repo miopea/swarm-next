@@ -124,3 +124,20 @@ actual production web build against the rebuilt API binary:
 - The push worker now activates updates immediately, bypasses the HTTP cache
   when explicitly registered, and uses the current Queen launcher artwork for
   notification icon and badge requests.
+
+## Release terminal geometry recovery (2026-08-12)
+
+Operator dogfooding exposed a production-only terminal corruption: optimized
+terminal-host builds resized the PTY but compiled the matching canonical-screen
+resize out because the state transition lived inside `debug_assert!`. Durable
+snapshots therefore remained at `80×24` while Claude painted for the wider PTY.
+
+- The canonical resize now executes in every build profile; the assertion only
+  verifies its result.
+- CI runs the PTY/canonical-dimension regression in the optimized release
+  profile so debug-only behavior cannot satisfy this acceptance gate.
+- Browser resize events are coalesced and publish xterm's settled dimensions,
+  instead of discarding an event while xterm is updating its public geometry.
+- A fresh optimized host and production web build changed a new worker from the
+  `80×24` launch default to `155×41`, survived reload without corruption, then
+  changed to `43×24` at 412 by 915 with readable output and zero overflow.
