@@ -190,7 +190,7 @@ impl ServerHandler for AgentMcp {
             "swarm_list_tasks" => self
                 .tasks
                 .list_visible_tasks(self.principal)
-                .and_then(structured),
+                .and_then(|tasks| structured(json!({ "tasks": tasks }))),
             "swarm_transition_task" => parse::<TransitionTaskInput>(arguments).and_then(|input| {
                 self.tasks
                     .transition_task(
@@ -201,7 +201,10 @@ impl ServerHandler for AgentMcp {
                     )
                     .and_then(structured)
             }),
-            "swarm_list_workers" => self.tasks.list_workers(self.principal).and_then(structured),
+            "swarm_list_workers" => self
+                .tasks
+                .list_workers(self.principal)
+                .and_then(|workers| structured(json!({ "workers": workers }))),
             "swarm_create_task" => parse::<CreateTaskInput>(arguments).and_then(|input| {
                 self.tasks
                     .create_task(
@@ -542,6 +545,21 @@ mod tests {
         assert!(queen_names.contains(&"swarm_create_task"));
         assert!(queen_names.contains(&"swarm_assign_task"));
         assert_eq!(worker_names, ["swarm_list_tasks", "swarm_transition_task"]);
+
+        let listed = response_json(
+            handle(
+                bridge.clone(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_tasks", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert!(listed["result"]["structuredContent"].is_object());
+        assert!(listed["result"]["structuredContent"]["tasks"].is_array());
 
         let reopened = AgentBridge::new(
             store,
