@@ -79,7 +79,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, onResol
                     </div>
                   </div>
                 ) : (
-                  <p className="decision-resolved"><strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p>
+                  <div className="decision-resolved"><p><strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p><span className={`delivery-state ${decision.delivery_state ?? "recorded"}`}>{deliveryLabel(decision.delivery_state)}</span></div>
                 )}
               </article>
             );
@@ -90,6 +90,15 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, onResol
   );
 }
 
+function deliveryLabel(state: DecisionRequest["delivery_state"]): string {
+  switch (state) {
+    case "queued": return "Waiting for a quiet moment";
+    case "dispatching": return "Sending now";
+    case "delivered": return "Delivered to worker";
+    case "uncertain": return "Delivery uncertain · worker can retrieve it";
+    default: return "Recorded before delivery tracking";
+  }
+}
 function humanize(value: string): string {
   return value.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }

@@ -27,6 +27,7 @@ const pending: DecisionRequest = {
   created_at: 1,
   updated_at: 1,
   resolved_at: null,
+  delivery_state: null,
 };
 
 const resolved: DecisionRequest = {
@@ -38,17 +39,21 @@ const resolved: DecisionRequest = {
   state: "resolved",
   resolution_action: "ship",
   resolution_note: "Checks are green",
+  delivery_state: "delivered",
   resolved_by_operator_id: "operator-1",
   resolved_at: 2,
 };
 
+const queued = { ...resolved, id: "decision-3", title: "Queued release", delivery_state: "queued" } as DecisionRequest;
+const dispatching = { ...resolved, id: "decision-4", title: "Sending release", delivery_state: "dispatching" } as DecisionRequest;
+const uncertain = { ...resolved, id: "decision-5", title: "Uncertain release", delivery_state: "uncertain" } as DecisionRequest;
 const task = { id: "task-1", title: "Stabilize reloads" } as Task;
 const worker = { id: "worker-1", name: "Petal" } as Worker;
 
 test("keeps resolved history quiet until the operator asks for it", () => {
   render(
     <DecisionInbox
-      decisions={[pending, resolved]}
+      decisions={[pending, resolved, queued, dispatching, uncertain]}
       tasks={[task]}
       workers={[worker]}
       busy={false}
@@ -63,7 +68,11 @@ test("keeps resolved history quiet until the operator asks for it", () => {
 
   fireEvent.click(screen.getByRole("checkbox", { name: "Show resolved" }));
   expect(screen.getByText("Approve release")).toBeInTheDocument();
-  expect(screen.getByText(/Checks are green/)).toBeInTheDocument();
+  expect(screen.getAllByText(/Checks are green/)).toHaveLength(4);
+  expect(screen.getByText("Delivered to worker")).toBeInTheDocument();
+  expect(screen.getByText("Waiting for a quiet moment")).toBeInTheDocument();
+  expect(screen.getByText("Sending now")).toBeInTheDocument();
+  expect(screen.getByText("Delivery uncertain · worker can retrieve it")).toBeInTheDocument();
 });
 
 test("returns the selected action with the operator note", () => {

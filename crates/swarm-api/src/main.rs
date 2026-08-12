@@ -26,6 +26,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_task_store(store)
         .with_agent_configuration(agent_config_root, mcp_url_from_env(address));
+    let recovered = state.recover_decision_deliveries()?;
+    if recovered > 0 {
+        tracing::warn!(
+            recovered,
+            "crash-interrupted decision deliveries require operator review"
+        );
+    }
     state.supervise_workers().await;
     let supervisor = state.clone();
     tokio::spawn(async move {

@@ -37,7 +37,7 @@ deployment boundary, not a second product backend.
 - `workers`: durable worker identity and worker-session lifecycle.
 - `terminal`: PTY ownership, canonical terminal state, synchronization.
 - `orchestration`: recommendations, policies, dispatch, verification.
-- `decisions`: unified operator attention and resolution.
+- `decisions`: unified operator attention, resolution, and guarded durable delivery.
 - `messages`: findings, handoffs, blockers, operator communication.
 - `integrations`: external adapters and synchronization boundaries.
 - `mcp`: agent-facing tools over application services.

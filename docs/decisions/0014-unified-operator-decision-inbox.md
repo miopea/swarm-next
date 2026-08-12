@@ -31,9 +31,9 @@ Swarm Next owns one durable, typed operator decision inbox.
   identity, and timestamp atomically with a content-free control-room event.
 - Pending requests are bounded at 256 and reads at 200. Resolved history stays
   durable but visually quiet until requested.
-- A decision is a recorded judgment, not arbitrary agent-to-agent messaging and
-  not an automatic side effect. Guarded Queen delivery will consume resolved
-  outcomes in a later slice through the ADR-0012 engagement boundary.
+- A decision is a recorded judgment, not arbitrary agent-to-agent messaging.
+  ADR-0015 delivers resolved outcomes to the requesting worker through the
+  ADR-0012 engagement boundary.
 - Provider-native permission prompts remain provider-owned and are not copied
   into this inbox.
 
@@ -44,8 +44,8 @@ interruptions or fleet broadcasts. Durable context survives browser and API
 restarts, while role visibility prevents workers from reading peer requests or
 claiming unrelated tasks.
 
-The initial inbox does not yet deliver a resolution into a provider terminal,
-send push notifications, or model long-running discussions. Those features
+The initial inbox does not send push notifications or model long-running
+discussions. Guarded terminal delivery is specified by ADR-0015. Those features
 must extend the typed record and engagement guard rather than bypass them.
 
 ## Validation

@@ -26,7 +26,8 @@ use swarm_domain::{
     WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
-    MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE, TaskStore, TaskStoreError,
+    DecisionDeliveryFailure, DecisionDispatch, MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE,
+    TaskStore, TaskStoreError,
 };
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
@@ -58,6 +59,7 @@ pub struct AppState {
     task_store: Option<TaskStore>,
     agent_bridge: Option<agent::AgentBridge>,
     worker_lifecycle: Arc<Mutex<()>>,
+    decision_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     control_room_notify: Arc<Notify>,
 }
@@ -74,6 +76,7 @@ impl AppState {
             task_store: None,
             agent_bridge: None,
             worker_lifecycle: Arc::new(Mutex::new(())),
+            decision_delivery: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             control_room_notify: Arc::new(Notify::new()),
         }
@@ -140,9 +143,111 @@ impl AppState {
                 tracing::warn!(worker_id = %profile.id, worker_name = %profile.name, message = %error.message, "autostart worker could not be started");
             }
         }
+        self.deliver_decisions().await;
+    }
+
+    /// Delivers resolved outcomes only to running workers without a live operator lease.
+    pub async fn deliver_decisions(&self) {
+        let _guard = self.decision_delivery.lock().await;
+        let (Some(store), Some(client)) = (&self.task_store, &self.terminal_host) else {
+            return;
+        };
+        let now = unix_timestamp();
+        let deliveries = match store.claim_decision_deliveries(now) {
+            Ok(deliveries) => deliveries,
+            Err(error) => {
+                tracing::warn!(message = %error, "decision delivery queue could not be claimed");
+                return;
+            }
+        };
+        for delivery in deliveries {
+            let request = HostRequest::Write {
+                session_id: delivery.session_id,
+                bytes: decision_delivery_message(&delivery),
+            };
+            let outcome = match client.request(&request).await {
+                Ok(HostResponse::Acknowledged) => {
+                    store.complete_decision_delivery(delivery.decision_id, unix_timestamp())
+                }
+                Ok(HostResponse::Error { code, message }) => {
+                    tracing::warn!(decision_id = %delivery.decision_id, worker_id = %delivery.worker_id, %code, %message, "decision delivery was rejected by terminal host");
+                    store.fail_decision_delivery(
+                        delivery.decision_id,
+                        unix_timestamp(),
+                        DecisionDeliveryFailure::Retryable,
+                    )
+                }
+                Ok(_) => store.fail_decision_delivery(
+                    delivery.decision_id,
+                    unix_timestamp(),
+                    DecisionDeliveryFailure::Uncertain,
+                ),
+                Err(error) => {
+                    tracing::warn!(decision_id = %delivery.decision_id, worker_id = %delivery.worker_id, message = %error, "decision delivery result is uncertain");
+                    store.fail_decision_delivery(
+                        delivery.decision_id,
+                        unix_timestamp(),
+                        DecisionDeliveryFailure::Uncertain,
+                    )
+                }
+            };
+            match outcome {
+                Ok(true) => self.control_room_notify.notify_waiters(),
+                Ok(false) => {
+                    tracing::warn!(decision_id = %delivery.decision_id, "decision delivery claim was no longer active");
+                }
+                Err(error) => {
+                    tracing::warn!(decision_id = %delivery.decision_id, message = %error, "decision delivery outcome could not be persisted");
+                }
+            }
+        }
+    }
+
+    /// Makes crash-interrupted delivery explicit before any new dispatch is attempted.
+    ///
+    /// # Errors
+    /// Returns a persistence error when recovery cannot be recorded.
+    pub fn recover_decision_deliveries(&self) -> Result<usize, TaskStoreError> {
+        self.task_store
+            .as_ref()
+            .map_or(Ok(0), TaskStore::recover_inflight_decision_deliveries)
     }
 }
 
+fn decision_delivery_message(delivery: &DecisionDispatch) -> Vec<u8> {
+    let action = terminal_safe_text(&delivery.action);
+    let note = if delivery.note.is_empty() {
+        "No additional note.".into()
+    } else {
+        terminal_safe_text(&delivery.note)
+    };
+    format!(
+        "[Swarm decision {} resolved] Action: {}. Operator note: {} Use swarm_list_decisions for the full request context.\r",
+        delivery.decision_id, action, note,
+    )
+    .into_bytes()
+}
+
+fn terminal_safe_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+fn unix_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+        })
+}
 impl Default for AppState {
     fn default() -> Self {
         Self::new(JournalLimits::default())
@@ -555,14 +660,15 @@ async fn resolve_decision(
     Json(request): Json<ResolveDecisionRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let decision = task_service(&state)?
-        .resolve_operator_decision(
-            parse_decision_id(&decision_id)?,
-            &request.action,
-            &request.note,
-        )
+    let decision_id = parse_decision_id(&decision_id)?;
+    task_service(&state)?
+        .resolve_operator_decision(decision_id, &request.action, &request.note)
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
+    state.deliver_decisions().await;
+    let decision = task_store(&state)?
+        .get_decision_request(decision_id)
+        .map_err(|error| task_store_error(&error))?;
     Ok(Json(decision).into_response())
 }
 async fn list_tasks(
@@ -1438,6 +1544,21 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn decision_delivery_is_one_sanitized_terminal_submission() {
+        let delivery = DecisionDispatch {
+            decision_id: DecisionRequestId::new(),
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            action: "ship\nnow".into(),
+            note: "green\u{1b}[31m\rchecks".into(),
+        };
+        let message = decision_delivery_message(&delivery);
+        assert_eq!(message.last(), Some(&b'\r'));
+        assert!(!message[..message.len() - 1].contains(&b'\n'));
+        assert!(!message.contains(&0x1b));
+        assert!(String::from_utf8_lossy(&message).contains("ship now"));
+    }
     #[tokio::test]
     async fn health_is_versioned() {
         let response = router(AppState::default())
@@ -1837,6 +1958,108 @@ mod tests {
         assert!(resolved["resolved_by_operator_id"].is_string());
     }
 
+    #[tokio::test]
+    async fn resolving_a_decision_delivers_to_the_requesting_worker_terminal() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(16_384, 256), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec![
+                "-lc".into(),
+                "while IFS= read -r line; do printf 'received:%s\n' \"$line\"; done".into(),
+            ],
+            working_directory: workspace.clone(),
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store
+            .ensure_queen(workspace.to_string_lossy().as_ref())
+            .unwrap();
+        store.bind_worker_session(queen.id, session.id()).unwrap();
+        let actions = vec!["ship".to_string(), "hold".to_string()];
+        let decision = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Approve the release",
+                reason: "The candidate is ready",
+                risk: "Users wait if held",
+                evidence: "All checks pass",
+                suggested_action: "Ship",
+                allowed_actions: &actions,
+                deadline: None,
+            })
+            .unwrap();
+        let client = HostClient::new(&socket);
+        let app = router(
+            AppState::default()
+                .with_terminal_host(client.clone(), "secret")
+                .with_task_store(store),
+        );
+
+        let resolved = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/decisions/{}/resolution", decision.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"action":"ship","note":"Proceed after green checks"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resolved.status(), StatusCode::OK);
+        assert_eq!(response_json(resolved).await["delivery_state"], "delivered");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let mut after_sequence = None;
+        let mut output = Vec::new();
+        loop {
+            let response = client
+                .request(&HostRequest::Read {
+                    session_id: session.id(),
+                    after_sequence,
+                })
+                .await
+                .unwrap();
+            let HostResponse::Output { resume, .. } = response else {
+                panic!("terminal host should return worker output");
+            };
+            match resume {
+                swarm_terminal::Resume::Deltas { frames } => {
+                    for frame in frames {
+                        after_sequence = Some(frame.sequence);
+                        output.extend_from_slice(&frame.bytes);
+                    }
+                }
+                swarm_terminal::Resume::Snapshot { snapshot } => {
+                    after_sequence = Some(snapshot.sequence);
+                    output = snapshot.bytes;
+                }
+            }
+            let rendered = String::from_utf8_lossy(&output);
+            if rendered.contains("[Swarm decision") && rendered.contains("Action: ship") {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        session.stop().unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
     #[tokio::test]
     async fn task_activity_rejects_invalid_limits() {
         let store = TaskStore::in_memory().unwrap();

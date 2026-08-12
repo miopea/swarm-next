@@ -277,7 +277,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .decision-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 8px; }
 .primary-action { border-color: var(--accent-strong); color: var(--text); background: var(--accent-soft); }
 .primary-action:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-soft) 78%, var(--panel)); }
-.decision-resolved { margin: 0; padding: 10px 12px; border-radius: var(--radius-sm); color: var(--muted); background: var(--panel-soft); font-size: .78rem; }
+.decision-resolved { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: var(--radius-sm); color: var(--muted); background: var(--panel-soft); font-size: .78rem; }
+.decision-resolved p { margin: 0; }
+.delivery-state { flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: .68rem; font-weight: 700; }
+.delivery-state.delivered { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--line)); background: color-mix(in srgb, var(--good-soft) 62%, transparent); }
+.delivery-state.queued, .delivery-state.dispatching { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 36%, var(--line)); background: color-mix(in srgb, var(--accent-soft) 58%, transparent); }
+.delivery-state.uncertain { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 38%, var(--line)); background: color-mix(in srgb, var(--bad-soft) 60%, transparent); }
 .settings-workspace { display: grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); align-content: start; gap: 14px; min-height: 0; padding: 26px; overflow-y: auto; }
 .settings-card { display: grid; align-content: start; gap: 16px; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 6%, transparent); }
 .settings-card h3 { margin: 0; font-size: 1.08rem; }
@@ -378,6 +383,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .decision-inbox-intro { align-items: start; flex-direction: column; gap: 12px; }
   .decision-context { grid-template-columns: 1fr; }
   .decision-resolution { grid-template-columns: 1fr; }
+  .decision-resolved { align-items: flex-start; flex-direction: column; }
   .decision-actions { justify-content: stretch; }
   .task-drop-strip { flex-wrap: wrap; }
   .shortcuts-card { grid-column: auto; }

@@ -889,6 +889,44 @@ impl std::error::Error for ParseDecisionUrgencyError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum DecisionDeliveryState {
+    Queued,
+    Dispatching,
+    Delivered,
+    Uncertain,
+}
+impl fmt::Display for DecisionDeliveryState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Queued => "queued",
+            Self::Dispatching => "dispatching",
+            Self::Delivered => "delivered",
+            Self::Uncertain => "uncertain",
+        })
+    }
+}
+impl FromStr for DecisionDeliveryState {
+    type Err = ParseDecisionDeliveryStateError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "queued" => Ok(Self::Queued),
+            "dispatching" => Ok(Self::Dispatching),
+            "delivered" => Ok(Self::Delivered),
+            "uncertain" => Ok(Self::Uncertain),
+            _ => Err(ParseDecisionDeliveryStateError),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseDecisionDeliveryStateError;
+impl fmt::Display for ParseDecisionDeliveryStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown decision delivery state")
+    }
+}
+impl std::error::Error for ParseDecisionDeliveryStateError {}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DecisionRequestState {
     Pending,
     Resolved,
@@ -942,6 +980,7 @@ pub struct DecisionRequest {
     pub created_at: i64,
     pub updated_at: i64,
     pub resolved_at: Option<i64>,
+    pub delivery_state: Option<DecisionDeliveryState>,
 }
 #[cfg(test)]
 mod tests {
