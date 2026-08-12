@@ -9,6 +9,12 @@ Status: **Proposed**
 One authenticated person. An operator owns exactly one Hive. Presence is
 tracked per operator and device; authorization is never inferred from presence.
 
+### Operator presence
+
+One effective At Hive, Away, or Night Watch mode derived from bounded, expiring
+device observations and an optional manual override. Presence affects attention
+routing only; it is neither authentication nor an operator-engagement lease.
+
 ### Hive
 
 One operator's independently managed Swarm environment. It owns a personal
