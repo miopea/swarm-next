@@ -7,11 +7,13 @@ import {
   resolveDecision,
   createWorker,
   fetchHive,
+  fetchPresence,
   fetchSessions,
   fetchTaskActivity,
   fetchTasks,
   fetchWorkers,
   reorderTasks,
+  setManualPresence,
   startWorker,
   stopClaudeSession,
   stopWorker,
@@ -21,6 +23,8 @@ import {
   type DecisionRequest,
   type Health,
   type HiveIdentity,
+  type OperatorPresence,
+  type PresenceMode,
   type SessionSummary,
   type Task,
   type TaskDraftInput,
@@ -33,6 +37,7 @@ import DecisionInbox from "./decisions/DecisionInbox";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
+import { PresenceController, type LockDetectionState } from "./presence/PresenceController";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
@@ -65,11 +70,23 @@ export function App() {
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
   const [liveFeedState, setLiveFeedState] = useState<LiveFeedState>("connecting");
   const [recentEvents, setRecentEvents] = useState<ControlRoomEvent[]>([]);
+  const [presence, setPresence] = useState<OperatorPresence>();
+  const [lockDetectionState, setLockDetectionState] = useState<LockDetectionState>("unsupported");
+  const presenceController = useMemo(() => new PresenceController(), []);
 
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
   useEffect(() => saveSurface(surface), [surface]);
 
   useEffect(() => { void loadTerminalView().catch(() => undefined); }, []);
+  useEffect(() => {
+    if (!operatorToken) {
+      presenceController.stop();
+      setPresence(undefined);
+      return;
+    }
+    presenceController.start(operatorToken, setPresence, setLockDetectionState);
+    return () => presenceController.stop();
+  }, [operatorToken, presenceController]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -124,13 +141,19 @@ export function App() {
     feed.start(
       operatorToken,
       async (page) => {
-        const controlRoom = await loadControlRoom(operatorToken);
+        const [controlRoom, refreshedPresence] = await Promise.all([
+          loadControlRoom(operatorToken),
+          page.events.some((event) => event.kind === "presence_changed")
+            ? fetchPresence(operatorToken)
+            : Promise.resolve(undefined),
+        ]);
         if (cancelled) return;
         setHiveIdentity(controlRoom.hive);
         setSessions(controlRoom.sessions);
         setWorkers(controlRoom.workers);
         setTasks(controlRoom.tasks);
         setDecisions(controlRoom.decisions);
+        if (refreshedPresence) setPresence(refreshedPresence);
         setRecentEvents((current) => page.reset_required
           ? page.events.slice(-16)
           : [...current, ...page.events].filter((event, index, events) =>
@@ -169,6 +192,17 @@ export function App() {
     });
   }
 
+  async function changePresenceMode(mode: PresenceMode | null) {
+    if (!operatorToken) return;
+    await perform(async () => setPresence(await setManualPresence(operatorToken, mode)));
+  }
+
+  async function enableLockDetection() {
+    const enabled = await presenceController.enableLockDetection();
+    if (!enabled && lockDetectionState !== "denied") {
+      setOperationError("This browser did not grant operating-system lock detection. Presence still uses activity, visibility, and expiry.");
+    }
+  }
   async function refreshControlRoom() {
     if (!operatorToken) return;
     await perform(async () => {
@@ -476,6 +510,7 @@ export function App() {
           </div>
           <div className="header-actions">
             {busy && <span className="saving-state">Saving…</span>}
+            {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
             <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => setColorTheme((current) => current === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button" aria-label="Refresh control room" onClick={() => void refreshControlRoom()} disabled={busy}><RefreshIcon /></button>}
             {operatorToken && <button className="secondary-button" onClick={logout}>Lock</button>}
@@ -504,9 +539,13 @@ export function App() {
             health={loadState.kind === "ready" ? loadState.health : undefined}
             operatorToken={operatorToken}
             recentEvents={recentEvents}
+            presence={presence}
+            lockDetectionState={lockDetectionState}
             sessions={sessions}
             workers={workers}
             onThemeChange={setColorTheme}
+            onPresenceChange={changePresenceMode}
+            onEnableLockDetection={enableLockDetection}
           />
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}`}>
@@ -557,6 +596,12 @@ function availableTaskWorkerName(title: string, workers: Worker[]): string {
 function readSavedOperatorToken(): string | undefined { try { return window.sessionStorage.getItem(OPERATOR_TOKEN_STORAGE_KEY) ?? undefined; } catch { return undefined; } }
 function saveOperatorToken(operatorToken: string): boolean { try { window.sessionStorage.setItem(OPERATOR_TOKEN_STORAGE_KEY, operatorToken); return true; } catch { return false; } }
 function clearSavedOperatorToken() { try { window.sessionStorage.removeItem(OPERATOR_TOKEN_STORAGE_KEY); } catch { /* Locking memory is sufficient when browser storage is unavailable. */ } }
+
+function presenceModeLabel(mode: PresenceMode) {
+  if (mode === "at_hive") return "At Hive";
+  if (mode === "night_watch") return "Night Watch";
+  return "Away";
+}
 
 function RuntimeStatus({ state }: { state: LoadState }) {
   if (state.kind === "ready") return <span className="runtime-status"><span className="presence online" /> Runtime {state.health.version}</span>;

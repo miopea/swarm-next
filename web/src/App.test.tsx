@@ -2,6 +2,13 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 vi.mock("./terminal/XtermSurface", () => ({ XtermSurface: class {} }));
+vi.mock("./presence/PresenceController", () => ({
+  PresenceController: class {
+    start() {}
+    stop() {}
+    async enableLockDetection() { return false; }
+  },
+}));
 
 import { App } from "./App";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";

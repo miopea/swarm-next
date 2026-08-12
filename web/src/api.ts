@@ -7,7 +7,12 @@ export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type WorkerRole = "queen" | "worker";
 export type ProviderKind = "claude_code" | "codex";
 export type WorkerAttentionState = "sleeping" | "buzzing" | "with_operator" | "blocked";
-export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed" | "decisions_changed";
+export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed" | "decisions_changed" | "presence_changed";
+export type PresenceMode = "at_hive" | "away" | "night_watch";
+export type PresenceSource = "manual" | "active_device" | "screen_locked" | "inactive_device" | "timed_out";
+export type PresenceDeviceClass = "desktop" | "mobile";
+export type PresenceObservationState = "active" | "idle" | "locked" | "hidden";
+export type OperatorPresence = { mode: PresenceMode; manual_mode: PresenceMode | null; source: PresenceSource };
 export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };
 export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: number; reset_required: boolean };
 export type TerminalHostStatus = {
@@ -128,6 +133,40 @@ export async function fetchControlRoomEvents(
   return response.json() as Promise<ControlRoomEventPage>;
 }
 
+export async function fetchPresence(operatorToken: string): Promise<OperatorPresence> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/presence");
+  return response.json() as Promise<OperatorPresence>;
+}
+
+export async function setManualPresence(
+  operatorToken: string,
+  manualMode: PresenceMode | null,
+): Promise<OperatorPresence> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/presence", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ manual_mode: manualMode }),
+  });
+  return response.json() as Promise<OperatorPresence>;
+}
+
+export async function observePresence(
+  operatorToken: string,
+  deviceId: string,
+  deviceClass: PresenceDeviceClass,
+  state: PresenceObservationState,
+): Promise<OperatorPresence> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/presence/devices/${encodeURIComponent(deviceId)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_class: deviceClass, state }),
+    },
+  );
+  return response.json() as Promise<OperatorPresence>;
+}
 export async function fetchTerminalHostStatus(operatorToken: string): Promise<TerminalHostStatus> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/terminal-host");
   const payload = (await response.json()) as { type: "host_status"; status: TerminalHostStatus };

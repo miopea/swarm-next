@@ -1,5 +1,6 @@
 use swarm_domain::{
-    DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency, Task, TaskId,
+    DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency, OperatorPresence,
+    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState, Task, TaskId,
     TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
@@ -39,6 +40,43 @@ impl TaskService {
         &self.store
     }
 
+    /// Returns the effective local operator presence policy.
+    ///
+    /// # Errors
+    /// Returns a persistence error when presence cannot be read.
+    pub fn operator_presence(&self, now: i64) -> Result<OperatorPresence, ApplicationError> {
+        self.store.operator_presence(now).map_err(Into::into)
+    }
+
+    /// Sets or clears the operator's explicit presence override.
+    ///
+    /// # Errors
+    /// Returns a persistence error when presence cannot be updated atomically.
+    pub fn set_operator_presence(
+        &self,
+        mode: Option<PresenceMode>,
+        now: i64,
+    ) -> Result<(OperatorPresence, bool), ApplicationError> {
+        let mutation = self.store.set_manual_presence(mode, now)?;
+        Ok((mutation.presence, mutation.changed))
+    }
+
+    /// Records one authenticated client observation for derived presence.
+    ///
+    /// # Errors
+    /// Returns a capacity or persistence error.
+    pub fn observe_operator_device(
+        &self,
+        device_id: PresenceDeviceId,
+        device_class: PresenceDeviceClass,
+        state: PresenceObservationState,
+        now: i64,
+    ) -> Result<(OperatorPresence, bool), ApplicationError> {
+        let mutation =
+            self.store
+                .record_presence_observation(device_id, device_class, state, now)?;
+        Ok((mutation.presence, mutation.changed))
+    }
     /// Lists the complete local Hive queue for an operator or Queen coordinator.
     ///
     /// # Errors

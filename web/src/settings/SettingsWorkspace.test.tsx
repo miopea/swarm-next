@@ -7,6 +7,8 @@ afterEach(() => vi.unstubAllGlobals());
 
 test("shows subsystem diagnostics, previews a sanitized report, and changes the selected theme", async () => {
   const onThemeChange = vi.fn();
+  const onPresenceChange = vi.fn().mockResolvedValue(undefined);
+  const onEnableLockDetection = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 5, host_version: "0.1.0", draining: false, running_sessions: 1, retained_sessions: 3 } });
@@ -17,15 +19,24 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       colorTheme="light"
       liveFeedState="connected"
       operatorToken="secret-token"
+      presence={{ mode: "away", manual_mode: null, source: "screen_locked" }}
+      lockDetectionState="available"
       recentEvents={[{ sequence: 7, hive_id: "hive-1", kind: "workers_changed", occurred_at: 1 }]}
       hiveIdentity={{ operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } }}
       health={{ status: "ok", version: "0.1.0" }}
       sessions={[{ session_id: "session-safe-id", running: true }, { session_id: "session-2", running: false }, { session_id: "session-3", running: false }]}
       workers={[{ id: "worker-1", hive_id: "hive-1", name: "Private name", role: "worker", provider: "claude_code", workspace: "/private/workspace", autostart: false, position: 1, active_session_id: "session-safe-id", created_at: 1, updated_at: 1, running: true, attention_state: "blocked", runtime_error: "raw provider failure detail" }]}
       onThemeChange={onThemeChange}
+      onPresenceChange={onPresenceChange}
+      onEnableLockDetection={onEnableLockDetection}
     />,
   );
 
+  expect(screen.getByRole("status")).toHaveTextContent("AwayComputer lock detected");
+  fireEvent.change(screen.getByLabelText("Presence policy"), { target: { value: "night_watch" } });
+  expect(onPresenceChange).toHaveBeenCalledWith("night_watch");
+  fireEvent.click(screen.getByRole("button", { name: "Enable" }));
+  expect(onEnableLockDetection).toHaveBeenCalledOnce();
   expect(screen.getAllByText("Healthy · 0.1.0").length).toBeGreaterThan(0);
   expect(screen.getByText("Meadow Hive")).toBeInTheDocument();
   expect(screen.getByText("Bea")).toBeInTheDocument();

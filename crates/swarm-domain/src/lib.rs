@@ -42,6 +42,7 @@ domain_id!(HiveId);
 domain_id!(ApiaryId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
+domain_id!(PresenceDeviceId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -302,6 +303,7 @@ pub enum ControlRoomEventKind {
     SessionsChanged,
     RuntimeChanged,
     DecisionsChanged,
+    PresenceChanged,
 }
 
 impl fmt::Display for ControlRoomEventKind {
@@ -312,6 +314,7 @@ impl fmt::Display for ControlRoomEventKind {
             Self::SessionsChanged => "sessions_changed",
             Self::RuntimeChanged => "runtime_changed",
             Self::DecisionsChanged => "decisions_changed",
+            Self::PresenceChanged => "presence_changed",
         })
     }
 }
@@ -326,6 +329,7 @@ impl FromStr for ControlRoomEventKind {
             "sessions_changed" => Ok(Self::SessionsChanged),
             "runtime_changed" => Ok(Self::RuntimeChanged),
             "decisions_changed" => Ok(Self::DecisionsChanged),
+            "presence_changed" => Ok(Self::PresenceChanged),
             _ => Err(ParseControlRoomEventKindError),
         }
     }
@@ -1049,6 +1053,133 @@ impl fmt::Display for ParseDecisionRequestStateError {
 }
 impl std::error::Error for ParseDecisionRequestStateError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresenceMode {
+    AtHive,
+    Away,
+    NightWatch,
+}
+
+impl fmt::Display for PresenceMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::AtHive => "at_hive",
+            Self::Away => "away",
+            Self::NightWatch => "night_watch",
+        })
+    }
+}
+
+impl FromStr for PresenceMode {
+    type Err = ParsePresenceModeError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "at_hive" => Ok(Self::AtHive),
+            "away" => Ok(Self::Away),
+            "night_watch" => Ok(Self::NightWatch),
+            _ => Err(ParsePresenceModeError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParsePresenceModeError;
+impl fmt::Display for ParsePresenceModeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown operator presence mode")
+    }
+}
+impl std::error::Error for ParsePresenceModeError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresenceDeviceClass {
+    Desktop,
+    Mobile,
+}
+impl fmt::Display for PresenceDeviceClass {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Desktop => "desktop",
+            Self::Mobile => "mobile",
+        })
+    }
+}
+impl FromStr for PresenceDeviceClass {
+    type Err = ParsePresenceDeviceClassError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "desktop" => Ok(Self::Desktop),
+            "mobile" => Ok(Self::Mobile),
+            _ => Err(ParsePresenceDeviceClassError),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParsePresenceDeviceClassError;
+impl fmt::Display for ParsePresenceDeviceClassError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown presence device class")
+    }
+}
+impl std::error::Error for ParsePresenceDeviceClassError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresenceObservationState {
+    Active,
+    Idle,
+    Locked,
+    Hidden,
+}
+impl fmt::Display for PresenceObservationState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Active => "active",
+            Self::Idle => "idle",
+            Self::Locked => "locked",
+            Self::Hidden => "hidden",
+        })
+    }
+}
+impl FromStr for PresenceObservationState {
+    type Err = ParsePresenceObservationStateError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "active" => Ok(Self::Active),
+            "idle" => Ok(Self::Idle),
+            "locked" => Ok(Self::Locked),
+            "hidden" => Ok(Self::Hidden),
+            _ => Err(ParsePresenceObservationStateError),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParsePresenceObservationStateError;
+impl fmt::Display for ParsePresenceObservationStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown presence observation state")
+    }
+}
+impl std::error::Error for ParsePresenceObservationStateError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresenceSource {
+    Manual,
+    ActiveDevice,
+    ScreenLocked,
+    InactiveDevice,
+    TimedOut,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OperatorPresence {
+    pub mode: PresenceMode,
+    pub manual_mode: Option<PresenceMode>,
+    pub source: PresenceSource,
+}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DecisionRequest {
     pub id: DecisionRequestId,

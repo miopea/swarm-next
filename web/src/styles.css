@@ -134,6 +134,7 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .presence.offline { background: var(--bad); }
 .presence.engaged { background: var(--accent-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .presence.blocked { background: var(--blocked); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blocked) 18%, transparent); }
+.presence.waiting { background: var(--blocked); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blocked) 18%, transparent); }
 .worker-attention-label { color: var(--text); font-weight: 650; }
 
 .start-worker { display: grid; gap: 8px; margin: 14px 0 4px; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
@@ -157,6 +158,11 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .workspace-header { display: flex; min-height: 78px; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 17px 27px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 94%, transparent); }
 .workspace-header h2 { margin: 0; font-size: 1.3rem; letter-spacing: -.02em; }
 .header-actions { display: flex; align-items: center; gap: 8px; }
+.operator-presence-chip { display: inline-flex; min-height: 34px; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--panel-raised); font-size: .72rem; font-weight: 500; white-space: nowrap; }
+.operator-presence-chip.at_hive .state-dot { background: var(--good); }
+.operator-presence-chip.away .state-dot { background: var(--quiet); }
+.operator-presence-chip.night_watch { color: var(--blocked); background: var(--blocked-soft); }
+.operator-presence-chip.night_watch .state-dot { background: var(--blocked); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blocked) 18%, transparent); }
 .saving-state { color: var(--muted); font-size: .75rem; }
 .secondary-button, .icon-button { border-color: var(--line-strong); color: var(--text); background: var(--panel); }
 .secondary-button:hover:not(:disabled), .icon-button:hover:not(:disabled) { border-color: var(--good); background: var(--good-soft); }
@@ -379,6 +385,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .start-worker-disclosure .start-worker.mobile-expanded { display: grid; }
   .rail-footer { margin-top: 10px; }
   .workspace-header { min-height: 68px; padding: 14px 17px; }
+  .operator-presence-chip { width: 34px; justify-content: center; padding: 0; }
+  .operator-presence-chip > span:last-child { display: none; }
   .task-board { padding: 16px; }
   .task-compose { padding: 18px; }
   .task-compose form { grid-template-columns: 1fr; }
@@ -416,3 +424,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .terminal-key-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 5px; }
   .terminal-key-actions .mode-cycle-button { min-width: 92px; color: var(--text); background: var(--good-soft); }
 }
+
+.presence-settings label { display: grid; gap: .45rem; color: var(--text-muted); font-size: .78rem; font-weight: 700; }
+.presence-settings select { width: 100%; }
+.presence-summary, .presence-lock-row { display: flex; align-items: center; gap: .75rem; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-soft); padding: .8rem .9rem; }
+.presence-summary > span:last-child, .presence-lock-row > div { display: grid; gap: .15rem; min-width: 0; }
+.presence-summary small, .presence-lock-row small { color: var(--text-muted); font-weight: 500; }
+.presence-lock-row { justify-content: space-between; }
+.presence-lock-row .secondary-button { flex: 0 0 auto; }

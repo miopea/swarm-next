@@ -16,7 +16,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod decisions;
+mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
+pub use presence::PresenceMutation;
 mod task_dispatches;
 pub use task_dispatches::{TaskDispatch, TaskDispatchFailure};
 mod task_outcomes;
@@ -26,7 +28,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 13;
+const CURRENT_SCHEMA_VERSION: i64 = 14;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -63,6 +65,8 @@ pub enum TaskStoreError {
     DecisionInboxFull,
     #[error("this Hive already has the maximum number of pending task briefings")]
     TaskDispatchQueueFull,
+    #[error("this Hive already tracks the maximum of 16 presence devices")]
+    PresenceDeviceLimit,
     #[error("task handoff note must not exceed {MAX_TASK_ACTIVITY_NOTE_BYTES} bytes")]
     InvalidTaskActivityNote,
     #[error("this Hive already has the maximum number of pending Queen handoffs")]
@@ -133,7 +137,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=12 => {
+            0..=13 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -924,6 +928,9 @@ fn migrate_schema(
     if schema_version < 13 {
         migrate_task_outcomes(transaction)?;
     }
+    if schema_version < 14 {
+        migrate_operator_presence(transaction)?;
+    }
     Ok(())
 }
 
@@ -1278,6 +1285,41 @@ fn migrate_task_outcomes(transaction: &rusqlite::Transaction<'_>) -> rusqlite::R
          CREATE INDEX IF NOT EXISTS task_outcome_deliveries_queue
              ON task_outcome_deliveries(state, updated_at, id);
          PRAGMA user_version = 13;",
+    )
+}
+fn migrate_operator_presence(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "ALTER TABLE control_room_events RENAME TO control_room_events_v13;
+         CREATE TABLE control_room_events (
+             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+             hive_id TEXT NOT NULL REFERENCES hives(id),
+             kind TEXT NOT NULL CHECK (
+                 kind IN ('tasks_changed','workers_changed','sessions_changed','runtime_changed','decisions_changed','presence_changed')
+             ),
+             occurred_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         INSERT INTO control_room_events (sequence, hive_id, kind, occurred_at)
+             SELECT sequence, hive_id, kind, occurred_at FROM control_room_events_v13;
+         DROP TABLE control_room_events_v13;
+         CREATE INDEX control_room_events_by_hive_sequence
+             ON control_room_events(hive_id, sequence);
+         CREATE TABLE IF NOT EXISTS operator_presence_preferences (
+             operator_id TEXT PRIMARY KEY REFERENCES operators(id) ON DELETE CASCADE,
+             manual_mode TEXT CHECK (manual_mode IS NULL OR manual_mode IN ('at_hive','away','night_watch')),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         CREATE TABLE IF NOT EXISTS operator_presence_devices (
+             id TEXT PRIMARY KEY,
+             operator_id TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+             device_class TEXT NOT NULL CHECK (device_class IN ('desktop','mobile')),
+             state TEXT NOT NULL CHECK (state IN ('active','idle','locked','hidden')),
+             expires_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             CHECK (expires_at > updated_at)
+         );
+         CREATE INDEX IF NOT EXISTS operator_presence_devices_current
+             ON operator_presence_devices(operator_id, expires_at, state);
+         PRAGMA user_version = 14;",
     )
 }
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
@@ -2081,6 +2123,44 @@ mod tests {
                 .unwrap(),
             1
         );
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+    }
+    #[test]
+    fn migrates_schema_v13_to_bounded_operator_presence() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "DROP TABLE operator_presence_devices;
+                     DROP TABLE operator_presence_preferences;
+                     PRAGMA user_version = 13;",
+                )
+                .unwrap();
+        }
+
+        let migrated = TaskStore::open(path).unwrap();
+        let connection = migrated.connection().unwrap();
+        for table in ["operator_presence_preferences", "operator_presence_devices"] {
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        [table],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1
+            );
+        }
         assert_eq!(
             connection
                 .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))

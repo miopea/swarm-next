@@ -1,6 +1,7 @@
-import type { ControlRoomEvent, Health, HiveIdentity, SessionSummary, Worker } from "../api";
+import type { ControlRoomEvent, Health, HiveIdentity, OperatorPresence, PresenceMode, SessionSummary, Worker } from "../api";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
+import type { LockDetectionState } from "../presence/PresenceController";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 
 type Props = {
@@ -9,15 +10,45 @@ type Props = {
   hiveIdentity: HiveIdentity | undefined;
   liveFeedState: LiveFeedState;
   operatorToken: string;
+  presence: OperatorPresence | undefined;
+  lockDetectionState: LockDetectionState;
   recentEvents: ControlRoomEvent[];
   sessions: SessionSummary[];
   workers: Worker[];
   onThemeChange: (theme: ColorTheme) => void;
+  onPresenceChange: (mode: PresenceMode | null) => Promise<void>;
+  onEnableLockDetection: () => Promise<void>;
 };
 
-export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, liveFeedState, operatorToken, recentEvents, sessions, workers, onThemeChange }: Props) {
+export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, lockDetectionState, recentEvents, sessions, workers, onThemeChange, onPresenceChange, onEnableLockDetection }: Props) {
   return (
     <div className="settings-workspace">
+      <section className="settings-card presence-settings" aria-labelledby="presence-heading">
+        <div><p className="eyebrow">Presence</p><h3 id="presence-heading">Let attention follow you</h3></div>
+        <p>Automatic presence uses this device's activity, visibility, and expiry. A manual mode stays in effect until you return to Automatic.</p>
+        <label htmlFor="presence-mode"><span>Presence policy</span>
+          <select
+            id="presence-mode"
+            value={presence?.manual_mode ?? "auto"}
+            onChange={(event) => void onPresenceChange(event.target.value === "auto" ? null : event.target.value as PresenceMode)}
+          >
+            <option value="auto">Automatic</option>
+            <option value="at_hive">At the Hive</option>
+            <option value="away">Away</option>
+            <option value="night_watch">Night Watch</option>
+          </select>
+        </label>
+        <div className="presence-summary" role="status">
+          <span className={`presence ${presence?.mode === "at_hive" ? "online" : presence?.mode === "night_watch" ? "waiting" : "offline"}`} />
+          <span><strong>{presenceLabel(presence?.mode)}</strong><small>{presenceSourceLabel(presence)}</small></span>
+        </div>
+        <div className="presence-lock-row">
+          <div><strong>Computer lock detection</strong><small>{lockDetectionLabel(lockDetectionState)}</small></div>
+          <button className="secondary-button" disabled={lockDetectionState === "unsupported" || lockDetectionState === "enabled"} onClick={() => void onEnableLockDetection()}>
+            {lockDetectionState === "enabled" ? "Enabled" : "Enable"}
+          </button>
+        </div>
+      </section>
       <section className="settings-card" aria-labelledby="appearance-heading">
         <div><p className="eyebrow">Appearance</p><h3 id="appearance-heading">Comfortable in long sessions</h3></div>
         <p>Both themes use the same soft natural palette and high-legibility type system.</p>
@@ -65,6 +96,27 @@ export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, li
 }
 
 
+function presenceLabel(mode: PresenceMode | undefined) {
+  if (mode === "at_hive") return "At the Hive";
+  if (mode === "night_watch") return "Night Watch";
+  return mode === "away" ? "Away" : "Connecting…";
+}
+
+function presenceSourceLabel(presence: OperatorPresence | undefined) {
+  if (!presence) return "Waiting for the first device observation";
+  if (presence.source === "manual") return "Manual override";
+  if (presence.source === "active_device") return "Active device detected";
+  if (presence.source === "screen_locked") return "Computer lock detected";
+  if (presence.source === "inactive_device") return "No active visible device";
+  return "Device heartbeat expired safely";
+}
+
+function lockDetectionLabel(state: LockDetectionState) {
+  if (state === "enabled") return "Locking this computer moves Automatic presence to Away.";
+  if (state === "available") return "Supported; enabling requires one browser permission.";
+  if (state === "denied") return "Not granted; activity and visibility fallback remain active.";
+  return "Unavailable in this browser; fallback presence remains active.";
+}
 function liveFeedLabel(state: LiveFeedState) {
   if (state === "connected") return "Connected";
   if (state === "retrying") return "Reconnecting";

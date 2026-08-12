@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use swarm_application::{ApplicationError, TaskService};
 use swarm_domain::{
-    ControlRoomEventKind, DecisionRequestId, ProviderConversationId, ProviderKind,
-    TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId,
-    WorkerProfile, WorkerSessionId,
+    ControlRoomEventKind, DecisionRequestId, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    PresenceObservationState, ProviderConversationId, ProviderKind, TaskDetailsUpdate, TaskId,
+    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE,
@@ -440,6 +440,16 @@ struct AttachGrantResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct SetPresenceRequest {
+    manual_mode: Option<PresenceMode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PresenceObservationRequest {
+    device_class: PresenceDeviceClass,
+    state: PresenceObservationState,
+}
+#[derive(Debug, Deserialize)]
 struct StartSessionRequest {
     workspace: PathBuf,
     rows: u16,
@@ -668,6 +678,14 @@ fn api_router(state: AppState) -> Router {
         .route("/mcp", post(mcp))
         .route("/health", get(health))
         .route("/api/v1/hive", get(local_hive))
+        .route(
+            "/api/v1/presence",
+            get(operator_presence).put(set_operator_presence),
+        )
+        .route(
+            "/api/v1/presence/devices/{device_id}",
+            put(observe_presence_device),
+        )
         .route("/api/v1/control-room/events", get(control_room_events))
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
@@ -754,6 +772,59 @@ async fn local_hive(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(identity)).into_response())
 }
 
+async fn operator_presence(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let presence = task_service(&state)?
+        .operator_presence(unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(presence)).into_response())
+}
+
+async fn set_operator_presence(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SetPresenceRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let (presence, changed) = task_service(&state)?
+        .set_operator_presence(request.manual_mode, unix_timestamp())
+        .map_err(application_error)?;
+    if changed {
+        state.control_room_notify.notify_waiters();
+    }
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(presence)).into_response())
+}
+
+async fn observe_presence_device(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_id): Path<String>,
+    Json(request): Json<PresenceObservationRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let device_id = PresenceDeviceId::from_str(&device_id).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_presence_device_id",
+            "presence device ID must be a UUID",
+        )
+    })?;
+    let (presence, changed) = task_service(&state)?
+        .observe_operator_device(
+            device_id,
+            request.device_class,
+            request.state,
+            unix_timestamp(),
+        )
+        .map_err(application_error)?;
+    if changed {
+        state.control_room_notify.notify_waiters();
+    }
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(presence)).into_response())
+}
 async fn control_room_events(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1529,6 +1600,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "task_dispatch_queue_full",
             error.to_string(),
         ),
+        TaskStoreError::PresenceDeviceLimit => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "presence_device_limit",
+            error.to_string(),
+        ),
         TaskStoreError::TaskOutcomeQueueFull => ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "task_outcome_queue_full",
@@ -1816,6 +1892,73 @@ mod tests {
         assert!(json["hive"]["apiary_id"].is_null());
     }
 
+    #[tokio::test]
+    async fn presence_routes_are_private_typed_and_do_not_churn_events() {
+        let store = TaskStore::in_memory().unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(store.clone());
+        let app = router(state);
+        let device_id = PresenceDeviceId::new();
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/presence")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let observe = || {
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/presence/devices/{device_id}"))
+                .header("authorization", "Bearer secret")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"device_class":"desktop","state":"active"}"#))
+                .unwrap()
+        };
+        let observed = app.clone().oneshot(observe()).await.unwrap();
+        assert_eq!(observed.status(), StatusCode::OK);
+        assert_eq!(observed.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(observed).await["mode"], "at_hive");
+        let cursor = store.list_control_room_events(0).unwrap().next_cursor;
+
+        assert_eq!(
+            app.clone().oneshot(observe()).await.unwrap().status(),
+            StatusCode::OK
+        );
+        assert!(
+            store
+                .list_control_room_events(cursor)
+                .unwrap()
+                .events
+                .is_empty()
+        );
+
+        let manual = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/presence")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"manual_mode":"night_watch"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response_json(manual).await["mode"], "night_watch");
+        assert_eq!(
+            response_json(authorized_get(app, "/api/v1/presence").await).await["source"],
+            "manual"
+        );
+    }
     #[tokio::test]
     async fn control_room_event_feed_is_private_resumable_and_content_free() {
         let store = TaskStore::in_memory().unwrap();
