@@ -19,16 +19,17 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use swarm_domain::{
-    ControlRoomEventKind, ProviderKind, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
-    WorkerId, WorkerProfile, WorkerSessionId,
+    ControlRoomEventKind, ProviderConversationId, ProviderKind, TaskDetailsUpdate, TaskId,
+    TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE, TaskStore, TaskStoreError,
 };
 use swarm_terminal::{
-    CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, HistoryCursor, HostClient,
-    HostRequest, HostResponse, JournalLimits, MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS,
-    MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, TerminalSize,
+    CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
+    HistoryCursor, HostClient, HostRequest, HostResponse, JournalLimits,
+    MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
+    TerminalSize,
 };
 use tokio::{
     sync::{Mutex, Notify, RwLock, Semaphore},
@@ -776,6 +777,9 @@ async fn start_session(
         HostRequest::StartClaude {
             workspace: request.workspace,
             size: TerminalSize::new(request.rows, request.columns),
+            conversation: ClaudeConversationStart::New {
+                session_id: ProviderConversationId::new(),
+            },
         },
     )
     .await?;
@@ -885,6 +889,20 @@ async fn start_worker_process(
         HostRequest::StartClaude {
             workspace: PathBuf::from(&profile.workspace),
             size,
+            conversation: match (
+                profile.provider_conversation_id,
+                profile.has_session_history,
+            ) {
+                (Some(session_id), false) => ClaudeConversationStart::New { session_id },
+                (Some(session_id), true) => ClaudeConversationStart::Resume { session_id },
+                (None, true) => ClaudeConversationStart::Continue,
+                (None, false) => {
+                    let session_id = task_store(state)?
+                        .assign_provider_conversation(worker_id)
+                        .map_err(|error| task_store_error(&error))?;
+                    ClaudeConversationStart::New { session_id }
+                }
+            },
         },
     )
     .await?;
@@ -1135,6 +1153,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::WorkerAlreadyRunning => ApiError::new(
             StatusCode::CONFLICT,
             "worker_already_running",
+            error.to_string(),
+        ),
+        TaskStoreError::ProviderConversationUnavailable => ApiError::new(
+            StatusCode::CONFLICT,
+            "provider_conversation_unavailable",
             error.to_string(),
         ),
         TaskStoreError::Io(_)

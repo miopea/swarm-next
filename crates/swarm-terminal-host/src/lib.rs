@@ -252,8 +252,12 @@ fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostRe
             .and_then(|()| terminal_host_status(registry))
             .map(|status| HostResponse::HostStatus { status })
             .map_err(|error| error.to_string()),
-        HostRequest::StartClaude { workspace, size } => ClaudeCodeAdapter
-            .command_for(&workspace)
+        HostRequest::StartClaude {
+            workspace,
+            size,
+            conversation,
+        } => ClaudeCodeAdapter
+            .command_for(&workspace, conversation)
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry

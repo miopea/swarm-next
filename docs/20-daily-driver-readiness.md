@@ -22,7 +22,7 @@ mostly product operability rather than process survival.
 | Move between workers | Keyboard switching and cached terminals, but redraw was flaky | Repeated Queen/worker switching preserves exact session identity on desktop and mobile | Complete baseline; continue fast-output soak |
 | Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Explicit lifecycle, editing, priority, assignment, durable ordering, focused state drops, and bounded activity history | Complete dogfood baseline; defer broad integrations |
 | See changes without refreshing | Broad WebSocket event stream | Typed, authenticated, resumable control-room invalidation feed | Complete; keep Refresh as recovery |
-| Manage workers quickly | Launch, kill, revive, groups, bulk actions | Start by path and stop | Add start/revive/stop on profiles; defer groups until measured |
+| Manage workers quickly | Launch, kill, revive, groups, bulk actions | Durable profiles start, stop, and recover Claude context using exact provider identity for new profiles or `--continue` for migrated profiles | Complete dogfood baseline; defer groups until measured |
 | Use direct interactions | Shortcuts, command palette, drag/drop imports | Keyboard switching, durable task ordering, focused state drops, and accessible worker/task action menus with right-click parity | Add command palette and broader shortcuts only where dogfood proves value |
 | Configure the product | Large multi-tab editor with overlapping concerns | No settings surface | Add a compact settings workspace for workers, runtime, appearance, and diagnostics |
 | Handle attention | Proposals, messages, activity, notifications | None | Later: one decision inbox, not multiple legacy subsystems |

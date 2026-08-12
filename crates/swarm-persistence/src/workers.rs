@@ -2,8 +2,8 @@ use std::{collections::HashSet, str::FromStr};
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    ControlRoomEventKind, HiveId, ProviderKind, WorkerId, WorkerProfile, WorkerRole,
-    WorkerSessionId,
+    ControlRoomEventKind, HiveId, ProviderConversationId, ProviderKind, WorkerId, WorkerProfile,
+    WorkerRole, WorkerSessionId,
 };
 
 use super::{MAX_WORKSPACE_BYTES, TaskStore, TaskStoreError, insert_control_room_event};
@@ -60,7 +60,9 @@ impl TaskStore {
         let mut statement = connection.prepare(
             "
             SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
-                   p.position, s.session_id, p.created_at, p.updated_at
+                   p.position, s.session_id, p.provider_conversation_id,
+                   EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
+                   p.created_at, p.updated_at
             FROM worker_profiles p
             LEFT JOIN worker_sessions s
               ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -84,7 +86,9 @@ impl TaskStore {
             .query_row(
                 "
                 SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
-                       p.position, s.session_id, p.created_at, p.updated_at
+                       p.position, s.session_id, p.provider_conversation_id,
+                       EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
+                       p.created_at, p.updated_at
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -142,6 +146,41 @@ impl TaskStore {
         insert_control_room_event(&transaction, ControlRoomEventKind::SessionsChanged)?;
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Assigns a stable provider conversation to a profile that has never launched.
+    ///
+    /// # Errors
+    /// Returns an error when the worker is unknown, already has history, or persistence fails.
+    pub fn assign_provider_conversation(
+        &self,
+        worker_id: WorkerId,
+    ) -> Result<ProviderConversationId, TaskStoreError> {
+        let session_id = ProviderConversationId::new();
+        let connection = self.connection()?;
+        let updated = connection.execute(
+            "UPDATE worker_profiles SET provider_conversation_id = ?1, updated_at = unixepoch()
+             WHERE id = ?2 AND provider_conversation_id IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM worker_sessions WHERE worker_id = worker_profiles.id
+               )",
+            params![session_id.to_string(), worker_id.to_string()],
+        )?;
+        if updated == 1 {
+            return Ok(session_id);
+        }
+        let exists = connection
+            .query_row(
+                "SELECT 1 FROM worker_profiles WHERE id = ?1",
+                [worker_id.to_string()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if exists {
+            return Err(TaskStoreError::ProviderConversationUnavailable);
+        }
+        Err(TaskStoreError::WorkerNotFound)
     }
 
     /// Releases a session binding after its process exits or is stopped.
@@ -214,7 +253,9 @@ impl TaskStore {
             .query_row(
                 "
                 SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
-                       p.position, s.session_id, p.created_at, p.updated_at
+                       p.position, s.session_id, p.provider_conversation_id,
+                       EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
+                       p.created_at, p.updated_at
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
@@ -266,10 +307,12 @@ impl TaskStore {
             return Err(TaskStoreError::QueenAlreadyExists);
         }
         let id = WorkerId::new();
+        let provider_conversation_id = ProviderConversationId::new();
         transaction.execute(
             "INSERT INTO worker_profiles
-             (id, hive_id, name, role, provider, workspace, autostart, position)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (id, hive_id, name, role, provider, workspace, autostart, position,
+              provider_conversation_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 id.to_string(),
                 hive_id.to_string(),
@@ -278,7 +321,8 @@ impl TaskStore {
                 provider.to_string(),
                 workspace,
                 autostart,
-                position
+                position,
+                provider_conversation_id.to_string()
             ],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
@@ -311,6 +355,12 @@ fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> 
         .get::<_, Option<String>>(8)?
         .map(|value| WorkerSessionId::from_str(&value).map_err(|_| rusqlite::Error::InvalidQuery))
         .transpose()?;
+    let provider_conversation_id = row
+        .get::<_, Option<String>>(9)?
+        .map(|value| {
+            ProviderConversationId::from_str(&value).map_err(|_| rusqlite::Error::InvalidQuery)
+        })
+        .transpose()?;
     Ok(WorkerProfile {
         id,
         hive_id,
@@ -321,8 +371,10 @@ fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> 
         autostart: row.get::<_, i64>(6)? != 0,
         position: row.get(7)?,
         active_session_id: session,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
+        provider_conversation_id,
+        has_session_history: row.get::<_, i64>(10)? != 0,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 
@@ -389,5 +441,52 @@ mod tests {
                 .active_session_id,
             None
         );
+    }
+
+    #[test]
+    fn new_profiles_keep_one_exact_provider_conversation_across_processes() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Iris", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let conversation_id = worker
+            .provider_conversation_id
+            .expect("new profiles receive an exact provider conversation");
+        assert!(!worker.has_session_history);
+
+        let first = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, first).unwrap();
+        store.release_worker_session(first).unwrap();
+
+        let recovered = store.get_worker_profile(worker.id).unwrap();
+        assert_eq!(recovered.provider_conversation_id, Some(conversation_id));
+        assert!(recovered.has_session_history);
+    }
+
+    #[test]
+    fn migrated_profiles_with_history_remain_eligible_for_workspace_continue() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Poppy", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store.release_worker_session(session).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE worker_profiles SET provider_conversation_id = NULL WHERE id = ?1",
+                [worker.id.to_string()],
+            )
+            .unwrap();
+
+        let migrated = store.get_worker_profile(worker.id).unwrap();
+        assert_eq!(migrated.provider_conversation_id, None);
+        assert!(migrated.has_session_history);
+        assert!(matches!(
+            store.assign_provider_conversation(worker.id),
+            Err(TaskStoreError::ProviderConversationUnavailable)
+        ));
     }
 }

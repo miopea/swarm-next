@@ -18,7 +18,7 @@ mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 6;
+const CURRENT_SCHEMA_VERSION: i64 = 7;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -61,6 +61,8 @@ pub enum TaskStoreError {
     QueenAlreadyExists,
     #[error("worker already has an active session")]
     WorkerAlreadyRunning,
+    #[error("provider conversation cannot be assigned after worker history exists")]
+    ProviderConversationUnavailable,
     #[error("task order must contain every open task exactly once")]
     InvalidTaskOrder,
     #[error("database schema version {found} is newer than supported version {supported}")]
@@ -99,10 +101,11 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0 => {
+            0..=6 => {
                 let transaction = connection.transaction()?;
-                transaction.execute_batch(
-                    "
+                if schema_version == 0 {
+                    transaction.execute_batch(
+                        "
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -129,47 +132,9 @@ impl TaskStore {
                 occurred_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
             ",
-                )?;
-                migrate_worker_roster(&transaction)?;
-                migrate_task_details(&transaction)?;
-                migrate_hive_identity(&transaction)?;
-                migrate_control_room_events(&transaction)?;
-                migrate_task_ordering(&transaction)?;
-                transaction.commit()?;
-            }
-            1 => {
-                let transaction = connection.transaction()?;
-                migrate_worker_roster(&transaction)?;
-                migrate_task_details(&transaction)?;
-                migrate_hive_identity(&transaction)?;
-                migrate_control_room_events(&transaction)?;
-                migrate_task_ordering(&transaction)?;
-                transaction.commit()?;
-            }
-            2 => {
-                let transaction = connection.transaction()?;
-                migrate_task_details(&transaction)?;
-                migrate_hive_identity(&transaction)?;
-                migrate_control_room_events(&transaction)?;
-                migrate_task_ordering(&transaction)?;
-                transaction.commit()?;
-            }
-            3 => {
-                let transaction = connection.transaction()?;
-                migrate_hive_identity(&transaction)?;
-                migrate_control_room_events(&transaction)?;
-                migrate_task_ordering(&transaction)?;
-                transaction.commit()?;
-            }
-            4 => {
-                let transaction = connection.transaction()?;
-                migrate_control_room_events(&transaction)?;
-                migrate_task_ordering(&transaction)?;
-                transaction.commit()?;
-            }
-            5 => {
-                let transaction = connection.transaction()?;
-                migrate_task_ordering(&transaction)?;
+                    )?;
+                }
+                migrate_schema(&transaction, schema_version)?;
                 transaction.commit()?;
             }
             CURRENT_SCHEMA_VERSION => {}
@@ -714,6 +679,28 @@ impl TaskStore {
     }
 }
 
+fn migrate_schema(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
+    if schema_version < 2 {
+        migrate_worker_roster(transaction)?;
+    }
+    if schema_version < 3 {
+        migrate_task_details(transaction)?;
+    }
+    if schema_version < 4 {
+        migrate_hive_identity(transaction)?;
+    }
+    if schema_version < 5 {
+        migrate_control_room_events(transaction)?;
+    }
+    if schema_version < 6 {
+        migrate_task_ordering(transaction)?;
+    }
+    migrate_provider_conversations(transaction)
+}
+
 fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
     transaction.execute_batch(
         "
@@ -902,6 +889,13 @@ fn migrate_task_ordering(transaction: &rusqlite::Transaction<'_>) -> rusqlite::R
          );
          CREATE INDEX tasks_by_hive_position ON tasks(hive_id, position);
          PRAGMA user_version = 6;",
+    )
+}
+
+fn migrate_provider_conversations(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "ALTER TABLE worker_profiles ADD COLUMN provider_conversation_id TEXT;
+         PRAGMA user_version = 7;",
     )
 }
 
@@ -1230,6 +1224,16 @@ mod tests {
             .unwrap();
         assert!(columns.contains(&"description".to_owned()));
         assert!(columns.contains(&"priority".to_owned()));
+        let worker_columns = store
+            .connection()
+            .unwrap()
+            .prepare("PRAGMA table_info(worker_profiles)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(worker_columns.contains(&"provider_conversation_id".to_owned()));
         assert_eq!(
             store
                 .connection()
@@ -1469,6 +1473,7 @@ mod tests {
                 .execute_batch(
                     "DROP INDEX tasks_by_hive_position;
                      ALTER TABLE tasks DROP COLUMN position;
+                     ALTER TABLE worker_profiles DROP COLUMN provider_conversation_id;
                      DROP TABLE control_room_events;
                      PRAGMA user_version = 4;",
                 )
@@ -1488,6 +1493,50 @@ mod tests {
         );
         migrated.verify_integrity().unwrap();
     }
+
+    #[test]
+    fn migrates_schema_v6_without_assigning_ambiguous_existing_conversations() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let worker_id = {
+            let store = TaskStore::open(&path).unwrap();
+            let worker = store
+                .create_worker(
+                    "Existing worker",
+                    swarm_domain::ProviderKind::ClaudeCode,
+                    "/workspace",
+                    false,
+                    1,
+                )
+                .unwrap();
+            let session = WorkerSessionId::new();
+            store.bind_worker_session(worker.id, session).unwrap();
+            store.release_worker_session(session).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "ALTER TABLE worker_profiles DROP COLUMN provider_conversation_id;
+                     PRAGMA user_version = 6;",
+                )
+                .unwrap();
+            worker.id
+        };
+
+        let migrated = TaskStore::open(path).unwrap();
+        let worker = migrated.get_worker_profile(worker_id).unwrap();
+        assert!(worker.has_session_history);
+        assert_eq!(worker.provider_conversation_id, None);
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+    }
+
     #[test]
     fn fresh_store_owns_tasks_and_workers_in_one_durable_hive() {
         let directory = tempfile::tempdir().unwrap();

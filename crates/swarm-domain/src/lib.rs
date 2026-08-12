@@ -41,6 +41,7 @@ domain_id!(OperatorId);
 domain_id!(HiveId);
 domain_id!(ApiaryId);
 domain_id!(StewardshipId);
+domain_id!(ProviderConversationId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -504,6 +505,12 @@ pub struct WorkerProfile {
     pub autostart: bool,
     pub position: i64,
     pub active_session_id: Option<WorkerSessionId>,
+    /// Provider-owned conversation identity used for exact process recovery.
+    #[serde(skip)]
+    pub provider_conversation_id: Option<ProviderConversationId>,
+    /// Whether this profile has previously launched a provider process.
+    #[serde(skip)]
+    pub has_session_history: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -791,6 +798,8 @@ mod tests {
             autostart: true,
             position: 0,
             active_session_id: None,
+            provider_conversation_id: None,
+            has_session_history: false,
             created_at: 1,
             updated_at: 1,
         };
