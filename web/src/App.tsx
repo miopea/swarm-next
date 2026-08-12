@@ -296,6 +296,7 @@ export function App() {
 
   async function startWorkerForTask(task: Task) {
     if (!operatorToken) return;
+    let startedSessionId: string | undefined;
     await perform(async () => {
       const profile = workers.find((worker) => worker.workspace === task.workspace && worker.role !== "queen");
       if (!profile) throw new Error("Choose a configured worker for this task before starting it.");
@@ -310,8 +311,9 @@ export function App() {
       setTasks(controlRoom.tasks);
       setActiveSessionId(sessionId);
       setSurface("workers");
-      terminalWorkspace.focusSession(sessionId, shouldFocusTerminalInput());
+      startedSessionId = sessionId;
     });
+    if (startedSessionId) focusTerminalAfterRender(startedSessionId);
   }
 
   async function stopSession(sessionId: string) {
@@ -332,6 +334,7 @@ export function App() {
 
   async function startExistingWorker(profile: Worker) {
     if (!operatorToken) return;
+    let startedSessionId: string | undefined;
     await perform(async () => {
       const runningWorker = await startWorker(operatorToken, profile.id);
       const sessionId = requireActiveSession(runningWorker);
@@ -342,8 +345,9 @@ export function App() {
       setTasks(controlRoom.tasks);
       setActiveSessionId(sessionId);
       setSurface("workers");
-      terminalWorkspace.focusSession(sessionId, shouldFocusTerminalInput());
+      startedSessionId = sessionId;
     });
+    if (startedSessionId) focusTerminalAfterRender(startedSessionId);
   }
 
   async function addTask(input: TaskDraftInput) {
@@ -445,6 +449,13 @@ export function App() {
     setActiveSessionId(sessionId);
     setSurface("workers");
     terminalWorkspace.focusSession(sessionId, shouldFocusTerminalInput());
+  }
+
+  function focusTerminalAfterRender(sessionId: string) {
+    const input = shouldFocusTerminalInput();
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => terminalWorkspace.focusSession(sessionId, input));
+    });
   }
 
   async function logout() {

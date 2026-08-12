@@ -47,6 +47,7 @@ export class TerminalController {
   #state: TerminalConnectionState = "connecting";
   #stateDetail: string | undefined;
   #pendingFocus: "container" | "input" | undefined;
+  #focusOnConnect: "container" | "input" | undefined;
 
   constructor(surfaceFactory: TerminalSurfaceFactory, connectionFactory: TerminalConnectionFactory) {
     this.#surface = surfaceFactory();
@@ -65,8 +66,8 @@ export class TerminalController {
       this.#surface.open(this.#host);
       this.#opened = true;
     }
-    this.#applyPendingFocus();
     if (this.#started) {
+      this.#applyPendingFocus();
       this.#refitWhenAttached();
     } else {
       this.#startWhenFitted();
@@ -94,6 +95,7 @@ export class TerminalController {
   requestFocus(input: boolean): void {
     if (this.#disposed) return;
     this.#pendingFocus = input ? "input" : "container";
+    this.#focusOnConnect = this.#state === "connected" ? undefined : this.#pendingFocus;
     this.#applyPendingFocus();
   }
 
@@ -171,16 +173,22 @@ export class TerminalController {
       ),
     );
     this.#started = true;
+    this.#applyPendingFocus();
   }
 
   #setState(state: TerminalConnectionState, detail?: string): void {
     this.#state = state;
     this.#stateDetail = detail;
+    if (state === "connected" && this.#focusOnConnect) {
+      this.#pendingFocus = this.#focusOnConnect;
+      this.#focusOnConnect = undefined;
+      this.#applyPendingFocus();
+    }
     for (const subscriber of this.#statusSubscribers) subscriber(state, detail);
   }
 
   #applyPendingFocus(): void {
-    if (!this.#pendingFocus || !this.#host.parentElement || !this.#opened) return;
+    if (!this.#pendingFocus || !this.#host.parentElement || !this.#opened || !this.#started) return;
     const focus = this.#pendingFocus;
     this.#pendingFocus = undefined;
     if (focus === "input") this.#surface.focus();

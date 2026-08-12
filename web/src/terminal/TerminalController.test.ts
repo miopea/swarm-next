@@ -20,17 +20,32 @@ function fakeSurface(): TerminalSurface {
   };
 }
 
-test("a requested desktop focus follows the session into its mounted terminal", () => {
+test("a requested desktop focus follows the session into its mounted terminal", async () => {
   const surface = fakeSurface();
   const controller = new TerminalController(() => surface, fakeConnection);
 
   controller.requestFocus(true);
   controller.attach(document.createElement("div"));
 
-  expect(surface.focus).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(surface.focus).toHaveBeenCalledOnce());
 });
 
-test("a mobile worker selection focuses the terminal region without opening its keyboard", () => {
+test("a new terminal reapplies operator focus after its transport is ready", async () => {
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+
+  controller.requestFocus(true);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  expect(surface.focus).toHaveBeenCalledOnce();
+
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  handlers.onState("connected");
+  expect(surface.focus).toHaveBeenCalledTimes(2);
+});
+
+test("a mobile worker selection focuses the terminal region without opening its keyboard", async () => {
   const surface = fakeSurface();
   const controller = new TerminalController(() => surface, fakeConnection);
   const mount = document.createElement("div");
@@ -39,8 +54,8 @@ test("a mobile worker selection focuses the terminal region without opening its 
   controller.requestFocus(false);
   controller.attach(mount);
 
+  await vi.waitFor(() => expect(document.activeElement).toBe(mount.querySelector(".terminal-surface")));
   expect(surface.focus).not.toHaveBeenCalled();
-  expect(document.activeElement).toBe(mount.querySelector(".terminal-surface"));
   mount.remove();
 });
 
