@@ -79,8 +79,8 @@ test("edits task details and retains a failed form for retry", async () => {
 test("loads task history only when the operator opens it", async () => {
   const onFetchActivity = vi.fn().mockResolvedValue({
     events: [
-      { sequence: 1, task_id: task.id, kind: "created", from_state: null, to_state: "draft", occurred_at: 1_700_000_000 },
-      { sequence: 2, task_id: task.id, kind: "state_changed", from_state: "draft", to_state: "ready", occurred_at: 1_700_000_060 },
+      { sequence: 1, task_id: task.id, kind: "created", from_state: null, to_state: "draft", note: "", occurred_at: 1_700_000_000 },
+      { sequence: 2, task_id: task.id, kind: "state_changed", from_state: "draft", to_state: "ready", note: "Ready for Petal.", occurred_at: 1_700_000_060 },
     ],
     truncated: true,
   });
@@ -126,4 +126,23 @@ test.each([
   });
 
   expect(screen.getByRole("status")).toHaveTextContent(label);
+});
+test("shows Queen handoff state and its durable history note", async () => {
+  const onFetchActivity = vi.fn().mockResolvedValue({
+    events: [{
+      sequence: 3, task_id: task.id, kind: "state_changed", from_state: "active",
+      to_state: "review", note: "Android voice and shortcuts verified.", occurred_at: 1_700_000_120,
+    }],
+    truncated: false,
+  });
+  renderBoard({
+    tasks: [{ ...task, state: "review", assigned_session_id: "session-1", outcome_delivery_state: "delivered" }],
+    sessions: [{ session_id: "session-1", running: true }],
+    onFetchActivity,
+  });
+
+  expect(screen.getByRole("status")).toHaveTextContent("Queen notified");
+  fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Show history" }));
+  await waitFor(() => expect(screen.getByText("Android voice and shortcuts verified.")).toBeInTheDocument());
 });

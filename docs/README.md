@@ -59,3 +59,6 @@ Current decision records:
 - [ADR 0012: Server-authoritative operator engagement leases](decisions/0012-operator-engagement-leases.md)
 - [ADR 0013: Scoped agent application bridge](decisions/0013-scoped-agent-application-bridge.md)
 - [ADR 0014: Unified operator decision inbox](decisions/0014-unified-operator-decision-inbox.md)
+- [ADR 0015: Guarded durable decision outcome delivery](decisions/0015-guarded-decision-outcome-delivery.md)
+- [ADR 0016: Guarded durable task assignment dispatch](decisions/0016-guarded-task-assignment-dispatch.md)
+- [ADR 0017: Guarded worker outcomes to Queen](decisions/0017-guarded-worker-outcomes-to-queen.md)

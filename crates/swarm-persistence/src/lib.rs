@@ -9,7 +9,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use swarm_domain::{
     ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
     HiveIdentity, Operator, OperatorId, Task, TaskActivity, TaskActivityKind, TaskActivityPage,
-    TaskDetailsUpdate, TaskDispatchState, TaskId, TaskPriority, TaskState, WorkerSessionId,
+    TaskDetailsUpdate, TaskDispatchState, TaskId, TaskOutcomeDeliveryState, TaskPriority,
+    TaskState, WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -18,11 +19,14 @@ mod decisions;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
 mod task_dispatches;
 pub use task_dispatches::{TaskDispatch, TaskDispatchFailure};
+mod task_outcomes;
+pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
+const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 12;
+const CURRENT_SCHEMA_VERSION: i64 = 13;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -59,6 +63,10 @@ pub enum TaskStoreError {
     DecisionInboxFull,
     #[error("this Hive already has the maximum number of pending task briefings")]
     TaskDispatchQueueFull,
+    #[error("task handoff note must not exceed {MAX_TASK_ACTIVITY_NOTE_BYTES} bytes")]
+    InvalidTaskActivityNote,
+    #[error("this Hive already has the maximum number of pending Queen handoffs")]
+    TaskOutcomeQueueFull,
     #[error("task title must contain 1 to {MAX_TASK_TITLE_BYTES} bytes")]
     InvalidTitle,
     #[error("task description must not exceed {MAX_TASK_DESCRIPTION_BYTES} bytes")]
@@ -125,7 +133,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=11 => {
+            0..=12 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -280,6 +288,9 @@ impl TaskStore {
             "
             SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
                    (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
+                   (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
+                    AND outcome.target_state = t.state
+                    ORDER BY outcome.activity_sequence DESC LIMIT 1),
                    t.position, t.created_at, t.updated_at
             FROM tasks t
             LEFT JOIN task_assignments a
@@ -306,6 +317,9 @@ impl TaskStore {
                 "
                 SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
                    (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
+                   (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
+                    AND outcome.target_state = t.state
+                    ORDER BY outcome.activity_sequence DESC LIMIT 1),
                        t.position, t.created_at, t.updated_at
                 FROM tasks t
                 LEFT JOIN task_assignments a
@@ -344,7 +358,7 @@ impl TaskStore {
         let query_limit = i64::try_from(limit.saturating_add(1))
             .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
         let mut statement = connection.prepare(
-            "SELECT sequence, task_id, kind, from_state, to_state, occurred_at
+            "SELECT sequence, task_id, kind, from_state, to_state, note, occurred_at
              FROM task_activity WHERE task_id = ?1
              ORDER BY sequence DESC LIMIT ?2",
         )?;
@@ -507,21 +521,82 @@ impl TaskStore {
         }
     }
 
-    /// Applies one permitted task state transition and records its activity atomically.
+    /// Applies one permitted task transition without a handoff note.
     ///
     /// # Errors
     /// Returns an error for an unknown task, rejected transition, or persistence failure.
     pub fn transition_task(&self, id: TaskId, target: TaskState) -> Result<Task, TaskStoreError> {
+        self.transition_task_inner(id, target, "", None)
+    }
+
+    /// Applies an operator or Queen transition with a bounded audit note.
+    ///
+    /// # Errors
+    /// Returns an error for invalid content, lifecycle, or persistence.
+    pub fn transition_task_with_note(
+        &self,
+        id: TaskId,
+        target: TaskState,
+        note: &str,
+    ) -> Result<Task, TaskStoreError> {
+        self.transition_task_inner(id, target, note, None)
+    }
+
+    /// Applies an assigned worker transition and queues Blocked or Review for Queen atomically.
+    ///
+    /// # Errors
+    /// Returns an error for a stale assignment, invalid content, capacity, or persistence.
+    pub fn transition_worker_task(
+        &self,
+        id: TaskId,
+        target: TaskState,
+        note: &str,
+        session_id: WorkerSessionId,
+    ) -> Result<Task, TaskStoreError> {
+        self.transition_task_inner(id, target, note, Some(session_id))
+    }
+
+    fn transition_task_inner(
+        &self,
+        id: TaskId,
+        target: TaskState,
+        note: &str,
+        reporting_session_id: Option<WorkerSessionId>,
+    ) -> Result<Task, TaskStoreError> {
+        if note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
+            return Err(TaskStoreError::InvalidTaskActivityNote);
+        }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let current: Option<String> = transaction
-            .query_row(
-                "SELECT state FROM tasks WHERE id = ?1",
-                [id.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let current = current.ok_or(TaskStoreError::NotFound)?;
+        let current: Option<String> = if let Some(session_id) = reporting_session_id {
+            transaction
+                .query_row(
+                    "SELECT task.state FROM tasks task
+                     JOIN task_assignments assignment ON assignment.task_id = task.id
+                         AND assignment.released_at IS NULL
+                     JOIN worker_sessions session ON session.session_id = assignment.worker_session_id
+                         AND session.ended_at IS NULL
+                     WHERE task.id = ?1 AND session.session_id = ?2",
+                    params![id.to_string(), session_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?
+        } else {
+            transaction
+                .query_row(
+                    "SELECT state FROM tasks WHERE id = ?1",
+                    [id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?
+        };
+        let current = current.ok_or_else(|| {
+            if reporting_session_id.is_some() {
+                TaskStoreError::WorkerSessionNotActive
+            } else {
+                TaskStoreError::NotFound
+            }
+        })?;
         let current = TaskState::from_str(&current)
             .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
         if !current.can_transition_to(target) {
@@ -531,20 +606,34 @@ impl TaskStore {
             });
         }
         transaction.execute(
+            "DELETE FROM task_outcome_deliveries WHERE task_id = ?1 AND state = 'queued'",
+            [id.to_string()],
+        )?;
+        transaction.execute(
             "UPDATE tasks SET state = ?2, updated_at = unixepoch() WHERE id = ?1",
             params![id.to_string(), target.to_string()],
         )?;
         transaction.execute(
-            "INSERT INTO task_activity (task_id, kind, from_state, to_state)
-             VALUES (?1, 'state_changed', ?2, ?3)",
-            params![id.to_string(), current.to_string(), target.to_string()],
+            "INSERT INTO task_activity (task_id, kind, from_state, to_state, note)
+             VALUES (?1, 'state_changed', ?2, ?3, ?4)",
+            params![
+                id.to_string(),
+                current.to_string(),
+                target.to_string(),
+                note
+            ],
         )?;
+        let activity_sequence = transaction.last_insert_rowid();
+        if let Some(session_id) = reporting_session_id
+            && matches!(target, TaskState::Blocked | TaskState::Review)
+        {
+            insert_task_outcome(&transaction, id, target, session_id, activity_sequence)?;
+        }
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_task(id)
     }
-
     /// Replaces the current assignment with a running immutable worker-session identity.
     ///
     /// # Errors
@@ -567,6 +656,10 @@ impl TaskStore {
         if state == TaskState::Completed.to_string() {
             return Err(TaskStoreError::CompletedTask);
         }
+        transaction.execute(
+            "DELETE FROM task_outcome_deliveries WHERE task_id = ?1 AND state = 'queued'",
+            [id.to_string()],
+        )?;
         transaction.execute(
             "DELETE FROM task_dispatches WHERE assignment_id IN (
                  SELECT id FROM task_assignments WHERE task_id = ?1 AND released_at IS NULL
@@ -741,6 +834,56 @@ impl TaskStore {
     }
 }
 
+fn insert_task_outcome(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    target: TaskState,
+    session_id: WorkerSessionId,
+    activity_sequence: i64,
+) -> Result<(), TaskStoreError> {
+    let queued: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM task_outcome_deliveries
+         WHERE state IN ('queued','dispatching')",
+        [],
+        |row| row.get(0),
+    )?;
+    if queued >= 256 {
+        return Err(TaskStoreError::TaskOutcomeQueueFull);
+    }
+    let inserted = transaction.execute(
+        "INSERT INTO task_outcome_deliveries (
+             id, task_id, activity_sequence, reporting_worker_id,
+             recipient_worker_id, target_state, state
+         )
+         SELECT ?1, ?2, ?3, reporter.id, queen.id, ?5, 'queued'
+         FROM worker_sessions session
+         JOIN worker_profiles reporter ON reporter.id = session.worker_id
+         JOIN worker_profiles queen ON queen.hive_id = reporter.hive_id
+             AND queen.role = 'queen'
+         WHERE session.session_id = ?4 AND session.ended_at IS NULL",
+        params![
+            Uuid::now_v7().to_string(),
+            task_id.to_string(),
+            activity_sequence,
+            session_id.to_string(),
+            target.to_string(),
+        ],
+    )?;
+    if inserted != 1 {
+        return Err(TaskStoreError::IntegrityFailure(
+            "worker outcome could not resolve its Queen".into(),
+        ));
+    }
+    transaction.execute(
+        "DELETE FROM task_outcome_deliveries WHERE id IN (
+             SELECT id FROM task_outcome_deliveries
+             WHERE state IN ('delivered','uncertain')
+             ORDER BY updated_at DESC, id DESC LIMIT -1 OFFSET 1024
+         )",
+        [],
+    )?;
+    Ok(())
+}
 fn migrate_schema(
     transaction: &rusqlite::Transaction<'_>,
     schema_version: i64,
@@ -775,7 +918,13 @@ fn migrate_schema(
     if schema_version < 11 {
         migrate_decision_deliveries(transaction)?;
     }
-    migrate_task_dispatches(transaction)
+    if schema_version < 12 {
+        migrate_task_dispatches(transaction)?;
+    }
+    if schema_version < 13 {
+        migrate_task_outcomes(transaction)?;
+    }
+    Ok(())
 }
 
 fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -1085,6 +1234,52 @@ fn migrate_task_dispatches(transaction: &rusqlite::Transaction<'_>) -> rusqlite:
          PRAGMA user_version = 12;",
     )
 }
+fn migrate_task_outcomes(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_activity (
+             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             kind TEXT NOT NULL,
+             from_state TEXT,
+             to_state TEXT,
+             occurred_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );",
+    )?;
+    let has_note = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM pragma_table_info('task_activity') WHERE name = 'note'
+         )",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !has_note {
+        transaction.execute(
+            "ALTER TABLE task_activity ADD COLUMN note TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_outcome_deliveries (
+             id TEXT PRIMARY KEY,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             activity_sequence INTEGER NOT NULL UNIQUE REFERENCES task_activity(sequence) ON DELETE CASCADE,
+             reporting_worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+             recipient_worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+             target_state TEXT NOT NULL CHECK (target_state IN ('blocked','review')),
+             state TEXT NOT NULL CHECK (state IN ('queued','dispatching','delivered','uncertain')),
+             session_id TEXT REFERENCES worker_sessions(session_id),
+             attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 3),
+             attempted_at INTEGER,
+             delivered_at INTEGER,
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             CHECK ((state = 'delivered' AND delivered_at IS NOT NULL)
+                 OR (state <> 'delivered' AND delivered_at IS NULL))
+         );
+         CREATE INDEX IF NOT EXISTS task_outcome_deliveries_queue
+             ON task_outcome_deliveries(state, updated_at, id);
+         PRAGMA user_version = 13;",
+    )
+}
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
     if title.is_empty() || title.len() > MAX_TASK_TITLE_BYTES {
         return Err(TaskStoreError::InvalidTitle);
@@ -1109,6 +1304,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let state: String = row.get(6)?;
     let assigned_session_id: Option<String> = row.get(7)?;
     let dispatch_state: Option<String> = row.get(8)?;
+    let outcome_delivery_state: Option<String> = row.get(9)?;
     Ok(Task {
         id: TaskId::from_str(&id).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -1155,9 +1351,19 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
                     Box::new(error),
                 )
             })?,
-        position: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
+        outcome_delivery_state: outcome_delivery_state
+            .map(|value| TaskOutcomeDeliveryState::from_str(&value))
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    9,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
+        position: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 
@@ -1181,7 +1387,8 @@ fn task_activity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskActiv
         kind,
         from_state,
         to_state,
-        occurred_at: row.get(5)?,
+        note: row.get(5)?,
+        occurred_at: row.get(6)?,
     })
 }
 
@@ -1829,6 +2036,53 @@ mod tests {
             migrated
                 .connection()
                 .unwrap()
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+    }
+    #[test]
+    fn migrates_schema_v12_to_task_handoff_notes_and_outbox() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "DROP TABLE task_outcome_deliveries;
+                     ALTER TABLE task_activity DROP COLUMN note;
+                     PRAGMA user_version = 12;",
+                )
+                .unwrap();
+        }
+
+        let migrated = TaskStore::open(path).unwrap();
+        let connection = migrated.connection().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'task_outcome_deliveries'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('task_activity') WHERE name = 'note'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
                 .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
                 .unwrap(),
             CURRENT_SCHEMA_VERSION

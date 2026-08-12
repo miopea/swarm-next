@@ -73,6 +73,12 @@ assignment. Its Queued, Dispatching, Delivered, or Uncertain state describes
 terminal delivery only; it never overrides task lifecycle or assignment truth.
 Operator engagement defers a dispatch, and ambiguous delivery is not replayed
 automatically.
+### Task outcome
+
+The durable, assignment-authorized Blocked or Review handoff from one worker to
+its Queen. It owns a bounded activity note and a separate Queued, Dispatching,
+Delivered, or Uncertain delivery state. A newer task transition cancels a stale
+Queued outcome; terminal delivery never overrides task state or history.
 ### Activity event
 
 An immutable record of a material domain transition. Events support audit,

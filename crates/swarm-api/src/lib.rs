@@ -27,7 +27,8 @@ use swarm_domain::{
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE,
-    TaskDispatch, TaskDispatchFailure, TaskStore, TaskStoreError,
+    TaskDispatch, TaskDispatchFailure, TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore,
+    TaskStoreError,
 };
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
@@ -154,6 +155,7 @@ impl AppState {
         };
         self.deliver_decision_outcomes(store, client).await;
         self.deliver_task_briefs(store, client).await;
+        self.deliver_task_outcomes(store, client).await;
     }
 
     async fn deliver_decision_outcomes(&self, store: &TaskStore, client: &HostClient) {
@@ -257,6 +259,56 @@ impl AppState {
             }
         }
     }
+    async fn deliver_task_outcomes(&self, store: &TaskStore, client: &HostClient) {
+        let outcomes = match store.claim_task_outcomes(unix_timestamp()) {
+            Ok(outcomes) => outcomes,
+            Err(error) => {
+                tracing::warn!(message = %error, "task outcome queue could not be claimed");
+                return;
+            }
+        };
+        for outcome in outcomes {
+            let request = HostRequest::Write {
+                session_id: outcome.session_id,
+                bytes: task_outcome_message(&outcome),
+            };
+            let result = match client.request(&request).await {
+                Ok(HostResponse::Acknowledged) => {
+                    store.complete_task_outcome(&outcome.id, unix_timestamp())
+                }
+                Ok(HostResponse::Error { code, message }) => {
+                    tracing::warn!(task_id = %outcome.task_id, reporter_id = %outcome.reporting_worker_id, recipient_id = %outcome.recipient_worker_id, %code, %message, "task outcome was rejected by terminal host");
+                    store.fail_task_outcome(
+                        &outcome.id,
+                        unix_timestamp(),
+                        TaskOutcomeFailure::Retryable,
+                    )
+                }
+                Ok(_) => store.fail_task_outcome(
+                    &outcome.id,
+                    unix_timestamp(),
+                    TaskOutcomeFailure::Uncertain,
+                ),
+                Err(error) => {
+                    tracing::warn!(task_id = %outcome.task_id, reporter_id = %outcome.reporting_worker_id, message = %error, "task outcome result is uncertain");
+                    store.fail_task_outcome(
+                        &outcome.id,
+                        unix_timestamp(),
+                        TaskOutcomeFailure::Uncertain,
+                    )
+                }
+            };
+            match result {
+                Ok(true) => self.control_room_notify.notify_waiters(),
+                Ok(false) => {
+                    tracing::warn!(task_id = %outcome.task_id, "task outcome claim was no longer active");
+                }
+                Err(error) => {
+                    tracing::warn!(task_id = %outcome.task_id, message = %error, "task outcome could not be persisted");
+                }
+            }
+        }
+    }
     /// Makes crash-interrupted delivery explicit before any new dispatch is attempted.
     ///
     /// # Errors
@@ -274,6 +326,15 @@ impl AppState {
         self.task_store
             .as_ref()
             .map_or(Ok(0), TaskStore::recover_inflight_task_dispatches)
+    }
+    /// Makes crash-interrupted Queen handoffs explicit before new dispatch.
+    ///
+    /// # Errors
+    /// Returns a persistence error when recovery cannot be recorded.
+    pub fn recover_task_outcomes(&self) -> Result<usize, TaskStoreError> {
+        self.task_store
+            .as_ref()
+            .map_or(Ok(0), TaskStore::recover_inflight_task_outcomes)
     }
 }
 
@@ -302,6 +363,20 @@ fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
     format!(
         "[Swarm task {} assigned] {}. Priority: {}. Workspace: {}. Brief: {} Use swarm_list_tasks for the authoritative current assignment; if it is not visible, the assignment changed.\r",
         delivery.task_id, title, delivery.priority, workspace, description,
+    )
+    .into_bytes()
+}
+fn task_outcome_message(outcome: &TaskOutcomeDispatch) -> Vec<u8> {
+    let reporter = terminal_safe_text(&outcome.reporting_worker_name);
+    let title = terminal_safe_text(&outcome.title);
+    let note = if outcome.note.is_empty() {
+        "No additional handoff note.".into()
+    } else {
+        terminal_safe_text(&outcome.note)
+    };
+    format!(
+        "[Swarm worker outcome] {} moved task {} \"{}\" to {}. Handoff: {} Use swarm_list_tasks and task history for authoritative context.\r",
+        reporter, outcome.task_id, title, outcome.target_state, note,
     )
     .into_bytes()
 }
@@ -457,6 +532,8 @@ struct CreateTaskRequest {
 #[derive(Debug, Deserialize)]
 struct TransitionTaskRequest {
     state: TaskState,
+    #[serde(default)]
+    note: String,
 }
 #[derive(Debug, Deserialize)]
 struct ResolveDecisionRequest {
@@ -842,7 +919,7 @@ async fn transition_task(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let task = task_service(&state)?
-        .transition_operator_task(parse_task_id(&task_id)?, request.state)
+        .transition_operator_task_with_note(parse_task_id(&task_id)?, request.state, &request.note)
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     Ok(Json(task).into_response())
@@ -1438,7 +1515,8 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::InvalidTitle
         | TaskStoreError::InvalidDescription
         | TaskStoreError::InvalidWorkspace
-        | TaskStoreError::EmptyTaskDetailsUpdate => {
+        | TaskStoreError::EmptyTaskDetailsUpdate
+        | TaskStoreError::InvalidTaskActivityNote => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_task", error.to_string())
         }
         TaskStoreError::InvalidTransition { .. } | TaskStoreError::CompletedTask => ApiError::new(
@@ -1449,6 +1527,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::TaskDispatchQueueFull => ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "task_dispatch_queue_full",
+            error.to_string(),
+        ),
+        TaskStoreError::TaskOutcomeQueueFull => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "task_outcome_queue_full",
             error.to_string(),
         ),
         TaskStoreError::InvalidTaskOrder => ApiError::new(
@@ -1664,6 +1747,25 @@ mod tests {
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));
         assert!(String::from_utf8_lossy(&message).contains("polish mobile"));
+    }
+    #[test]
+    fn task_outcome_is_one_sanitized_terminal_submission() {
+        let outcome = TaskOutcomeDispatch {
+            id: "outcome-1".into(),
+            task_id: TaskId::new(),
+            reporting_worker_id: WorkerId::new(),
+            reporting_worker_name: "Petal\nBee".into(),
+            recipient_worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            title: "Mobile\u{1b}[31m controls".into(),
+            target_state: TaskState::Review,
+            note: "Shipped\rand verified".into(),
+        };
+        let message = task_outcome_message(&outcome);
+        assert_eq!(message.last(), Some(&b'\r'));
+        assert!(!message[..message.len() - 1].contains(&b'\n'));
+        assert!(!message.contains(&0x1b));
+        assert!(String::from_utf8_lossy(&message).contains("Petal Bee"));
     }
     #[tokio::test]
     async fn health_is_versioned() {
@@ -2163,6 +2265,111 @@ mod tests {
         }
 
         session.stop().unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn worker_review_handoff_reaches_the_quiet_queen_terminal() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec![
+                "-lc".into(),
+                "read value; printf 'received:%s' \"$value\"; sleep 5".into(),
+            ],
+            working_directory: workspace.clone(),
+        };
+        let queen_terminal = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store
+            .ensure_queen(workspace.to_string_lossy().as_ref())
+            .unwrap();
+        store
+            .bind_worker_session(queen.id, queen_terminal.id())
+            .unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let worker_session = WorkerSessionId::new();
+        store
+            .bind_worker_session(worker.id, worker_session)
+            .unwrap();
+        let task = store
+            .create_task("Ship mobile controls", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, worker_session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store
+            .transition_worker_task(
+                task.id,
+                TaskState::Review,
+                "Android voice and shortcuts verified.",
+                worker_session,
+            )
+            .unwrap();
+
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
+        state.deliver_coordination().await;
+        assert_eq!(
+            store.get_task(task.id).unwrap().outcome_delivery_state,
+            Some(swarm_domain::TaskOutcomeDeliveryState::Delivered)
+        );
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let mut after_sequence = None;
+        let mut output = Vec::new();
+        loop {
+            let response = HostClient::new(&socket)
+                .request(&HostRequest::Read {
+                    session_id: queen_terminal.id(),
+                    after_sequence,
+                })
+                .await
+                .unwrap();
+            let HostResponse::Output { resume, .. } = response else {
+                panic!("terminal host should return Queen output");
+            };
+            match resume {
+                swarm_terminal::Resume::Deltas { frames } => {
+                    for frame in frames {
+                        after_sequence = Some(frame.sequence);
+                        output.extend_from_slice(&frame.bytes);
+                    }
+                }
+                swarm_terminal::Resume::Snapshot { snapshot } => {
+                    after_sequence = Some(snapshot.sequence);
+                    output = snapshot.bytes;
+                }
+            }
+            let rendered = String::from_utf8_lossy(&output);
+            if rendered.contains("[Swarm worker outcome]")
+                && rendered.contains("Android voice and shortcuts verified")
+            {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        queen_terminal.stop().unwrap();
         server_task.abort();
         let _ = server_task.await;
     }

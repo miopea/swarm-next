@@ -227,6 +227,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-history li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; color: var(--muted); font-size: .73rem; }
 .task-history li::before { width: 6px; height: 6px; margin-right: 8px; border-radius: 50%; background: var(--good); content: ""; }
 .task-history li { grid-template-columns: 6px minmax(0, 1fr) auto; }
+.task-history-handoff { display: block; margin-top: 3px; color: var(--text); font-size: .71rem; line-height: 1.4; }
 .task-history time { color: var(--quiet); font-size: .67rem; white-space: nowrap; }
 .task-edit-form { display: grid; gap: 7px; margin: -5px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); }
 .task-edit-form input, .task-edit-form select, .task-edit-form textarea { min-height: 34px; padding: 7px 9px; font-size: .78rem; }

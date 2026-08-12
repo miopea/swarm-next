@@ -39,6 +39,12 @@ const dispatchLabels = {
   delivered: "Worker briefed",
   uncertain: "Briefing uncertain — task remains authoritative",
 } as const;
+const outcomeDeliveryLabels = {
+  queued: "Queen handoff waits for a quiet moment",
+  dispatching: "Notifying Queen",
+  delivered: "Queen notified",
+  uncertain: "Queen handoff uncertain — task remains authoritative",
+} as const;
 const validTargets: Record<TaskState, TaskState[]> = {
   draft: ["ready"],
   ready: ["active", "blocked"],
@@ -327,6 +333,11 @@ function TaskCard({ task, sessions, workerNames, busy, onUpdate, onTransition, o
             {dispatchLabels[task.dispatch_state]}
           </p>
         )}
+        {task.outcome_delivery_state && (
+          <p className={`task-dispatch task-dispatch-${task.outcome_delivery_state}`} role="status">
+            {outcomeDeliveryLabels[task.outcome_delivery_state]}
+          </p>
+        )}
         </>
       )}
       <div className="task-actions">
@@ -376,7 +387,10 @@ function TaskActivityPanel({ activity, loading, failed, onRetry }: {
         <ol>
           {activity.events.map((entry) => (
             <li key={entry.sequence}>
-              <span>{activityLabel(entry)}</span>
+              <span>
+                <span>{activityLabel(entry)}</span>
+                {entry.note && <small className="task-history-handoff">{entry.note}</small>}
+              </span>
               <time dateTime={new Date(entry.occurred_at * 1000).toISOString()}>{formatActivityTime(entry.occurred_at)}</time>
             </li>
           ))}
