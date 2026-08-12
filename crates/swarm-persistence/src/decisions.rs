@@ -2,8 +2,8 @@ use std::{collections::HashSet, str::FromStr};
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    ControlRoomEventKind, DecisionRequest, DecisionRequestId, DecisionRequestKind,
-    DecisionRequestState, DecisionUrgency, TaskId, WorkerId,
+    ControlRoomEventKind, DecisionDeliveryState, DecisionRequest, DecisionRequestId,
+    DecisionRequestKind, DecisionRequestState, DecisionUrgency, TaskId, WorkerId, WorkerSessionId,
 };
 
 use super::{TaskStore, TaskStoreError, insert_control_room_event};
@@ -15,7 +15,23 @@ const MAX_DETAIL_BYTES: usize = 10_000;
 const MAX_ACTION_BYTES: usize = 80;
 const MAX_ACTIONS: usize = 6;
 const MAX_RESOLUTION_NOTE_BYTES: usize = 4_000;
+const MAX_DELIVERY_CLAIMS: i64 = 16;
+const MAX_DELIVERY_ATTEMPTS: i64 = 3;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecisionDispatch {
+    pub decision_id: DecisionRequestId,
+    pub worker_id: WorkerId,
+    pub session_id: WorkerSessionId,
+    pub action: String,
+    pub note: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DecisionDeliveryFailure {
+    Retryable,
+    Uncertain,
+}
 #[derive(Clone, Debug)]
 pub struct NewDecisionRequest<'a> {
     pub requesting_worker_id: WorkerId,
@@ -110,7 +126,8 @@ impl TaskStore {
                 "SELECT id, hive_id, requesting_worker_id, task_id, kind, urgency, title,
                         reason, risk, evidence, suggested_action, allowed_actions, deadline,
                         state, resolution_action, resolution_note, resolved_by_operator_id,
-                        created_at, updated_at, resolved_at
+                        created_at, updated_at, resolved_at,
+                        (SELECT state FROM decision_deliveries WHERE decision_id = decision_requests.id)
                  FROM decision_requests WHERE id = ?1",
                 [id.to_string()],
                 decision_from_row,
@@ -129,7 +146,8 @@ impl TaskStore {
             "SELECT d.id, d.hive_id, d.requesting_worker_id, d.task_id, d.kind, d.urgency, d.title,
                     reason, risk, evidence, suggested_action, allowed_actions, deadline,
                     state, resolution_action, resolution_note, resolved_by_operator_id,
-                    created_at, updated_at, resolved_at
+                    created_at, updated_at, resolved_at,
+                    (SELECT state FROM decision_deliveries WHERE decision_id = d.id)
              FROM decision_requests d
              JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
              ORDER BY state = 'pending' DESC, urgency = 'time_sensitive' DESC,
@@ -192,10 +210,161 @@ impl TaskStore {
         if updated != 1 {
             return Err(TaskStoreError::DecisionAlreadyResolved);
         }
+        transaction.execute(
+            "INSERT INTO decision_deliveries (decision_id, worker_id, state)
+             SELECT id, requesting_worker_id, 'queued' FROM decision_requests WHERE id = ?1",
+            [id.to_string()],
+        )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
         transaction.commit()?;
         drop(connection);
         self.get_decision_request(id)
+    }
+
+    /// Atomically claims a bounded batch whose worker is running and not operator-engaged.
+    ///
+    /// # Errors
+    /// Returns a persistence or integrity error.
+    pub fn claim_decision_deliveries(
+        &self,
+        now: i64,
+    ) -> Result<Vec<DecisionDispatch>, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let candidates = {
+            let mut statement = transaction.prepare(
+                "SELECT dd.decision_id, dd.worker_id, ws.session_id,
+                        d.resolution_action, d.resolution_note
+                 FROM decision_deliveries dd
+                 JOIN decision_requests d ON d.id = dd.decision_id
+                 JOIN worker_sessions ws ON ws.worker_id = dd.worker_id AND ws.ended_at IS NULL
+                 WHERE dd.state = 'queued'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM worker_engagements e
+                       WHERE e.worker_id = dd.worker_id AND e.expires_at > ?1
+                   )
+                 ORDER BY dd.updated_at, dd.decision_id
+                 LIMIT ?2",
+            )?;
+            statement
+                .query_map(params![now, MAX_DELIVERY_CLAIMS], |row| {
+                    Ok(DecisionDispatch {
+                        decision_id: parse_id(&row.get::<_, String>(0)?)?,
+                        worker_id: parse_id(&row.get::<_, String>(1)?)?,
+                        session_id: parse_id(&row.get::<_, String>(2)?)?,
+                        action: row.get(3)?,
+                        note: row.get(4)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for delivery in &candidates {
+            let updated = transaction.execute(
+                "UPDATE decision_deliveries SET state = 'dispatching', session_id = ?2,
+                     attempts = attempts + 1, attempted_at = ?3, updated_at = ?3
+                 WHERE decision_id = ?1 AND state = 'queued' AND attempts < ?4",
+                params![
+                    delivery.decision_id.to_string(),
+                    delivery.session_id.to_string(),
+                    now,
+                    MAX_DELIVERY_ATTEMPTS,
+                ],
+            )?;
+            if updated != 1 {
+                return Err(TaskStoreError::IntegrityFailure(
+                    "decision delivery claim lost atomic ownership".into(),
+                ));
+            }
+        }
+        if !candidates.is_empty() {
+            insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
+        }
+        transaction.commit()?;
+        Ok(candidates)
+    }
+
+    /// Records an acknowledged delivery.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn complete_decision_delivery(
+        &self,
+        id: DecisionRequestId,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        self.finish_decision_delivery(id, now, None)
+    }
+
+    /// Records a definitive rejection for retry or a crash-ambiguous result as uncertain.
+    ///
+    /// # Errors
+    /// Returns a persistence or integrity error.
+    pub fn fail_decision_delivery(
+        &self,
+        id: DecisionRequestId,
+        now: i64,
+        failure: DecisionDeliveryFailure,
+    ) -> Result<bool, TaskStoreError> {
+        self.finish_decision_delivery(id, now, Some(failure))
+    }
+
+    fn finish_decision_delivery(
+        &self,
+        id: DecisionRequestId,
+        now: i64,
+        failure: Option<DecisionDeliveryFailure>,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let (state, delivered_at) = match failure {
+            None => ("delivered", Some(now)),
+            Some(DecisionDeliveryFailure::Uncertain) => ("uncertain", None),
+            Some(DecisionDeliveryFailure::Retryable) => {
+                let attempts: i64 = transaction.query_row(
+                    "SELECT attempts FROM decision_deliveries
+                     WHERE decision_id = ?1 AND state = 'dispatching'",
+                    [id.to_string()],
+                    |row| row.get(0),
+                )?;
+                (
+                    if attempts >= MAX_DELIVERY_ATTEMPTS {
+                        "uncertain"
+                    } else {
+                        "queued"
+                    },
+                    None,
+                )
+            }
+        };
+        let changed = transaction.execute(
+            "UPDATE decision_deliveries SET state = ?2, delivered_at = ?3, updated_at = ?4
+             WHERE decision_id = ?1 AND state = 'dispatching'",
+            params![id.to_string(), state, delivered_at, now],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
+    /// Converts crash-interrupted dispatches to an explicit non-retrying state.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn recover_inflight_decision_deliveries(&self) -> Result<usize, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE decision_deliveries SET state = 'uncertain', updated_at = unixepoch()
+             WHERE state = 'dispatching'",
+            [],
+        )?;
+        if changed > 0 {
+            insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
     }
 }
 
@@ -268,6 +437,11 @@ fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionReques
         created_at: row.get(17)?,
         updated_at: row.get(18)?,
         resolved_at: row.get(19)?,
+        delivery_state: row
+            .get::<_, Option<String>>(20)?
+            .map(|value| DecisionDeliveryState::from_str(&value))
+            .transpose()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
     })
 }
 
@@ -372,5 +546,70 @@ mod tests {
         let inbox = store.list_decision_requests().unwrap();
         assert_eq!(inbox.len(), 2);
         assert_eq!(inbox[0].urgency, DecisionUrgency::TimeSensitive);
+    }
+
+    #[test]
+    fn resolved_outcomes_wait_for_engagement_then_deliver_to_the_active_session() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        let actions = vec!["continue".into(), "stop".into()];
+        let decision = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+        let resolved = store
+            .resolve_decision_request(decision.id, "continue", "Ship after tests.")
+            .unwrap();
+        assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
+
+        store.renew_worker_engagement(session, 100, 300).unwrap();
+        assert!(store.claim_decision_deliveries(101).unwrap().is_empty());
+        let deliveries = store.claim_decision_deliveries(401).unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].session_id, session);
+        assert_eq!(deliveries[0].action, "continue");
+        assert_eq!(deliveries[0].note, "Ship after tests.");
+        assert_eq!(
+            store
+                .get_decision_request(decision.id)
+                .unwrap()
+                .delivery_state,
+            Some(DecisionDeliveryState::Dispatching)
+        );
+
+        assert!(store.complete_decision_delivery(decision.id, 402).unwrap());
+        assert_eq!(
+            store
+                .get_decision_request(decision.id)
+                .unwrap()
+                .delivery_state,
+            Some(DecisionDeliveryState::Delivered)
+        );
+    }
+
+    #[test]
+    fn crash_ambiguity_never_auto_retries_a_terminal_injection() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        let actions = vec!["continue".into()];
+        let decision = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+        store
+            .resolve_decision_request(decision.id, "continue", "")
+            .unwrap();
+        assert_eq!(store.claim_decision_deliveries(100).unwrap().len(), 1);
+        assert_eq!(store.recover_inflight_decision_deliveries().unwrap(), 1);
+        assert!(store.claim_decision_deliveries(101).unwrap().is_empty());
+        assert_eq!(
+            store
+                .get_decision_request(decision.id)
+                .unwrap()
+                .delivery_state,
+            Some(DecisionDeliveryState::Uncertain)
+        );
     }
 }

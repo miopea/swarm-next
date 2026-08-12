@@ -15,12 +15,12 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod decisions;
-pub use decisions::NewDecisionRequest;
+pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
 mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 10;
+const CURRENT_SCHEMA_VERSION: i64 = 11;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -121,7 +121,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=9 => {
+            0..=10 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -727,7 +727,10 @@ fn migrate_schema(
     if schema_version < 9 {
         migrate_agent_credentials(transaction)?;
     }
-    migrate_decision_requests(transaction)
+    if schema_version < 10 {
+        migrate_decision_requests(transaction)?;
+    }
+    migrate_decision_deliveries(transaction)
 }
 
 fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -997,6 +1000,25 @@ fn migrate_decision_requests(transaction: &rusqlite::Transaction<'_>) -> rusqlit
          CREATE INDEX IF NOT EXISTS decision_requests_by_worker
              ON decision_requests(requesting_worker_id, state, created_at DESC);
          PRAGMA user_version = 10;",
+    )
+}
+fn migrate_decision_deliveries(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS decision_deliveries (
+             decision_id TEXT PRIMARY KEY REFERENCES decision_requests(id) ON DELETE CASCADE,
+             worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+             state TEXT NOT NULL CHECK (state IN ('queued','dispatching','delivered','uncertain')),
+             session_id TEXT REFERENCES worker_sessions(session_id),
+             attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 3),
+             attempted_at INTEGER,
+             delivered_at INTEGER,
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             CHECK ((state = 'delivered' AND delivered_at IS NOT NULL)
+                 OR (state <> 'delivered' AND delivered_at IS NULL))
+         );
+         CREATE INDEX IF NOT EXISTS decision_deliveries_queue
+             ON decision_deliveries(state, updated_at, decision_id);
+         PRAGMA user_version = 11;",
     )
 }
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
@@ -1360,6 +1382,39 @@ mod tests {
         reopened.verify_integrity().unwrap();
     }
 
+    #[test]
+    fn migrates_v10_decisions_to_the_guarded_delivery_outbox() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            let connection = store.connection().unwrap();
+            connection
+                .execute_batch("DROP TABLE decision_deliveries; PRAGMA user_version = 10;")
+                .unwrap();
+        }
+        let reopened = TaskStore::open(path).unwrap();
+        let table_exists = reopened
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_deliveries'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()
+            .unwrap()
+            .is_some();
+        assert!(table_exists);
+        assert_eq!(
+            reopened
+                .connection()
+                .unwrap()
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+    }
     #[test]
     fn migrates_v3_tasks_and_workers_into_one_durable_hive() {
         let connection = Connection::open_in_memory().unwrap();

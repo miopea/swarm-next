@@ -84,6 +84,7 @@ export type DecisionRequest = {
   created_at: number;
   updated_at: number;
   resolved_at: number | null;
+  delivery_state: "queued" | "dispatching" | "delivered" | "uncertain" | null;
 };
 
 export type TaskActivityKind = "created" | "details_updated" | "state_changed" | "assigned" | "unassigned";
