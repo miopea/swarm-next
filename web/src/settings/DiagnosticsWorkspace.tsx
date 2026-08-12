@@ -14,6 +14,7 @@ import {
   type Worker,
 } from "../api";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
+import { serializeDiagnosticReport, type RuntimeDiagnostics } from "./diagnosticReport";
 
 type Props = {
   operatorToken: string;
@@ -23,13 +24,6 @@ type Props = {
   recentEvents: ControlRoomEvent[];
   sessions: SessionSummary[];
   workers: Worker[];
-};
-
-type RuntimeDiagnostics = {
-  terminalHost?: TerminalHostStatus;
-  history?: HistoryDiagnostics | null;
-  resources?: RuntimeResources;
-  loaded: boolean;
 };
 
 export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdentity, liveFeedState, recentEvents, sessions, workers }: Props) {
@@ -64,41 +58,7 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
   const hostMemory = resourceLabel(runtime.resources?.terminal_host);
 
   function buildPreview() {
-    const report = {
-      schema_version: 1,
-      generated_at: new Date().toISOString(),
-      correlation_id: globalThis.crypto?.randomUUID?.() ?? `local-${Date.now()}`,
-      privacy: "content-free: no terminal output, task text, paths, credentials, or raw errors",
-      browser: {
-        status: navigator.onLine ? "online" : "offline",
-        visibility: document.visibilityState,
-        live_updates: liveFeedState,
-      },
-      api: health ? { status: "healthy", version: health.version } : { status: "unavailable" },
-      database: {
-        status: hiveIdentity ? "healthy" : "unavailable",
-        hive_id: hiveIdentity?.hive.id,
-      },
-      terminal_host: runtime.terminalHost
-        ? { status: runtime.terminalHost.draining ? "draining" : "healthy", ...runtime.terminalHost }
-        : { status: runtime.loaded ? "unavailable" : "checking" },
-      provider: {
-        status: launchFailures > 0 ? "degraded" : "healthy",
-        configured_workers: workers.length,
-        running_workers: workers.filter((worker) => worker.running).length,
-        launch_failures: launchFailures,
-        session_ids: sessions.map((session) => session.session_id),
-      },
-      runtime_resources: runtime.resources ? {
-        policy: runtime.resources.policy,
-        api: runtime.resources.api,
-        terminal_host: runtime.resources.terminal_host,
-      } : { status: runtime.loaded ? "unavailable" : "checking" },
-      terminal_history: runtime.history ?? { status: runtime.loaded ? "unavailable" : "checking" },
-      integrations: { status: "not_configured" },
-      recent_state_transitions: recentEvents.slice(-16).map(({ sequence, kind, occurred_at }) => ({ sequence, kind, occurred_at })),
-    };
-    const serialized = JSON.stringify(report, null, 2);
+    const serialized = serializeDiagnosticReport({ health, hiveIdentity, liveFeedState, recentEvents, runtime, sessions, workers });
     setPreview(serialized);
     setCopyState("idle");
     return serialized;

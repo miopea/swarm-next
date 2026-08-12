@@ -315,6 +315,15 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .diagnostics-card, .shortcuts-card { grid-column: 1 / -1; }
 .diagnostic-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .diagnostic-preview { max-height: 320px; margin: 0; padding: 14px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-md); color: var(--terminal-text); background: var(--terminal-frame); font-family: "Atkinson Hyperlegible Mono Variable", monospace; font-size: .7rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.feedback-backdrop { position: fixed; z-index: 40; inset: 0; display: grid; padding: 24px; place-items: center; background: color-mix(in srgb, var(--terminal-frame) 62%, transparent); backdrop-filter: blur(3px); }
+.feedback-dialog { display: grid; width: min(860px, 100%); max-height: min(820px, calc(100dvh - 48px)); gap: 16px; padding: 24px; overflow: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); color: var(--text); background: var(--panel-raised); box-shadow: 0 20px 60px color-mix(in srgb, var(--terminal-frame) 42%, transparent); }
+.feedback-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.feedback-dialog h2, .feedback-dialog p { margin: 0; }
+.feedback-dialog > p { color: var(--muted); line-height: 1.55; }
+.feedback-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.feedback-fields label { display: grid; min-width: 0; gap: 7px; color: var(--muted); font-size: .76rem; font-weight: 650; }
+.feedback-fields textarea { min-height: 116px; resize: vertical; }
+.feedback-preview { max-height: 280px; }
 kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px; padding: 2px 6px; place-items: center; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 6px; color: var(--text); background: var(--panel-raised); font-family: "Atkinson Hyperlegible Mono Variable", monospace; font-size: .7rem; }
 
 .terminal-empty { display: grid; max-width: 560px; margin: auto; padding: 40px; place-items: center; color: var(--muted); text-align: center; }
@@ -399,6 +408,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .empty-card { flex-direction: column; padding: 20px; text-align: center; }
   .settings-workspace { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); padding: 16px; overflow-x: hidden; }
   .settings-card { min-width: 0; }
+  .feedback-backdrop { padding: 10px; place-items: start stretch; }
+  .feedback-dialog { width: 100%; max-height: calc(100dvh - 20px); padding: 17px; border-radius: var(--radius-md); }
+  .feedback-fields { grid-template-columns: minmax(0, 1fr); }
   .decision-inbox { padding: 16px; }
   .decision-inbox-intro { align-items: start; flex-direction: column; gap: 12px; }
   .decision-context { grid-template-columns: 1fr; }
