@@ -1,0 +1,18 @@
+{
+  "name": "Swarm Next",
+  "short_name": "Swarm",
+  "description": "A persistent agent workspace and Hive control room.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f3e9",
+  "theme_color": "#d69c28",
+  "icons": [
+    {
+      "src": "/bee-notification.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

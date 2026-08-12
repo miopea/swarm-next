@@ -304,6 +304,7 @@ pub enum ControlRoomEventKind {
     RuntimeChanged,
     DecisionsChanged,
     PresenceChanged,
+    NotificationsChanged,
 }
 
 impl fmt::Display for ControlRoomEventKind {
@@ -315,6 +316,7 @@ impl fmt::Display for ControlRoomEventKind {
             Self::RuntimeChanged => "runtime_changed",
             Self::DecisionsChanged => "decisions_changed",
             Self::PresenceChanged => "presence_changed",
+            Self::NotificationsChanged => "notifications_changed",
         })
     }
 }
@@ -330,6 +332,7 @@ impl FromStr for ControlRoomEventKind {
             "runtime_changed" => Ok(Self::RuntimeChanged),
             "decisions_changed" => Ok(Self::DecisionsChanged),
             "presence_changed" => Ok(Self::PresenceChanged),
+            "notifications_changed" => Ok(Self::NotificationsChanged),
             _ => Err(ParseControlRoomEventKindError),
         }
     }
@@ -1204,6 +1207,61 @@ pub struct DecisionRequest {
     pub resolved_at: Option<i64>,
     pub delivery_state: Option<DecisionDeliveryState>,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationPolicy {
+    ImportantOnly,
+    AllDecisions,
+    Off,
+}
+
+impl NotificationPolicy {
+    #[must_use]
+    pub fn allows(self, urgency: DecisionUrgency, presence: PresenceMode) -> bool {
+        presence != PresenceMode::AtHive
+            && match self {
+                Self::ImportantOnly => matches!(urgency, DecisionUrgency::TimeSensitive),
+                Self::AllDecisions => true,
+                Self::Off => false,
+            }
+    }
+}
+
+impl fmt::Display for NotificationPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ImportantOnly => "important_only",
+            Self::AllDecisions => "all_decisions",
+            Self::Off => "off",
+        })
+    }
+}
+
+impl FromStr for NotificationPolicy {
+    type Err = ParseNotificationPolicyError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "important_only" => Ok(Self::ImportantOnly),
+            "all_decisions" => Ok(Self::AllDecisions),
+            "off" => Ok(Self::Off),
+            _ => Err(ParseNotificationPolicyError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseNotificationPolicyError;
+
+impl fmt::Display for ParseNotificationPolicyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown notification policy")
+    }
+}
+
+impl std::error::Error for ParseNotificationPolicyError {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

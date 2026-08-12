@@ -137,7 +137,7 @@ export class PresenceController {
   }
 }
 
-function presenceDeviceId(): string {
+export function presenceDeviceId(): string {
   try {
     const saved = window.localStorage.getItem(DEVICE_ID_STORAGE_KEY);
     if (saved) return saved;
@@ -149,7 +149,7 @@ function presenceDeviceId(): string {
   }
 }
 
-function deviceClass(): PresenceDeviceClass {
+export function deviceClass(): PresenceDeviceClass {
   return /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? "mobile" : "desktop";
 }
 

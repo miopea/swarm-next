@@ -78,8 +78,8 @@ Decision meanings:
 | Jira | Redesign | First shared Apiary backend. Use per-Hive operator identities, one project sync scope, distributed bindings, atomic claims, explicit mappings, and exception-only Keeper involvement. |
 | Outlook/email import | Investigate | Validate frequency and which parts—task creation, attachment parsing, draft replies—remain valuable. |
 | Cloudflare Tunnel | Redesign | Remote access is valuable; treat tunnel choice as deployment adapter, not core domain. |
-| Browser notifications | Keep | Useful attention channel; unify with in-app decisions and notification policy. |
-| PWA installation, push, and mobile terminal | Redesign | Android Chrome/Edge is a first-class dogfood surface. Keep the service worker minimal, make notifications policy-driven, and preserve terminal commands alongside long-form voice input. |
+| Browser notifications | Keep | Implemented as a bounded, durable Web Push adapter for Needs you: presence-gated, generic encrypted payloads, explicit opt-in, and configurable policy. |
+| PWA installation, push, and mobile terminal | Redesign | Android Chrome/Edge is a first-class dogfood surface. Push-only service worker and install manifest are implemented; preserve terminal commands alongside long-form voice input and continue rendered mobile acceptance. |
 | In-app feedback | Keep/Redesign | Critical to dogfooding; capture correlated diagnostics and privacy-safe context. |
 
 ## Platform and administration

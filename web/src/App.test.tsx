@@ -10,6 +10,16 @@ vi.mock("./presence/PresenceController", () => ({
   },
 }));
 
+vi.mock("./notifications/NotificationController", () => ({
+  NotificationController: class {
+    async start() {}
+    stop() {}
+    async enable() { return true; }
+    async disable() {}
+    async changePolicy() {}
+    async test() {}
+  },
+}));
 import { App } from "./App";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 
@@ -18,6 +28,7 @@ afterEach(() => {
   terminalWorkspace.logout();
   window.sessionStorage.clear();
   window.localStorage.clear();
+  window.history.replaceState({}, "", "/");
   delete document.documentElement.dataset.theme;
   document.documentElement.style.colorScheme = "";
   vi.unstubAllGlobals();
@@ -122,6 +133,25 @@ test("restores the worker surface after a refresh", async () => {
   expect(window.sessionStorage.getItem("swarm-next.surface.v1")).toBe("workers");
 });
 
+test("notification navigation overrides a previously saved surface", async () => {
+  window.sessionStorage.setItem("swarm-next.operator-token.v1", "saved-secret");
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  window.history.replaceState({}, "", "/?surface=decisions");
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok(hiveIdentity()))
+    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]));
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "Needs you" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Needs you 0" })).toHaveAttribute("aria-current", "page");
+});
 test("keyboard shortcuts switch workspaces but pause while editing a field", async () => {
   window.sessionStorage.setItem("swarm-next.operator-token.v1", "saved-secret");
   const fetch = vi

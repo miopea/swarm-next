@@ -25,7 +25,7 @@ mostly product operability rather than process survival.
 | Manage workers quickly | Launch, kill, revive, groups, bulk actions | Durable profiles start, stop, and recover Claude context using exact provider identity for new profiles or `--continue` for migrated profiles | Complete dogfood baseline; defer groups until measured |
 | Use direct interactions | Shortcuts, command palette, drag/drop imports | Keyboard switching, durable task ordering, focused state drops, and accessible worker/task action menus with right-click parity | Add command palette and broader shortcuts only where dogfood proves value |
 | Configure the product | Large multi-tab editor with overlapping concerns | Compact settings workspace covers runtime, terminal, appearance, and diagnostics preferences | Expand only where dogfood proves a durable need |
-| Handle attention | Proposals, messages, activity, notifications | Durable engagement guard, typed operator decisions, guarded worker handoffs, and server-authoritative At Hive/Away/Night Watch presence | Presence foundation complete; add mobile notification transport |
+| Handle attention | Proposals, messages, activity, notifications | Durable engagement guard, typed operator decisions, guarded worker handoffs, server-authoritative At Hive/Away/Night Watch presence, and bounded private Web Push | Complete baseline; verify install and notification delivery on Android Chrome/Edge |
 | Diagnose failures | Large logs/config surface | Browser, API, database, terminal, provider, and integration health with sanitized preview/copy | Complete foundation; add submission transport when selected |
 
 ## First dogfood cut

@@ -63,3 +63,4 @@ Current decision records:
 - [ADR 0016: Guarded durable task assignment dispatch](decisions/0016-guarded-task-assignment-dispatch.md)
 - [ADR 0017: Guarded worker outcomes to Queen](decisions/0017-guarded-worker-outcomes-to-queen.md)
 - [ADR 0018: Layered operator presence](decisions/0018-layered-operator-presence.md)
+- [ADR 0019: Policy-driven mobile attention](decisions/0019-policy-driven-mobile-attention.md)
