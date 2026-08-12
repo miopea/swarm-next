@@ -29,9 +29,11 @@ Creating an assignment atomically creates one bounded task-dispatch outbox row.
 - The one-line terminal payload contains task identity, title, priority,
   workspace, bounded description, and an MCP retrieval hint. Control characters
   are replaced before the single terminal submission. The PTY transport writes
-  the prompt, waits for its bounded task marker in host-owned canonical output,
-  and only then sends Enter. Provider line editors therefore cannot render a
-  brief without accepting it while the ledger reports Delivered.
+  the prompt, follows at most 64 actual host-output advances until its bounded
+  task marker appears in canonical output, and only then sends Enter. A stalled
+  or unverified render becomes Uncertain. Provider line editors therefore
+  cannot render a brief without accepting it while the ledger reports
+  Delivered.
 - A terminal-host acknowledgement marks the brief Delivered. A definitive host
   rejection retries at most three times. Unexpected or transport outcomes are
   Uncertain immediately.

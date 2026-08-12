@@ -457,33 +457,39 @@ async fn submit_terminal_message(
         }
         _ => return Ok(TerminalSubmission::Uncertain),
     }
-    if !matches!(
-        client
+    let mut after_sequence = baseline;
+    let mut rendered = false;
+    for _ in 0..64 {
+        let observed_sequence = match client
             .request(&HostRequest::Wait {
                 session_id,
-                after_sequence: Some(baseline),
+                after_sequence: Some(after_sequence),
             })
-            .await?,
-        HostResponse::Output { .. }
-    ) {
-        return Ok(TerminalSubmission::Uncertain);
+            .await?
+        {
+            HostResponse::Output { resume, .. } => resume_sequence(&resume),
+            _ => return Ok(TerminalSubmission::Uncertain),
+        };
+        if observed_sequence <= after_sequence {
+            return Ok(TerminalSubmission::Uncertain);
+        }
+        after_sequence = observed_sequence;
+        rendered = matches!(
+            client
+                .request(&HostRequest::Read {
+                    session_id,
+                    after_sequence: None,
+                })
+                .await?,
+            HostResponse::Output {
+                resume: swarm_terminal::Resume::Snapshot { snapshot },
+                ..
+            } if snapshot.bytes.windows(marker.len()).any(|part| part == marker)
+        );
+        if rendered {
+            break;
+        }
     }
-    let rendered = match client
-        .request(&HostRequest::Read {
-            session_id,
-            after_sequence: None,
-        })
-        .await?
-    {
-        HostResponse::Output {
-            resume: swarm_terminal::Resume::Snapshot { snapshot },
-            ..
-        } => snapshot
-            .bytes
-            .windows(marker.len())
-            .any(|part| part == marker),
-        _ => false,
-    };
     if !rendered {
         return Ok(TerminalSubmission::Uncertain);
     }
