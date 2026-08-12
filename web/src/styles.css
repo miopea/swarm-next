@@ -326,6 +326,17 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .worker-order-actions { display: flex; gap: 5px; }
 .worker-order-actions button { width: 34px; min-height: 34px; padding: 4px; }
 .configure-worker-form { display: grid; grid-template-columns: minmax(150px, .6fr) minmax(220px, 1fr) auto; align-items: end; gap: 9px; padding-top: 14px; border-top: 1px solid var(--line); }
+.configure-worker-form .field-stack { min-width: 0; }
+.configure-worker-form .field-stack > small { color: var(--text-muted); font-size: .68rem; line-height: 1.35; }
+.workspace-combobox { position: relative; min-width: 0; }
+.workspace-suggestions { position: absolute; z-index: 20; top: calc(100% + 5px); right: 0; left: 0; display: grid; max-height: 280px; overflow-y: auto; padding: 5px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel-raised); box-shadow: 0 14px 34px color-mix(in srgb, var(--terminal-frame) 22%, transparent); }
+.workspace-suggestion { display: grid; grid-template-columns: minmax(0, 1fr) auto; min-height: 43px; align-items: center; gap: 12px; padding: 7px 9px; border-color: transparent; color: var(--text); background: transparent; text-align: left; }
+.workspace-suggestion:hover:not(:disabled), .workspace-suggestion.highlighted { border-color: transparent; background: var(--good-soft); }
+.workspace-suggestion-copy { display: grid; min-width: 0; gap: 2px; overflow: hidden; }
+.workspace-suggestion-copy strong { overflow: hidden; font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-suggestion-copy small { overflow: hidden; color: var(--text-muted); font-family: "Atkinson Hyperlegible Mono Variable", "Cascadia Code", Consolas, monospace; font-size: .66rem; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-kind { color: var(--text-muted); font-size: .64rem; text-transform: uppercase; }
+.workspace-suggestions > p { margin: 0; padding: 11px; color: var(--text-muted); font-size: .75rem; line-height: 1.45; }
 .empty-worker-settings { margin: 0; padding: 12px; color: var(--muted); text-align: center; }
 .theme-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .theme-choice button { display: flex; align-items: center; gap: 9px; border-color: var(--line-strong); color: var(--text); background: var(--panel-raised); }

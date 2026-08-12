@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type FormEvent } from "react";
+import { useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 
 import type { Worker, WorkspaceChoice } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -17,7 +17,10 @@ export default function WorkerSettings({ workers, workspaces, busy, onCreate, on
   const available = workspaces.filter((workspace) => !workspace.configured_worker_id);
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [highlightedWorkspace, setHighlightedWorkspace] = useState(0);
   const [draggedWorkerId, setDraggedWorkerId] = useState<string>();
+  const matchingWorkspaces = workspaceMatches(available, workspace).slice(0, 8);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -25,6 +28,30 @@ export default function WorkerSettings({ workers, workspaces, busy, onCreate, on
     await onCreate(name, workspace);
     setName("");
     setWorkspace("");
+    setWorkspaceOpen(false);
+  }
+
+  function selectWorkspace(choice: WorkspaceChoice) {
+    setWorkspace(choice.path);
+    setWorkspaceOpen(false);
+    setHighlightedWorkspace(0);
+  }
+
+  function workspaceKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setWorkspaceOpen(true);
+      setHighlightedWorkspace((current) => Math.min(current + 1, Math.max(0, matchingWorkspaces.length - 1)));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setWorkspaceOpen(true);
+      setHighlightedWorkspace((current) => Math.max(0, current - 1));
+    } else if (event.key === "Enter" && workspaceOpen && matchingWorkspaces.length > 0) {
+      event.preventDefault();
+      selectWorkspace(matchingWorkspaces[highlightedWorkspace] ?? matchingWorkspaces[0]);
+    } else if (event.key === "Escape") {
+      setWorkspaceOpen(false);
+    }
   }
 
   function move(index: number, offset: -1 | 1) {
@@ -78,11 +105,54 @@ export default function WorkerSettings({ workers, workspaces, busy, onCreate, on
           <input id="configured-worker-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Daisy" maxLength={80} />
         </div>
         <div className="field-stack">
-          <label htmlFor="configured-worker-repository">Repository</label>
-          <select id="configured-worker-repository" value={workspace} onChange={(event) => setWorkspace(event.target.value)}>
-            <option value="">Choose a repository</option>
-            {available.map((choice) => <option key={choice.path} value={choice.path}>{choice.name}{choice.kind === "folder" ? " · folder" : ""}</option>)}
-          </select>
+          <label htmlFor="configured-worker-repository">Repository path</label>
+          <div
+            className="workspace-combobox"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setWorkspaceOpen(false);
+            }}
+          >
+            <input
+              id="configured-worker-repository"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-controls="workspace-suggestions"
+              aria-expanded={workspaceOpen}
+              aria-activedescendant={workspaceOpen && matchingWorkspaces.length > 0 ? `workspace-option-${highlightedWorkspace}` : undefined}
+              value={workspace}
+              placeholder="/home/bschleifer/projects/..."
+              autoComplete="off"
+              spellCheck={false}
+              onFocus={() => setWorkspaceOpen(true)}
+              onChange={(event) => {
+                setWorkspace(event.target.value);
+                setWorkspaceOpen(true);
+                setHighlightedWorkspace(0);
+              }}
+              onKeyDown={workspaceKeyDown}
+            />
+            {workspaceOpen && workspace.trim() && (
+              <div id="workspace-suggestions" className="workspace-suggestions" role="listbox" aria-label="Repository path suggestions">
+                {matchingWorkspaces.map((choice, index) => (
+                  <button
+                    id={`workspace-option-${index}`}
+                    key={choice.path}
+                    type="button"
+                    role="option"
+                    aria-selected={index === highlightedWorkspace}
+                    className={index === highlightedWorkspace ? "workspace-suggestion highlighted" : "workspace-suggestion"}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectWorkspace(choice)}
+                  >
+                    <span className="workspace-suggestion-copy"><strong>{choice.name}</strong><small>{choice.path}</small></span>
+                    <small className="workspace-kind">{choice.kind === "repository" ? "Repository" : "Folder"}</small>
+                  </button>
+                ))}
+                {matchingWorkspaces.length === 0 && <p>No suggestion yet. Keep typing an existing path inside your projects folder.</p>}
+              </div>
+            )}
+          </div>
+          <small>Type any part of the path, then choose a suggestion—or enter the complete path directly.</small>
         </div>
         <button disabled={busy || !name.trim() || !workspace}>Add sleeping worker</button>
       </form>
@@ -155,4 +225,26 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, onMove, onUp
 
 function repositoryName(workspace: string): string {
   return workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace;
+}
+
+function workspaceMatches(choices: WorkspaceChoice[], query: string): WorkspaceChoice[] {
+  const normalizedQuery = normalizePath(query.trim());
+  if (!normalizedQuery) return choices;
+  return choices
+    .filter((choice) => normalizePath(choice.path).includes(normalizedQuery) || choice.name.toLowerCase().includes(normalizedQuery))
+    .sort((left, right) => workspaceRank(left, normalizedQuery) - workspaceRank(right, normalizedQuery)
+      || left.path.localeCompare(right.path));
+}
+
+function workspaceRank(choice: WorkspaceChoice, query: string): number {
+  const path = normalizePath(choice.path);
+  const name = choice.name.toLowerCase();
+  if (path === query) return 0;
+  if (name.startsWith(query)) return 1;
+  if (path.startsWith(query)) return 2;
+  return path.indexOf(query) + 3;
+}
+
+function normalizePath(path: string): string {
+  return path.replaceAll("\\", "/").toLowerCase();
 }

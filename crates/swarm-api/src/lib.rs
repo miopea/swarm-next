@@ -5,7 +5,7 @@ mod notifications;
 mod terminal_socket;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Path as FilePath, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -1482,63 +1482,115 @@ async fn workspace_catalog(
     state: &AppState,
     profiles: &[WorkerProfile],
 ) -> Result<Vec<WorkspaceView>, ApiError> {
+    const MAX_WORKSPACES: usize = 256;
+    const MAX_FOLDER_DEPTH: usize = 6;
     let mut workspaces = Vec::new();
     for root in state.workspace_roots.iter() {
-        let mut entries = tokio::fs::read_dir(root).await.map_err(|_| {
+        let entries = tokio::fs::read_dir(root).await.map_err(|_| {
             ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "workspace_catalog_unavailable",
                 "configured repository catalog is unavailable",
             )
         })?;
-        while let Some(entry) = entries.next_entry().await.map_err(|_| {
-            ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "workspace_catalog_unavailable",
-                "configured repository catalog could not be read",
-            )
-        })? {
-            if workspaces.len() >= 256 {
-                break;
-            }
-            let file_type = entry.file_type().await.map_err(|_| {
+        let mut pending = VecDeque::from([(entries, 0_usize)]);
+        while let Some((mut entries, depth)) = pending.pop_front() {
+            while let Some(entry) = entries.next_entry().await.map_err(|_| {
                 ApiError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "workspace_catalog_unavailable",
-                    "configured repository catalog could not be inspected",
+                    "configured repository catalog could not be read",
                 )
-            })?;
-            if !file_type.is_dir() || file_type.is_symlink() {
-                continue;
+            })? {
+                if workspaces.len() >= MAX_WORKSPACES {
+                    break;
+                }
+                let Ok(file_type) = entry.file_type().await else {
+                    continue;
+                };
+                if !file_type.is_dir() || file_type.is_symlink() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') || name == "queen" {
+                    continue;
+                }
+                let path = entry.path();
+                let path_text = path.to_string_lossy().into_owned();
+                let configured_worker_id = profiles
+                    .iter()
+                    .find(|profile| profile.workspace == path_text)
+                    .map(|profile| profile.id);
+                let repository = tokio::fs::try_exists(path.join(".git"))
+                    .await
+                    .unwrap_or(false);
+                workspaces.push(WorkspaceView {
+                    name,
+                    path: path_text,
+                    kind: if repository { "repository" } else { "folder" },
+                    configured_worker_id,
+                });
+                if !repository
+                    && depth < MAX_FOLDER_DEPTH
+                    && let Ok(children) = tokio::fs::read_dir(&path).await
+                {
+                    pending.push_back((children, depth + 1));
+                }
             }
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') || name == "queen" {
-                continue;
+            if workspaces.len() >= MAX_WORKSPACES {
+                break;
             }
-            let path = entry.path();
-            let path_text = path.to_string_lossy().into_owned();
-            let configured_worker_id = profiles
-                .iter()
-                .find(|profile| profile.workspace == path_text)
-                .map(|profile| profile.id);
-            let kind = if tokio::fs::try_exists(path.join(".git"))
-                .await
-                .unwrap_or(false)
-            {
-                "repository"
-            } else {
-                "folder"
-            };
-            workspaces.push(WorkspaceView {
-                name,
-                path: path_text,
-                kind,
-                configured_worker_id,
-            });
+        }
+        if workspaces.len() >= MAX_WORKSPACES {
+            break;
         }
     }
-    workspaces.sort_by_key(|workspace| workspace.name.to_lowercase());
+    workspaces.sort_by_key(|workspace| workspace.path.to_lowercase());
     Ok(workspaces)
+}
+
+async fn resolve_workspace_path(state: &AppState, requested: &str) -> Result<PathBuf, ApiError> {
+    let requested = FilePath::new(requested.trim());
+    if !requested.is_absolute() {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown_workspace",
+            "enter an absolute path inside a configured workspace root",
+        ));
+    }
+    let metadata = tokio::fs::symlink_metadata(requested).await.map_err(|_| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown_workspace",
+            "that workspace folder does not exist",
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown_workspace",
+            "choose a real folder rather than a file or symbolic link",
+        ));
+    }
+    let canonical = tokio::fs::canonicalize(requested).await.map_err(|_| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown_workspace",
+            "that workspace folder could not be resolved",
+        )
+    })?;
+    for root in state.workspace_roots.iter() {
+        if let Ok(root) = tokio::fs::canonicalize(root).await
+            && canonical.starts_with(root)
+        {
+            return Ok(canonical);
+        }
+    }
+    Err(ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unknown_workspace",
+        "that folder is outside the configured workspace roots",
+    ))
 }
 
 async fn create_worker(
@@ -1550,19 +1602,12 @@ async fn create_worker(
     let profiles = task_store(&state)?
         .list_worker_profiles()
         .map_err(|error| task_store_error(&error))?;
-    let workspace = workspace_catalog(&state, &profiles)
-        .await?
+    let workspace = resolve_workspace_path(&state, &request.workspace).await?;
+    let workspace = workspace.to_string_lossy().into_owned();
+    if profiles
         .iter()
-        .find(|workspace| workspace.path == request.workspace)
-        .cloned()
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "unknown_workspace",
-                "choose a repository from the configured catalog",
-            )
-        })?;
-    if workspace.configured_worker_id.is_some() {
+        .any(|profile| profile.workspace == workspace)
+    {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "workspace_already_assigned",
@@ -1579,7 +1624,7 @@ async fn create_worker(
         .create_worker(
             &request.name,
             request.provider,
-            &request.workspace,
+            &workspace,
             request.autostart,
             position,
         )
@@ -4168,6 +4213,47 @@ mod tests {
         assert_eq!(catalog[0].configured_worker_id, Some(worker.id));
         assert_eq!(catalog[1].name, "open-repo");
         assert_eq!(catalog[1].configured_worker_id, None);
+    }
+
+    #[tokio::test]
+    async fn workspace_catalog_descends_through_folders_but_stops_at_repositories() {
+        let root = TempDir::new().unwrap();
+        let group = root.path().join("personal");
+        let repository = group.join("swarm-next");
+        std::fs::create_dir_all(repository.join(".git")).unwrap();
+        std::fs::create_dir_all(repository.join("node_modules").join("not-a-workspace")).unwrap();
+        let state = AppState::default().with_workspace_roots(vec![root.path().to_path_buf()]);
+
+        let catalog = workspace_catalog(&state, &[]).await.unwrap();
+
+        assert_eq!(catalog.len(), 2);
+        assert_eq!(catalog[0].path, group.to_string_lossy());
+        assert_eq!(catalog[0].kind, "folder");
+        assert_eq!(catalog[1].path, repository.to_string_lossy());
+        assert_eq!(catalog[1].kind, "repository");
+    }
+
+    #[tokio::test]
+    async fn typed_workspace_paths_resolve_inside_roots_and_reject_escape() {
+        let root = TempDir::new().unwrap();
+        let nested = root.path().join("personal").join("swarm-next");
+        std::fs::create_dir_all(&nested).unwrap();
+        let outside = TempDir::new().unwrap();
+        let state = AppState::default().with_workspace_roots(vec![root.path().to_path_buf()]);
+
+        assert_eq!(
+            resolve_workspace_path(&state, nested.to_string_lossy().as_ref())
+                .await
+                .unwrap(),
+            nested.canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolve_workspace_path(&state, outside.path().to_string_lossy().as_ref())
+                .await
+                .unwrap_err()
+                .code,
+            "unknown_workspace"
+        );
     }
 
     #[tokio::test]

@@ -1,3 +1,6 @@
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(clients.claim()));
+
 self.addEventListener("push", (event) => {
   let payload = {
     title: "Your Hive needs you",
@@ -14,8 +17,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(self.registration.showNotification(payload.title, {
     body: payload.body,
     tag: payload.tag,
-    icon: "/bee-notification.svg",
-    badge: "/bee-notification.svg",
+    icon: "/swarm-app-icon-192.png?v=queen-20260812",
+    badge: "/swarm-app-icon-192.png?v=queen-20260812",
     renotify: payload.urgency === "time_sensitive",
     data: { url: payload.url },
   }));

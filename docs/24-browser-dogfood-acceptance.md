@@ -105,3 +105,22 @@ the newly built API contract rather than mocked data:
   explicit, touch ordering moved Poppy before Marigold, and the order survived
   reload with zero horizontal overflow.
 - Browser logs contained no warnings or errors during edit, reorder, and reload.
+
+## Repository path completion (2026-08-12)
+
+The isolated runtime used nested `personal` and `rcg` folders to verify the
+actual production web build against the rebuilt API binary:
+
+- Typing `personal/bud` produced the nested `budgetbug` repository and Enter
+  completed the canonical absolute path before creating Daisy.
+- A directly typed existing path is accepted even when it is outside the
+  bounded suggestion result, while the server rejects non-existent paths,
+  symlinks, and paths outside configured workspace roots.
+- At 412 by 915, `rcg/pub` displayed `public-website` first with its full path
+  as secondary context; the popup stayed anchored with zero horizontal
+  overflow.
+- At 1440 by 900, folder and repository results remained visually distinct,
+  keyboard reachable, and free of browser warnings or errors.
+- The push worker now activates updates immediately, bypasses the HTTP cache
+  when explicitly registered, and uses the current Queen launcher artwork for
+  notification icon and badge requests.
