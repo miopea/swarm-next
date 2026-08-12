@@ -17,7 +17,7 @@ mostly product operability rather than process survival.
 |---|---|---|---|
 | Resume after reload | Feature-rich but observed redraw and reconnect failures | Canonical recovery verified with three live workers in an actual browser | Complete baseline; continue multi-day soak |
 | Update during work | Sidecar separation existed | Live proof preserves the same host PID, session, and interactive PTY | Complete |
-| Know who is working | Configured names, roles, groups, status labels | Durable named worker profiles retain workspace, provider, order, and session binding | Complete dogfood baseline; add richer attention states |
+| Know who is working | Configured names, roles, groups, status labels | Durable profiles report Sleeping, Buzzing, With you, or Blocked with matching visual treatment | Complete dogfood baseline; add Awaiting you only from a trustworthy provider signal |
 | Coordinate with Queen | Interactive Queen PTY plus separate headless automation | One durable, always-active Queen survives API/browser updates | Complete interactive baseline; defer autonomous conductor policy |
 | Move between workers | Keyboard switching and cached terminals, but redraw was flaky | Repeated Queen/worker switching preserves exact session identity on desktop and mobile | Complete baseline; continue fast-output soak |
 | Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Explicit lifecycle, editing, priority, assignment, durable ordering, focused state drops, and bounded activity history | Complete dogfood baseline; defer broad integrations |
@@ -25,7 +25,7 @@ mostly product operability rather than process survival.
 | Manage workers quickly | Launch, kill, revive, groups, bulk actions | Durable profiles start, stop, and recover Claude context using exact provider identity for new profiles or `--continue` for migrated profiles | Complete dogfood baseline; defer groups until measured |
 | Use direct interactions | Shortcuts, command palette, drag/drop imports | Keyboard switching, durable task ordering, focused state drops, and accessible worker/task action menus with right-click parity | Add command palette and broader shortcuts only where dogfood proves value |
 | Configure the product | Large multi-tab editor with overlapping concerns | No settings surface | Add a compact settings workspace for workers, runtime, appearance, and diagnostics |
-| Handle attention | Proposals, messages, activity, notifications | None | Later: one decision inbox, not multiple legacy subsystems |
+| Handle attention | Proposals, messages, activity, notifications | Terminal input creates a durable operator engagement lease and coordination guard | Add the unified decision inbox and notification routing on this foundation |
 | Diagnose failures | Large logs/config surface | Browser, API, database, terminal, provider, and integration health with sanitized preview/copy | Complete foundation; add submission transport when selected |
 
 ## First dogfood cut

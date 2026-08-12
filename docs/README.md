@@ -53,3 +53,7 @@ Current decision records:
 - [ADR 0006: Host-owned canonical terminal snapshots](decisions/0006-canonical-terminal-snapshots.md)
 - [ADR 0007: Host-owned bounded durable terminal history](decisions/0007-host-owned-durable-terminal-history.md)
 - [ADR 0008: Drain-compatible terminal-host updates](decisions/0008-drain-compatible-terminal-host-updates.md)
+- [ADR 0009: Unprivileged systemd user package lifecycle](decisions/0009-systemd-user-package-lifecycle.md)
+- [ADR 0010: Apiary federation and stewardship](decisions/0010-apiary-federation-and-stewardship.md)
+- [ADR 0011: Durable provider conversation recovery](decisions/0011-provider-conversation-recovery.md)
+- [ADR 0012: Server-authoritative operator engagement leases](decisions/0012-operator-engagement-leases.md)

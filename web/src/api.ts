@@ -6,6 +6,7 @@ export type TaskState = "draft" | "ready" | "active" | "blocked" | "review" | "c
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type WorkerRole = "queen" | "worker";
 export type ProviderKind = "claude_code" | "codex";
+export type WorkerAttentionState = "sleeping" | "buzzing" | "with_operator" | "blocked";
 export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed";
 export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };
 export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: number; reset_required: boolean };
@@ -43,6 +44,8 @@ export type Worker = {
   created_at: number;
   updated_at: number;
   running: boolean;
+  attention_state: WorkerAttentionState;
+  engagement_expires_at?: number;
   runtime_error?: string;
 };
 

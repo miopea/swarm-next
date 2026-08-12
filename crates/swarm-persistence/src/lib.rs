@@ -18,7 +18,7 @@ mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 7;
+const CURRENT_SCHEMA_VERSION: i64 = 8;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -61,6 +61,8 @@ pub enum TaskStoreError {
     QueenAlreadyExists,
     #[error("worker already has an active session")]
     WorkerAlreadyRunning,
+    #[error("worker session is not active")]
+    WorkerSessionNotActive,
     #[error("provider conversation cannot be assigned after worker history exists")]
     ProviderConversationUnavailable,
     #[error("task order must contain every open task exactly once")]
@@ -101,7 +103,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=6 => {
+            0..=7 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -698,7 +700,10 @@ fn migrate_schema(
     if schema_version < 6 {
         migrate_task_ordering(transaction)?;
     }
-    migrate_provider_conversations(transaction)
+    if schema_version < 7 {
+        migrate_provider_conversations(transaction)?;
+    }
+    migrate_worker_engagements(transaction)
 }
 
 fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -896,6 +901,19 @@ fn migrate_provider_conversations(transaction: &rusqlite::Transaction<'_>) -> ru
     transaction.execute_batch(
         "ALTER TABLE worker_profiles ADD COLUMN provider_conversation_id TEXT;
          PRAGMA user_version = 7;",
+    )
+}
+
+fn migrate_worker_engagements(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE worker_engagements (
+             worker_id TEXT PRIMARY KEY REFERENCES worker_profiles(id) ON DELETE CASCADE,
+             session_id TEXT NOT NULL UNIQUE REFERENCES worker_sessions(session_id) ON DELETE CASCADE,
+             engaged_at INTEGER NOT NULL,
+             renewed_at INTEGER NOT NULL,
+             expires_at INTEGER NOT NULL CHECK (expires_at > renewed_at)
+         );
+         PRAGMA user_version = 8;",
     )
 }
 
@@ -1473,6 +1491,7 @@ mod tests {
                 .execute_batch(
                     "DROP INDEX tasks_by_hive_position;
                      ALTER TABLE tasks DROP COLUMN position;
+                     DROP TABLE worker_engagements;
                      ALTER TABLE worker_profiles DROP COLUMN provider_conversation_id;
                      DROP TABLE control_room_events;
                      PRAGMA user_version = 4;",
@@ -1516,7 +1535,8 @@ mod tests {
                 .connection()
                 .unwrap()
                 .execute_batch(
-                    "ALTER TABLE worker_profiles DROP COLUMN provider_conversation_id;
+                    "DROP TABLE worker_engagements;
+                     ALTER TABLE worker_profiles DROP COLUMN provider_conversation_id;
                      PRAGMA user_version = 6;",
                 )
                 .unwrap();
@@ -1535,6 +1555,33 @@ mod tests {
                 .unwrap(),
             CURRENT_SCHEMA_VERSION
         );
+    }
+
+    #[test]
+    fn migrates_schema_v7_to_bounded_worker_engagements() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch("DROP TABLE worker_engagements; PRAGMA user_version = 7;")
+                .unwrap();
+        }
+
+        let migrated = TaskStore::open(path).unwrap();
+        let tables = migrated
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'worker_engagements'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 1);
     }
 
     #[test]

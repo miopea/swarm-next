@@ -511,8 +511,20 @@ pub struct WorkerProfile {
     /// Whether this profile has previously launched a provider process.
     #[serde(skip)]
     pub has_session_history: bool,
+    /// Expiry of the active operator engagement lease, when one exists.
+    #[serde(skip)]
+    pub engagement_expires_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerAttentionState {
+    Sleeping,
+    Buzzing,
+    WithOperator,
+    Blocked,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -800,6 +812,7 @@ mod tests {
             active_session_id: None,
             provider_conversation_id: None,
             has_session_history: false,
+            engagement_expires_at: None,
             created_at: 1,
             updated_at: 1,
         };
