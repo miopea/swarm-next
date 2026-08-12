@@ -19,6 +19,11 @@ mod decisions;
 mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
 pub use presence::PresenceMutation;
+mod notifications;
+pub use notifications::{
+    NotificationDeliveryFailure, NotificationDispatch, NotificationSettings, PushSubscriptionInput,
+    VapidKeyMaterial,
+};
 mod task_dispatches;
 pub use task_dispatches::{TaskDispatch, TaskDispatchFailure};
 mod task_outcomes;
@@ -28,7 +33,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 14;
+const CURRENT_SCHEMA_VERSION: i64 = 15;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -67,6 +72,14 @@ pub enum TaskStoreError {
     TaskDispatchQueueFull,
     #[error("this Hive already tracks the maximum of 16 presence devices")]
     PresenceDeviceLimit,
+    #[error("notification subscription material is invalid")]
+    InvalidNotificationSubscription,
+    #[error("this Hive already has the maximum of 8 notification subscriptions")]
+    NotificationSubscriptionLimit,
+    #[error("the bounded notification delivery queue is full")]
+    NotificationQueueFull,
+    #[error("the installation notification signing key is invalid")]
+    InvalidVapidKey,
     #[error("task handoff note must not exceed {MAX_TASK_ACTIVITY_NOTE_BYTES} bytes")]
     InvalidTaskActivityNote,
     #[error("this Hive already has the maximum number of pending Queen handoffs")]
@@ -137,7 +150,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=13 => {
+            0..=14 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -931,6 +944,9 @@ fn migrate_schema(
     if schema_version < 14 {
         migrate_operator_presence(transaction)?;
     }
+    if schema_version < 15 {
+        migrate_notifications(transaction)?;
+    }
     Ok(())
 }
 
@@ -1320,6 +1336,65 @@ fn migrate_operator_presence(transaction: &rusqlite::Transaction<'_>) -> rusqlit
          CREATE INDEX IF NOT EXISTS operator_presence_devices_current
              ON operator_presence_devices(operator_id, expires_at, state);
          PRAGMA user_version = 14;",
+    )
+}
+fn migrate_notifications(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "ALTER TABLE control_room_events RENAME TO control_room_events_v14;
+         CREATE TABLE control_room_events (
+             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+             hive_id TEXT NOT NULL REFERENCES hives(id),
+             kind TEXT NOT NULL CHECK (
+                 kind IN ('tasks_changed','workers_changed','sessions_changed','runtime_changed','decisions_changed','presence_changed','notifications_changed')
+             ),
+             occurred_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         INSERT INTO control_room_events (sequence, hive_id, kind, occurred_at)
+             SELECT sequence, hive_id, kind, occurred_at FROM control_room_events_v14;
+         DROP TABLE control_room_events_v14;
+         CREATE INDEX control_room_events_by_hive_sequence
+             ON control_room_events(hive_id, sequence);
+         CREATE TABLE IF NOT EXISTS notification_vapid_keys (
+             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+             private_key BLOB NOT NULL CHECK (length(private_key) = 32),
+             public_key BLOB NOT NULL CHECK (length(public_key) = 65),
+             created_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS notification_preferences (
+             operator_id TEXT PRIMARY KEY REFERENCES operators(id) ON DELETE CASCADE,
+             policy TEXT NOT NULL CHECK (policy IN ('important_only','all_decisions','off')),
+             updated_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS notification_subscriptions (
+             device_id TEXT PRIMARY KEY,
+             operator_id TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+             device_class TEXT NOT NULL CHECK (device_class IN ('desktop','mobile')),
+             endpoint TEXT NOT NULL UNIQUE CHECK (length(endpoint) BETWEEN 1 AND 4096),
+             p256dh BLOB NOT NULL CHECK (length(p256dh) = 65),
+             auth BLOB NOT NULL CHECK (length(auth) = 16),
+             failure_count INTEGER NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS notification_subscriptions_by_operator
+             ON notification_subscriptions(operator_id, updated_at);
+         CREATE TABLE IF NOT EXISTS notification_deliveries (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             operator_id TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+             subscription_id TEXT NOT NULL REFERENCES notification_subscriptions(device_id) ON DELETE CASCADE,
+             decision_id TEXT REFERENCES decision_requests(id) ON DELETE CASCADE,
+             urgency TEXT NOT NULL CHECK (urgency IN ('normal','time_sensitive')),
+             kind TEXT NOT NULL CHECK (kind IN ('decision','test')),
+             state TEXT NOT NULL CHECK (state IN ('queued','dispatching')),
+             attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+             available_at INTEGER NOT NULL,
+             created_at INTEGER NOT NULL,
+             CHECK ((kind = 'decision' AND decision_id IS NOT NULL) OR (kind = 'test' AND decision_id IS NULL)),
+             UNIQUE(decision_id, subscription_id)
+         );
+         CREATE INDEX IF NOT EXISTS notification_deliveries_ready
+             ON notification_deliveries(state, available_at, urgency, id);
+         PRAGMA user_version = 15;",
     )
 }
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
@@ -2167,6 +2242,53 @@ mod tests {
                 .unwrap(),
             CURRENT_SCHEMA_VERSION
         );
+    }
+    #[test]
+    fn migrates_schema_v14_to_bounded_mobile_attention() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "DROP TABLE notification_deliveries;
+                     DROP TABLE notification_subscriptions;
+                     DROP TABLE notification_preferences;
+                     DROP TABLE notification_vapid_keys;
+                     PRAGMA user_version = 14;",
+                )
+                .unwrap();
+        }
+
+        let migrated = TaskStore::open(path).unwrap();
+        let connection = migrated.connection().unwrap();
+        for table in [
+            "notification_vapid_keys",
+            "notification_preferences",
+            "notification_subscriptions",
+            "notification_deliveries",
+        ] {
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        [table],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1
+            );
+        }
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+        drop(connection);
+        migrated.verify_integrity().unwrap();
     }
     #[test]
     fn fresh_store_owns_tasks_and_workers_in_one_durable_hive() {

@@ -9,6 +9,10 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   const onThemeChange = vi.fn();
   const onPresenceChange = vi.fn().mockResolvedValue(undefined);
   const onEnableLockDetection = vi.fn().mockResolvedValue(undefined);
+  const onNotificationPolicyChange = vi.fn().mockResolvedValue(undefined);
+  const onEnableNotifications = vi.fn().mockResolvedValue(undefined);
+  const onDisableNotifications = vi.fn().mockResolvedValue(undefined);
+  const onTestNotification = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 5, host_version: "0.1.0", draining: false, running_sessions: 1, retained_sessions: 3 } });
@@ -21,6 +25,8 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       operatorToken="secret-token"
       presence={{ mode: "away", manual_mode: null, source: "screen_locked" }}
       lockDetectionState="available"
+      notificationSettings={{ policy: "important_only", subscription_count: 0, vapid_public_key: "public-key" }}
+      notificationState="available"
       recentEvents={[{ sequence: 7, hive_id: "hive-1", kind: "workers_changed", occurred_at: 1 }]}
       hiveIdentity={{ operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } }}
       health={{ status: "ok", version: "0.1.0" }}
@@ -29,14 +35,23 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       onThemeChange={onThemeChange}
       onPresenceChange={onPresenceChange}
       onEnableLockDetection={onEnableLockDetection}
+      onNotificationPolicyChange={onNotificationPolicyChange}
+      onEnableNotifications={onEnableNotifications}
+      onDisableNotifications={onDisableNotifications}
+      onTestNotification={onTestNotification}
     />,
   );
 
-  expect(screen.getByRole("status")).toHaveTextContent("AwayComputer lock detected");
+  expect(screen.getAllByRole("status")[0]).toHaveTextContent("AwayComputer lock detected");
   fireEvent.change(screen.getByLabelText("Presence policy"), { target: { value: "night_watch" } });
   expect(onPresenceChange).toHaveBeenCalledWith("night_watch");
   fireEvent.click(screen.getByRole("button", { name: "Enable" }));
   expect(onEnableLockDetection).toHaveBeenCalledOnce();
+  expect(screen.getByText("Available when you choose")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Notify me"), { target: { value: "all_decisions" } });
+  expect(onNotificationPolicyChange).toHaveBeenCalledWith("all_decisions");
+  fireEvent.click(screen.getByRole("button", { name: "Enable this device" }));
+  expect(onEnableNotifications).toHaveBeenCalledOnce();
   expect(screen.getAllByText("Healthy · 0.1.0").length).toBeGreaterThan(0);
   expect(screen.getByText("Meadow Hive")).toBeInTheDocument();
   expect(screen.getByText("Bea")).toBeInTheDocument();

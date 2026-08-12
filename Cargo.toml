@@ -20,6 +20,7 @@ repository = "https://github.com/miopea/swarm-next"
 [workspace.dependencies]
 axum = { version = "0.8.9", features = ["ws"] }
 futures-util = "0.3"
+base64ct = { version = "1.8", features = ["alloc"] }
 rmcp = { version = "3.1.2", default-features = false, features = ["server", "transport-streamable-http-server"] }
 getrandom = "0.3"
 nix = { version = "0.28", features = ["user"] }
@@ -28,6 +29,7 @@ sha2 = "0.10"
 rusqlite = { version = "0.37", features = ["backup", "bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -37,6 +39,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v7"] }
 vt100 = "0.16.2"
+web-push-native = { version = "0.5.0", default-features = false, features = ["vapid"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

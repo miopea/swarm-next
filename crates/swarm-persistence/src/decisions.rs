@@ -107,6 +107,12 @@ impl TaskStore {
             return Err(TaskStoreError::WorkerNotFound);
         }
         insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
+        super::notifications::enqueue_decision_notifications(
+            &transaction,
+            id,
+            request.urgency,
+            now,
+        )?;
         transaction.commit()?;
         drop(connection);
         self.get_decision_request(id)

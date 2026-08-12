@@ -58,6 +58,9 @@ impl TaskStore {
         if changed {
             insert_control_room_event(&transaction, ControlRoomEventKind::PresenceChanged)?;
         }
+        if after.mode != PresenceMode::AtHive {
+            super::notifications::enqueue_pending_notifications(&transaction, now)?;
+        }
         transaction.commit()?;
         Ok(PresenceMutation {
             presence: after,
@@ -124,6 +127,9 @@ impl TaskStore {
         if changed {
             insert_control_room_event(&transaction, ControlRoomEventKind::PresenceChanged)?;
         }
+        if after.mode != PresenceMode::AtHive {
+            super::notifications::enqueue_pending_notifications(&transaction, now)?;
+        }
         transaction.commit()?;
         Ok(PresenceMutation {
             presence: after,
@@ -141,7 +147,7 @@ fn observation_ttl(state: PresenceObservationState) -> i64 {
     }
 }
 
-fn operator_presence_from_connection(
+pub(super) fn operator_presence_from_connection(
     connection: &Connection,
     now: i64,
 ) -> Result<OperatorPresence, TaskStoreError> {
@@ -205,7 +211,7 @@ fn operator_presence_from_connection(
     })
 }
 
-fn local_operator_id(connection: &Connection) -> Result<OperatorId, TaskStoreError> {
+pub(super) fn local_operator_id(connection: &Connection) -> Result<OperatorId, TaskStoreError> {
     let value: String = connection.query_row(
         "SELECT h.operator_id FROM local_hive_identity local
          JOIN hives h ON h.id = local.hive_id WHERE local.singleton = 1",

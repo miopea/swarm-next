@@ -25,6 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
         )
         .with_task_store(store)
+        .with_notifications(vapid_subject_from_env())?
         .with_agent_configuration(agent_config_root, mcp_url_from_env(address));
     let recovered = state.recover_decision_deliveries()?;
     if recovered > 0 {
@@ -38,6 +39,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!(
             recovered_task_dispatches,
             "crash-interrupted task briefings require operator review"
+        );
+    }
+    let recovered_notifications = state.recover_notification_deliveries()?;
+    if recovered_notifications > 0 {
+        tracing::warn!(
+            recovered_notifications,
+            "crash-interrupted tagged notifications were safely requeued"
         );
     }
     let recovered_task_outcomes = state.recover_task_outcomes()?;
@@ -71,6 +79,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+fn vapid_subject_from_env() -> String {
+    env::var("SWARM_VAPID_SUBJECT")
+        .unwrap_or_else(|_| "mailto:operator@swarm-next.local".to_owned())
 }
 
 fn queen_workspace_from_env() -> PathBuf {

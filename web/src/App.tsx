@@ -7,6 +7,7 @@ import {
   resolveDecision,
   createWorker,
   fetchHive,
+  fetchNotificationSettings,
   fetchPresence,
   fetchSessions,
   fetchTaskActivity,
@@ -23,6 +24,8 @@ import {
   type DecisionRequest,
   type Health,
   type HiveIdentity,
+  type NotificationPolicy,
+  type NotificationSettings,
   type OperatorPresence,
   type PresenceMode,
   type SessionSummary,
@@ -38,6 +41,7 @@ import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/the
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
 import { PresenceController, type LockDetectionState } from "./presence/PresenceController";
+import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
@@ -72,7 +76,10 @@ export function App() {
   const [recentEvents, setRecentEvents] = useState<ControlRoomEvent[]>([]);
   const [presence, setPresence] = useState<OperatorPresence>();
   const [lockDetectionState, setLockDetectionState] = useState<LockDetectionState>("unsupported");
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>();
+  const [notificationState, setNotificationState] = useState<NotificationCapabilityState>("unsupported");
   const presenceController = useMemo(() => new PresenceController(), []);
+  const notificationController = useMemo(() => new NotificationController(), []);
 
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
   useEffect(() => saveSurface(surface), [surface]);
@@ -87,6 +94,17 @@ export function App() {
     presenceController.start(operatorToken, setPresence, setLockDetectionState);
     return () => presenceController.stop();
   }, [operatorToken, presenceController]);
+
+  useEffect(() => {
+    if (!operatorToken) {
+      notificationController.stop();
+      setNotificationSettings(undefined);
+      setNotificationState("unsupported");
+      return;
+    }
+    void notificationController.start(operatorToken, setNotificationSettings, setNotificationState);
+    return () => notificationController.stop();
+  }, [notificationController, operatorToken]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -141,10 +159,13 @@ export function App() {
     feed.start(
       operatorToken,
       async (page) => {
-        const [controlRoom, refreshedPresence] = await Promise.all([
+        const [controlRoom, refreshedPresence, refreshedNotifications] = await Promise.all([
           loadControlRoom(operatorToken),
           page.events.some((event) => event.kind === "presence_changed")
             ? fetchPresence(operatorToken)
+            : Promise.resolve(undefined),
+          page.events.some((event) => event.kind === "notifications_changed")
+            ? fetchNotificationSettings(operatorToken)
             : Promise.resolve(undefined),
         ]);
         if (cancelled) return;
@@ -154,6 +175,7 @@ export function App() {
         setTasks(controlRoom.tasks);
         setDecisions(controlRoom.decisions);
         if (refreshedPresence) setPresence(refreshedPresence);
+        if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
         setRecentEvents((current) => page.reset_required
           ? page.events.slice(-16)
           : [...current, ...page.events].filter((event, index, events) =>
@@ -202,6 +224,24 @@ export function App() {
     if (!enabled && lockDetectionState !== "denied") {
       setOperationError("This browser did not grant operating-system lock detection. Presence still uses activity, visibility, and expiry.");
     }
+  }
+  async function changeNotificationPolicy(policy: NotificationPolicy) {
+    await perform(() => notificationController.changePolicy(policy));
+  }
+
+  async function enableNotifications() {
+    await perform(async () => {
+      const enabled = await notificationController.enable();
+      if (!enabled) throw new Error("This browser did not enable notifications. Check its site permission and try again.");
+    });
+  }
+
+  async function disableNotifications() {
+    await perform(() => notificationController.disable());
+  }
+
+  async function testNotification() {
+    await perform(() => notificationController.test());
   }
   async function refreshControlRoom() {
     if (!operatorToken) return;
@@ -384,6 +424,8 @@ export function App() {
     setWorkers([]);
     setTasks([]);
     setDecisions([]);
+    setNotificationSettings(undefined);
+    setNotificationState("unsupported");
     setActiveSessionId(undefined);
     setOperationError(undefined);
   }
@@ -541,11 +583,17 @@ export function App() {
             recentEvents={recentEvents}
             presence={presence}
             lockDetectionState={lockDetectionState}
+            notificationSettings={notificationSettings}
+            notificationState={notificationState}
             sessions={sessions}
             workers={workers}
             onThemeChange={setColorTheme}
             onPresenceChange={changePresenceMode}
             onEnableLockDetection={enableLockDetection}
+            onNotificationPolicyChange={changeNotificationPolicy}
+            onEnableNotifications={enableNotifications}
+            onDisableNotifications={disableNotifications}
+            onTestNotification={testNotification}
           />
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}`}>
@@ -611,7 +659,7 @@ function RuntimeStatus({ state }: { state: LoadState }) {
 
 function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>; }
 function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
-function readSavedSurface(): Surface { try { const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "decisions" || saved === "workers" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
+function readSavedSurface(): Surface { try { const linked = new URLSearchParams(window.location.search).get("surface"); if (linked === "decisions" || linked === "tasks" || linked === "workers" || linked === "settings") return linked; const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "decisions" || saved === "workers" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
 function saveSurface(surface: Surface) { try { window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface); } catch { /* Surface persistence is a non-critical convenience. */ } }
 function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }
 function SettingsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>; }

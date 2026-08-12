@@ -1,7 +1,8 @@
-import type { ControlRoomEvent, Health, HiveIdentity, OperatorPresence, PresenceMode, SessionSummary, Worker } from "../api";
+import type { ControlRoomEvent, Health, HiveIdentity, NotificationPolicy, NotificationSettings, OperatorPresence, PresenceMode, SessionSummary, Worker } from "../api";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
+import type { NotificationCapabilityState } from "../notifications/NotificationController";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 
 type Props = {
@@ -12,15 +13,21 @@ type Props = {
   operatorToken: string;
   presence: OperatorPresence | undefined;
   lockDetectionState: LockDetectionState;
+  notificationSettings: NotificationSettings | undefined;
+  notificationState: NotificationCapabilityState;
   recentEvents: ControlRoomEvent[];
   sessions: SessionSummary[];
   workers: Worker[];
   onThemeChange: (theme: ColorTheme) => void;
   onPresenceChange: (mode: PresenceMode | null) => Promise<void>;
   onEnableLockDetection: () => Promise<void>;
+  onNotificationPolicyChange: (policy: NotificationPolicy) => Promise<void>;
+  onEnableNotifications: () => Promise<void>;
+  onDisableNotifications: () => Promise<void>;
+  onTestNotification: () => Promise<void>;
 };
 
-export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, lockDetectionState, recentEvents, sessions, workers, onThemeChange, onPresenceChange, onEnableLockDetection }: Props) {
+export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, lockDetectionState, notificationSettings, notificationState, recentEvents, sessions, workers, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification }: Props) {
   return (
     <div className="settings-workspace">
       <section className="settings-card presence-settings" aria-labelledby="presence-heading">
@@ -48,6 +55,35 @@ export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, li
             {lockDetectionState === "enabled" ? "Enabled" : "Enable"}
           </button>
         </div>
+      </section>
+      <section className="settings-card notification-settings" aria-labelledby="notification-heading">
+        <div><p className="eyebrow">Mobile attention</p><h3 id="notification-heading">Let urgent work find you</h3></div>
+        <p>Notifications are quiet while you are At the Hive. Away and Night Watch can deliver generic, private prompts when a worker needs a decision.</p>
+        <label htmlFor="notification-policy"><span>Notify me</span>
+          <select
+            id="notification-policy"
+            value={notificationSettings?.policy ?? "important_only"}
+            disabled={!notificationSettings}
+            onChange={(event) => void onNotificationPolicyChange(event.target.value as NotificationPolicy)}
+          >
+            <option value="important_only">Important or time-sensitive decisions</option>
+            <option value="all_decisions">Every pending decision</option>
+            <option value="off">Never</option>
+          </select>
+        </label>
+        <div className="notification-status" role="status">
+          <span className={`presence ${notificationState === "enabled" ? "online" : notificationState === "error" || notificationState === "denied" ? "offline" : "waiting"}`} />
+          <span><strong>{notificationStateLabel(notificationState)}</strong><small>{notificationStateDetail(notificationState, notificationSettings?.subscription_count ?? 0)}</small></span>
+        </div>
+        <div className="settings-actions">
+          {notificationState === "enabled" ? (
+            <button className="secondary-button" onClick={() => void onDisableNotifications()}>Disable this device</button>
+          ) : (
+            <button className="primary-action" disabled={notificationState === "unsupported" || notificationState === "denied" || !notificationSettings} onClick={() => void onEnableNotifications()}>Enable this device</button>
+          )}
+          <button className="secondary-button" disabled={notificationState !== "enabled"} onClick={() => void onTestNotification()}>Send a test</button>
+        </div>
+        <small className="privacy-note">Notification text never includes repository names, task titles, evidence, credentials, or terminal output.</small>
       </section>
       <section className="settings-card" aria-labelledby="appearance-heading">
         <div><p className="eyebrow">Appearance</p><h3 id="appearance-heading">Comfortable in long sessions</h3></div>
@@ -96,6 +132,21 @@ export default function SettingsWorkspace({ colorTheme, health, hiveIdentity, li
 }
 
 
+function notificationStateLabel(state: NotificationCapabilityState) {
+  if (state === "enabled") return "Ready on this device";
+  if (state === "denied") return "Browser permission blocked";
+  if (state === "unsupported") return "Push unavailable in this browser";
+  if (state === "error") return "Needs another try";
+  return "Available when you choose";
+}
+
+function notificationStateDetail(state: NotificationCapabilityState, count: number) {
+  if (state === "enabled") return `${count} device${count === 1 ? "" : "s"} registered with this Hive`;
+  if (state === "denied") return "Allow notifications in browser site settings to enable them.";
+  if (state === "unsupported") return "Presence and the Needs you inbox continue to work normally.";
+  if (state === "error") return "No notification was enabled; retry when the connection is stable.";
+  return "Nothing is registered until you explicitly enable it.";
+}
 function presenceLabel(mode: PresenceMode | undefined) {
   if (mode === "at_hive") return "At the Hive";
   if (mode === "night_watch") return "Night Watch";
