@@ -205,6 +205,7 @@ impl ServerHandler for AgentMcp {
                         TaskId::from_str(&input.task_id)
                             .map_err(|_| ApplicationError::NotAuthorized)?,
                         input.state,
+                        &input.note,
                     )
                     .and_then(structured)
             }),
@@ -314,6 +315,8 @@ struct AssignTaskInput {
 struct TransitionTaskInput {
     task_id: String,
     state: TaskState,
+    #[serde(default)]
+    note: String,
 }
 
 #[derive(Deserialize)]
@@ -422,12 +425,13 @@ fn assign_task_tool() -> Tool {
 fn transition_task_tool() -> Tool {
     tool(
         "swarm_transition_task",
-        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment; Queen may approve valid transitions including Completed.",
+        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Include a concise Blocked reason or Review handoff note; Queen receives it when not operator-engaged.",
         &json!({
             "type": "object",
             "properties": {
                 "task_id": { "type": "string", "format": "uuid" },
-                "state": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "completed"] }
+                "state": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "completed"] },
+                "note": { "type": "string", "maxLength": 4000, "description": "Concise blocker reason, review handoff, or transition context" }
             },
             "required": ["task_id", "state"],
             "additionalProperties": false

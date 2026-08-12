@@ -40,6 +40,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "crash-interrupted task briefings require operator review"
         );
     }
+    let recovered_task_outcomes = state.recover_task_outcomes()?;
+    if recovered_task_outcomes > 0 {
+        tracing::warn!(
+            recovered_task_outcomes,
+            "crash-interrupted Queen handoffs require operator review"
+        );
+    }
     state.supervise_workers().await;
     let supervisor = state.clone();
     tokio::spawn(async move {

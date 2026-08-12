@@ -103,6 +103,20 @@ impl TaskService {
             .transition_task(task_id, target)
             .map_err(Into::into)
     }
+    /// Applies one domain-valid task transition with an optional audit note.
+    ///
+    /// # Errors
+    /// Propagates lifecycle, note validation, and persistence failures.
+    pub fn transition_operator_task_with_note(
+        &self,
+        task_id: TaskId,
+        target: TaskState,
+        note: &str,
+    ) -> Result<Task, ApplicationError> {
+        self.store
+            .transition_task_with_note(task_id, target, note)
+            .map_err(Into::into)
+    }
     /// Lists the work visible to an agent. Queen sees the Hive queue; workers see only their
     /// current session assignment.
     ///
@@ -184,6 +198,7 @@ impl TaskService {
         principal: AgentPrincipal,
         task_id: TaskId,
         target: TaskState,
+        note: &str,
     ) -> Result<Task, ApplicationError> {
         if principal.role != WorkerRole::Queen {
             let session_id = principal
@@ -199,8 +214,12 @@ impl TaskService {
             ) {
                 return Err(ApplicationError::NotAuthorized);
             }
+            return self
+                .store
+                .transition_worker_task(task_id, target, note, session_id)
+                .map_err(Into::into);
         }
-        self.transition_operator_task(task_id, target)
+        self.transition_operator_task_with_note(task_id, target, note)
     }
     /// Lists the operator/Queen inbox, or only requests originated by a worker caller.
     ///
@@ -405,7 +424,7 @@ mod tests {
             Err(ApplicationError::NotAuthorized)
         ));
         assert!(matches!(
-            service.transition_task(worker_principal, task.id, TaskState::Completed),
+            service.transition_task(worker_principal, task.id, TaskState::Completed, ""),
             Err(ApplicationError::NotAuthorized)
         ));
     }

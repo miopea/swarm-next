@@ -59,6 +59,7 @@ export type Task = {
   state: TaskState;
   assigned_session_id: string | null;
   dispatch_state?: "queued" | "dispatching" | "delivered" | "uncertain" | null;
+  outcome_delivery_state?: "queued" | "dispatching" | "delivered" | "uncertain" | null;
   position: number;
   created_at: number;
   updated_at: number;
@@ -96,6 +97,7 @@ export type TaskActivity = {
   kind: TaskActivityKind;
   from_state: TaskState | null;
   to_state: TaskState | null;
+  note: string;
   occurred_at: number;
 };
 
@@ -231,6 +233,7 @@ export async function transitionTask(
   operatorToken: string,
   taskId: string,
   state: TaskState,
+  note = "",
 ): Promise<Task> {
   const response = await authenticatedFetch(
     operatorToken,
@@ -238,7 +241,7 @@ export async function transitionTask(
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state }),
+      body: JSON.stringify({ state, note }),
     },
   );
   return response.json() as Promise<Task>;

@@ -689,6 +689,50 @@ impl fmt::Display for ParseTaskDispatchStateError {
 }
 
 impl std::error::Error for ParseTaskDispatchStateError {}
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskOutcomeDeliveryState {
+    Queued,
+    Dispatching,
+    Delivered,
+    Uncertain,
+}
+
+impl fmt::Display for TaskOutcomeDeliveryState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Queued => "queued",
+            Self::Dispatching => "dispatching",
+            Self::Delivered => "delivered",
+            Self::Uncertain => "uncertain",
+        })
+    }
+}
+
+impl FromStr for TaskOutcomeDeliveryState {
+    type Err = ParseTaskOutcomeDeliveryStateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "queued" => Ok(Self::Queued),
+            "dispatching" => Ok(Self::Dispatching),
+            "delivered" => Ok(Self::Delivered),
+            "uncertain" => Ok(Self::Uncertain),
+            _ => Err(ParseTaskOutcomeDeliveryStateError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseTaskOutcomeDeliveryStateError;
+
+impl fmt::Display for ParseTaskOutcomeDeliveryStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown task outcome delivery state")
+    }
+}
+
+impl std::error::Error for ParseTaskOutcomeDeliveryStateError {}
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskPriority {
@@ -790,6 +834,7 @@ pub struct TaskActivity {
     pub kind: TaskActivityKind,
     pub from_state: Option<TaskState>,
     pub to_state: Option<TaskState>,
+    pub note: String,
     pub occurred_at: i64,
 }
 
@@ -818,6 +863,7 @@ pub struct Task {
     pub state: TaskState,
     pub assigned_session_id: Option<WorkerSessionId>,
     pub dispatch_state: Option<TaskDispatchState>,
+    pub outcome_delivery_state: Option<TaskOutcomeDeliveryState>,
     pub position: i64,
     pub created_at: i64,
     pub updated_at: i64,
