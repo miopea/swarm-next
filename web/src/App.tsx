@@ -712,7 +712,7 @@ export function App() {
                         key={worker.id}
                         worker={worker}
                         selected={sessionId === activeSessionId}
-                        detail={worker.runtime_error ?? task?.title ?? (worker.role === "queen" ? "Always-active command terminal" : worker.running ? "Unassigned session" : "Stopped · click to start")}
+                        detail={worker.runtime_error ?? task?.title ?? (worker.role === "queen" ? "Always-active command terminal" : worker.running ? `${repositoryName(worker.workspace)} · Ready for work` : `${repositoryName(worker.workspace)} · Sleeping`)}
                         busy={busy}
                         onOpen={() => sessionId && openWorker(sessionId)}
                         onStart={() => void startExistingWorker(worker)}
@@ -885,6 +885,10 @@ function CommandIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><cir
 function requireActiveSession(worker: Worker): string {
   if (!worker.active_session_id) throw new Error(`${worker.name} did not receive a terminal session`);
   return worker.active_session_id;
+}
+
+function repositoryName(workspace: string): string {
+  return workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace;
 }
 
 function presenceModeLabel(mode: PresenceMode) {

@@ -215,7 +215,7 @@ test("removes completed assignments from the live worker roster", async () => {
 
   render(<App />);
 
-  expect(await screen.findByRole("button", { name: /^Daisy/ })).toHaveTextContent("Unassigned session");
+  expect(await screen.findByRole("button", { name: /^Daisy/ })).toHaveTextContent("daisy · Ready for work");
   expect(screen.queryByText("Already shipped")).not.toBeInTheDocument();
 });
 
