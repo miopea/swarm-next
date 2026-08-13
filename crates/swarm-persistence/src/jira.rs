@@ -55,6 +55,7 @@ pub struct JiraIssueSnapshot<'a> {
     pub issue_id: &'a str,
     pub issue_key: &'a str,
     pub summary: &'a str,
+    pub description: &'a str,
     pub status_id: &'a str,
     pub status_name: &'a str,
     pub assignee_account_id: Option<&'a str>,
@@ -365,12 +366,13 @@ impl TaskStore {
                     transaction.execute(
                         "INSERT INTO tasks (
                          id, hive_id, title, description, priority, workspace, state, position
-                     ) VALUES (?1, ?2, ?3, '', 'normal', ?4, ?5,
+                     ) VALUES (?1, ?2, ?3, ?4, 'normal', ?5, ?6,
                          COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0))",
                         params![
                             task_id.to_string(),
                             binding.hive_id.to_string(),
                             summary,
+                            issue.description.trim(),
                             unassigned_scope,
                             target_state.to_string(),
                         ],
@@ -907,6 +909,7 @@ fn valid_issue(issue: &JiraIssueSnapshot<'_>) -> bool {
     bounded(issue.issue_id, MAX_ISSUE_ID_BYTES)
         && bounded(issue.issue_key, MAX_ISSUE_KEY_BYTES)
         && bounded(issue.summary, super::MAX_TASK_TITLE_BYTES)
+        && issue.description.len() <= super::MAX_TASK_DESCRIPTION_BYTES
         && bounded(issue.status_id, MAX_STATUS_ID_BYTES)
         && bounded(issue.status_name, MAX_STATUS_NAME_BYTES)
         && bounded(issue.remote_updated_at, MAX_REMOTE_TIMESTAMP_BYTES)
@@ -1038,6 +1041,7 @@ mod tests {
                     issue_id: "20001",
                     issue_key: "WEB-42",
                     summary: "Polish the launch page",
+                    description: "Confirm every launch condition.",
                     status_id: "1",
                     status_name: "To Do",
                     assignee_account_id: Some("account-1"),
@@ -1049,6 +1053,7 @@ mod tests {
             .remove(0);
         assert_eq!(first.workspace, "jira://project/10001");
         assert_eq!(first.state, TaskState::Ready);
+        assert_eq!(first.description, "Confirm every launch condition.");
         assert_eq!(first.assigned_worker_id, None);
         store
             .update_task_details(
@@ -1072,6 +1077,7 @@ mod tests {
                     issue_id: "20001",
                     issue_key: "WEB-42",
                     summary: "Polish the public launch page",
+                    description: "Confirm desktop and mobile.",
                     status_id: "3",
                     status_name: "In Progress",
                     assignee_account_id: Some("account-1"),
@@ -1108,6 +1114,7 @@ mod tests {
                     issue_id: "20001",
                     issue_key: "WEB-42",
                     summary: "Polish the public launch page",
+                    description: "Confirm desktop and mobile.",
                     status_id: "3",
                     status_name: "In Progress",
                     assignee_account_id: Some("account-1"),
@@ -1163,6 +1170,7 @@ mod tests {
                     issue_id: "20001",
                     issue_key: "WEB-42",
                     summary: "Polish the launch page",
+                    description: "",
                     status_id: "1",
                     status_name: "To Do",
                     assignee_account_id: None,
@@ -1205,6 +1213,7 @@ mod tests {
                     issue_id: "20001",
                     issue_key: "WEB-42",
                     summary: "Polish the launch page",
+                    description: "",
                     status_id: "1",
                     status_name: "To Do",
                     assignee_account_id: None,
@@ -1272,6 +1281,7 @@ mod tests {
                     issue_id: "20001",
                     issue_key: "WEB-42",
                     summary: "Polish the launch page",
+                    description: "",
                     status_id: "1",
                     status_name: "To Do",
                     assignee_account_id: None,
@@ -1315,6 +1325,7 @@ mod tests {
                     issue_id: "20001",
                     issue_key: "WEB-42",
                     summary: "Polish the launch page",
+                    description: "",
                     status_id: "3",
                     status_name: "In Progress",
                     assignee_account_id: None,

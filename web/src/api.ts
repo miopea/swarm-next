@@ -104,6 +104,7 @@ export type JiraIssue = {
   id: string;
   key: string;
   summary: string;
+  description: string;
   status_id: string;
   status_name: string;
   assignee_account_id: string | null;

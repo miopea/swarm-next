@@ -15,6 +15,7 @@ const MAX_PROJECTS: usize = 500;
 const MAX_PROJECT_STATUSES: usize = 128;
 const MAX_ISSUES: usize = 200;
 const MAX_TRANSITIONS: usize = 128;
+const MAX_ISSUE_DESCRIPTION_BYTES: usize = 10_000;
 
 #[derive(Clone, Default)]
 pub(crate) enum JiraReadinessProbe {
@@ -72,6 +73,7 @@ pub(crate) struct JiraIssue {
     pub id: String,
     pub key: String,
     pub summary: String,
+    pub description: String,
     pub status_id: String,
     pub status_name: String,
     pub assignee_account_id: Option<String>,
@@ -168,6 +170,7 @@ struct JiraIssueResponse {
 #[derive(Deserialize)]
 struct JiraIssueFields {
     summary: String,
+    description: Option<serde_json::Value>,
     status: JiraIssueStatus,
     assignee: Option<JiraIssueAssignee>,
     updated: String,
@@ -486,7 +489,7 @@ impl JiraReadinessProbe {
                 let mut pairs = url.query_pairs_mut();
                 pairs.append_pair("jql", &jql);
                 pairs.append_pair("maxResults", &PAGE_SIZE.to_string());
-                pairs.append_pair("fields", "summary,status,assignee,updated");
+                pairs.append_pair("fields", "summary,description,status,assignee,updated");
                 if let Some(token) = next_page_token.as_deref() {
                     pairs.append_pair("nextPageToken", token);
                 }
@@ -781,6 +784,12 @@ fn recommended_state(category_key: &str) -> TaskState {
 
 fn jira_issue(issue: JiraIssueResponse) -> Option<JiraIssue> {
     let summary = issue.fields.summary.trim().to_owned();
+    let description = issue
+        .fields
+        .description
+        .as_ref()
+        .map(jira_document_text)
+        .unwrap_or_default();
     let status_name = issue.fields.status.name.trim().to_owned();
     if issue.id.is_empty()
         || issue.id.len() > 128
@@ -798,6 +807,7 @@ fn jira_issue(issue: JiraIssueResponse) -> Option<JiraIssue> {
         id: issue.id,
         key: issue.key,
         summary,
+        description,
         status_id: issue.fields.status.id,
         status_name,
         assignee_account_id: issue
@@ -811,6 +821,55 @@ fn jira_issue(issue: JiraIssueResponse) -> Option<JiraIssue> {
             .and_then(|assignee| assignee.display_name),
         updated_at: issue.fields.updated,
     })
+}
+
+fn jira_document_text(value: &serde_json::Value) -> String {
+    fn visit(value: &serde_json::Value, output: &mut String) {
+        match value {
+            serde_json::Value::String(text) => output.push_str(text),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    visit(item, output);
+                }
+            }
+            serde_json::Value::Object(object) => {
+                let node_type = object.get("type").and_then(serde_json::Value::as_str);
+                if node_type == Some("text") {
+                    if let Some(text) = object.get("text").and_then(serde_json::Value::as_str) {
+                        output.push_str(text);
+                    }
+                    return;
+                }
+                if node_type == Some("hardBreak") {
+                    output.push('\n');
+                    return;
+                }
+                if let Some(content) = object.get("content") {
+                    visit(content, output);
+                }
+                if matches!(
+                    node_type,
+                    Some("paragraph" | "heading" | "listItem" | "blockquote" | "codeBlock")
+                ) && !output.ends_with('\n')
+                {
+                    output.push('\n');
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut output = String::new();
+    visit(value, &mut output);
+    let normalized = output.trim().replace("\n\n\n", "\n\n");
+    if normalized.len() <= MAX_ISSUE_DESCRIPTION_BYTES {
+        return normalized;
+    }
+    let mut boundary = MAX_ISSUE_DESCRIPTION_BYTES;
+    while !normalized.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    normalized[..boundary].trim_end().to_owned()
 }
 
 fn unavailable() -> JiraReadiness {
@@ -977,6 +1036,18 @@ mod tests {
                             "key": "WEB-42",
                             "fields": {
                                 "summary": "Polish the launch page",
+                                "description": {
+                                    "type": "doc",
+                                    "version": 1,
+                                    "content": [{
+                                        "type": "paragraph",
+                                        "content": [
+                                            { "type": "text", "text": "Verify desktop" },
+                                            { "type": "hardBreak" },
+                                            { "type": "text", "text": "and mobile." }
+                                        ]
+                                    }]
+                                },
                                 "status": { "id": "3", "name": "In Progress" },
                                 "assignee": { "accountId": "account-1", "displayName": "Bea" },
                                 "updated": "2026-08-13T13:00:00.000+0000"
@@ -1008,6 +1079,7 @@ mod tests {
         let issues = adapter.issues("10001").await.unwrap();
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].key, "WEB-42");
+        assert_eq!(issues[0].description, "Verify desktop\nand mobile.");
         assert_eq!(issues[0].assignee_name.as_deref(), Some("Bea"));
     }
 

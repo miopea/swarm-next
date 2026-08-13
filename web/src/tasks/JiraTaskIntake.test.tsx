@@ -21,8 +21,8 @@ test("brings explicitly selected assigned or unassigned open Jira work onto the 
       scope: "hive", hive_id: "hive-1", apiary_id: null, access_verified: true, workflow_mapped: true,
     }]);
     if (url.endsWith("/bindings/binding-1/issues")) return ok([
-      { id: "20001", key: "WWD-42", summary: "Polish launch", status_id: "1", status_name: "To Do", assignee_account_id: "a1", assignee_name: "Bradford", updated_at: "now" },
-      { id: "20002", key: "WWD-43", summary: "Review mobile", status_id: "3", status_name: "In Progress", assignee_account_id: null, assignee_name: null, updated_at: "now" },
+      { id: "20001", key: "WWD-42", summary: "Polish launch", description: "Verify launch conditions.", status_id: "1", status_name: "To Do", assignee_account_id: "a1", assignee_name: "Bradford", updated_at: "now" },
+      { id: "20002", key: "WWD-43", summary: "Review mobile", description: "Check the Android PWA.", status_id: "3", status_name: "In Progress", assignee_account_id: null, assignee_name: null, updated_at: "now" },
     ]);
     if (url.endsWith("/bindings/binding-1/sync") && method === "POST") return ok([{ id: "task-1" }]);
     throw new Error(`Unexpected request: ${method} ${url}`);
