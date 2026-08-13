@@ -19,6 +19,9 @@ workspace_root=${SWARM_WORKSPACE_ROOT:-}
 drain_release=
 rollback_release=
 rollback_host_release=
+restore_rollback=
+restore_auth=
+restore_incoming=
 
 die() { printf 'swarm-next-package: %s\n' "$*" >&2; exit 1; }
 run_systemctl() { "$systemctl_bin" --user "$@"; }
@@ -27,6 +30,15 @@ terminal_socket() { printf '%s/swarm-next/terminal.sock\n' "${XDG_RUNTIME_DIR:-/
 on_exit() {
   result=$?
   trap - EXIT
+  [ -z "$restore_auth" ] || rm -f "$restore_auth"
+  [ -z "$restore_incoming" ] || rm -f "$restore_incoming"
+  if [ -n "$restore_rollback" ] && [ -f "$restore_rollback" ]; then
+    run_systemctl stop swarm-next-api.service >/dev/null 2>&1 || true
+    cp "$restore_rollback" "$state_root/swarm-next.sqlite3" >/dev/null 2>&1 || true
+    chmod 0600 "$state_root/swarm-next.sqlite3" >/dev/null 2>&1 || true
+    rm -f "$state_root/swarm-next.sqlite3-wal" "$state_root/swarm-next.sqlite3-shm"
+    run_systemctl start swarm-next-api.service >/dev/null 2>&1 || true
+  fi
   if [ -n "$rollback_host_release" ] && [ -d "$rollback_host_release" ]; then
     activate_link "$rollback_release" >/dev/null 2>&1 || true
     activate_host_link "$rollback_host_release" >/dev/null 2>&1 || true
@@ -42,6 +54,38 @@ on_exit() {
       "$drain_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
   fi
   exit "$result"
+}
+
+restore_database() {
+  backup=$bundle
+  case "$backup" in "$home_dir"/*) :;; *) die "restore input must remain below HOME";; esac
+  case "$backup" in *[!A-Za-z0-9_./-]*) die "restore input contains unsupported characters";; esac
+  [ -f "$backup" ] || die "restore database is missing"
+  current=$(release_from_link "$install_root/current")
+  [ -n "$current" ] || die "no current release is installed"
+  "$current/bin/swarmctl" verify-database "$backup" >/dev/null || die "restore database failed integrity verification"
+  database="$state_root/swarm-next.sqlite3"
+  restore_rollback="$state_root/.restore-rollback-$$.sqlite3"
+  restore_auth="$state_root/.restore-auth-$$"
+  token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm-next.env")
+  umask 077
+  printf 'header = "Authorization: Bearer %s"\n' "$token" > "$restore_auth"
+  "$curl_bin" --fail --silent --show-error --config "$restore_auth" --output "$restore_rollback" "${health_url%/health}/api/v1/backups/database" || die "could not create the pre-restore rollback backup"
+  rm -f "$restore_auth"
+  restore_auth=
+  "$current/bin/swarmctl" verify-database "$restore_rollback" >/dev/null || die "pre-restore rollback backup failed verification"
+  run_systemctl stop swarm-next-api.service
+  restore_incoming="$state_root/.restore-incoming-$$.sqlite3"
+  cp "$backup" "$restore_incoming"
+  chmod 0600 "$restore_incoming"
+  mv -f "$restore_incoming" "$database"
+  restore_incoming=
+  rm -f "$database-wal" "$database-shm"
+  run_systemctl start swarm-next-api.service
+  wait_for_health || die "restored API failed health verification; previous database will be restored"
+  rm -f "$restore_rollback"
+  restore_rollback=
+  printf 'Hive database restored and verified; terminal host and repositories were preserved.\n'
 }
 trap on_exit EXIT
 
@@ -342,5 +386,6 @@ case "$action" in
   reconcile-host) reconcile_host;;
   migrate-protocol) migrate_protocol;;
   uninstall) uninstall_product;;
-  *) die "usage: swarm-next-package <install|update|migrate-protocol> RELEASE_DIR | rollback | reconcile-host | uninstall";;
+  restore) restore_database;;
+  *) die "usage: swarm-next-package <install|update|migrate-protocol> RELEASE_DIR | restore DATABASE | rollback | reconcile-host | uninstall";;
 esac

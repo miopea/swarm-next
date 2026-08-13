@@ -1117,7 +1117,10 @@ async fn download_database_backup(
     })?;
     let mut response_headers = HeaderMap::new();
     response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/vnd.sqlite3"));
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/vnd.sqlite3"),
+    );
     response_headers.insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_static("attachment; filename=swarm-next-hive.sqlite3"),
@@ -2890,7 +2893,12 @@ mod tests {
         );
         let unauthorized = app
             .clone()
-            .oneshot(Request::builder().uri("/api/v1/backups/database").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/backups/database")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
@@ -2898,15 +2906,28 @@ mod tests {
         let response = authorized_get(app, "/api/v1/backups/database").await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/vnd.sqlite3");
-        assert!(response.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().contains("attachment"));
-        let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024).await.unwrap();
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/vnd.sqlite3"
+        );
+        assert!(
+            response.headers()[header::CONTENT_DISPOSITION]
+                .to_str()
+                .unwrap()
+                .contains("attachment")
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+            .await
+            .unwrap();
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("restored.sqlite3");
         std::fs::write(&path, bytes).unwrap();
         let restored = TaskStore::open(path).unwrap();
         restored.verify_integrity().unwrap();
-        assert_eq!(restored.local_hive_identity().unwrap().hive.id, expected.hive.id);
+        assert_eq!(
+            restored.local_hive_identity().unwrap().hive.id,
+            expected.hive.id
+        );
     }
 
     #[tokio::test]

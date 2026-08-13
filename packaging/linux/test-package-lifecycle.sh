@@ -26,6 +26,16 @@ EOF
 cat > "$SWARM_CURL_BIN" <<'EOF'
 #!/bin/sh
 set -eu
+output=
+previous=
+for argument in "$@"; do
+  if [ "$previous" = "--output" ]; then output=$argument; fi
+  previous=$argument
+done
+if [ -n "$output" ]; then
+  printf 'rollback-database\n' > "$output"
+  exit 0
+fi
 version=$(cat "$SWARM_INSTALL_ROOT/current/VERSION")
 printf '%s\n' "$version" >> "$HOME/curl.log"
 [ "$version" != "3.0.0" ] && [ "$version" != "6.0.0" ]
@@ -177,6 +187,7 @@ printf '0\n' > "$HOME/running-sessions"
 "$package" migrate-protocol "$test_root/bundle-4.0.0"
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "4.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ]
+
 [ "$(cat "$SWARM_INSTALL_ROOT/previous/VERSION")" = "2.0.0" ]
 grep -q '^--user stop swarm-next.target$' "$HOME/systemctl.log"
 grep -q '^--user enable --now swarm-next.target$' "$HOME/systemctl.log"
@@ -188,6 +199,20 @@ if "$package" migrate-protocol "$test_root/bundle-6.0.0"; then
 fi
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "4.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ]
+
+# Database restore verifies input, creates a rollback snapshot, restarts only
+# the API, and preserves the terminal host and repository root.
+printf 'old-database\n' > "$SWARM_STATE_ROOT/swarm-next.sqlite3"
+printf 'restored-database\n' > "$HOME/hive-backup.sqlite3"
+: > "$HOME/systemctl.log"
+"$package" restore "$HOME/hive-backup.sqlite3"
+[ "$(cat "$SWARM_STATE_ROOT/swarm-next.sqlite3")" = "restored-database" ]
+grep -q '^--user stop swarm-next-api.service$' "$HOME/systemctl.log"
+grep -q '^--user start swarm-next-api.service$' "$HOME/systemctl.log"
+if grep -q 'swarm-next-terminal-host.service' "$HOME/systemctl.log"; then
+  echo "database restore touched the terminal host" >&2
+  exit 1
+fi
 
 printf 'keep\n' > "$SWARM_STATE_ROOT/operator-data"
 if SWARM_INSTALL_ROOT="$HOME/.local/lib/not-swarm" "$package" uninstall; then

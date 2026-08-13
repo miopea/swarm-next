@@ -1,6 +1,6 @@
 # ADR 0020: Authenticated Hive database export
 
-Status: **Accepted**
+Status: **Accepted and implemented**
 
 ## Context
 
@@ -19,7 +19,7 @@ repositories, terminal output/history, provider login material, deployment
 secrets, and machine-specific workspace-root configuration.
 
 Restore is deliberately not performed by the running web process. The package
-lifecycle will add a verified, offline restore that checks integrity and
+lifecycle provides a verified, offline restore that checks integrity and
 compatibility, creates a rollback snapshot, replaces state while the API is
 stopped, restarts only the API, and rolls back on failed health. A later full
 encrypted export may combine the database with explicitly selected portable
@@ -33,7 +33,8 @@ configuration; it must never silently copy machine credentials.
   operator and the response cannot be cached.
 - Repositories and host-specific secrets cannot be mistaken for portable Hive
   state.
-- Restore remains blocked until its crash-safe package boundary is complete.
+- Restore is an explicit package command and preserves the terminal host and
+  repositories while restarting only the API.
 
 ## Validation
 
@@ -42,3 +43,5 @@ configuration; it must never silently copy machine credentials.
   checks.
 - The response is a no-store attachment with a stable SQLite media type.
 - Browser tests verify the Settings action downloads the returned snapshot.
+- Package lifecycle tests prove restore verification, API-only restart, and
+  terminal-host preservation.

@@ -2656,6 +2656,7 @@ name = "swarm-cli"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "swarm-persistence",
  "swarm-terminal",
  "swarm-terminal-host",
  "tempfile",

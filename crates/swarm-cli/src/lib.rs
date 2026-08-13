@@ -9,17 +9,20 @@ pub const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub const MAX_READY_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 pub const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LifecycleCommand {
     Status,
     BeginDrain,
     CancelDrain,
     WaitReady { timeout: Duration },
+    VerifyDatabase { path: std::path::PathBuf },
 }
 
 #[derive(Debug, Error)]
 pub enum CliError {
-    #[error("usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]>")]
+    #[error(
+        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|verify-database PATH>"
+    )]
     Usage,
     #[error("wait timeout must be an integer from 1 through 86400 seconds")]
     InvalidTimeout,
@@ -37,6 +40,8 @@ pub enum CliError {
         "terminal host did not become ready within the timeout; {running_sessions} sessions remain"
     )]
     ReadyTimeout { running_sessions: usize },
+    #[error("database verification failed: {0}")]
+    Database(String),
 }
 
 impl CliError {
@@ -76,6 +81,16 @@ pub fn parse_command(
             }
             Ok(LifecycleCommand::WaitReady { timeout })
         }
+        "verify-database" => {
+            let path = arguments
+                .next()
+                .map(std::path::PathBuf::from)
+                .ok_or(CliError::Usage)?;
+            if arguments.next().is_some() || !path.is_absolute() {
+                return Err(CliError::Usage);
+            }
+            Ok(LifecycleCommand::VerifyDatabase { path })
+        }
         _ => Err(CliError::Usage),
     }
 }
@@ -110,7 +125,17 @@ pub async fn execute(
         LifecycleCommand::WaitReady { timeout } => {
             wait_until_ready(client, timeout, READY_POLL_INTERVAL).await
         }
+        LifecycleCommand::VerifyDatabase { .. } => Err(CliError::Usage),
     }
+}
+
+/// Opens an exported Hive database and verifies its schema and SQLite integrity.
+pub fn verify_database(path: impl AsRef<std::path::Path>) -> Result<(), CliError> {
+    let store = swarm_persistence::TaskStore::open(path)
+        .map_err(|error| CliError::Database(error.to_string()))?;
+    store
+        .verify_integrity()
+        .map_err(|error| CliError::Database(error.to_string()))
 }
 
 /// Serializes one machine-readable status object without embedded newlines.
@@ -197,6 +222,13 @@ mod tests {
             parse_command([OsString::from("restart")]),
             Err(CliError::Usage)
         ));
+        assert!(matches!(
+            parse_command([
+                OsString::from("verify-database"),
+                OsString::from("/tmp/hive.sqlite3")
+            ]),
+            Ok(LifecycleCommand::VerifyDatabase { .. })
+        ));
     }
 
     #[test]
@@ -231,6 +263,20 @@ mod tests {
                 .running_sessions,
             1
         );
+    }
+
+    #[test]
+    fn verifies_a_real_database_and_rejects_non_database_input() {
+        let directory = TempDir::new().unwrap();
+        let database = directory.path().join("hive.sqlite3");
+        swarm_persistence::TaskStore::open(&database).unwrap();
+        verify_database(&database).unwrap();
+        let invalid = directory.path().join("not-a-database");
+        std::fs::write(&invalid, b"not sqlite").unwrap();
+        assert!(matches!(
+            verify_database(invalid),
+            Err(CliError::Database(_))
+        ));
     }
 
     #[tokio::test]
