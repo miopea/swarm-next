@@ -145,10 +145,25 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: "Close" }).click();
     const savedFeedbackVisible = await page.getByRole("heading", { name: "Saved dogfood reports" }).isVisible();
     if (!savedFeedbackVisible) throw new Error(`${surface.name}: saved feedback queue is unavailable`);
+    const diagnosticsHeading = page.getByRole("heading", { name: "Know which layer needs attention" });
+    await diagnosticsHeading.scrollIntoViewIfNeeded();
+    const settingsOverflow = await page.locator(".settings-workspace").evaluate((workspace) => ({
+      scrollWidth: workspace.scrollWidth,
+      clientWidth: workspace.clientWidth,
+      overflowingCards: [...workspace.querySelectorAll(".settings-card")]
+        .filter((card) => card.scrollWidth > card.clientWidth + 1).length,
+    }));
+    if (settingsOverflow.scrollWidth > settingsOverflow.clientWidth + 1 || settingsOverflow.overflowingCards > 0) {
+      throw new Error(`${surface.name}/settings-detail: internal horizontal overflow`);
+    }
+    await page.screenshot({
+      path: path.join(outputRoot, `${surface.name}-settings-diagnostics.png`),
+      fullPage: true,
+    });
     const jiraReadinessVisible = await page.getByText("Jira not connected", { exact: true }).isVisible();
     if (!jiraReadinessVisible) throw new Error(`${surface.name}: Jira readiness is unavailable`);
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }

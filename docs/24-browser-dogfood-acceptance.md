@@ -330,3 +330,8 @@ the independently updated terminal host through the API to worker settings:
   browser context, and requires the control room to return without another
   operator-token prompt before any remaining checks run; both device profiles
   passed that PWA-reopen approximation.
+- Settings coverage now scrolls to the lower backup and diagnostics region,
+  captures it at both sizes, and inspects the scroll container plus every card
+  for internal horizontal overflow. The live desktop workspace measured 1,154
+  pixels exactly in both directions; mobile measured 412 pixels exactly, with
+  zero overflowing cards in either profile.
