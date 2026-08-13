@@ -367,3 +367,20 @@ the independently updated terminal host through the API to worker settings:
   feedback, Jira readiness, and backup with no browser errors or horizontal
   page/card overflow. Deployment preserved terminal-host PID `400662`, all
   three running sessions, and all five retained sessions.
+- Release `0.1.0-67d625162b60` removes the false Settings count, leads worker
+  creation with a repository-name search instead of a filesystem path, and
+  makes both worker creation and waking sleeping workers reachable from quick
+  navigation. Missing design-token aliases now have an automated completeness
+  check, restoring the intended muted text, soft surfaces, danger color, and
+  card radii throughout the UI. On mobile, the task queue now occupies the
+  first screen while its complete creation form expands on demand; desktop
+  keeps the form open by default.
+- The deployed desktop and authentic Android-sized gates opened every primary
+  surface, selected and connected all three exact live sessions, expanded the
+  mobile task composer, verified repository-first worker creation and quick
+  navigation, reopened the authenticated PWA context, exercised feedback,
+  maintenance confirmation, Jira readiness, and downloaded a valid 356,352
+  byte SQLite backup. Every document and Settings card remained bounded and no
+  authenticated-page console or runtime error occurred. The API-only update
+  replaced PID `969807` with `980976` while preserving terminal-host PID
+  `400662`, the same three running session IDs, and all five retained sessions.

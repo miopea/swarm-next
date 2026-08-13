@@ -80,3 +80,11 @@ samples over 600 seconds. API PID `959445` stayed fixed with memory between
 cgroup between 1.19 and 1.21 GiB. Retained history grew only with real terminal
 activity from 69,493,127 to 69,504,137 bytes, and dropped history remained zero.
 The run used API release `0.1.0-cad55ededfc5` and terminal-host `0.1.0`.
+
+The next uninterrupted validation extended that evidence to 1,800 seconds and
+60 samples with the same three live sessions. API PID `969807` stayed fixed at
+5.5 to 7.2 MiB. Terminal-host PID `400662` stayed fixed while its complete
+cgroup, including the three Claude processes, remained between 1.21 and 1.24
+GiB. Retained history ranged from 69,519,004 to 69,526,930 bytes with zero
+dropped bytes. The run passed on API release `0.1.0-da686ff83eb1`; it remains a
+bounded overnight checkpoint rather than the required 24-hour promotion soak.
