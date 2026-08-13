@@ -670,13 +670,14 @@ export async function fetchJiraBindingIssues(operatorToken: string, bindingId: s
   return response.json() as Promise<JiraIssue[]>;
 }
 
-export async function syncJiraBinding(operatorToken: string, bindingId: string, issueIds?: string[]): Promise<Task[]> {
+export async function syncJiraBinding(operatorToken: string, bindingId: string, issueIds: string[]): Promise<Task[]> {
   const response = await authenticatedFetch(
     operatorToken,
     `/api/v1/integrations/jira/bindings/${encodeURIComponent(bindingId)}/sync`,
     {
       method: "POST",
-      ...(issueIds ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue_ids: issueIds }) } : {}),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issue_ids: issueIds }),
     },
   );
   return response.json() as Promise<Task[]>;

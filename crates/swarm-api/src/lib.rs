@@ -236,6 +236,58 @@ impl AppState {
             sender.deliver().await;
         }
     }
+
+    /// Refreshes only Jira issues that are already part of this Hive.
+    ///
+    /// New Jira work always requires explicit operator or Queen intake. A failed
+    /// project refresh is isolated so local work and other connected projects continue.
+    pub async fn reconcile_jira(&self) {
+        let Some(store) = self.task_store.as_ref() else {
+            return;
+        };
+        let bindings = match store.list_jira_project_bindings() {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                tracing::warn!(%error, "Jira reconciliation could not list project bindings");
+                return;
+            }
+        };
+        for binding in bindings {
+            let links = match store.list_jira_issue_links(binding.id) {
+                Ok(links) if links.is_empty() => continue,
+                Ok(links) => links,
+                Err(error) => {
+                    tracing::warn!(%error, project = %binding.project_key, "Jira reconciliation could not read imported work");
+                    continue;
+                }
+            };
+            let imported = links
+                .into_iter()
+                .map(|link| link.issue_id)
+                .collect::<HashSet<_>>();
+            let issues = match self.jira_readiness.issues(&binding.project_id).await {
+                Ok(issues) => issues,
+                Err(error) => {
+                    tracing::warn!(%error, project = %binding.project_key, "Jira reconciliation is temporarily unavailable");
+                    continue;
+                }
+            };
+            let snapshots = issues
+                .iter()
+                .filter(|issue| imported.contains(&issue.id))
+                .map(jira_issue_snapshot)
+                .collect::<Vec<_>>();
+            if snapshots.is_empty() {
+                continue;
+            }
+            match store.sync_jira_issues(binding.id, &snapshots) {
+                Ok(_) => self.control_room_notify.notify_waiters(),
+                Err(error) => {
+                    tracing::warn!(%error, project = %binding.project_key, "Jira reconciliation was rejected");
+                }
+            }
+        }
+    }
     #[must_use]
     pub fn with_terminal_host(
         mut self,
@@ -976,9 +1028,9 @@ struct ReplaceJiraMappingsRequest {
     mappings: Vec<JiraStatusMapping>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct SyncJiraBindingRequest {
-    issue_ids: Option<Vec<String>>,
+    issue_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2489,20 +2541,9 @@ async fn sync_jira_binding(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(binding_id): Path<JiraProjectBindingId>,
-    body: Bytes,
+    Json(request): Json<SyncJiraBindingRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let request = if body.is_empty() {
-        SyncJiraBindingRequest::default()
-    } else {
-        serde_json::from_slice::<SyncJiraBindingRequest>(&body).map_err(|_| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_jira_selection",
-                "choose valid Jira issues to import",
-            )
-        })?
-    };
     let store = task_store(&state)?;
     let binding = store
         .get_jira_project_binding(binding_id)
@@ -2514,38 +2555,26 @@ async fn sync_jira_binding(
         .map_err(jira_adapter_error)?;
     let selected_ids = request
         .issue_ids
-        .map(|ids| {
-            let selected = ids
-                .into_iter()
-                .map(|id| id.trim().to_owned())
-                .collect::<HashSet<_>>();
-            if selected.is_empty()
-                || selected.len() > 100
-                || selected
-                    .iter()
-                    .any(|id| id.is_empty() || id.len() > 128 || id.chars().any(char::is_control))
-            {
-                return Err(ApiError::new(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "invalid_jira_selection",
-                    "choose between 1 and 100 Jira issues to import",
-                ));
-            }
-            Ok(selected)
-        })
-        .transpose()?;
+        .into_iter()
+        .map(|id| id.trim().to_owned())
+        .collect::<HashSet<_>>();
+    if selected_ids.is_empty()
+        || selected_ids.len() > 100
+        || selected_ids
+            .iter()
+            .any(|id| id.is_empty() || id.len() > 128 || id.chars().any(char::is_control))
+    {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_jira_selection",
+            "choose between 1 and 100 Jira issues to import",
+        ));
+    }
     let selected_issues = issues
         .iter()
-        .filter(|issue| {
-            selected_ids
-                .as_ref()
-                .is_none_or(|ids| ids.contains(&issue.id))
-        })
+        .filter(|issue| selected_ids.contains(&issue.id))
         .collect::<Vec<_>>();
-    if selected_ids
-        .as_ref()
-        .is_some_and(|ids| ids.len() != selected_issues.len())
-    {
+    if selected_ids.len() != selected_issues.len() {
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_jira_selection",
@@ -2554,22 +2583,26 @@ async fn sync_jira_binding(
     }
     let snapshots = selected_issues
         .into_iter()
-        .map(|issue| JiraIssueSnapshot {
-            issue_id: &issue.id,
-            issue_key: &issue.key,
-            summary: &issue.summary,
-            status_id: &issue.status_id,
-            status_name: &issue.status_name,
-            assignee_account_id: issue.assignee_account_id.as_deref(),
-            assignee_name: issue.assignee_name.as_deref(),
-            remote_updated_at: &issue.updated_at,
-        })
+        .map(jira_issue_snapshot)
         .collect::<Vec<_>>();
     let tasks = store
         .sync_jira_issues(binding_id, &snapshots)
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
+}
+
+fn jira_issue_snapshot(issue: &jira::JiraIssue) -> JiraIssueSnapshot<'_> {
+    JiraIssueSnapshot {
+        issue_id: &issue.id,
+        issue_key: &issue.key,
+        summary: &issue.summary,
+        status_id: &issue.status_id,
+        status_name: &issue.status_name,
+        assignee_account_id: issue.assignee_account_id.as_deref(),
+        assignee_name: issue.assignee_name.as_deref(),
+        remote_updated_at: &issue.updated_at,
+    }
 }
 
 async fn list_workspaces(
@@ -4255,6 +4288,102 @@ mod tests {
             response_json(authorized_get(app, "/api/v1/integrations/jira/task-links").await).await;
         assert_eq!(transitioned_links[0]["jira_status_id"], "4");
         assert_eq!(transitioned_links[0]["jira_status_name"], "In Review");
+    }
+
+    #[tokio::test]
+    async fn jira_reconciliation_refreshes_only_work_already_in_the_hive() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let jira_server = axum::Router::new().route(
+            "/rest/api/3/search/jql",
+            get(|| async {
+                Json(serde_json::json!({
+                    "isLast": true,
+                    "issues": [{
+                        "id": "20001",
+                        "key": "WEB-42",
+                        "fields": {
+                            "summary": "Updated remotely",
+                            "status": { "id": "4", "name": "In Review" },
+                            "assignee": { "accountId": "account-2", "displayName": "Fern" },
+                            "updated": "2026-08-13T14:00:00.000+0000"
+                        }
+                    }, {
+                        "id": "20002",
+                        "key": "WEB-43",
+                        "fields": {
+                            "summary": "Never implicitly import this issue",
+                            "status": { "id": "3", "name": "In Progress" },
+                            "assignee": null,
+                            "updated": "2026-08-13T14:01:00.000+0000"
+                        }
+                    }]
+                }))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, jira_server).await.unwrap() });
+
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "3".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "4".into(),
+                        jira_status_name: "In Review".into(),
+                        task_state: TaskState::Review,
+                    },
+                ],
+            )
+            .unwrap();
+        store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "20001",
+                    issue_key: "WEB-42",
+                    summary: "Original title",
+                    status_id: "3",
+                    status_name: "In Progress",
+                    assignee_account_id: None,
+                    assignee_name: None,
+                    remote_updated_at: "2026-08-13T13:00:00.000+0000",
+                }],
+            )
+            .unwrap();
+        let state = AppState::default()
+            .with_task_store(store.clone())
+            .with_jira_configuration(
+                &format!("http://{address}"),
+                "operator@example.test",
+                "api-token",
+            )
+            .unwrap();
+
+        state.reconcile_jira().await;
+
+        let tasks = store.list_tasks().unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Updated remotely");
+        assert_eq!(tasks[0].state, TaskState::Review);
+        let links = store.list_jira_issue_links(binding.id).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].jira_assignee_name.as_deref(), Some("Fern"));
+        assert_eq!(links[0].jira_status_id, "4");
     }
 
     #[tokio::test]

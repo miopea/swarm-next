@@ -203,6 +203,7 @@ impl ServerHandler for AgentMcp {
                 list_jira_projects_tool(),
                 preview_jira_project_tool(),
                 sync_jira_project_tool(),
+                refresh_jira_project_tool(),
             ]);
         }
         Ok(ListToolsResult::with_all_items(tools))
@@ -258,6 +259,7 @@ impl ServerHandler for AgentMcp {
             }
             "swarm_preview_jira_project" => self.preview_jira_project(arguments).await,
             "swarm_sync_jira_project" => self.sync_jira_project(arguments).await,
+            "swarm_refresh_jira_project" => self.refresh_jira_project(arguments).await,
             "swarm_list_decisions" => self
                 .tasks
                 .list_visible_decisions(Some(self.principal))
@@ -468,6 +470,51 @@ impl AgentMcp {
         let tasks = store.sync_jira_issues(binding_id, &snapshots)?;
         structured(json!({ "project": binding, "tasks": tasks }))
     }
+
+    async fn refresh_jira_project(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, ApplicationError> {
+        if self.principal.role != WorkerRole::Queen {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        let input = parse::<PreviewJiraProjectInput>(arguments)?;
+        let binding_id = JiraProjectBindingId::from_str(&input.binding_id)
+            .map_err(|_| ApplicationError::NotAuthorized)?;
+        let store = self.tasks.store();
+        let binding = store.get_jira_project_binding(binding_id)?;
+        let imported_ids = store
+            .list_jira_issue_links(binding_id)?
+            .into_iter()
+            .map(|link| link.issue_id)
+            .collect::<HashSet<_>>();
+        let issues = self
+            .jira
+            .issues(&binding.project_id)
+            .await
+            .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
+        let snapshots = issues
+            .iter()
+            .filter(|issue| imported_ids.contains(&issue.id))
+            .map(|issue| JiraIssueSnapshot {
+                issue_id: &issue.id,
+                issue_key: &issue.key,
+                summary: &issue.summary,
+                status_id: &issue.status_id,
+                status_name: &issue.status_name,
+                assignee_account_id: issue.assignee_account_id.as_deref(),
+                assignee_name: issue.assignee_name.as_deref(),
+                remote_updated_at: &issue.updated_at,
+            })
+            .collect::<Vec<_>>();
+        let tasks = store.sync_jira_issues(binding_id, &snapshots)?;
+        structured(json!({
+            "project": binding,
+            "tasks": tasks,
+            "imported_count": imported_ids.len(),
+            "refreshed_count": snapshots.len(),
+        }))
+    }
 }
 
 fn structured<T: serde::Serialize>(value: T) -> Result<CallToolResult, ApplicationError> {
@@ -656,6 +703,22 @@ fn sync_jira_project_tool() -> Tool {
                 "issue_ids": { "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } }
             },
             "required": ["binding_id", "issue_ids"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn refresh_jira_project_tool() -> Tool {
+    tool(
+        "swarm_refresh_jira_project",
+        "Queen only: refresh Jira-owned identity, workflow, and assignee data for issues already imported into this Hive. Never imports new Jira work.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "binding_id": { "type": "string", "format": "uuid" }
+            },
+            "required": ["binding_id"],
             "additionalProperties": false
         }),
         false,
@@ -882,8 +945,10 @@ mod tests {
         assert!(queen_names.contains(&"swarm_list_jira_projects"));
         assert!(queen_names.contains(&"swarm_preview_jira_project"));
         assert!(queen_names.contains(&"swarm_sync_jira_project"));
+        assert!(queen_names.contains(&"swarm_refresh_jira_project"));
         assert!(!worker_names.contains(&"swarm_preview_jira_project"));
         assert!(!worker_names.contains(&"swarm_sync_jira_project"));
+        assert!(!worker_names.contains(&"swarm_refresh_jira_project"));
         assert_eq!(
             worker_names,
             [

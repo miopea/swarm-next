@@ -74,6 +74,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             supervisor.supervise_workers().await;
         }
     });
+    let jira_reconciler = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            jira_reconciler.reconcile_jira().await;
+        }
+    });
     let listener = tokio::net::TcpListener::bind(address).await?;
     info!(%address, "Swarm Next API listening");
     let app = match (
