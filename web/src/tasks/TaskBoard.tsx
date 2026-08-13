@@ -74,6 +74,7 @@ export default function TaskBoard({
   const [workerId, setWorkerId] = useState("");
   const [draggedTaskId, setDraggedTaskId] = useState<string>();
   const [composeOpen, setComposeOpen] = useState(initialComposerOpen);
+  const titleInput = useRef<HTMLInputElement>(null);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -131,7 +132,13 @@ export default function TaskBoard({
             className="secondary-button task-compose-toggle"
             aria-expanded={composeOpen}
             aria-controls="new-task-form"
-            onClick={() => setComposeOpen((current) => !current)}
+            onClick={() => {
+              if (composeOpen) setComposeOpen(false);
+              else {
+                setComposeOpen(true);
+                requestAnimationFrame(() => titleInput.current?.focus());
+              }
+            }}
           >
             {composeOpen ? "Hide task form" : "Create a task"}
           </button>
@@ -141,6 +148,7 @@ export default function TaskBoard({
             <label htmlFor="task-title">Task title</label>
             <input
               id="task-title"
+              ref={titleInput}
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="What should be true when this is done?"

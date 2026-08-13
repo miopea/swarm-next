@@ -31,7 +31,7 @@ function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> 
   return props;
 }
 
-test("keeps active work above the fold on phones until task creation is requested", () => {
+test("keeps active work above the fold on phones until task creation is requested", async () => {
   vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
   renderBoard({ tasks: [] });
 
@@ -39,7 +39,9 @@ test("keeps active work above the fold on phones until task creation is requeste
   const toggle = screen.getByRole("button", { name: "Create a task" });
   expect(toggle).toHaveAttribute("aria-expanded", "false");
   fireEvent.click(toggle);
-  expect(screen.getByLabelText("Task title")).toBeInTheDocument();
+  const title = screen.getByLabelText("Task title");
+  expect(title).toBeInTheDocument();
+  await waitFor(() => expect(title).toHaveFocus());
   expect(screen.getByRole("button", { name: "Hide task form" })).toHaveAttribute("aria-expanded", "true");
 });
 
