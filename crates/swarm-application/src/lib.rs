@@ -176,6 +176,7 @@ impl TaskService {
                     .filter(|task| {
                         task.assigned_worker_id == Some(principal.worker_id)
                             && task.assigned_session_id == Some(session_id)
+                            && task.state != TaskState::Completed
                     })
                     .collect()
             }))
@@ -427,6 +428,28 @@ mod tests {
             [service.store().get_task(mine.id).unwrap()]
         );
         assert!(service.store().get_task(other.id).is_ok());
+
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            service.transition_operator_task(mine.id, state).unwrap();
+        }
+        assert!(
+            service
+                .list_visible_tasks(AgentPrincipal::from(&current))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            service
+                .list_visible_tasks(AgentPrincipal::from(&queen))
+                .unwrap()
+                .iter()
+                .any(|task| task.id == mine.id)
+        );
     }
 
     #[test]
