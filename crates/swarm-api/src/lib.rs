@@ -975,6 +975,11 @@ struct ReplaceJiraMappingsRequest {
     mappings: Vec<JiraStatusMapping>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct SyncJiraBindingRequest {
+    issue_ids: Option<Vec<String>>,
+}
+
 #[derive(Debug, Deserialize)]
 struct HistoryQuery {
     segment: Option<u64>,
@@ -2371,8 +2376,20 @@ async fn sync_jira_binding(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(binding_id): Path<JiraProjectBindingId>,
+    body: Bytes,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let request = if body.is_empty() {
+        SyncJiraBindingRequest::default()
+    } else {
+        serde_json::from_slice::<SyncJiraBindingRequest>(&body).map_err(|_| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_jira_selection",
+                "choose valid Jira issues to import",
+            )
+        })?
+    };
     let store = task_store(&state)?;
     let binding = store
         .get_jira_project_binding(binding_id)
@@ -2382,8 +2399,48 @@ async fn sync_jira_binding(
         .issues(&binding.project_id)
         .await
         .map_err(jira_adapter_error)?;
-    let snapshots = issues
+    let selected_ids = request
+        .issue_ids
+        .map(|ids| {
+            let selected = ids
+                .into_iter()
+                .map(|id| id.trim().to_owned())
+                .collect::<HashSet<_>>();
+            if selected.is_empty()
+                || selected.len() > 100
+                || selected
+                    .iter()
+                    .any(|id| id.is_empty() || id.len() > 128 || id.chars().any(char::is_control))
+            {
+                return Err(ApiError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "invalid_jira_selection",
+                    "choose between 1 and 100 Jira issues to import",
+                ));
+            }
+            Ok(selected)
+        })
+        .transpose()?;
+    let selected_issues = issues
         .iter()
+        .filter(|issue| {
+            selected_ids
+                .as_ref()
+                .is_none_or(|ids| ids.contains(&issue.id))
+        })
+        .collect::<Vec<_>>();
+    if selected_ids
+        .as_ref()
+        .is_some_and(|ids| ids.len() != selected_issues.len())
+    {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_jira_selection",
+            "one or more selected Jira issues are no longer available",
+        ));
+    }
+    let snapshots = selected_issues
+        .into_iter()
         .map(|issue| JiraIssueSnapshot {
             issue_id: &issue.id,
             issue_key: &issue.key,
@@ -3956,6 +4013,15 @@ mod tests {
                             "assignee": { "accountId": "account-1", "displayName": "Bea" },
                             "updated": "2026-08-13T13:00:00.000+0000"
                         }
+                    }, {
+                        "id": "20002",
+                        "key": "WEB-43",
+                        "fields": {
+                            "summary": "Keep the unselected issue remote",
+                            "status": { "id": "3", "name": "In Progress" },
+                            "assignee": null,
+                            "updated": "2026-08-13T13:01:00.000+0000"
+                        }
                     }]
                 }))
             }),
@@ -4004,7 +4070,8 @@ mod tests {
                             binding.id
                         ))
                         .header("authorization", "Bearer secret")
-                        .body(Body::empty())
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"issue_ids":["20001"]}"#))
                         .unwrap(),
                 )
                 .await

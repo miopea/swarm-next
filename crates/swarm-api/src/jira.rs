@@ -464,7 +464,7 @@ impl JiraReadinessProbe {
             }
             next_page_token = page.next_page_token;
         }
-        Err(JiraAdapterError::ResponseLimitExceeded)
+        Ok(issues)
     }
 
     async fn access(&self) -> Result<JiraAccess, JiraAdapterError> {

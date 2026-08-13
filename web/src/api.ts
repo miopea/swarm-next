@@ -100,6 +100,16 @@ export type JiraStatusMapping = {
   jira_status_name: string;
   task_state: TaskState;
 };
+export type JiraIssue = {
+  id: string;
+  key: string;
+  summary: string;
+  status_id: string;
+  status_name: string;
+  assignee_account_id: string | null;
+  assignee_name: string | null;
+  updated_at: string;
+};
 
 export type Worker = {
   id: string;
@@ -624,11 +634,30 @@ export async function replaceJiraMappings(
   return response.json() as Promise<JiraStatusMapping[]>;
 }
 
-export async function syncJiraBinding(operatorToken: string, bindingId: string): Promise<Task[]> {
+export async function fetchJiraMappings(operatorToken: string, bindingId: string): Promise<JiraStatusMapping[]> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/integrations/jira/bindings/${encodeURIComponent(bindingId)}/mappings`,
+  );
+  return response.json() as Promise<JiraStatusMapping[]>;
+}
+
+export async function fetchJiraBindingIssues(operatorToken: string, bindingId: string): Promise<JiraIssue[]> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/integrations/jira/bindings/${encodeURIComponent(bindingId)}/issues`,
+  );
+  return response.json() as Promise<JiraIssue[]>;
+}
+
+export async function syncJiraBinding(operatorToken: string, bindingId: string, issueIds?: string[]): Promise<Task[]> {
   const response = await authenticatedFetch(
     operatorToken,
     `/api/v1/integrations/jira/bindings/${encodeURIComponent(bindingId)}/sync`,
-    { method: "POST" },
+    {
+      method: "POST",
+      ...(issueIds ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ issue_ids: issueIds }) } : {}),
+    },
   );
   return response.json() as Promise<Task[]>;
 }

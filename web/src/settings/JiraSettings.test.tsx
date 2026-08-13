@@ -16,6 +16,15 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
     const url = String(input);
     const method = init?.method ?? "GET";
     requests.push({ url, method, body: typeof init?.body === "string" ? init.body : undefined });
+    if (url.includes("/bindings/binding-1/mappings") && method === "GET") return ok([
+      { jira_status_id: "1", jira_status_name: "To Do", task_state: "ready" },
+      { jira_status_id: "5", jira_status_name: "Done", task_state: "completed" },
+    ]);
+    if (url.includes("/bindings/binding-1/issues") && method === "GET") return ok([
+      { id: "20001", key: "WEB-42", summary: "Polish launch", status_id: "1", status_name: "To Do", assignee_account_id: "a1", assignee_name: "Bea", updated_at: "now" },
+      { id: "20002", key: "WEB-43", summary: "Already shipped", status_id: "5", status_name: "Done", assignee_account_id: null, assignee_name: null, updated_at: "now" },
+    ]);
+    if (url.includes("/bindings/binding-1/sync") && method === "POST") return ok([{ id: "task-1" }]);
     if (url.includes("/bindings") && method === "GET") return ok(bound ? [{
       id: "binding-1", project_id: "10001", project_key: "WEB", project_name: "Website Services",
       scope: "hive", hive_id: "hive-1", apiary_id: null, access_verified: true, workflow_mapped: true,
@@ -66,6 +75,16 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
     { jira_status_id: "3", jira_status_name: "In Progress", task_state: "active" },
     { jira_status_id: "5", jira_status_name: "Done", task_state: "completed" },
   ]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Review issues" }));
+  const openIssue = await screen.findByRole("checkbox", { name: /WEB-42/ });
+  const doneIssue = screen.getByRole("checkbox", { name: /WEB-43/ });
+  expect(openIssue).toBeChecked();
+  expect(doneIssue).not.toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: "Add 1 to this Hive" }));
+  expect(await screen.findByText("1 Jira issue added or refreshed from Website Services.")).toBeInTheDocument();
+  const sync = requests.find((request) => request.url.includes("/sync") && request.method === "POST");
+  expect(JSON.parse(sync?.body ?? "{}")).toEqual({ issue_ids: ["20001"] });
 });
 
 test("offers an operator-facing Atlassian connection instead of host-setting instructions", async () => {

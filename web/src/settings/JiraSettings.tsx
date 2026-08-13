@@ -4,13 +4,16 @@ import {
   beginJiraAuthorization,
   createJiraBinding,
   disconnectJira,
+  fetchJiraBindingIssues,
   fetchJiraBindings,
+  fetchJiraMappings,
   fetchJiraProjects,
   fetchJiraProjectStatuses,
   replaceJiraMappings,
   syncJiraBinding,
   type JiraProject,
   type JiraProjectBinding,
+  type JiraIssue,
   type JiraProjectStatus,
   type JiraReadiness,
   type JiraStatusMapping,
@@ -42,6 +45,9 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
   const [mapping, setMapping] = useState<Record<string, TaskState>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [intakeBinding, setIntakeBinding] = useState<JiraProjectBinding>();
+  const [intakeIssues, setIntakeIssues] = useState<JiraIssue[]>([]);
+  const [selectedIssueIds, setSelectedIssueIds] = useState<Set<string>>(new Set());
   const availableProjects = projects.filter(
     (project) => !bindings.some((binding) => binding.project_id === project.id),
   );
@@ -108,14 +114,39 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
     }
   }
 
-  async function syncProject(binding: JiraProjectBinding) {
+  async function reviewProject(binding: JiraProjectBinding) {
     setBusy(true);
     setMessage("");
     try {
-      const tasks = await syncJiraBinding(operatorToken, binding.id);
-      setMessage(`${binding.project_name} refreshed ${tasks.length} Jira issue${tasks.length === 1 ? "" : "s"}.`);
+      const [issues, mappings] = await Promise.all([
+        fetchJiraBindingIssues(operatorToken, binding.id),
+        fetchJiraMappings(operatorToken, binding.id),
+      ]);
+      const completedStatuses = new Set(mappings.filter((mapping) => mapping.task_state === "completed").map((mapping) => mapping.jira_status_id));
+      const openIssueIds = issues.filter((issue) => !completedStatuses.has(issue.status_id)).slice(0, 100).map((issue) => issue.id);
+      setIntakeBinding(binding);
+      setIntakeIssues(issues);
+      setSelectedIssueIds(new Set(openIssueIds));
+      setMessage(issues.length ? "Review the Jira issues below before adding them to this Hive." : `${binding.project_name} has no visible issues.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Jira issues could not be refreshed.");
+      setMessage(error instanceof Error ? error.message : "Jira issues could not be previewed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importSelectedIssues() {
+    if (!intakeBinding || selectedIssueIds.size === 0) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const tasks = await syncJiraBinding(operatorToken, intakeBinding.id, [...selectedIssueIds]);
+      setMessage(`${tasks.length} Jira issue${tasks.length === 1 ? "" : "s"} added or refreshed from ${intakeBinding.project_name}.`);
+      setIntakeBinding(undefined);
+      setIntakeIssues([]);
+      setSelectedIssueIds(new Set());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Selected Jira issues could not be imported.");
     } finally {
       setBusy(false);
     }
@@ -173,11 +204,45 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
               <div key={binding.id} className="jira-binding-card">
                 <span><strong>{binding.project_key}</strong><small>{binding.project_name}</small></span>
                 <span><strong>Shared with this Hive</strong><small>{binding.workflow_mapped ? "Workflow mapped" : "Mapping needed"}</small></span>
-                <button className="secondary-button" type="button" disabled={busy || !binding.workflow_mapped} onClick={() => void syncProject(binding)}>Sync now</button>
+                <button className="secondary-button" type="button" disabled={busy || !binding.workflow_mapped} onClick={() => void reviewProject(binding)}>Review issues</button>
               </div>
           ))}
         </div>
       ) : <small className="privacy-note">No Jira projects are connected to this Hive yet.</small>}
+
+      {intakeBinding ? (
+        <section className="jira-intake" aria-label={`Review ${intakeBinding.project_name} issues`}>
+          <div className="jira-intake-heading">
+            <span><strong>Choose work for this Hive</strong><small>{intakeBinding.project_key} · latest {intakeIssues.length} visible</small></span>
+            <button className="text-button" type="button" onClick={() => { setIntakeBinding(undefined); setIntakeIssues([]); setSelectedIssueIds(new Set()); }}>Close</button>
+          </div>
+          <p className="privacy-note">Open work is selected by default, up to 100 issues. Nothing is imported until you confirm.</p>
+          <div className="jira-intake-actions">
+            <button className="text-button" type="button" onClick={() => setSelectedIssueIds(new Set(intakeIssues.slice(0, 100).map((issue) => issue.id)))}>Select first 100</button>
+            <button className="text-button" type="button" onClick={() => setSelectedIssueIds(new Set())}>Clear</button>
+          </div>
+          <div className="jira-issue-list">
+            {intakeIssues.map((issue) => (
+              <label className="jira-issue-row" key={issue.id}>
+                <input
+                  type="checkbox"
+                  checked={selectedIssueIds.has(issue.id)}
+                  disabled={!selectedIssueIds.has(issue.id) && selectedIssueIds.size >= 100}
+                  onChange={(event) => setSelectedIssueIds((current) => {
+                    const next = new Set(current);
+                    if (event.target.checked) next.add(issue.id); else next.delete(issue.id);
+                    return next;
+                  })}
+                />
+                <span><strong>{issue.key} · {issue.summary}</strong><small>{issue.status_name} · {issue.assignee_name ?? "Unassigned in Jira"}</small></span>
+              </label>
+            ))}
+          </div>
+          <button className="primary-action" type="button" disabled={busy || selectedIssueIds.size === 0} onClick={() => void importSelectedIssues()}>
+            {busy ? "Importing…" : `Add ${selectedIssueIds.size} to this Hive`}
+          </button>
+        </section>
+      ) : null}
 
       {readiness?.connection === "ready" ? (
         <div className="jira-project-setup">
