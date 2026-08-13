@@ -18,10 +18,11 @@ type Props = {
   busy: boolean;
   focusDecisionId?: string;
   focusRequest?: number;
+  onOpenTask?: (taskId: string) => void;
   onResolve: (decision: DecisionRequest, action: string, note: string) => Promise<void>;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, onResolve }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, onOpenTask, onResolve }: Props) {
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const taskNames = useMemo(() => new Map(tasks.map((task) => [task.id, task.title])), [tasks]);
@@ -77,7 +78,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                 </header>
                 <p className="decision-reason">{decision.reason}</p>
                 <dl className="decision-context">
-                  {decision.task_id && <div><dt>Task</dt><dd>{taskNames.get(decision.task_id) ?? "Linked task"}</dd></div>}
+                  {decision.task_id && <div><dt>Task</dt><dd>{onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(decision.task_id!)}>{taskNames.get(decision.task_id) ?? "Linked task"}</button> : taskNames.get(decision.task_id) ?? "Linked task"}</dd></div>}
                   {decision.risk && <div><dt>Risk</dt><dd>{decision.risk}</dd></div>}
                   {decision.evidence && <div><dt>Evidence</dt><dd>{decision.evidence}</dd></div>}
                   <div><dt>Suggested</dt><dd>{decision.suggested_action}</dd></div>

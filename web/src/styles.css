@@ -204,6 +204,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-card:hover { border-color: var(--line-strong); background: var(--panel-raised); }
 .task-card:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent); outline-offset: 2px; }
 .decision-card:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent); outline-offset: 2px; }
+.decision-task-link { width: auto; padding: 0; border: 0; border-radius: 0; color: inherit; background: transparent; font: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.decision-task-link:hover, .decision-task-link:focus-visible { color: var(--accent-strong); background: transparent; }
 .task-card-topline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .task-signals { display: flex; align-items: center; gap: 9px; }
 .task-card-topline code { overflow: hidden; color: var(--quiet); font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }

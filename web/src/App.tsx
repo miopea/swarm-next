@@ -816,7 +816,7 @@ export function App() {
             <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
           </form>
         ) : surface === "decisions" ? (
-          <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onResolve={resolveInboxDecision} />
+          <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
           <TaskBoard tasks={tasks} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (

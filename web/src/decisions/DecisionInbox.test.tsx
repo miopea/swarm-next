@@ -99,6 +99,16 @@ test("returns the selected action with the operator note", () => {
   );
 });
 
+test("opens the task that gave a decision its context", () => {
+  const onOpenTask = vi.fn();
+  render(
+    <DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onOpenTask={onOpenTask} onResolve={vi.fn()} />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: task.title }));
+  expect(onOpenTask).toHaveBeenCalledWith(task.id);
+});
+
 test("reveals and focuses a resolved decision selected through global navigation", async () => {
   const scrollIntoView = vi.fn();
   Element.prototype.scrollIntoView = scrollIntoView;
