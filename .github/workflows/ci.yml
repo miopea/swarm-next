@@ -57,6 +57,12 @@ jobs:
       - uses: rustsec/audit-check@v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # web-push-native's VAPID feature pulls jwt-simple's optional RSA
+          # implementation into Cargo.lock, but Swarm constructs only ES256
+          # keys. RUSTSEC-2023-0071 has no patched rsa release and applies to
+          # observable RSA private-key operations, which this binary never
+          # performs. Keep the exception visible and scoped to this one ID.
+          ignore: RUSTSEC-2023-0071
 
   linux-package:
     runs-on: ubuntu-latest
