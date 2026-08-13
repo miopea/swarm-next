@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { downloadDatabaseBackup, fetchTerminalHostStatus, type ControlRoomEvent, type Health, type HiveIdentity, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, fetchJiraReadiness, fetchTerminalHostStatus, type ControlRoomEvent, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
@@ -43,6 +43,8 @@ type Props = {
 export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers, onUpdateWorkerEngine }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
+  const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
+  const [jiraUnavailable, setJiraUnavailable] = useState(false);
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -51,6 +53,13 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
       .catch(() => { if (!cancelled) setTerminalHostStatus(undefined); });
     return () => { cancelled = true; };
   }, [operatorToken, providers]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchJiraReadiness(operatorToken)
+      .then((readiness) => { if (!cancelled) setJiraReadiness(readiness); })
+      .catch(() => { if (!cancelled) setJiraUnavailable(true); });
+    return () => { cancelled = true; };
+  }, [operatorToken]);
   async function downloadBackup() {
     const blob = await downloadDatabaseBackup(operatorToken);
     const url = URL.createObjectURL(blob);
@@ -213,8 +222,8 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
         <div><p className="eyebrow">Integrations</p><h3 id="integration-heading">Bring Jira in without making it a bottleneck</h3></div>
         <p>Your Hive stays useful on its own. Jira connections use this operator's identity; credentials and permissions never come from Queen or another Hive.</p>
         <div className="integration-status" role="status">
-          <span className="presence waiting" />
-          <span><strong>Jira not connected</strong><small>Local workers and private tasks are unaffected</small></span>
+          <span className={`presence ${jiraReadiness?.connection === "ready" ? "online" : jiraUnavailable || jiraReadiness?.connection === "credentials_invalid" || jiraReadiness?.connection === "permission_denied" ? "offline" : "waiting"}`} />
+          <span><strong>{jiraReadinessLabel(jiraReadiness, jiraUnavailable)}</strong><small>{jiraReadinessDetail(jiraReadiness, jiraUnavailable)}</small></span>
         </div>
         <dl className="diagnostic-list">
           <div><dt>Hive projects</dt><dd>Synced by this Hive</dd></div>
@@ -299,6 +308,23 @@ function lockDetectionLabel(state: LockDetectionState) {
   if (state === "denied") return "Not granted; activity and visibility fallback remain active.";
   if (state === "error") return "Could not start; activity and visibility fallback remain active.";
   return "Unavailable in this browser; fallback presence remains active.";
+}
+function jiraReadinessLabel(readiness: JiraReadiness | undefined, unavailable: boolean) {
+  if (unavailable) return "Jira check unavailable";
+  if (!readiness) return "Checking Jira readiness";
+  if (readiness.connection === "ready") return readiness.account_name ? `Jira ready · ${readiness.account_name}` : "Jira ready";
+  if (readiness.connection === "credentials_invalid") return "Jira credentials need attention";
+  if (readiness.connection === "permission_denied") return "Jira access denied";
+  if (readiness.connection === "network_unavailable") return "Jira temporarily unreachable";
+  return "Jira not connected";
+}
+
+function jiraReadinessDetail(readiness: JiraReadiness | undefined, unavailable: boolean) {
+  if (unavailable || readiness?.connection === "network_unavailable") return "Local work continues; existing owned work remains safe";
+  if (readiness?.connection === "credentials_invalid") return "Refresh this operator's Jira API token";
+  if (readiness?.connection === "permission_denied") return "This Jira identity cannot read the requested scope";
+  if (readiness?.connection === "ready") return "Using this Hive operator's Jira identity";
+  return "Local workers and private tasks are unaffected";
 }
 function liveFeedLabel(state: LiveFeedState) {
   if (state === "connected") return "Connected";

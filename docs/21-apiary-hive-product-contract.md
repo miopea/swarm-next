@@ -128,6 +128,16 @@ workflow mapping. A temporary outage permits work already owned by the Hive but
 never permits a new shared claim. Provider credentials remain adapter-private;
 Queen consumes typed readiness and commands rather than tokens or browser state.
 
+The first executable adapter slice is deliberately read-only. When all three
+operator-owned settings (`SWARM_JIRA_BASE_URL`, `SWARM_JIRA_EMAIL`, and
+`SWARM_JIRA_API_TOKEN`) are present, the API performs a five-second Jira Cloud
+`/rest/api/3/myself` identity probe and returns only typed readiness plus the
+account display name. Remote transport must be HTTPS, credentials embedded in
+URLs are rejected, partial configuration fails closed, the endpoint is
+operator-authenticated and `no-store`, and the UI keeps local work available
+for every degraded state. Project bindings, workflow mapping, issue sync, and
+writes remain outside this slice and require separate tested contracts.
+
 ## Presence, attention, and mobile
 
 Presence modes are **At the Hive**, **Away**, and **Night Watch**. On supported

@@ -70,6 +70,12 @@ export type DogfoodReport = {
   attachment_name: string | null;
   created_at: number;
 };
+export type JiraConnectionState = "not_connected" | "ready" | "network_unavailable" | "credentials_invalid" | "permission_denied";
+export type JiraReadiness = {
+  configured: boolean;
+  connection: JiraConnectionState;
+  account_name: string | null;
+};
 
 export type Worker = {
   id: string;
@@ -510,6 +516,11 @@ export async function fetchDogfoodReports(
     `/api/v1/feedback/reports?limit=${encodeURIComponent(String(limit))}`,
   );
   return response.json() as Promise<DogfoodReport[]>;
+}
+
+export async function fetchJiraReadiness(operatorToken: string): Promise<JiraReadiness> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/readiness");
+  return response.json() as Promise<JiraReadiness>;
 }
 
 export async function uploadDogfoodScreenshot(operatorToken: string, image: File): Promise<string> {

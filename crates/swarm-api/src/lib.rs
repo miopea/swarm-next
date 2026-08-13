@@ -1,6 +1,7 @@
 mod agent;
 mod attach;
 mod attachments;
+mod jira;
 mod notifications;
 mod terminal_socket;
 
@@ -81,6 +82,7 @@ pub struct AppState {
     workspace_roots: Arc<Vec<PathBuf>>,
     maintenance_request_path: Option<Arc<PathBuf>>,
     maintenance_timeout: Duration,
+    jira_readiness: jira::JiraReadinessProbe,
 }
 
 impl AppState {
@@ -103,7 +105,22 @@ impl AppState {
             workspace_roots: Arc::new(Vec::new()),
             maintenance_request_path: None,
             maintenance_timeout: Duration::from_secs(45),
+            jira_readiness: jira::JiraReadinessProbe::default(),
         }
+    }
+
+    /// Enables a bounded Jira Cloud identity probe using operator-owned credentials.
+    ///
+    /// # Errors
+    /// Rejects invalid or insecure Jira base URLs.
+    pub fn with_jira_configuration(
+        mut self,
+        base_url: &str,
+        email: impl Into<Arc<str>>,
+        api_token: impl Into<Arc<str>>,
+    ) -> Result<Self, String> {
+        self.jira_readiness = jira::JiraReadinessProbe::configured(base_url, email, api_token)?;
+        Ok(self)
     }
 
     #[must_use]
@@ -1047,6 +1064,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/tasks/{task_id}/assignment", put(assign_task))
         .route("/api/v1/workers", get(list_workers).post(create_worker))
         .route("/api/v1/providers", get(list_provider_capabilities))
+        .route("/api/v1/integrations/jira/readiness", get(jira_readiness))
         .route("/api/v1/workers/order", put(reorder_workers))
         .route("/api/v1/workers/{worker_id}", patch(update_worker))
         .route("/api/v1/workspaces", get(list_workspaces))
@@ -1979,6 +1997,18 @@ async fn list_provider_capabilities(
         },
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(capabilities)).into_response())
+}
+
+async fn jira_readiness(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.jira_readiness.readiness().await),
+    )
+        .into_response())
 }
 
 async fn list_workspaces(
@@ -3275,6 +3305,33 @@ mod tests {
         let json = response_json(response).await;
         assert_eq!(json["claude_code"], true);
         assert_eq!(json["codex"], false);
+    }
+
+    #[tokio::test]
+    async fn jira_readiness_is_private_and_explicit_when_not_configured() {
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret"),
+        );
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/integrations/jira/readiness")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/integrations/jira/readiness").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(response).await;
+        assert_eq!(json["configured"], false);
+        assert_eq!(json["connection"], "not_connected");
+        assert!(json["account_name"].is_null());
     }
 
     #[tokio::test]

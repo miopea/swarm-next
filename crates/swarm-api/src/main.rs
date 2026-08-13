@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .to_string_lossy()
             .as_ref(),
     )?;
-    let state = env::var("SWARM_OPERATOR_TOKEN")
+    let mut state = env::var("SWARM_OPERATOR_TOKEN")
         .map_or_else(
             |_| AppState::default(),
             |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
@@ -35,6 +35,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_task_store(store)
         .with_notifications(vapid_subject_from_env())?
         .with_agent_configuration(agent_config_root, mcp_url_from_env(address));
+    let jira_values = (
+        env::var("SWARM_JIRA_BASE_URL").ok(),
+        env::var("SWARM_JIRA_EMAIL").ok(),
+        env::var("SWARM_JIRA_API_TOKEN").ok(),
+    );
+    match jira_values {
+        (None, None, None) => {}
+        (Some(base_url), Some(email), Some(api_token)) => {
+            state = state.with_jira_configuration(&base_url, email, api_token)?;
+        }
+        _ => return Err("Jira configuration requires SWARM_JIRA_BASE_URL, SWARM_JIRA_EMAIL, and SWARM_JIRA_API_TOKEN together".into()),
+    }
     let recovered = state.recover_decision_deliveries()?;
     if recovered > 0 {
         tracing::warn!(

@@ -36,6 +36,9 @@ The UI keeps notes and the image in place if either write fails.
 This makes dogfooding asynchronous: the operator can save evidence at the
 moment of failure and a trusted developer can later read it through
 `GET /api/v1/feedback/reports`. No hidden data is recollected after submission.
+Settings also shows the newest reports as collapsed summaries and copies the
+already-reviewed bundle on demand; diagnostic payloads are not expanded by
+default.
 
 ## Boundary
 

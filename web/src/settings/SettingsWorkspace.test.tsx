@@ -22,6 +22,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   const onUpdateWorkerEngine = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
     if (url.includes("feedback/reports")) return ok([{
       id: "report-1",
       expectation: "Worker remains readable",
@@ -92,7 +93,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Meadow Hive")).toBeInTheDocument();
   expect(screen.getByText("Bea")).toBeInTheDocument();
   expect(screen.getByText("Personal Hive")).toBeInTheDocument();
-  expect(screen.getByText("Jira not connected")).toBeInTheDocument();
+  expect(await screen.findByText("Jira not connected")).toBeInTheDocument();
   expect(screen.getByText("Owned tasks continue; new shared claims wait")).toBeInTheDocument();
   expect(screen.getByText("Live updates").parentElement).toHaveTextContent("Live updatesConnected");
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
@@ -150,6 +151,7 @@ test("downloads a consistent Hive database snapshot", async () => {
   const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
     if (url.includes("feedback/reports")) return ok([]);
     if (url === "/api/v1/backups/database") {
       return new Response(new Uint8Array([83, 81, 76]), { status: 200, headers: { "Content-Type": "application/vnd.sqlite3" } });
