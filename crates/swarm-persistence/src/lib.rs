@@ -19,7 +19,9 @@ mod decisions;
 mod feedback;
 mod jira;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
-pub use jira::{JiraIssueSnapshot, JiraProjectBindingInput};
+pub use jira::{
+    JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionDispatch, JiraTransitionFailure,
+};
 mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
 pub use presence::PresenceMutation;
@@ -40,7 +42,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 21;
+const CURRENT_SCHEMA_VERSION: i64 = 22;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -137,6 +139,10 @@ pub enum TaskStoreError {
     InvalidJiraWorkflowMapping,
     #[error("Jira project binding was not found")]
     JiraProjectBindingNotFound,
+    #[error("this Jira task already has an outbound workflow update pending")]
+    JiraTransitionPending,
+    #[error("this Hive already has the maximum number of pending Jira updates")]
+    JiraTransitionQueueFull,
     #[error("worker order must contain every non-Queen worker exactly once")]
     InvalidWorkerOrder,
     #[error("database schema version {found} is newer than supported version {supported}")]
@@ -649,6 +655,7 @@ impl TaskStore {
                 to: target,
             });
         }
+        jira::queue_jira_transition(&transaction, id, target)?;
         transaction.execute(
             "DELETE FROM task_outcome_deliveries WHERE task_id = ?1 AND state = 'queued'",
             [id.to_string()],
@@ -1033,7 +1040,40 @@ fn migrate_schema(
     if schema_version < 21 {
         migrate_jira_bindings(transaction)?;
     }
+    if schema_version < 22 {
+        migrate_jira_transition_deliveries(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_jira_transition_deliveries(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS jira_transition_deliveries (
+             id TEXT PRIMARY KEY,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             target_task_state TEXT NOT NULL CHECK (
+                 target_task_state IN ('draft','ready','active','blocked','review','completed')
+             ),
+             state TEXT NOT NULL CHECK (
+                 state IN ('queued','dispatching','delivered','conflict','uncertain')
+             ),
+             attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 3),
+             available_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             attempted_at INTEGER,
+             delivered_at INTEGER,
+             last_error TEXT,
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS jira_transition_one_active_per_task
+             ON jira_transition_deliveries(task_id)
+             WHERE state IN ('queued','dispatching');
+         CREATE INDEX IF NOT EXISTS jira_transition_delivery_queue
+             ON jira_transition_deliveries(state, available_at, updated_at);
+         PRAGMA user_version = 22;",
+    )
 }
 
 fn migrate_jira_bindings(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
