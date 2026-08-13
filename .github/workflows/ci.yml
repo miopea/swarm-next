@@ -13,7 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+      - name: Install pinned Rust toolchain
+        run: |
+          for attempt in 1 2 3; do
+            rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt && exit 0
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "Rust distribution download failed; retrying ($attempt/3)"
+            sleep $((attempt * 5))
+          done
       - run: rustup override set 1.97.1
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
