@@ -9,6 +9,7 @@ import {
   resolveDecision,
   createWorker,
   fetchHive,
+  fetchHealth,
   fetchNotificationSettings,
   fetchQueenAutonomyPolicy,
   fetchPresence,
@@ -181,17 +182,13 @@ export function App() {
   }, [operatorToken, presentationDevice]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    void fetch("/health", { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error(`Health returned ${response.status}`);
-        return response.json() as Promise<Health>;
-      })
-      .then((health) => setLoadState({ kind: "ready", health }))
+    let cancelled = false;
+    void recoverTransientRuntime(fetchHealth)
+      .then((health) => { if (!cancelled) setLoadState({ kind: "ready", health }); })
       .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === "AbortError")) setLoadState({ kind: "unavailable" });
+        if (!cancelled) setLoadState({ kind: "unavailable" });
       });
-    return () => controller.abort();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {

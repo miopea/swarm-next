@@ -141,6 +141,28 @@ test("restores tasks and workers after a refresh", async () => {
   expect(screen.queryByRole("button", { name: "Settings 3" })).not.toBeInTheDocument();
 });
 
+test("recovers runtime status and saved authentication after an update handoff", async () => {
+  let healthAttempts = 0;
+  let sessionAttempts = 0;
+  const fetch = vi.fn((input: string | URL | Request) => {
+    const url = String(input);
+    if (url === "/health") return Promise.resolve(healthAttempts++ === 0 ? badGateway() : ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(sessionAttempts++ === 0 ? badGateway() : ok({}));
+    if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [] }));
+    if (["/api/v1/workers", "/api/v1/workspaces", "/api/v1/tasks", "/api/v1/decisions"].includes(url)) return Promise.resolve(ok([]));
+    return Promise.resolve(ok({}));
+  });
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+
+  expect(await screen.findByText("Runtime 0.1.0")).toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument());
+  expect(healthAttempts).toBe(2);
+  expect(sessionAttempts).toBe(2);
+});
+
 test("restores the saved session after a rolling API interruption", async () => {
   const fetch = vi
     .fn()

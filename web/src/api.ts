@@ -652,6 +652,12 @@ export async function authenticatedFetch(
   return response;
 }
 
+export async function fetchHealth(): Promise<Health> {
+  const response = await fetch("/health", { cache: "no-store" });
+  if (!response.ok) throw new RuntimeRequestError(response.status, `Health returned ${response.status}`);
+  return response.json() as Promise<Health>;
+}
+
 export class RuntimeRequestError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message);
