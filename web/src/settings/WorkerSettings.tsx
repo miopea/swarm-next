@@ -109,8 +109,9 @@ export default function WorkerSettings({ workers, workspaces, busy, onCreate, on
           <label htmlFor="configured-worker-provider">Coding provider</label>
           <select id="configured-worker-provider" value={provider} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
             <option value="claude_code">Claude Code</option>
-            <option value="codex">Codex</option>
+            <option value="codex" disabled>Codex · runtime setup required</option>
           </select>
+          <small>Codex profiles will unlock after its durable login and recovery adapter are installed on this Hive.</small>
         </div>
         <div className="field-stack">
           <label htmlFor="configured-worker-repository">Repository path</label>
