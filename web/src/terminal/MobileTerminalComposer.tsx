@@ -12,8 +12,11 @@ export const MOBILE_TERMINAL_KEYS = {
   escape: "\u001b",
   enter: "\r",
   tab: "\t",
+  interrupt: "\u0003",
   modeCycle: "\u001b[Z",
 } as const;
+
+const MOBILE_KEYS_VISIBILITY = "swarm-next-mobile-keys-expanded";
 
 export function composeTerminalSubmission(draft: string): string {
   const normalized = draft.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -30,6 +33,7 @@ interface MobileTerminalComposerProps {
 
 export function MobileTerminalComposer({ connectionState, onInput }: MobileTerminalComposerProps) {
   const [draft, setDraft] = useState("");
+  const [keysExpanded, setKeysExpanded] = useState(() => localStorage.getItem(MOBILE_KEYS_VISIBILITY) !== "false");
   const textarea = useRef<HTMLTextAreaElement>(null);
   const connected = connectionState === "connected";
 
@@ -43,6 +47,13 @@ export function MobileTerminalComposer({ connectionState, onInput }: MobileTermi
 
   function sendKey(value: string) {
     if (connected) onInput(value);
+  }
+
+  function toggleKeys() {
+    setKeysExpanded((current) => {
+      localStorage.setItem(MOBILE_KEYS_VISIBILITY, String(!current));
+      return !current;
+    });
   }
 
   return (
@@ -65,7 +76,11 @@ export function MobileTerminalComposer({ connectionState, onInput }: MobileTermi
         />
         <button type="submit" disabled={!connected || draft.length === 0}>Send</button>
       </form>
-      <div className="mobile-terminal-keys" aria-label="Terminal keys">
+      <div className="mobile-terminal-key-heading">
+        <span>Terminal keys</span>
+        <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} onClick={toggleKeys}>{keysExpanded ? "Hide" : "Show"}</button>
+      </div>
+      {keysExpanded && <div className="mobile-terminal-keys" aria-label="Terminal keys">
         <div className="terminal-dpad">
           <button type="button" aria-label="Arrow up" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.up)} disabled={!connected}>↑</button>
           <button type="button" aria-label="Arrow left" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.left)} disabled={!connected}>←</button>
@@ -76,9 +91,10 @@ export function MobileTerminalComposer({ connectionState, onInput }: MobileTermi
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.enter)} disabled={!connected}>Enter</button>
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.escape)} disabled={!connected}>Esc</button>
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.tab)} disabled={!connected}>Tab</button>
+          <button type="button" className="interrupt-button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.interrupt)} disabled={!connected}>Ctrl+C</button>
           <button type="button" className="mode-cycle-button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.modeCycle)} disabled={!connected}>Cycle mode</button>
         </div>
-      </div>
+      </div>}
     </section>
   );
 }

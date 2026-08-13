@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
   composeTerminalSubmission,
@@ -9,6 +9,7 @@ import {
 } from "./MobileTerminalComposer";
 
 afterEach(cleanup);
+beforeEach(() => localStorage.clear());
 
 test("sends slash commands through the terminal unchanged and appends Enter", () => {
   const onInput = vi.fn();
@@ -47,6 +48,7 @@ test("sends mobile navigation and Claude mode controls as terminal key sequences
   fireEvent.click(screen.getByRole("button", { name: "Enter" }));
   fireEvent.click(screen.getByRole("button", { name: "Esc" }));
   fireEvent.click(screen.getByRole("button", { name: "Tab" }));
+  fireEvent.click(screen.getByRole("button", { name: "Ctrl+C" }));
   fireEvent.click(screen.getByRole("button", { name: "Cycle mode" }));
 
   expect(onInput.mock.calls.map(([value]) => value)).toEqual([
@@ -57,8 +59,19 @@ test("sends mobile navigation and Claude mode controls as terminal key sequences
     MOBILE_TERMINAL_KEYS.enter,
     MOBILE_TERMINAL_KEYS.escape,
     MOBILE_TERMINAL_KEYS.tab,
+    MOBILE_TERMINAL_KEYS.interrupt,
     MOBILE_TERMINAL_KEYS.modeCycle,
   ]);
+});
+
+test("remembers when the operator collapses the mobile key pad", () => {
+  const first = render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+  expect(screen.queryByRole("button", { name: "Arrow up" })).not.toBeInTheDocument();
+  first.unmount();
+
+  render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "Show" })).toHaveAttribute("aria-expanded", "false");
 });
 
 test("retains the draft and blocks controls while disconnected", () => {

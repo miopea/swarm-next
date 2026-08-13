@@ -526,6 +526,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .mobile-terminal-composer label { display: flex; grid-column: 1 / -1; justify-content: space-between; gap: 12px; }
   .mobile-terminal-composer textarea { min-height: 66px; max-height: 116px; resize: vertical; }
   .mobile-terminal-composer form > button { min-height: 44px; align-self: stretch; border-color: var(--accent-strong); color: var(--text); background: var(--accent-soft); }
+  .mobile-terminal-key-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: .78rem; }
+  .mobile-terminal-key-heading .terminal-keys-toggle { min-height: 32px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--panel-raised); }
   .mobile-terminal-keys { display: flex; align-items: end; justify-content: space-between; gap: 10px; }
   .mobile-terminal-keys button { min-width: 42px; min-height: 38px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--panel-raised); }
   .terminal-dpad { display: grid; grid-template-areas: '. up .' 'left down right'; grid-template-columns: repeat(3, 42px); gap: 4px; }
@@ -534,6 +536,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .terminal-dpad button:nth-child(2) { grid-area: left; }
   .terminal-dpad button:nth-child(3) { grid-area: down; }
   .terminal-dpad button:nth-child(4) { grid-area: right; }
+  .interrupt-button { color: var(--danger) !important; }
   .terminal-key-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 5px; }
   .terminal-key-actions .mode-cycle-button { min-width: 92px; color: var(--text); background: var(--good-soft); }
 }
