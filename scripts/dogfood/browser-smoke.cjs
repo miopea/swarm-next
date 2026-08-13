@@ -111,6 +111,16 @@ async function checkSurface(browser, surface) {
     }
 
     await page.getByRole("heading", { name: "Your familiar crew" }).waitFor();
+    const repositoryPicker = page.getByRole("combobox", { name: "Repository", exact: true });
+    if (await repositoryPicker.getAttribute("placeholder") !== "Search by name or path") {
+      throw new Error(`${surface.name}: worker creation still leads with a filesystem path`);
+    }
+    if (!await page.getByText("Start with a repository name and Swarm completes the path. Full paths still work.", { exact: true }).isVisible()) {
+      throw new Error(`${surface.name}: repository completion guidance is unavailable`);
+    }
+    if (await page.getByRole("button", { name: /Settings 3/ }).count()) {
+      throw new Error(`${surface.name}: Settings exposes a false pending-item count`);
+    }
     const provider = page.getByLabel("Coding provider");
     const codexDisabled = await provider.locator('option[value="codex"]').isDisabled();
     await page.getByText(/^(Current|Update waiting) ·/).waitFor();
@@ -192,7 +202,7 @@ async function checkSurface(browser, surface) {
     const jiraReadinessVisible = await page.getByText("Jira not connected", { exact: true }).isVisible();
     if (!jiraReadinessVisible) throw new Error(`${surface.name}: Jira readiness is unavailable`);
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, repositoryPicker: "name-first", settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }
