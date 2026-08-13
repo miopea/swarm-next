@@ -151,6 +151,7 @@ async function checkSurface(browser, surface) {
           await page.getByRole("heading", { name: "Active work" }).waitFor();
         }
         const jiraSource = page.getByRole("region", { name: "Bring assigned work onto this board" });
+        await jiraSource.waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
         if (await jiraSource.isVisible().catch(() => false)) {
           const chooseWork = jiraSource.locator(".jira-project-actions button").first();
           await chooseWork.click();

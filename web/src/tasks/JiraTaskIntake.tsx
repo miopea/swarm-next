@@ -104,7 +104,7 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
           ))}
         </div>
       ) : (
-        <div className="jira-intake" aria-label={`Choose ${activeBinding.project_name} work`}>
+        <section className="jira-intake" aria-label={`Choose ${activeBinding.project_name} work`}>
           <div className="jira-intake-heading">
             <span><strong>{activeBinding.project_key} · {activeBinding.project_name}</strong><small>Assigned to {readiness.account_name ?? "you"} · open only</small></span>
             <button className="text-button" type="button" onClick={close}>Close</button>
@@ -140,7 +140,7 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
           <button className="primary-action" type="button" disabled={busy || selectedIds.size === 0} onClick={() => void importSelected()}>
             {busy ? "Adding work…" : `Add ${selectedIds.size} to this board`}
           </button>
-        </div>
+        </section>
       )}
       {message ? <p className="settings-message" role="status">{message}</p> : null}
     </section>
