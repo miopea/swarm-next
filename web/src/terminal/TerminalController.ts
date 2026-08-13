@@ -132,14 +132,11 @@ export class TerminalController {
     const refitPromise = this.#refitAttachedSurface();
     this.#refitPromise = refitPromise;
     void refitPromise
-      .catch((error: unknown) => {
-        if (!this.#disposed) {
-          this.#setState(
-            "error",
-            error instanceof Error ? error.message : "terminal renderer refit failed",
-          );
-        }
-      })
+      // A started terminal already owns a valid PTY size. Reattachment can race
+      // a hidden or not-yet-laid-out container; ResizeObserver will publish the
+      // settled geometry later, so a transient refit miss must not poison the
+      // otherwise healthy transport.
+      .catch(() => undefined)
       .finally(() => {
         if (this.#refitPromise === refitPromise) this.#refitPromise = undefined;
       });

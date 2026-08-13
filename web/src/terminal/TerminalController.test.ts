@@ -135,6 +135,28 @@ test("reattaching a started terminal refits after its new container layout", asy
   controller.dispose();
 });
 
+test("a transient reattach measurement miss keeps the connected terminal healthy", async () => {
+  const surface = fakeSurface();
+  vi.mocked(surface.fit)
+    .mockResolvedValueOnce({ rows: 24, columns: 80 })
+    .mockRejectedValueOnce(new Error("renderer metrics are not ready"));
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  const states: string[] = [];
+  controller.subscribe((state) => states.push(state));
+
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
+  vi.mocked(connection.start).mock.calls[0][0].onState("connected");
+  controller.detach();
+  controller.attach(document.createElement("div"));
+
+  await vi.waitFor(() => expect(surface.fit).toHaveBeenCalledTimes(2));
+  expect(states.at(-1)).toBe("connected");
+  expect(connection.start).toHaveBeenCalledTimes(1);
+  expect(connection.dispose).not.toHaveBeenCalled();
+});
+
 test("mobile controls use the same terminal input transport", () => {
   const connection = fakeConnection();
   const controller = new TerminalController(fakeSurface, () => connection);
