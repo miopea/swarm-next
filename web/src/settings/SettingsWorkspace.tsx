@@ -47,6 +47,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
+  const [activeSettingsSection, setActiveSettingsSection] = useState("settings-crew");
   useEffect(() => {
     let cancelled = false;
     void fetchTerminalHostStatus(operatorToken)
@@ -83,7 +84,16 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
           ["settings-backup", "Backup"],
           ["settings-diagnostics", "Diagnostics"],
         ] as const).map(([id, label]) => (
-          <button key={id} type="button" aria-controls={id} onClick={() => document.getElementById(id)?.scrollIntoView?.({ behavior: "smooth", block: "start" })}>{label}</button>
+          <button
+            key={id}
+            type="button"
+            aria-controls={id}
+            aria-current={activeSettingsSection === id ? "location" : undefined}
+            onClick={() => {
+              setActiveSettingsSection(id);
+              document.getElementById(id)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+            }}
+          >{label}</button>
         ))}
       </nav>
       <WorkerSettings workers={workers} workspaces={workspaces} busy={busy} providers={providers} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onReorder={onReorderWorkers} />
