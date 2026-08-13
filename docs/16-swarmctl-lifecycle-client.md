@@ -14,6 +14,7 @@ swarmctl status
 swarmctl drain
 swarmctl cancel-drain
 swarmctl wait-ready [timeout-seconds]
+swarmctl stop-session UUID
 ```
 
 All successful commands print one compact JSON terminal-host status object per
@@ -48,10 +49,12 @@ workspace paths, or provider input.
 
 ## Safety boundary
 
-`swarmctl` intentionally does not kill processes, delete sockets, replace
-binaries, or force worker stops. The service manager owns process identity and
-installed binary paths. It uses this client to establish the safe drain state,
-then performs graceful replacement only when readiness is true.
+`swarmctl` never deletes sockets or replaces binaries. `stop-session` is the
+one explicit maintenance escape hatch: it asks the owning host to stop one
+exact UUID and then reports authoritative host status. It has no bulk, name,
+or wildcard form. The service manager still owns process identity and installed
+binary paths; ordinary updates establish drain state and replace the host only
+when readiness is true.
 
 The socket path defaults to
 `$HOME/.local/state/swarm-next/run/terminal.sock` and may be overridden with
@@ -64,6 +67,7 @@ cargo run -p swarm-cli --bin swarmctl -- status
 cargo run -p swarm-cli --bin swarmctl -- drain
 cargo run -p swarm-cli --bin swarmctl -- wait-ready 300
 cargo run -p swarm-cli --bin swarmctl -- cancel-drain
+cargo run -p swarm-cli --bin swarmctl -- stop-session SESSION_UUID
 ```
 
 ## Validation
@@ -72,8 +76,8 @@ cargo run -p swarm-cli --bin swarmctl -- cancel-drain
 - A protocol mismatch is distinguished from ordinary host rejection.
 - Real same-user IPC drives begin/cancel status transitions.
 - A live session produces exit-code-3 timeout behavior and reports its count.
-- Stopping the session allows `wait-ready` to return the authoritative
-  zero-running status.
+- `stop-session` stops one exact real IPC session and returns the authoritative
+  zero-running status; malformed UUIDs fail before connecting.
 - Waiting without drain fails instead of silently changing host state.
 - A live executable smoke with a real Claude PTY proved compact JSON output,
   exit code 3 with one active session, cancellation, and zero-session readiness.

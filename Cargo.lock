@@ -2658,6 +2658,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "swarm-domain",
  "swarm-persistence",
  "swarm-terminal",
  "swarm-terminal-host",

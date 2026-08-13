@@ -2,6 +2,7 @@ use std::{ffi::OsString, path::PathBuf, time::Duration};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
+use swarm_domain::WorkerSessionId;
 
 use swarm_terminal::{
     HostClient, HostRequest, HostResponse, IpcError, PROTOCOL_VERSION, TerminalHostStatus,
@@ -18,6 +19,7 @@ pub enum LifecycleCommand {
     BeginDrain,
     CancelDrain,
     WaitReady { timeout: Duration },
+    StopSession { session_id: WorkerSessionId },
     VerifyDatabase { path: std::path::PathBuf },
     InspectLegacy { path: std::path::PathBuf },
 }
@@ -25,11 +27,13 @@ pub enum LifecycleCommand {
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error(
-        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|verify-database PATH|inspect-legacy PATH>"
+        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|stop-session UUID|verify-database PATH|inspect-legacy PATH>"
     )]
     Usage,
     #[error("wait timeout must be an integer from 1 through 86400 seconds")]
     InvalidTimeout,
+    #[error("session id must be a UUID")]
+    InvalidSessionId,
     #[error("terminal host IPC failed: {0}")]
     Ipc(#[from] IpcError),
     #[error("terminal host rejected the lifecycle request: {0}")]
@@ -54,7 +58,7 @@ impl CliError {
     #[must_use]
     pub const fn exit_code(&self) -> u8 {
         match self {
-            Self::Usage | Self::InvalidTimeout => 2,
+            Self::Usage | Self::InvalidTimeout | Self::InvalidSessionId => 2,
             Self::ReadyTimeout { .. } => 3,
             _ => 1,
         }
@@ -86,6 +90,17 @@ pub fn parse_command(
                 return Err(CliError::Usage);
             }
             Ok(LifecycleCommand::WaitReady { timeout })
+        }
+        "stop-session" => {
+            let session_id = arguments
+                .next()
+                .and_then(|value| value.into_string().ok())
+                .and_then(|value| value.parse().ok())
+                .ok_or(CliError::InvalidSessionId)?;
+            if arguments.next().is_some() {
+                return Err(CliError::Usage);
+            }
+            Ok(LifecycleCommand::StopSession { session_id })
         }
         "verify-database" => {
             let path = arguments
@@ -137,6 +152,13 @@ pub async fn execute(
         LifecycleCommand::CancelDrain => request_status(client, HostRequest::CancelDrain).await,
         LifecycleCommand::WaitReady { timeout } => {
             wait_until_ready(client, timeout, READY_POLL_INTERVAL).await
+        }
+        LifecycleCommand::StopSession { session_id } => {
+            match client.request(&HostRequest::Stop { session_id }).await? {
+                HostResponse::Acknowledged => request_status(client, HostRequest::HostStatus).await,
+                HostResponse::Error { message, .. } => Err(CliError::HostRejected(message)),
+                _ => Err(CliError::UnexpectedResponse),
+            }
         }
         LifecycleCommand::VerifyDatabase { .. } | LifecycleCommand::InspectLegacy { .. } => {
             Err(CliError::Usage)
@@ -359,6 +381,19 @@ mod tests {
             ]),
             Ok(LifecycleCommand::InspectLegacy { .. })
         ));
+        let session_id = WorkerSessionId::new();
+        assert_eq!(
+            parse_command([
+                OsString::from("stop-session"),
+                OsString::from(session_id.to_string())
+            ])
+            .unwrap(),
+            LifecycleCommand::StopSession { session_id }
+        );
+        assert!(matches!(
+            parse_command([OsString::from("stop-session"), OsString::from("not-a-uuid")]),
+            Err(CliError::InvalidSessionId)
+        ));
     }
 
     #[test]
@@ -477,7 +512,15 @@ mod tests {
             }
         ));
 
-        session.stop().unwrap();
+        let stopped = execute(
+            &client,
+            LifecycleCommand::StopSession {
+                session_id: session.id(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(stopped.running_sessions, 0);
         let ready = wait_until_ready(&client, Duration::from_secs(1), Duration::from_millis(5))
             .await
             .unwrap();
