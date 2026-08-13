@@ -39,4 +39,8 @@ function processTotals(processes) {
   }), { working_set_bytes: 0, private_bytes: 0 });
 }
 
-module.exports = { MIB, evaluateGrowth, processTotals, summarizeSeries };
+function isTransientGatewayError(message) {
+  return /^Failed to load resource: the server responded with a status of 502 \(\)$/.test(message);
+}
+
+module.exports = { MIB, evaluateGrowth, isTransientGatewayError, processTotals, summarizeSeries };

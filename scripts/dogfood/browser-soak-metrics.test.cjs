@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { MIB, evaluateGrowth, processTotals, summarizeSeries } = require("./browser-soak-metrics.cjs");
+const { MIB, evaluateGrowth, isTransientGatewayError, processTotals, summarizeSeries } = require("./browser-soak-metrics.cjs");
 
 test("summarizes a time series with a per-minute slope", () => {
   const summary = summarizeSeries([
@@ -29,4 +29,10 @@ test("totals only the processes owned by the browser", () => {
     { working_set_bytes: 10, private_bytes: 8 },
     { working_set_bytes: 20, private_bytes: 17 },
   ]), { working_set_bytes: 30, private_bytes: 25 });
+});
+
+test("recognizes only the gateway error expected during an API switch", () => {
+  assert.equal(isTransientGatewayError("Failed to load resource: the server responded with a status of 502 ()"), true);
+  assert.equal(isTransientGatewayError("Failed to load resource: the server responded with a status of 500 ()"), false);
+  assert.equal(isTransientGatewayError("Uncaught TypeError: failed to render"), false);
 });

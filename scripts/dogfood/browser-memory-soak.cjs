@@ -5,7 +5,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { chromium } = require("playwright");
 
-const { evaluateGrowth, processTotals } = require("./browser-soak-metrics.cjs");
+const { evaluateGrowth, isTransientGatewayError, processTotals } = require("./browser-soak-metrics.cjs");
 
 const baseUrl = process.env.SWARM_BASE_URL || "http://127.0.0.1:8766";
 const operatorToken = process.env.SWARM_OPERATOR_TOKEN;
@@ -14,6 +14,7 @@ const durationSeconds = boundedInteger("SWARM_BROWSER_SOAK_DURATION_SECONDS", 18
 const sampleSeconds = boundedInteger("SWARM_BROWSER_SOAK_SAMPLE_SECONDS", 30, 5, 300);
 const activitySeconds = boundedInteger("SWARM_BROWSER_SOAK_ACTIVITY_SECONDS", 60, 15, 600);
 const outputRoot = process.env.SWARM_BROWSER_SOAK_EVIDENCE || path.resolve("dist", "browser-soak");
+const maxGatewayErrors = 20;
 
 if (!operatorToken) throw new Error("SWARM_OPERATOR_TOKEN is required");
 
@@ -37,6 +38,8 @@ async function main() {
   let pinnedBrowserPid;
   let nextActivityAt = activitySeconds;
   let activityCycles = 0;
+  let handledBrowserErrors = 0;
+  const updateRecoveries = [];
 
   try {
     await openAuthenticatedSettings(page);
@@ -89,7 +92,20 @@ async function main() {
       };
       samples.push(sample);
       await fs.appendFile(samplesPath, `${Object.values(sample).join(",")}\n`, "utf8");
-      if (browserErrors.length) throw new Error(`authenticated page errors: ${browserErrors.join(" | ")}`);
+      if (browserErrors.length > handledBrowserErrors) {
+        const newErrors = browserErrors.slice(handledBrowserErrors);
+        if (browserErrors.length > maxGatewayErrors || newErrors.some((message) => !isTransientGatewayError(message))) {
+          throw new Error(`authenticated page errors: ${newErrors.join(" | ")}`);
+        }
+        const recovery = await recoverAfterGatewayInterruption(page, elapsedSeconds);
+        const recoveryErrors = browserErrors.slice(handledBrowserErrors);
+        if (browserErrors.length > maxGatewayErrors || recoveryErrors.some((message) => !isTransientGatewayError(message))) {
+          throw new Error(`authenticated page errors during recovery: ${recoveryErrors.join(" | ")}`);
+        }
+        recovery.error_count = recoveryErrors.length;
+        updateRecoveries.push(recovery);
+        handledBrowserErrors = browserErrors.length;
+      }
       if (elapsedSeconds >= durationSeconds) break;
       if (elapsedSeconds >= nextActivityAt) {
         await exerciseReadOnlySurface(page);
@@ -122,6 +138,7 @@ async function main() {
       dom_nodes: { min: Math.min(...samples.map((sample) => sample.dom_nodes)), max: Math.max(...samples.map((sample) => sample.dom_nodes)) },
       process_count: { min: Math.min(...samples.map((sample) => sample.process_count)), max: Math.max(...samples.map((sample) => sample.process_count)) },
       storage_process_count: { min: Math.min(...samples.map((sample) => sample.storage_process_count)), max: Math.max(...samples.map((sample) => sample.storage_process_count)) },
+      update_recoveries: updateRecoveries,
       samples_file: samplesPath,
     };
     await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
@@ -131,6 +148,29 @@ async function main() {
     await context.close();
     await browser.close();
   }
+}
+
+async function recoverAfterGatewayInterruption(page, elapsedSeconds) {
+  const startedAt = Date.now();
+  const deadline = startedAt + 15_000;
+  let healthy = false;
+  while (Date.now() < deadline) {
+    try {
+      const response = await page.request.get(`${baseUrl}/health`, { timeout: 3_000 });
+      healthy = response.ok();
+    } catch {
+      healthy = false;
+    }
+    if (healthy) break;
+    await delay(500);
+  }
+  if (!healthy) throw new Error("gateway interruption did not recover within 15 seconds");
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 15_000 });
+  await page.getByRole("heading", { name: "Settings" }).waitFor({ timeout: 15_000 });
+  if (await page.getByLabel("Operator token").isVisible().catch(() => false)) {
+    throw new Error("browser authentication did not survive the gateway interruption");
+  }
+  return { elapsed_seconds: elapsedSeconds, recovery_milliseconds: Date.now() - startedAt };
 }
 
 async function exerciseReadOnlySurface(page) {
