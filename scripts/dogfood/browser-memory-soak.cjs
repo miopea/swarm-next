@@ -144,6 +144,28 @@ async function main() {
     await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
     if (result !== "passed") process.exitCode = 1;
+  } catch (error) {
+    const lastSample = samples.at(-1);
+    const failure = {
+      run_id: runId,
+      result: "failed",
+      base_url: baseUrl,
+      duration_seconds_observed: lastSample?.elapsed_seconds ?? 0,
+      sample_count: samples.length,
+      browser_pid: pinnedBrowserPid,
+      page_error_count: browserErrors.length,
+      last_sample: lastSample ? {
+        browser_private_bytes: lastSample.browser_private_bytes,
+        storage_private_bytes: lastSample.storage_private_bytes,
+        total_private_bytes: lastSample.total_private_bytes,
+        js_heap_bytes: lastSample.js_heap_bytes,
+        dom_nodes: lastSample.dom_nodes,
+        storage_usage_bytes: lastSample.storage_usage_bytes,
+      } : undefined,
+      samples_file: samplesPath,
+    };
+    await fs.writeFile(summaryPath, `${JSON.stringify(failure, null, 2)}\n`, "utf8");
+    throw error;
   } finally {
     await context.close();
     await browser.close();
