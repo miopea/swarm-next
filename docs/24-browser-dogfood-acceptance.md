@@ -222,3 +222,28 @@ worker:
   uploaded automatically; the operator keeps the image as a separate explicit
   attachment. Desktop and mobile CSS keep the preview actions inside the
   bounded feedback dialog.
+
+## Provider readiness and bounded live soak (2026-08-13)
+
+Release `0.1.0-b74ba072198d` added a private provider-capability contract from
+the independently updated terminal host through the API to worker settings:
+
+- New workers can select only coding providers whose executable is present in
+  the terminal host's bounded service `PATH`. An older still-running host
+  degrades explicitly to Claude available and Codex awaiting maintenance.
+- The Codex launch adapter uses the installed CLI's current contracts: `codex`
+  for a new repository conversation and `codex resume --last` for recovery.
+  No Swarm permission override is added.
+- The alpha server has Codex `0.147.0` installed and authenticated. Activation
+  remains deferred until the three active Claude sessions reach a safe
+  zero-session maintenance point; the API update preserved terminal-host PID
+  `400662` and all running sessions.
+- A reusable headless Edge acceptance pass now opens the deployed HTTPS app at
+  1440 by 900 and 412 by 915, performs a real unlock, reloads to verify the
+  durable browser session, opens Settings, rejects horizontal overflow, checks
+  provider readiness, captures screenshots, and fails on authenticated-page
+  console or runtime errors. Both sizes passed against this release.
+- A 20-minute live sample spanning API updates kept API RSS between 2.5 and
+  4.4 MiB. The terminal-host cgroup, including three Claude processes, remained
+  between 920 and 927 MiB and ended at 925.7 MiB. This is bounded short-run
+  evidence; it does not replace the 24-hour promotion soak.
