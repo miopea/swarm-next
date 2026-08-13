@@ -408,3 +408,27 @@ the independently updated terminal host through the API to worker settings:
   Every desktop and mobile document/card remained bounded with no authenticated
   browser error. API PID `995654` now serves the release while terminal-host
   PID `400662` and all three worker session identities remain unchanged.
+- Releases through `0.1.0-6624a47c17b6` completed the searchable completed-work
+  view and fixed mobile quick-task focus at the lifecycle boundary where the
+  collapsed composer actually mounts. The deployed desktop and Android gate
+  found all seven completed tasks, expanded and focused an exact result, then
+  opened `Create task` with the title field focused. All 119 frontend tests,
+  the production build, and the full live gate passed while host PID `400662`
+  and the same three session identities remained unchanged.
+- Release `0.1.0-549271c15cf5` bounded automatic worker recovery. One automatic
+  relaunch is allowed; a second early exit visibly blocks the worker until an
+  operator Retry, while five stable minutes reset the circuit. The roster now
+  names that action `Retry worker`. Unit tests cover repeated failure and the
+  stable reset, and the API-only rollout preserved the live host and workers.
+- Release `0.1.0-659c2584cd18` fixed a rolling-update authentication race rather
+  than weakening the cookie. Live diagnostics proved the 30-day HttpOnly,
+  Secure, SameSite=Strict cookie remained present and the session endpoint
+  returned 204; a one-shot React bootstrap had landed inside the gateway
+  handoff. Saved-session restoration now retries only network failures and
+  HTTP 502/503/504 within a 15.75-second budget, never 401. A deliberate live
+  API restart produced ten gateway errors, recovered the authenticated Settings
+  workspace in 3.7 seconds, passed 17 memory samples and five navigation cycles,
+  and retained terminal-host PID `400662`. The same release also restricts a
+  worker's MCP task list to non-completed work bound to its current session,
+  preventing historical tasks from polluting agent context while Queen keeps
+  the complete Hive view.

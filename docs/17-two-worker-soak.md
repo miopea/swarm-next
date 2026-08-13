@@ -89,6 +89,19 @@ remained zero bytes, and no authenticated-page error occurred. This validates
 the harness and rules out violent immediate growth; it does not replace the
 24-hour browser soak.
 
+A 30-minute active browser run then pinned Edge browser PID `42888` for 60
+samples while cycling Workers, Tasks, and Settings. Browser private memory
+ended 0.8 MiB lower, the storage process had zero net growth, the complete
+browser tree ended 15.5 MiB higher with a 0.5 MiB/minute fitted slope, renderer
+heap ended 0.2 MiB higher, DOM nodes remained exactly 440, and browser storage
+remained zero. A later rolling-update proof on release
+`0.1.0-659c2584cd18` deliberately restarted only the API. The authenticated
+browser observed ten exact gateway errors, recovered in 3.7 seconds without a
+new token, completed five more navigation cycles, and passed all memory bounds.
+The soak permits only that exact bounded gateway signature, requires public
+health and an authenticated-only Settings control to return, and still fails
+every other console or runtime error.
+
 ## Read-only live observation
 
 `scripts/dogfood/observe-live-soak.sh` monitors the actual dogfood crew without
