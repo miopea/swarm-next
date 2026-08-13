@@ -19,8 +19,8 @@ export default function CommandPalette({ choices, onClose }: { choices: CommandC
         <div><p className="eyebrow">Quick navigation</p><h2 id="command-heading">Where would you like to go?</h2></div>
         <button type="button" className="secondary-button" onClick={onClose}>Close</button>
       </header>
-      <label className="sr-only" htmlFor="command-query">Find a view or worker</label>
-      <input id="command-query" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a view or worker…" />
+      <label className="sr-only" htmlFor="command-query">Find work, decisions, or workers</label>
+      <input id="command-query" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find work, decisions, or workers…" />
       <div className="command-results">
         {filtered.map((choice) => <button key={choice.id} type="button" onClick={() => { onClose(); choice.run(); }}>
           <span><small>{choice.group}</small><strong>{choice.label}</strong></span><span>{choice.detail}</span>
