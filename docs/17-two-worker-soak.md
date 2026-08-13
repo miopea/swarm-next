@@ -73,3 +73,10 @@ memory stayed between 4.4 and 4.7 MiB, the host cgroup stayed between 882.8 and
 883.6 MiB, retained history remained exactly 2,466,880 bytes, and dropped
 history remained zero. This validates the read-only harness; it is not the
 24-hour promotion result.
+
+A later uninterrupted validation observed the same three live sessions for 20
+samples over 600 seconds. API PID `959445` stayed fixed with memory between
+6.7 and 7.5 MiB; terminal-host PID `400662` stayed fixed with its complete
+cgroup between 1.19 and 1.21 GiB. Retained history grew only with real terminal
+activity from 69,493,127 to 69,504,137 bytes, and dropped history remained zero.
+The run used API release `0.1.0-cad55ededfc5` and terminal-host `0.1.0`.

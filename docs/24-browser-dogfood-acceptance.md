@@ -352,3 +352,8 @@ the independently updated terminal host through the API to worker settings:
   every live worker, and completed the full regression suite without browser
   errors. The API-only deployment again preserved terminal-host PID `400662`
   and all three running sessions.
+- A continuous read-only soak then pinned both process identities for 600
+  seconds: 20 samples kept API PID `959445` between 6.7 and 7.5 MiB and the
+  terminal-host cgroup under PID `400662`, including all three Claude workers,
+  between 1.19 and 1.21 GiB. All three sessions stayed live, retained history
+  advanced only with terminal activity, and dropped history remained zero.
