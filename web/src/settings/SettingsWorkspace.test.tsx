@@ -81,6 +81,8 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Meadow Hive")).toBeInTheDocument();
   expect(screen.getByText("Bea")).toBeInTheDocument();
   expect(screen.getByText("Personal Hive")).toBeInTheDocument();
+  expect(screen.getByText("Jira not connected")).toBeInTheDocument();
+  expect(screen.getByText("Owned tasks continue; new shared claims wait")).toBeInTheDocument();
   expect(screen.getByText("Live updates").parentElement).toHaveTextContent("Live updatesConnected");
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");

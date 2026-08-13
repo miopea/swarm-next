@@ -122,6 +122,12 @@ continues locally and outbound updates queue with explicit bounds. New shared
 claims require Apiary coordination. Confirmed credential or permission loss
 enters a visible degraded state and blocks affected claims and writes.
 
+The integration boundary reports these cases separately: not connected,
+temporary network loss, invalid credentials, denied project access, and missing
+workflow mapping. A temporary outage permits work already owned by the Hive but
+never permits a new shared claim. Provider credentials remain adapter-private;
+Queen consumes typed readiness and commands rather than tokens or browser state.
+
 ## Presence, attention, and mobile
 
 Presence modes are **At the Hive**, **Away**, and **Night Watch**. On supported

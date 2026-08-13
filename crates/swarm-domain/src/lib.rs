@@ -43,12 +43,89 @@ domain_id!(ApiaryId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
+domain_id!(JiraProjectBindingId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SharedWorkBackend {
     Jira,
     Native,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JiraConnectionState {
+    NotConnected,
+    Ready,
+    NetworkUnavailable,
+    CredentialsInvalid,
+    PermissionDenied,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JiraProjectScope {
+    Hive,
+    Apiary,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct JiraProjectBinding {
+    pub id: JiraProjectBindingId,
+    pub project_key: String,
+    pub scope: JiraProjectScope,
+    pub hive_id: HiveId,
+    pub apiary_id: Option<ApiaryId>,
+    pub access_verified: bool,
+    pub workflow_mapped: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JiraProjectReadiness {
+    Ready,
+    OfflineOwnedWorkOnly,
+    ConnectionRequired,
+    AccessRequired,
+    WorkflowMappingRequired,
+    ApiaryMembershipRequired,
+}
+
+impl JiraProjectBinding {
+    /// Evaluates whether this Hive can synchronize or claim work without treating
+    /// temporary network loss as an authorization failure.
+    #[must_use]
+    pub fn readiness(
+        &self,
+        connection: JiraConnectionState,
+        hive_apiary_id: Option<ApiaryId>,
+        already_owned: bool,
+    ) -> JiraProjectReadiness {
+        if self.scope == JiraProjectScope::Apiary
+            && (self.apiary_id.is_none() || self.apiary_id != hive_apiary_id)
+        {
+            return JiraProjectReadiness::ApiaryMembershipRequired;
+        }
+        match connection {
+            JiraConnectionState::NetworkUnavailable if already_owned => {
+                return JiraProjectReadiness::OfflineOwnedWorkOnly;
+            }
+            JiraConnectionState::NotConnected | JiraConnectionState::NetworkUnavailable => {
+                return JiraProjectReadiness::ConnectionRequired;
+            }
+            JiraConnectionState::CredentialsInvalid | JiraConnectionState::PermissionDenied => {
+                return JiraProjectReadiness::AccessRequired;
+            }
+            JiraConnectionState::Ready => {}
+        }
+        if !self.access_verified {
+            JiraProjectReadiness::AccessRequired
+        } else if !self.workflow_mapped {
+            JiraProjectReadiness::WorkflowMappingRequired
+        } else {
+            JiraProjectReadiness::Ready
+        }
+    }
 }
 
 impl fmt::Display for SharedWorkBackend {
@@ -1594,5 +1671,67 @@ mod tests {
         };
         assert!(advisory.permits(PresenceMode::AtHive, QueenActionClass::Advise, false));
         assert!(!advisory.permits(PresenceMode::AtHive, QueenActionClass::Coordinate, true));
+    }
+
+    #[test]
+    fn jira_readiness_preserves_owned_offline_work_and_blocks_new_shared_claims() {
+        let hive_id = HiveId::new();
+        let apiary_id = ApiaryId::new();
+        let binding = JiraProjectBinding {
+            id: JiraProjectBindingId::new(),
+            project_key: "WEB".into(),
+            scope: JiraProjectScope::Apiary,
+            hive_id,
+            apiary_id: Some(apiary_id),
+            access_verified: true,
+            workflow_mapped: true,
+        };
+        assert_eq!(
+            binding.readiness(JiraConnectionState::Ready, Some(apiary_id), false),
+            JiraProjectReadiness::Ready
+        );
+        assert_eq!(
+            binding.readiness(
+                JiraConnectionState::NetworkUnavailable,
+                Some(apiary_id),
+                true
+            ),
+            JiraProjectReadiness::OfflineOwnedWorkOnly
+        );
+        assert_eq!(
+            binding.readiness(
+                JiraConnectionState::NetworkUnavailable,
+                Some(apiary_id),
+                false
+            ),
+            JiraProjectReadiness::ConnectionRequired
+        );
+        assert_eq!(
+            binding.readiness(JiraConnectionState::Ready, None, false),
+            JiraProjectReadiness::ApiaryMembershipRequired
+        );
+    }
+
+    #[test]
+    fn jira_readiness_distinguishes_access_from_workflow_configuration() {
+        let hive_id = HiveId::new();
+        let mut binding = JiraProjectBinding {
+            id: JiraProjectBindingId::new(),
+            project_key: "OPS".into(),
+            scope: JiraProjectScope::Hive,
+            hive_id,
+            apiary_id: None,
+            access_verified: false,
+            workflow_mapped: false,
+        };
+        assert_eq!(
+            binding.readiness(JiraConnectionState::CredentialsInvalid, None, false),
+            JiraProjectReadiness::AccessRequired
+        );
+        binding.access_verified = true;
+        assert_eq!(
+            binding.readiness(JiraConnectionState::Ready, None, false),
+            JiraProjectReadiness::WorkflowMappingRequired
+        );
     }
 }

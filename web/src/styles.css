@@ -550,6 +550,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .presence-lock-row .secondary-button { flex: 0 0 auto; }
 .notification-settings label { display: grid; gap: .45rem; color: var(--text-muted); font-size: .78rem; font-weight: 700; }
 .notification-settings select { width: 100%; }
+.integration-status { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-raised); }
+.integration-status > span:last-child { display: grid; gap: 1px; }
+.integration-status small { color: var(--muted); }
 .mobile-presence-note { padding: .75rem .85rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
 .mobile-policy-choice { display: grid; gap: 7px; margin: 0; padding: 0; border: 0; }
 .mobile-policy-choice legend { margin-bottom: 2px; color: var(--text-muted); font-size: .78rem; font-weight: 700; }

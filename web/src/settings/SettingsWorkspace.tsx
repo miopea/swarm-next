@@ -178,6 +178,21 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
         </dl>
       </section>
 
+      <section className="settings-card integration-settings" aria-labelledby="integration-heading">
+        <div><p className="eyebrow">Integrations</p><h3 id="integration-heading">Bring Jira in without making it a bottleneck</h3></div>
+        <p>Your Hive stays useful on its own. Jira connections use this operator's identity; credentials and permissions never come from Queen or another Hive.</p>
+        <div className="integration-status" role="status">
+          <span className="presence waiting" />
+          <span><strong>Jira not connected</strong><small>Local workers and private tasks are unaffected</small></span>
+        </div>
+        <dl className="diagnostic-list">
+          <div><dt>Hive projects</dt><dd>Synced by this Hive</dd></div>
+          <div><dt>Apiary projects</dt><dd>Require membership and verified access</dd></div>
+          <div><dt>Offline work</dt><dd>Owned tasks continue; new shared claims wait</dd></div>
+        </dl>
+        <small className="privacy-note">Connection setup appears here when the Jira credential adapter is enabled. Swarm stores readiness and mappings, not browser passwords.</small>
+      </section>
+
       <section className="settings-card" aria-labelledby="backup-heading">
         <div><p className="eyebrow">Backup</p><h3 id="backup-heading">Carry your Hive safely</h3></div>
         <p>Download a consistent snapshot of workers, tasks, conversations, policies, and Hive identity. Repository contents are intentionally excluded.</p>
