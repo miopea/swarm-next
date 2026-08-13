@@ -58,7 +58,7 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
   return (
     <div
       ref={rowRef}
-      className="worker-row"
+      className={`worker-row worker-state-${engagementExpired ? "resting" : worker.attention_state}`}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuOpen(true);
@@ -75,10 +75,10 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
       >
         <span className="worker-avatar"><BeeMascot role={worker.role === "queen" ? "queen" : "worker"} expression={attention.expression} /></span>
         <span className="worker-copy">
-          <strong>{worker.name}</strong>
-          <small><span className="worker-attention-label">{attention.label}</span> · {detail}</small>
+          <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.label}</span></span>
+          <small title={detail}>{detail}</small>
         </span>
-        <span className={`presence ${attention.presence}`} title={attention.label} />
+        <span className={`presence ${attention.presence}`} title={attention.label} aria-hidden="true" />
       </button>
       <button
         className="worker-menu-trigger"

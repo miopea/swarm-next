@@ -1,7 +1,12 @@
 export type Health = { status: "ok"; version: string };
 export const BROWSER_SESSION_AUTH = "browser-session-cookie";
 const TRANSIENT_RUNTIME_STATUSES = new Set([502, 503, 504]);
-export type SessionSummary = { session_id: string; running: boolean };
+export type ProcessResources = {
+  resident_memory_bytes: number | null;
+  process_tree_resident_memory_bytes?: number | null;
+  process_tree_process_count?: number | null;
+};
+export type SessionSummary = { session_id: string; running: boolean; resources?: ProcessResources | null };
 export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
 export type TaskState = "draft" | "ready" | "active" | "blocked" | "review" | "completed";
@@ -35,7 +40,7 @@ export type TerminalHostStatus = {
   draining: boolean;
   running_sessions: number;
   retained_sessions: number;
-  resources?: { resident_memory_bytes: number | null } | null;
+  resources?: ProcessResources | null;
 };
 export type WorkerEngineMaintenanceResult = {
   previous_version: string;
@@ -47,8 +52,22 @@ export type ResourcePressure = "normal" | "advisory" | "critical" | "unavailable
 export type RuntimeResources = {
   sampled_at: number;
   policy: { mode: "observe_only"; advisory_bytes: number; critical_bytes: number };
-  api: { resident_memory_bytes: number | null; pressure: ResourcePressure };
-  terminal_host: { resident_memory_bytes: number | null; pressure: ResourcePressure };
+  api: ProcessResources & { pressure: ResourcePressure };
+  terminal_host: ProcessResources & { pressure: ResourcePressure };
+  machine?: {
+    memory_total_bytes: number | null;
+    memory_available_bytes: number | null;
+    memory_used_percent: number | null;
+    swap_total_bytes: number | null;
+    swap_used_bytes: number | null;
+    swap_used_percent: number | null;
+    load_average: [number, number, number] | null;
+    logical_cpus: number | null;
+    memory_pressure_avg10: number | null;
+    cpu_pressure_avg10: number | null;
+    io_pressure_avg10: number | null;
+    pressure: ResourcePressure;
+  };
 };
 export type HistoryDiagnostics = {
   retained_bytes: number;

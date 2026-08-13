@@ -35,13 +35,13 @@ test("keeps active work above the fold on phones until task creation is requeste
   renderBoard({ tasks: [] });
 
   expect(screen.queryByLabelText("Task title")).not.toBeInTheDocument();
-  const toggle = screen.getByRole("button", { name: "Create a task" });
+  const toggle = screen.getByRole("button", { name: "Create task" });
   expect(toggle).toHaveAttribute("aria-expanded", "false");
   fireEvent.click(toggle);
   const title = screen.getByLabelText("Task title");
   expect(title).toBeInTheDocument();
   await waitFor(() => expect(title).toHaveFocus());
-  expect(screen.getByRole("button", { name: "Hide task form" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("button", { name: "Close task form" })).toHaveAttribute("aria-expanded", "true");
 });
 
 test("opens and focuses task creation when requested from global navigation", async () => {
@@ -53,7 +53,7 @@ test("opens and focuses task creation when requested from global navigation", as
 
   const title = await screen.findByLabelText("Task title");
   await waitFor(() => expect(title).toHaveFocus());
-  expect(screen.getByRole("button", { name: "Hide task form" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("button", { name: "Close task form" })).toHaveAttribute("aria-expanded", "true");
 });
 
 test("reveals and focuses a completed task selected through global navigation", async () => {
@@ -88,6 +88,7 @@ test("creates a task with useful context and priority", () => {
   const onCreate = vi.fn().mockResolvedValue(undefined);
   renderBoard({ tasks: [], onCreate });
 
+  fireEvent.click(screen.getByRole("button", { name: "Create task" }));
   fireEvent.change(screen.getByLabelText("Task title"), { target: { value: "Ship task editing" } });
   fireEvent.change(screen.getByLabelText(/Description/), { target: { value: "Keep failed forms open" } });
   fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "urgent" } });
@@ -112,7 +113,7 @@ test("keeps worker ownership visible while the assigned worker is sleeping", () 
   const card = screen.getByRole("article", { name: task.title });
   expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
   expect(within(card).queryByText("In progress", { selector: ".task-state" })).not.toBeInTheDocument();
-  expect(within(card).getByText("Daisy · swarm")).toBeInTheDocument();
+  expect(within(card).getByText("Daisy")).toBeInTheDocument();
   expect(within(card).getByLabelText("Worker")).toHaveValue(worker.id);
 });
 
@@ -142,7 +143,7 @@ test("keeps Jira identity and remote status visible while routing work", () => {
   const card = screen.getByRole("article", { name: task.title });
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Website Services");
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("To Do");
-  expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Jira: Bradford");
+  expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Bradford");
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Jira update needs attention");
   fireEvent.click(within(card).getByRole("button", { name: "Retry Jira" }));
   expect(onRetryJira).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
@@ -187,7 +188,7 @@ test("opens the assigned running worker directly from her task", () => {
     onOpenWorker,
   });
 
-  fireEvent.click(screen.getByRole("button", { name: "Daisy · swarm" }));
+  fireEvent.click(screen.getByRole("button", { name: "Daisy" }));
   expect(onOpenWorker).toHaveBeenCalledWith("session-1");
 });
 

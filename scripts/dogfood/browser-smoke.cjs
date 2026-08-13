@@ -145,12 +145,12 @@ async function checkSurface(browser, surface) {
       await target.ready().first().waitFor();
       if (target.name === "tasks") {
         const taskTitleVisible = await page.getByLabel("Task title").isVisible().catch(() => false);
-        if (surface.mobile && taskTitleVisible) throw new Error(`${surface.name}: task composer obscures active work by default`);
-        if (!surface.mobile && !taskTitleVisible) throw new Error(`${surface.name}: desktop task composer is unexpectedly collapsed`);
+        if (taskTitleVisible) throw new Error(`${surface.name}: task composer obscures active work by default`);
         if (surface.mobile) {
           await page.getByRole("heading", { name: "Active work" }).waitFor();
         }
-        const jiraSource = page.getByRole("region", { name: "Bring your Jira work onto this board" });
+        await page.getByRole("button", { name: "Choose Jira work" }).click();
+        const jiraSource = page.getByRole("region", { name: "Choose unassigned work from Jira" });
         await jiraSource.waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
         if (await jiraSource.isVisible().catch(() => false)) {
           const chooseWork = jiraSource.locator(".jira-project-actions button").first();
@@ -228,10 +228,10 @@ async function checkSurface(browser, surface) {
 
     if (surface.mobile) {
       await page.getByRole("button", { name: /Tasks/ }).click();
-      const createTask = page.getByRole("button", { name: "Create a task" });
+      const createTask = page.getByRole("button", { name: "Create task" });
       await createTask.click();
       await page.getByLabel("Task title").waitFor();
-      if (await page.getByRole("button", { name: "Hide task form" }).getAttribute("aria-expanded") !== "true") {
+      if (await page.getByRole("button", { name: "Close task form" }).getAttribute("aria-expanded") !== "true") {
         throw new Error(`${surface.name}: task composer did not expose its expanded state`);
       }
       await page.screenshot({ path: path.join(outputRoot, `${surface.name}-tasks-compose.png`), fullPage: true });
@@ -352,7 +352,8 @@ async function checkSurface(browser, surface) {
     await restoreGuide.click();
     const restoreCommandVisible = await page.getByText(/swarm-next-package restore/).isVisible();
     if (!restoreCommandVisible) throw new Error(`${surface.name}: Hive restore guidance is unavailable`);
-    await page.getByRole("button", { name: "Open quick navigation" }).click();
+    await page.keyboard.press("Alt+K");
+    await page.getByRole("dialog", { name: "Where would you like to go?" }).waitFor();
     const addWorkerShortcutVisible = await page.getByRole("option", { name: /Add worker Configure a repository worker/ }).isVisible();
     if (!addWorkerShortcutVisible) throw new Error(`${surface.name}: worker creation is not discoverable from quick navigation`);
     let commandSearch = page.getByRole("combobox", { name: "Find work, decisions, or workers" });
@@ -448,9 +449,21 @@ async function verifyRunningWorkerSelection(page, surfaceName) {
 
   const selected = [];
   for (const worker of workers) {
-    const button = page.locator(".worker-row .worker-button").filter({ hasText: worker.name }).first();
+    let button;
+    if (surfaceName === "mobile") {
+      await page.locator(".mobile-worker-switcher-trigger").click();
+      const dialog = page.getByRole("dialog", { name: "Where do you want to work?" });
+      await dialog.waitFor();
+      button = dialog.locator(".mobile-worker-choice").filter({ hasText: worker.name }).first();
+    } else {
+      button = page.locator(".worker-row .worker-button").filter({ hasText: worker.name }).first();
+    }
     await button.click();
-    await page.getByRole("heading", { name: worker.name, exact: true }).waitFor();
+    if (surfaceName === "mobile") {
+      await page.locator(".mobile-worker-switcher-trigger").filter({ hasText: worker.name }).waitFor();
+    } else {
+      await page.getByRole("heading", { name: worker.name, exact: true }).waitFor();
+    }
     await page.locator(".terminal-panel").waitFor();
     await page.getByText("connected", { exact: true }).waitFor();
     try {
@@ -463,7 +476,10 @@ async function verifyRunningWorkerSelection(page, surfaceName) {
       }));
       throw new Error(`${surfaceName}: selecting ${worker.name} did not focus its terminal: ${JSON.stringify(focus)}`);
     }
-    if (await button.getAttribute("aria-current") !== "page") {
+    const selectedWorker = surfaceName === "mobile"
+      ? page.locator(".mobile-worker-switcher-trigger").filter({ hasText: worker.name })
+      : button;
+    if (surfaceName !== "mobile" && await selectedWorker.getAttribute("aria-current") !== "page") {
       throw new Error(`${surfaceName}: ${worker.name} did not become the selected terminal`);
     }
     selected.push({ name: worker.name, sessionId: worker.sessionId, connected: true });

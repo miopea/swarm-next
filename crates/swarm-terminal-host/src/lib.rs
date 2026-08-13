@@ -319,13 +319,14 @@ fn dispatch_blocking(
                 session_id: session.id(),
             }),
         HostRequest::ListSessions => registry
-            .session_states()
+            .session_resource_states()
             .map(|sessions| HostResponse::Sessions {
                 sessions: sessions
                     .into_iter()
-                    .map(|(session_id, running)| HostSessionSummary {
+                    .map(|(session_id, running, resources)| HostSessionSummary {
                         session_id,
                         running,
+                        resources,
                     })
                     .collect(),
             })

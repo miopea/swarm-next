@@ -84,7 +84,7 @@ test("creates a durable browser session without storing the operator token", asy
   fireEvent.click(screen.getByRole("button", { name: "Unlock Swarm" }));
 
   expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Give the next worker a clear outcome" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "What should the Hive take on next?" })).toBeInTheDocument();
   expect(fetch).toHaveBeenCalledWith(
     "/api/v1/tasks",
     expect.objectContaining({ cache: "no-store" }),
@@ -346,6 +346,7 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Create task" }));
   const taskTitle = screen.getByLabelText("Task title");
   taskTitle.focus();
   fireEvent.keyDown(taskTitle, { key: "4", altKey: true });
@@ -435,6 +436,7 @@ test("creates a persisted task draft from the task board", async () => {
   fireEvent.change(screen.getByLabelText("Operator token"), { target: { value: "secret" } });
   fireEvent.click(screen.getByRole("button", { name: "Unlock Swarm" }));
 
+  fireEvent.click(await screen.findByRole("button", { name: "Create task" }));
   fireEvent.change(await screen.findByLabelText("Task title"), { target: { value: task.title } });
   fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
 

@@ -54,7 +54,7 @@ export default function CommandPalette({ choices, onClose }: { choices: CommandC
         aria-activedescendant={filtered[activeIndex] ? `command-${filtered[activeIndex].id}` : undefined}
       />
       <div className="command-results" id="command-results" role="listbox">
-        {filtered.map((choice, index) => <button id={`command-${choice.id}`} aria-selected={index === activeIndex} role="option" key={choice.id} type="button" onMouseEnter={() => setActiveIndex(index)} onClick={() => { onClose(); choice.run(); }}>
+        {filtered.map((choice, index) => <button id={`command-${choice.id}`} data-group={choice.group} aria-selected={index === activeIndex} role="option" key={choice.id} type="button" onMouseEnter={() => setActiveIndex(index)} onClick={() => { onClose(); choice.run(); }}>
           <span><small>{choice.group}</small><strong>{choice.label}</strong></span><span>{choice.detail}</span>
         </button>)}
         {filtered.length === 0 ? <p>No matching result.</p> : null}

@@ -77,6 +77,8 @@ pub enum HostRequest {
 pub struct HostSessionSummary {
     pub session_id: WorkerSessionId,
     pub running: bool,
+    #[serde(default)]
+    pub resources: Option<ProcessResourceSample>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

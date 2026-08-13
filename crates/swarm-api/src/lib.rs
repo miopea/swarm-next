@@ -974,6 +974,23 @@ struct RuntimeResourcesResponse {
     policy: ResourcePolicyResponse,
     api: ProcessResourceResponse,
     terminal_host: ProcessResourceResponse,
+    machine: MachineResourceResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct MachineResourceResponse {
+    memory_total_bytes: Option<u64>,
+    memory_available_bytes: Option<u64>,
+    memory_used_percent: Option<f64>,
+    swap_total_bytes: Option<u64>,
+    swap_used_bytes: Option<u64>,
+    swap_used_percent: Option<f64>,
+    load_average: Option<[f64; 3]>,
+    logical_cpus: Option<usize>,
+    memory_pressure_avg10: Option<f64>,
+    cpu_pressure_avg10: Option<f64>,
+    io_pressure_avg10: Option<f64>,
+    pressure: ResourcePressure,
 }
 
 #[derive(Debug, Serialize)]
@@ -995,6 +1012,8 @@ enum ResourcePressure {
 #[derive(Debug, Serialize)]
 struct ProcessResourceResponse {
     resident_memory_bytes: Option<u64>,
+    process_tree_resident_memory_bytes: Option<u64>,
+    process_tree_process_count: Option<u32>,
     pressure: ResourcePressure,
 }
 
@@ -2274,13 +2293,116 @@ async fn runtime_resources(
         },
         api: resource_response(Some(sample_current_process())),
         terminal_host,
+        machine: sample_machine_resources(),
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
 }
 
+fn sample_machine_resources() -> MachineResourceResponse {
+    #[cfg(target_os = "linux")]
+    {
+        let meminfo = std::fs::read_to_string("/proc/meminfo").ok();
+        let fields = meminfo.as_deref().map(parse_meminfo).unwrap_or_default();
+        let bytes = |name: &str| fields.get(name).and_then(|value| value.checked_mul(1024));
+        let memory_total_bytes = bytes("MemTotal");
+        let memory_available_bytes = bytes("MemAvailable");
+        let swap_total_bytes = bytes("SwapTotal");
+        let swap_free_bytes = bytes("SwapFree");
+        let swap_used_bytes = swap_total_bytes
+            .zip(swap_free_bytes)
+            .map(|(total, free)| total.saturating_sub(free));
+        let percent =
+            |used: u64, total: u64| (total > 0).then_some((used as f64 / total as f64) * 100.0);
+        let memory_used_percent = memory_total_bytes
+            .zip(memory_available_bytes)
+            .and_then(|(total, available)| percent(total.saturating_sub(available), total));
+        let swap_used_percent = swap_used_bytes
+            .zip(swap_total_bytes)
+            .and_then(|(used, total)| percent(used, total));
+        let load_average = std::fs::read_to_string("/proc/loadavg")
+            .ok()
+            .and_then(|value| parse_load_average(&value));
+        let memory_pressure_avg10 = read_psi_avg10("/proc/pressure/memory");
+        let cpu_pressure_avg10 = read_psi_avg10("/proc/pressure/cpu");
+        let io_pressure_avg10 = read_psi_avg10("/proc/pressure/io");
+        let pressure = match (memory_used_percent, memory_pressure_avg10) {
+            (_, Some(psi)) if psi >= 10.0 => ResourcePressure::Critical,
+            (Some(used), _) if used >= 95.0 => ResourcePressure::Critical,
+            (_, Some(psi)) if psi >= 2.0 => ResourcePressure::Advisory,
+            (Some(used), _) if used >= 85.0 => ResourcePressure::Advisory,
+            (Some(_), _) => ResourcePressure::Normal,
+            _ => ResourcePressure::Unavailable,
+        };
+        return MachineResourceResponse {
+            memory_total_bytes,
+            memory_available_bytes,
+            memory_used_percent,
+            swap_total_bytes,
+            swap_used_bytes,
+            swap_used_percent,
+            load_average,
+            logical_cpus: std::thread::available_parallelism().ok().map(usize::from),
+            memory_pressure_avg10,
+            cpu_pressure_avg10,
+            io_pressure_avg10,
+            pressure,
+        };
+    }
+    #[cfg(not(target_os = "linux"))]
+    MachineResourceResponse {
+        memory_total_bytes: None,
+        memory_available_bytes: None,
+        memory_used_percent: None,
+        swap_total_bytes: None,
+        swap_used_bytes: None,
+        swap_used_percent: None,
+        load_average: None,
+        logical_cpus: std::thread::available_parallelism().ok().map(usize::from),
+        memory_pressure_avg10: None,
+        cpu_pressure_avg10: None,
+        io_pressure_avg10: None,
+        pressure: ResourcePressure::Unavailable,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_meminfo(value: &str) -> std::collections::HashMap<&str, u64> {
+    value
+        .lines()
+        .filter_map(|line| {
+            let (name, rest) = line.split_once(':')?;
+            let kib = rest.split_whitespace().next()?.parse().ok()?;
+            Some((name, kib))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn parse_load_average(value: &str) -> Option<[f64; 3]> {
+    let mut values = value.split_whitespace().take(3).map(str::parse::<f64>);
+    Some([
+        values.next()?.ok()?,
+        values.next()?.ok()?,
+        values.next()?.ok()?,
+    ])
+}
+
+#[cfg(target_os = "linux")]
+fn read_psi_avg10(path: &str) -> Option<f64> {
+    let value = std::fs::read_to_string(path).ok()?;
+    value.lines().find_map(|line| {
+        let rest = line.strip_prefix("some ")?;
+        rest.split_whitespace()
+            .find_map(|field| field.strip_prefix("avg10=")?.parse().ok())
+    })
+}
+
 fn resource_response(sample: Option<ProcessResourceSample>) -> ProcessResourceResponse {
     let resident_memory_bytes = sample.and_then(|sample| sample.resident_memory_bytes);
-    let pressure = match resident_memory_bytes {
+    let process_tree_resident_memory_bytes =
+        sample.and_then(|sample| sample.process_tree_resident_memory_bytes);
+    let process_tree_process_count = sample.and_then(|sample| sample.process_tree_process_count);
+    let pressure = match process_tree_resident_memory_bytes.or(resident_memory_bytes) {
         Some(bytes) if bytes >= RESOURCE_CRITICAL_BYTES => ResourcePressure::Critical,
         Some(bytes) if bytes >= RESOURCE_ADVISORY_BYTES => ResourcePressure::Advisory,
         Some(_) => ResourcePressure::Normal,
@@ -2288,6 +2410,8 @@ fn resource_response(sample: Option<ProcessResourceSample>) -> ProcessResourceRe
     };
     ProcessResourceResponse {
         resident_memory_bytes,
+        process_tree_resident_memory_bytes,
+        process_tree_process_count,
         pressure,
     }
 }
@@ -4364,6 +4488,8 @@ mod tests {
         let sample = |resident_memory_bytes| {
             resource_response(Some(ProcessResourceSample {
                 resident_memory_bytes,
+                process_tree_resident_memory_bytes: resident_memory_bytes,
+                process_tree_process_count: resident_memory_bytes.map(|_| 1),
             }))
         };
         assert_eq!(

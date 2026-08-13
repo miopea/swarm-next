@@ -122,7 +122,8 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   const terminalHost = await screen.findByText("Terminal host");
   expect(terminalHost.parentElement).toHaveTextContent("Terminal hostHealthy · 0.1.0-host");
   expect((await screen.findByText("API memory")).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
-  expect(screen.getByText("Terminal memory").parentElement).toHaveTextContent("Terminal memoryNormal · 9.0 MiB");
+  expect(screen.getByText("Terminal host service").parentElement).toHaveTextContent("Terminal host service9.0 MiB");
+  expect(screen.getByText("Loaded worker runtimes").parentElement).toHaveTextContent("Loaded worker runtimesUnavailable");
   expect(screen.getByText("Needs you").parentElement).toHaveTextContent("Needs youAlt1");
   expect(screen.getByText("Tasks").parentElement).toHaveTextContent("TasksAlt2");
   expect(screen.getByText("Workers").parentElement).toHaveTextContent("WorkersAlt3");

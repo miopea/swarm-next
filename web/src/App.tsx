@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
 
 import {
   assignTask,
@@ -61,7 +61,7 @@ import {
   type Worker,
   type WorkspaceChoice,
 } from "./api";
-import BeeMascot from "./brand/BeeMascot";
+import BeeMascot, { type BeeExpression } from "./brand/BeeMascot";
 import DecisionInbox from "./decisions/DecisionInbox";
 import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
@@ -70,7 +70,7 @@ import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRo
 import SettingsWorkspace from "./settings/SettingsWorkspace";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
-import TaskBoard, { workerName } from "./tasks/TaskBoard";
+import TaskBoard, { workerName, type TaskBoardFilter, type TaskBoardSort } from "./tasks/TaskBoard";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./terminal/MobileTerminalComposer";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
@@ -100,9 +100,13 @@ export function App() {
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackRevision, setFeedbackRevision] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
+  const [showMobileWorkers, setShowMobileWorkers] = useState(false);
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") ? "settings" : readSavedSurface());
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
+  const [taskQuery, setTaskQuery] = useState("");
+  const [taskFilter, setTaskFilter] = useState<TaskBoardFilter>("all");
+  const [taskSort, setTaskSort] = useState<TaskBoardSort>("queue");
   const [decisionFocus, setDecisionFocus] = useState<{ id: string; request: number }>();
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -555,7 +559,7 @@ export function App() {
     }
   }
 
-  function handleShortcut(event: ReactKeyboardEvent<HTMLElement>) {
+  function handleShortcut(event: KeyboardEvent) {
     if (!operatorToken || !event.altKey || event.ctrlKey || event.metaKey || isTypingTarget(event.target)) return;
     if (event.key.toLocaleLowerCase() === "k") {
       event.preventDefault();
@@ -715,6 +719,11 @@ export function App() {
   ], [openTaskCount, pendingDecisionCount, workers, tasks, decisions, activeSessionId, operatorToken]);
 
   useEffect(() => {
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  });
+
+  useEffect(() => {
     if (surface !== "workers" || !activeSessionId) return;
     const frame = requestAnimationFrame(() => {
       terminalWorkspace.focusSession(activeSessionId, shouldFocusTerminalInput());
@@ -722,8 +731,15 @@ export function App() {
     return () => cancelAnimationFrame(frame);
   }, [surface, activeSessionId]);
 
+  useEffect(() => {
+    if (!showMobileWorkers) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setShowMobileWorkers(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [showMobileWorkers]);
+
   return (
-    <main className="app-shell" onKeyDown={handleShortcut}>
+    <main className="app-shell">
       <aside className={`control-rail surface-${surface}`} aria-label="Swarm navigation">
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
@@ -748,10 +764,33 @@ export function App() {
             </nav>
 
             {surface !== "settings" && surface !== "decisions" && <div className="rail-context">
-              <div className="rail-heading"><span>{surface === "tasks" ? "Open tasks" : "Live sessions"}</span></div>
+              <div className="rail-heading"><span>{surface === "tasks" ? "Board view" : "Workers"}</span></div>
               {surface === "tasks" ? (
-                tasks.filter((task) => task.state !== "completed").length === 0 ? <p className="empty-rail">Nothing queued yet.</p> :
-                  <div className="mini-task-list">{tasks.filter((task) => task.state !== "completed").slice(0, 8).map((task) => <div key={task.id}><span className={`state-dot state-${task.state}`} /><span>{task.title}</span></div>)}</div>
+                <div className="task-board-controls">
+                  <label>
+                    <span>Find work</span>
+                    <input value={taskQuery} type="search" placeholder="Title or Jira key" onChange={(event) => setTaskQuery(event.target.value)} />
+                  </label>
+                  <label>
+                    <span>Show</span>
+                    <select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value as TaskBoardFilter)}>
+                      <option value="all">All open tasks</option>
+                      <option value="unassigned">Unassigned</option>
+                      <option value="jira">Jira work</option>
+                      <option value="attention">Blocked or review</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Sort by</span>
+                    <select value={taskSort} onChange={(event) => setTaskSort(event.target.value as TaskBoardSort)}>
+                      <option value="queue">Queue order</option>
+                      <option value="priority">Priority</option>
+                      <option value="status">Needs attention</option>
+                      <option value="updated">Recently updated</option>
+                    </select>
+                  </label>
+                  <small>{tasks.filter((task) => task.state !== "completed").length} open · drag ordering is available in Queue order</small>
+                </div>
               ) : workers.length === 0 && orphanSessions.length === 0 ? (
                 <p className="empty-rail">No workers configured.</p>
               ) : (
@@ -806,6 +845,13 @@ export function App() {
             <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "tasks" ? "Plan and dispatch" : surface === "settings" ? "Preferences and diagnostics" : activeTask?.title ?? "Persistent terminal"}</p>
             <h2>{surface === "decisions" ? "Needs you" : surface === "tasks" ? "Task board" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
           </div>
+          {surface === "workers" && operatorToken ? (
+            <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" onClick={() => setShowMobileWorkers(true)}>
+              <span className="worker-avatar"><BeeMascot expression={activeWorker ? workerExpression(activeWorker) : "sleeping"} /></span>
+              <span><small>Current worker</small><strong>{activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "Choose worker")}</strong></span>
+              <span aria-hidden="true">⌄</span>
+            </button>
+          ) : null}
           <div className="header-actions">
             {busy && <span className="saving-state">Saving…</span>}
             {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
@@ -817,6 +863,52 @@ export function App() {
           </div>
         </header>
         {operationError && <div className="operation-error" role="alert">{operationError}</div>}
+        {showMobileWorkers ? (
+          <div className="mobile-worker-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowMobileWorkers(false); }}>
+            <section className="mobile-worker-dialog" role="dialog" aria-modal="true" aria-labelledby="mobile-worker-heading">
+              <div className="mobile-worker-dialog-heading">
+                <div><p className="eyebrow">Worker switcher</p><h3 id="mobile-worker-heading">Where do you want to work?</h3></div>
+                <button type="button" onClick={() => setShowMobileWorkers(false)}>Close</button>
+              </div>
+              <p className="mobile-worker-dialog-summary">{liveWorkerCount} active · {rosterWorkerCount - liveWorkerCount} sleeping</p>
+              <div className="mobile-worker-dialog-list">
+                {workers.map((worker) => {
+                  const sessionId = worker.active_session_id;
+                  const assignedTask = sessionId ? tasksBySession.get(sessionId) : undefined;
+                  return (
+                    <button
+                      type="button"
+                      className="mobile-worker-choice"
+                      aria-current={sessionId === activeSessionId ? "page" : undefined}
+                      key={worker.id}
+                      disabled={busy}
+                      onClick={() => {
+                        if (sessionId) openWorker(sessionId);
+                        else void startExistingWorker(worker);
+                        setShowMobileWorkers(false);
+                      }}
+                    >
+                      <span className="worker-avatar"><BeeMascot expression={workerExpression(worker)} /></span>
+                      <span className="mobile-worker-choice-copy">
+                        <span><strong>{worker.name}</strong><small>{worker.role === "queen" ? "Queen" : repositoryName(worker.workspace)}</small></span>
+                        <small>{worker.runtime_error ?? assignedTask?.title ?? (worker.running ? workerAttentionLabel(worker) : "Sleeping · tap to wake")}</small>
+                      </span>
+                      <span className={`presence ${worker.running ? "online" : "offline"}`} aria-label={worker.running ? workerAttentionLabel(worker) : "Sleeping"} />
+                    </button>
+                  );
+                })}
+                {orphanSessions.map((session) => (
+                  <button type="button" className="mobile-worker-choice" aria-current={session.session_id === activeSessionId ? "page" : undefined} key={session.session_id} onClick={() => { openWorker(session.session_id); setShowMobileWorkers(false); }}>
+                    <span className="worker-avatar"><BeeMascot expression={session.running ? "focused" : "sleeping"} /></span>
+                    <span className="mobile-worker-choice-copy"><span><strong>{workerName(session.session_id)}</strong><small>Unconfigured session</small></span><small>{tasksBySession.get(session.session_id)?.title ?? "Pre-roster session"}</small></span>
+                    <span className={`presence ${session.running ? "online" : "offline"}`} aria-label={session.running ? "Running" : "Exited"} />
+                  </button>
+                ))}
+              </div>
+              <button className="secondary-button mobile-manage-workers" type="button" onClick={() => { setShowMobileWorkers(false); setSurface("settings"); }}>Manage workers</button>
+            </section>
+          </div>
+        ) : null}
         {operatorToken && showCommands ? <CommandPalette choices={commandChoices} onClose={() => setShowCommands(false)} /> : null}
         {operatorToken && showFeedback ? (
           <DogfoodFeedbackDialog
@@ -846,7 +938,7 @@ export function App() {
         ) : surface === "decisions" ? (
           <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onReorder={reorderOpenTasks} />
+          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} sort={taskSort} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSortChange={setTaskSort} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             busy={busy}
@@ -950,6 +1042,27 @@ function taskStateLabel(task: Task): string {
   return task.state[0].toUpperCase() + task.state.slice(1);
 }
 
+function workerAttentionLabel(worker: Worker): string {
+  if (worker.attention_state === "with_operator" && worker.engagement_expires_at !== undefined && worker.engagement_expires_at * 1000 <= Date.now()) return "Resting";
+  return ({
+    sleeping: "Sleeping",
+    resting: "Resting",
+    buzzing: "Buzzing",
+    with_operator: "With you",
+    awaiting_operator: "Awaiting you",
+    blocked: "Blocked",
+  } as const)[worker.attention_state] ?? (worker.running ? "Resting" : "Sleeping");
+}
+
+function workerExpression(worker: Worker): BeeExpression {
+  const attention = workerAttentionLabel(worker);
+  if (attention === "Sleeping") return "sleeping";
+  if (attention === "Buzzing") return "thinking";
+  if (attention === "With you") return "focused";
+  if (attention === "Blocked") return "blocked";
+  return "available";
+}
+
 function presenceModeLabel(mode: PresenceMode) {
   if (mode === "at_hive") return "At Hive";
   if (mode === "night_watch") return "Night Watch";
@@ -971,7 +1084,7 @@ function SettingsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><ci
 function ThemeIcon({ theme }: { theme: ColorTheme }) { return theme === "light" ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.5A8 8 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg>; }
 
 function isTypingTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || Boolean(target.closest("[role='menu']")));
+  return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || Boolean(target.closest("[role='menu'], .xterm")));
 }
 
 function shouldFocusTerminalInput(): boolean {

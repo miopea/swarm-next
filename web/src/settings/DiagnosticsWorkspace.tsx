@@ -72,7 +72,13 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
     ? runtime.terminalHost.draining ? "Updating safely" : `Healthy · ${runtime.terminalHost.host_version}`
     : "Unavailable";
   const apiMemory = resourceLabel(runtime.resources?.api);
-  const hostMemory = resourceLabel(runtime.resources?.terminal_host);
+  const hostMemory = ownResourceLabel(runtime.resources?.terminal_host);
+  const workerMemory = workerTreeLabel(runtime.resources?.terminal_host, runtime.terminalHost?.running_sessions ?? sessions.filter((session) => session.running).length);
+  const machine = runtime.resources?.machine;
+  const measuredWorkers = workers
+    .filter((worker) => worker.running && worker.active_session_id)
+    .map((worker) => ({ worker, session: sessions.find((session) => session.session_id === worker.active_session_id) }))
+    .filter(({ session }) => session?.resources?.process_tree_resident_memory_bytes != null);
 
   function buildPreview() {
     const serialized = serializeDiagnosticReport({ health, hiveIdentity, liveFeedState, recentEvents, runtime, sessions, workers });
@@ -131,10 +137,23 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
         <div><dt>Database</dt><dd>{hiveIdentity ? "Healthy" : "Unavailable"}</dd></div>
         <div><dt>Terminal host</dt><dd>{terminalStatus}</dd></div>
         <div><dt>API memory</dt><dd className={resourceClass(runtime.resources?.api.pressure)}>{apiMemory}</dd></div>
-        <div><dt>Terminal memory</dt><dd className={resourceClass(runtime.resources?.terminal_host.pressure)}>{hostMemory}</dd></div>
+        <div><dt>Terminal host service</dt><dd>{hostMemory}</dd></div>
+        <div><dt>Loaded worker runtimes</dt><dd className={resourceClass(runtime.resources?.terminal_host.pressure)}>{workerMemory}</dd></div>
+        <div><dt>Machine memory</dt><dd className={resourceClass(machine?.pressure)}>{machineMemoryLabel(machine)}</dd></div>
+        <div><dt>Memory stall</dt><dd className={resourceClass(machine?.pressure)}>{pressureLabel(machine?.memory_pressure_avg10)}</dd></div>
+        <div><dt>Compute load</dt><dd>{loadLabel(machine?.load_average, machine?.logical_cpus)}</dd></div>
+        <div><dt>Standing swap</dt><dd>{swapLabel(machine?.swap_used_bytes, machine?.swap_total_bytes, machine?.swap_used_percent)}</dd></div>
         <div><dt>Provider</dt><dd>{providerStatus}</dd></div>
         <div><dt>Integrations</dt><dd>Not configured</dd></div>
       </dl>
+      {measuredWorkers.length ? (
+        <details className="worker-resource-breakdown">
+          <summary>Memory by loaded worker</summary>
+          <dl className="diagnostic-list">
+            {measuredWorkers.map(({ worker, session }) => <div key={worker.id}><dt>{worker.name}</dt><dd>{formatBytes(session!.resources!.process_tree_resident_memory_bytes!)} · {session!.resources!.process_tree_process_count ?? 1} processes</dd></div>)}
+          </dl>
+        </details>
+      ) : null}
       <div className="diagnostic-actions">
         <button type="button" onClick={buildPreview}>Preview report</button>
         <button type="button" onClick={() => void copyReport()}>{copyState === "copied" ? "Copied" : "Copy report"}</button>
@@ -183,7 +202,37 @@ function resourceClass(pressure: RuntimeResources["api"]["pressure"] | undefined
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+}
+
+function ownResourceLabel(resource: RuntimeResources["api"] | undefined) {
+  return resource?.resident_memory_bytes == null ? "Unavailable" : formatBytes(resource.resident_memory_bytes);
+}
+
+function workerTreeLabel(resource: RuntimeResources["api"] | undefined, sessions: number) {
+  if (resource?.process_tree_resident_memory_bytes == null) return "Unavailable";
+  const workerBytes = Math.max(0, resource.process_tree_resident_memory_bytes - (resource.resident_memory_bytes ?? 0));
+  return `${resourceLabel({ ...resource, resident_memory_bytes: workerBytes })} · ${sessions} loaded`;
+}
+
+function machineMemoryLabel(machine: RuntimeResources["machine"] | undefined) {
+  if (machine?.memory_total_bytes == null || machine.memory_available_bytes == null || machine.memory_used_percent == null) return "Unavailable";
+  const used = machine.memory_total_bytes - machine.memory_available_bytes;
+  return `${formatBytes(used)} / ${formatBytes(machine.memory_total_bytes)} · ${machine.memory_used_percent.toFixed(0)}% used`;
+}
+
+function pressureLabel(value: number | null | undefined) {
+  return value == null ? "Unavailable" : `${value.toFixed(1)}% waiting · last 10 seconds`;
+}
+
+function loadLabel(load: [number, number, number] | null | undefined, cpus: number | null | undefined) {
+  return !load ? "Unavailable" : `${load.map((value) => value.toFixed(2)).join(" / ")} · ${cpus ?? "?"} CPUs`;
+}
+
+function swapLabel(used: number | null | undefined, total: number | null | undefined, percent: number | null | undefined) {
+  if (used == null || total == null || percent == null) return "Unavailable";
+  return `${formatBytes(used)} / ${formatBytes(total)} · ${percent.toFixed(0)}% parked`;
 }
 
 function formatReportDate(timestamp: number) {

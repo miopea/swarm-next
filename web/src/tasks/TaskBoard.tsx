@@ -26,7 +26,16 @@ type Props = {
   onRetryJira: (task: Task) => Promise<void>;
   onJiraImported: () => Promise<void>;
   onReorder: (taskIds: string[]) => Promise<void>;
+  query?: string;
+  filter?: TaskBoardFilter;
+  sort?: TaskBoardSort;
+  onQueryChange?: (query: string) => void;
+  onFilterChange?: (filter: TaskBoardFilter) => void;
+  onSortChange?: (sort: TaskBoardSort) => void;
 };
+
+export type TaskBoardFilter = "all" | "unassigned" | "jira" | "attention";
+export type TaskBoardSort = "queue" | "priority" | "status" | "updated";
 
 const stateLabels: Record<TaskState, string> = {
   draft: "Draft",
@@ -60,6 +69,15 @@ const priorityLabels: Record<TaskPriority, string> = {
   high: "High",
   urgent: "Urgent",
 };
+const priorityOrder: Record<TaskPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+const stateOrder: Record<TaskState, number> = { blocked: 0, review: 1, active: 2, ready: 3, draft: 4, completed: 5 };
+
+function taskComparator(sort: TaskBoardSort): (left: Task, right: Task) => number {
+  if (sort === "priority") return (left, right) => priorityOrder[left.priority] - priorityOrder[right.priority] || left.position - right.position;
+  if (sort === "status") return (left, right) => stateOrder[left.state] - stateOrder[right.state] || left.position - right.position;
+  if (sort === "updated") return (left, right) => right.updated_at - left.updated_at || left.position - right.position;
+  return (left, right) => left.position - right.position;
+}
 
 const dispatchLabels = {
   queued: "Briefing waits for a quiet moment",
@@ -104,6 +122,12 @@ export default function TaskBoard({
   onRetryJira,
   onJiraImported,
   onReorder,
+  query = "",
+  filter = "all",
+  sort = "queue",
+  onQueryChange,
+  onFilterChange,
+  onSortChange,
 }: Props) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -111,7 +135,8 @@ export default function TaskBoard({
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
   const [workerId, setWorkerId] = useState("");
   const [draggedTaskId, setDraggedTaskId] = useState<string>();
-  const [composeOpen, setComposeOpen] = useState(initialComposerOpen);
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [jiraOpen, setJiraOpen] = useState(false);
   const titleInput = useRef<HTMLInputElement>(null);
   const completedTasksPanel = useRef<HTMLDetailsElement>(null);
 
@@ -129,17 +154,20 @@ export default function TaskBoard({
     else if (workerId && !assignableWorkers.some((worker) => worker.id === workerId)) setWorkerId(assignableWorkers[0]?.id ?? "");
   }, [assignableWorkers, workerId]);
 
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const mobile = window.matchMedia("(max-width: 680px)");
-    const adapt = (event: MediaQueryListEvent) => setComposeOpen(!event.matches);
-    mobile.addEventListener?.("change", adapt);
-    return () => mobile.removeEventListener?.("change", adapt);
-  }, []);
-
-  const openTasks = tasks
-    .filter((task) => task.state !== "completed")
-    .sort((left, right) => left.position - right.position);
+  const allOpenTasks = tasks.filter((task) => task.state !== "completed");
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const openTasks = allOpenTasks
+    .filter((task) => {
+      const jiraLink = jiraTaskLinks.find((link) => link.task_id === task.id);
+      const matchesQuery = !normalizedQuery || [task.title, task.description, jiraLink?.issue_key, jiraLink?.project_name]
+        .some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
+      if (!matchesQuery) return false;
+      if (filter === "unassigned") return !task.assigned_worker_id;
+      if (filter === "jira") return Boolean(jiraLink);
+      if (filter === "attention") return task.state === "blocked" || task.state === "review";
+      return true;
+    })
+    .sort(taskComparator(sort));
   const completedTasks = tasks.filter((task) => task.state === "completed");
   const draggedTask = tasks.find((task) => task.id === draggedTaskId);
 
@@ -157,6 +185,7 @@ export default function TaskBoard({
   useEffect(() => {
     if (!composeRequest) return;
     setComposeOpen(true);
+    setJiraOpen(false);
   }, [composeRequest]);
 
   useEffect(() => {
@@ -183,26 +212,40 @@ export default function TaskBoard({
 
   return (
     <div className="task-board">
-      <section className={`task-compose${composeOpen ? " compose-open" : " compose-collapsed"}`} aria-labelledby="new-task-heading">
-        <div>
-          <p className="eyebrow">New work</p>
-          <h3 id="new-task-heading">Give the next worker a clear outcome</h3>
-          <p>Choose the worker. Swarm already knows which repository she owns.</p>
+      <section className={`task-compose${composeOpen || jiraOpen ? " compose-open" : " compose-collapsed"}`} aria-labelledby="new-task-heading">
+        <div className="task-compose-header">
+          <div>
+            <p className="eyebrow">Add work</p>
+            <h3 id="new-task-heading">What should the Hive take on next?</h3>
+            <p>Create focused work or claim an unassigned Jira issue.</p>
+          </div>
+          <div className="task-entry-actions">
           <button
             type="button"
-            className="secondary-button task-compose-toggle"
+            className={composeOpen ? "primary-action" : "secondary-button"}
             aria-expanded={composeOpen}
             aria-controls="new-task-form"
             onClick={() => {
               if (composeOpen) setComposeOpen(false);
               else {
                 setComposeOpen(true);
+                setJiraOpen(false);
                 requestAnimationFrame(() => titleInput.current?.focus());
               }
             }}
           >
-            {composeOpen ? "Hide task form" : "Create a task"}
+            {composeOpen ? "Close task form" : "Create task"}
           </button>
+          <button
+            type="button"
+            className={jiraOpen ? "primary-action" : "secondary-button"}
+            aria-expanded={jiraOpen}
+            aria-controls="jira-work-source"
+            onClick={() => { setJiraOpen((current) => !current); setComposeOpen(false); }}
+          >
+            {jiraOpen ? "Close Jira work" : "Choose Jira work"}
+          </button>
+          </div>
         </div>
         {composeOpen && <form id="new-task-form" onSubmit={(event) => void submit(event)}>
           <div className="field-stack task-title-field">
@@ -234,7 +277,7 @@ export default function TaskBoard({
               {Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </div>
-          <div className="field-stack">
+          <div className="field-stack task-worker-field">
             <label htmlFor="task-worker">Who should handle this?</label>
             <select id="task-worker" value={workerId} onChange={(event) => setWorkerId(event.target.value)}>
               {assignableWorkers.length === 0 && <option value="">Configure a worker first</option>}
@@ -245,16 +288,25 @@ export default function TaskBoard({
           </div>
           <button disabled={busy || !title.trim() || !workerId}>Create draft</button>
         </form>}
-        <JiraTaskIntake operatorToken={operatorToken} onImported={onJiraImported} />
+        {jiraOpen ? <div id="jira-work-source"><JiraTaskIntake operatorToken={operatorToken} onImported={onJiraImported} /></div> : null}
       </section>
+
+      <details className="task-mobile-controls">
+        <summary>Find, filter, and sort <span>{openTasks.length}/{allOpenTasks.length}</span></summary>
+        <div>
+          <label><span>Find work</span><input value={query} type="search" placeholder="Title or Jira key" onChange={(event) => onQueryChange?.(event.target.value)} /></label>
+          <label><span>Show</span><select value={filter} onChange={(event) => onFilterChange?.(event.target.value as TaskBoardFilter)}><option value="all">All open tasks</option><option value="unassigned">Unassigned</option><option value="jira">Jira work</option><option value="attention">Blocked or review</option></select></label>
+          <label><span>Sort by</span><select value={sort} onChange={(event) => onSortChange?.(event.target.value as TaskBoardSort)}><option value="queue">Queue order</option><option value="priority">Priority</option><option value="status">Needs attention</option><option value="updated">Recently updated</option></select></label>
+        </div>
+      </details>
 
       <section className="task-section" aria-labelledby="active-work-heading">
         <div className="section-heading">
           <div><p className="eyebrow">Queue</p><h3 id="active-work-heading">Active work</h3></div>
-          <span className="count-badge">{openTasks.length}</span>
+          <span className="count-badge">{openTasks.length === allOpenTasks.length ? openTasks.length : `${openTasks.length}/${allOpenTasks.length}`}</span>
         </div>
         {openTasks.length === 0 ? (
-          <div className="empty-card"><BeeMascot className="empty-bee" expression="available" /><div><strong>No work queued</strong><span>Create a focused task when you are ready.</span></div></div>
+          <div className="empty-card"><BeeMascot className="empty-bee" expression="available" /><div><strong>{allOpenTasks.length ? "No work matches this view" : "No work queued"}</strong><span>{allOpenTasks.length ? "Adjust the task-board filters in the sidebar." : "Create a focused task when you are ready."}</span></div></div>
         ) : (
           <div className="task-grid">
             {openTasks.map((task, index) => (
@@ -274,12 +326,12 @@ export default function TaskBoard({
                 onFetchJiraComments={onFetchJiraComments}
                 onAddJiraComment={onAddJiraComment}
                 onRetryJira={onRetryJira}
-                canMoveEarlier={index > 0}
-                canMoveLater={index < openTasks.length - 1}
+                canMoveEarlier={sort === "queue" && !normalizedQuery && filter === "all" && index > 0}
+                canMoveLater={sort === "queue" && !normalizedQuery && filter === "all" && index < openTasks.length - 1}
                 onMoveEarlier={() => moveTaskAt(index, -1)}
                 onMoveLater={() => moveTaskAt(index, 1)}
                 onDropBefore={() => reorderBefore(task.id)}
-                onDragStart={setDraggedTaskId}
+                onDragStart={sort === "queue" && !normalizedQuery && filter === "all" ? setDraggedTaskId : () => undefined}
                 onDragEnd={() => setDraggedTaskId(undefined)}
               />
             ))}
@@ -343,10 +395,6 @@ export default function TaskBoard({
       )}
     </div>
   );
-}
-
-function initialComposerOpen(): boolean {
-  return typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 680px)").matches;
 }
 
 function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "operatorToken" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onJiraImported" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
@@ -443,9 +491,9 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
       ref={cardRef}
       data-task-id={task.id}
       tabIndex={-1}
-      className="task-card"
+      className={`task-card state-${task.state}`}
       aria-label={task.title}
-      draggable={!busy && !editing && task.state !== "completed"}
+      draggable={!busy && !editing && task.state !== "completed" && (canMoveEarlier || canMoveLater)}
       onDragStart={(event: DragEvent<HTMLElement>) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", task.id); onDragStart(task.id); }}
       onDragEnd={onDragEnd}
       onDragOver={(event) => event.preventDefault()}
@@ -459,8 +507,8 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
           <span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span>
         </div>
         {targetWorker?.active_session_id ? (
-          <button type="button" className="task-owner task-owner-link" onClick={() => onOpenWorker(targetWorker.active_session_id!)}>{targetWorker.name} · {repositoryName(task.workspace)}</button>
-        ) : <span className="task-owner">{targetWorker?.name ?? "Choose worker"} · {repositoryName(task.workspace)}</span>}
+          <button type="button" className="task-owner task-owner-link" onClick={() => onOpenWorker(targetWorker.active_session_id!)}>{targetWorker.name}</button>
+        ) : <span className="task-owner">{targetWorker?.name ?? "Unassigned"}</span>}
       </div>
       {jiraLink && (
         <div className="task-jira-origin" aria-label={`Jira issue ${jiraLink.issue_key}`}>
@@ -471,7 +519,7 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
           ) : <strong>{jiraLink.issue_key}</strong>}
           <span>{jiraLink.project_name}</span>
           <span>{jiraLink.jira_status_name}</span>
-          {jiraLink.jira_assignee_name && <span>Jira: {jiraLink.jira_assignee_name}</span>}
+          {jiraLink.jira_assignee_name && <span>{jiraLink.jira_assignee_name}</span>}
           {jiraLink.outbound_state && (
             <span className={`jira-sync-state ${jiraLink.outbound_state}`}>
               {jiraLink.outbound_state === "queued" || jiraLink.outbound_state === "dispatching"
@@ -491,34 +539,34 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
       {editing ? (
         <TaskEditForm task={task} busy={busy} onUpdate={onUpdate} onCancel={() => setEditing(false)} />
       ) : task.state !== "completed" && (
-        <>
-        <div className="assignment-row">
-          <label htmlFor={`assignment-${task.id}`}>Worker</label>
-          <select
-            id={`assignment-${task.id}`}
-            value={targetWorker?.id ?? ""}
-            onChange={(event) => event.target.value && void onAssign(task, event.target.value)}
-            disabled={busy || assignableWorkers.length === 0}
-          >
-            <option value="">Choose worker</option>
-            {assignableWorkers.map((worker) => (
-              <option key={worker.id} value={worker.id}>
-                {worker.name} · {workerAttentionLabel(worker)}
-              </option>
-            ))}
-          </select>
+        <div className="task-assignment-cell">
+          <div className="assignment-row">
+            <label htmlFor={`assignment-${task.id}`}>Worker</label>
+            <select
+              id={`assignment-${task.id}`}
+              value={targetWorker?.id ?? ""}
+              onChange={(event) => event.target.value && void onAssign(task, event.target.value)}
+              disabled={busy || assignableWorkers.length === 0}
+            >
+              <option value="">Choose worker</option>
+              {assignableWorkers.map((worker) => (
+                <option key={worker.id} value={worker.id}>
+                  {worker.name} · {workerAttentionLabel(worker)}
+                </option>
+              ))}
+            </select>
+          </div>
+          {task.dispatch_state && (
+            <p className={`task-dispatch task-dispatch-${task.dispatch_state}`} role="status">
+              {dispatchLabels[task.dispatch_state]}
+            </p>
+          )}
+          {task.outcome_delivery_state && (
+            <p className={`task-dispatch task-dispatch-${task.outcome_delivery_state}`} role="status">
+              {outcomeDeliveryLabels[task.outcome_delivery_state]}
+            </p>
+          )}
         </div>
-        {task.dispatch_state && (
-          <p className={`task-dispatch task-dispatch-${task.dispatch_state}`} role="status">
-            {dispatchLabels[task.dispatch_state]}
-          </p>
-        )}
-        {task.outcome_delivery_state && (
-          <p className={`task-dispatch task-dispatch-${task.outcome_delivery_state}`} role="status">
-            {outcomeDeliveryLabels[task.outcome_delivery_state]}
-          </p>
-        )}
-        </>
       )}
       <div className="task-actions">
         {!editing && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} targetWorker={targetWorker} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}

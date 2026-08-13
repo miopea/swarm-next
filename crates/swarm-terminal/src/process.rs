@@ -325,6 +325,18 @@ impl ProcessTerminalSession {
             .is_none())
     }
 
+    /// Samples the provider process tree owned by this terminal session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the child process lock is poisoned.
+    pub fn resource_sample(
+        &self,
+    ) -> Result<Option<crate::ProcessResourceSample>, SessionRegistryError> {
+        let process_id = lock(&self.child)?.process_id();
+        Ok(process_id.map(crate::sample_process_tree))
+    }
+
     /// Stops the child process explicitly.
     ///
     /// # Errors
@@ -521,6 +533,30 @@ impl SessionRegistry {
         sessions
             .values()
             .map(|session| Ok((session.id(), session.is_running()?)))
+            .collect()
+    }
+
+    /// Returns immutable identities, process state, and content-free process-tree resources.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a poisoned registry or failed OS process query.
+    pub fn session_resource_states(
+        &self,
+    ) -> Result<
+        Vec<(WorkerSessionId, bool, Option<crate::ProcessResourceSample>)>,
+        SessionRegistryError,
+    > {
+        let sessions = lock(&self.sessions)?;
+        sessions
+            .values()
+            .map(|session| {
+                Ok((
+                    session.id(),
+                    session.is_running()?,
+                    session.resource_sample()?,
+                ))
+            })
             .collect()
     }
 
