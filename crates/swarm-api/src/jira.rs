@@ -245,42 +245,66 @@ impl JiraReadinessProbe {
             }
             Err(_) => return unavailable(),
         };
-        let Ok(myself_url) = endpoint(&access.base_url, "/rest/api/3/myself") else {
+        let Ok(mut project_probe_url) = endpoint(&access.base_url, "/rest/api/3/project/search")
+        else {
             return unavailable();
         };
-        let response = authorize(access.client.get(myself_url), &access.authorization)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
-            .await;
-        let Ok(response) = response else {
+        project_probe_url
+            .query_pairs_mut()
+            .append_pair("startAt", "0")
+            .append_pair("maxResults", "1");
+        let project_response =
+            authorize(access.client.get(project_probe_url), &access.authorization)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .send()
+                .await;
+        let Ok(project_response) = project_response else {
             return unavailable();
         };
-        match response.status() {
-            status if status.is_success() => {
-                let account_name = response
+        match project_response.status() {
+            StatusCode::UNAUTHORIZED => {
+                return JiraReadiness {
+                    configured: true,
+                    connection: JiraConnectionState::CredentialsInvalid,
+                    account_name: None,
+                };
+            }
+            StatusCode::FORBIDDEN => {
+                return JiraReadiness {
+                    configured: true,
+                    connection: JiraConnectionState::PermissionDenied,
+                    account_name: None,
+                };
+            }
+            status if status.is_success() => {}
+            _ => return unavailable(),
+        }
+
+        // Project discovery is the capability Swarm requires. Profile access is
+        // cosmetic and older otherwise-valid grants may not include read:jira-user.
+        let account_name = if let Ok(myself_url) = endpoint(&access.base_url, "/rest/api/3/myself")
+        {
+            match authorize(access.client.get(myself_url), &access.authorization)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => response
                     .bytes()
                     .await
                     .ok()
                     .and_then(|bytes| serde_json::from_slice::<JiraAccount>(&bytes).ok())
                     .and_then(|account| account.display_name)
-                    .filter(|name| !name.trim().is_empty());
-                JiraReadiness {
-                    configured: true,
-                    connection: JiraConnectionState::Ready,
-                    account_name,
-                }
+                    .filter(|name| !name.trim().is_empty()),
+                _ => None,
             }
-            StatusCode::UNAUTHORIZED => JiraReadiness {
-                configured: true,
-                connection: JiraConnectionState::CredentialsInvalid,
-                account_name: None,
-            },
-            StatusCode::FORBIDDEN => JiraReadiness {
-                configured: true,
-                connection: JiraConnectionState::PermissionDenied,
-                account_name: None,
-            },
-            _ => unavailable(),
+        } else {
+            None
+        };
+        JiraReadiness {
+            configured: true,
+            connection: JiraConnectionState::Ready,
+            account_name,
         }
     }
 
@@ -579,13 +603,18 @@ mod tests {
     use axum::{Json, Router, http::StatusCode as AxumStatus, routing::get};
     use serde_json::json;
 
-    async fn probe(response_status: AxumStatus) -> JiraReadiness {
+    async fn probe(project_status: AxumStatus, profile_status: AxumStatus) -> JiraReadiness {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let app = Router::new().route(
-            "/rest/api/3/myself",
-            get(move || async move { (response_status, Json(json!({ "displayName": "Bea" }))) }),
-        );
+        let app = Router::new()
+            .route(
+                "/rest/api/3/project/search",
+                get(move || async move { (project_status, Json(json!({ "values": [] }))) }),
+            )
+            .route(
+                "/rest/api/3/myself",
+                get(move || async move { (profile_status, Json(json!({ "displayName": "Bea" }))) }),
+            );
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         JiraReadinessProbe::configured(
             &format!("http://{address}"),
@@ -600,16 +629,26 @@ mod tests {
     #[tokio::test]
     async fn distinguishes_ready_credentials_and_permission_states() {
         assert_eq!(
-            probe(AxumStatus::OK).await.connection,
+            probe(AxumStatus::OK, AxumStatus::OK).await.connection,
             JiraConnectionState::Ready
         );
         assert_eq!(
-            probe(AxumStatus::UNAUTHORIZED).await.connection,
+            probe(AxumStatus::UNAUTHORIZED, AxumStatus::OK)
+                .await
+                .connection,
             JiraConnectionState::CredentialsInvalid
         );
         assert_eq!(
-            probe(AxumStatus::FORBIDDEN).await.connection,
+            probe(AxumStatus::FORBIDDEN, AxumStatus::OK)
+                .await
+                .connection,
             JiraConnectionState::PermissionDenied
+        );
+        assert_eq!(
+            probe(AxumStatus::OK, AxumStatus::UNAUTHORIZED)
+                .await
+                .connection,
+            JiraConnectionState::Ready
         );
     }
 
