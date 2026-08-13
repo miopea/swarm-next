@@ -392,7 +392,11 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
       </div>
       {jiraLink && (
         <div className="task-jira-origin" aria-label={`Jira issue ${jiraLink.issue_key}`}>
-          <strong>{jiraLink.issue_key}</strong>
+          {jiraLink.issue_url ? (
+            <a href={jiraLink.issue_url} target="_blank" rel="noreferrer" title={`Open ${jiraLink.issue_key} in Jira`}>
+              <strong>{jiraLink.issue_key}</strong><span aria-hidden="true">↗</span>
+            </a>
+          ) : <strong>{jiraLink.issue_key}</strong>}
           <span>{jiraLink.project_name}</span>
           <span>{jiraLink.jira_status_name}</span>
           {jiraLink.jira_assignee_name && <span>Jira: {jiraLink.jira_assignee_name}</span>}

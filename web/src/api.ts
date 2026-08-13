@@ -113,6 +113,7 @@ export type JiraIssue = {
 export type JiraTaskLink = {
   issue_id: string;
   issue_key: string;
+  issue_url: string | null;
   binding_id: string;
   project_key: string;
   project_name: string;

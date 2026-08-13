@@ -1037,6 +1037,7 @@ struct SyncJiraBindingRequest {
 struct JiraTaskLinkView {
     issue_id: String,
     issue_key: String,
+    issue_url: Option<String>,
     binding_id: JiraProjectBindingId,
     project_key: String,
     project_name: String,
@@ -2445,28 +2446,32 @@ async fn jira_task_links(
     let bindings = store
         .list_jira_project_bindings()
         .map_err(|error| task_store_error(&error))?;
+    let browser_base_url = state.jira_readiness.browser_base_url().await;
     let mut links = Vec::new();
     for binding in bindings {
-        links.extend(
-            store
-                .list_jira_issue_links(binding.id)
-                .map_err(|error| task_store_error(&error))?
-                .into_iter()
-                .map(|link| JiraTaskLinkView {
-                    issue_id: link.issue_id,
-                    issue_key: link.issue_key,
-                    binding_id: link.binding_id,
-                    project_key: binding.project_key.clone(),
-                    project_name: binding.project_name.clone(),
-                    task_id: link.task_id,
-                    jira_status_id: link.jira_status_id,
-                    jira_status_name: link.jira_status_name,
-                    jira_assignee_account_id: link.jira_assignee_account_id,
-                    jira_assignee_name: link.jira_assignee_name,
-                    remote_updated_at: link.remote_updated_at,
-                    last_synced_at: link.last_synced_at,
-                }),
-        );
+        for link in store
+            .list_jira_issue_links(binding.id)
+            .map_err(|error| task_store_error(&error))?
+        {
+            let issue_url = browser_base_url
+                .as_ref()
+                .and_then(|base_url| jira::issue_url(base_url, &link.issue_key));
+            links.push(JiraTaskLinkView {
+                issue_id: link.issue_id,
+                issue_key: link.issue_key,
+                issue_url,
+                binding_id: link.binding_id,
+                project_key: binding.project_key.clone(),
+                project_name: binding.project_name.clone(),
+                task_id: link.task_id,
+                jira_status_id: link.jira_status_id,
+                jira_status_name: link.jira_status_name,
+                jira_assignee_account_id: link.jira_assignee_account_id,
+                jira_assignee_name: link.jira_assignee_name,
+                remote_updated_at: link.remote_updated_at,
+                last_synced_at: link.last_synced_at,
+            });
+        }
     }
     links.sort_by(|left, right| left.issue_key.cmp(&right.issue_key));
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(links)).into_response())
@@ -4261,6 +4266,10 @@ mod tests {
         .await;
         assert_eq!(links.as_array().unwrap().len(), 1);
         assert_eq!(links[0]["issue_key"], "WEB-42");
+        assert_eq!(
+            links[0]["issue_url"],
+            format!("http://{address}/browse/WEB-42")
+        );
         assert_eq!(links[0]["project_name"], "Website Services");
         assert_eq!(links[0]["jira_status_name"], "In Progress");
         assert_eq!(links[0]["jira_assignee_name"], "Bea");

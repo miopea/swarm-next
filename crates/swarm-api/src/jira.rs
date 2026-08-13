@@ -216,6 +216,14 @@ impl JiraReadinessProbe {
         }
     }
 
+    pub(crate) async fn browser_base_url(&self) -> Option<Url> {
+        match self {
+            Self::Configured { base_url, .. } => Some(base_url.clone()),
+            Self::OAuth(client) => client.site_url().await,
+            Self::NotConfigured => None,
+        }
+    }
+
     pub(crate) fn configured(
         base_url: &str,
         email: impl Into<Arc<str>>,
@@ -592,6 +600,26 @@ impl JiraReadinessProbe {
             }
         }
     }
+}
+
+pub(crate) fn issue_url(base_url: &Url, issue_key: &str) -> Option<String> {
+    let issue_key = issue_key.trim();
+    if issue_key.is_empty()
+        || issue_key.len() > 128
+        || issue_key.chars().any(char::is_control)
+        || !matches!(base_url.scheme(), "https" | "http")
+    {
+        return None;
+    }
+    let mut url = base_url.clone();
+    url.set_query(None);
+    url.set_fragment(None);
+    url.path_segments_mut()
+        .ok()?
+        .clear()
+        .push("browse")
+        .push(issue_key);
+    Some(url.into())
 }
 
 fn authorize(

@@ -263,6 +263,13 @@ impl JiraOAuthClient {
         })
     }
 
+    pub(crate) async fn site_url(&self) -> Option<Url> {
+        let tokens = self.inner.tokens.lock().await;
+        let url = Url::parse(tokens.site_url.trim()).ok()?;
+        (url.scheme() == "https" && url.username().is_empty() && url.password().is_none())
+            .then_some(url)
+    }
+
     pub(crate) async fn disconnect(&self) -> Result<(), OAuthError> {
         *self.inner.tokens.lock().await = OAuthTokens::default();
         match fs::remove_file(&self.inner.token_path) {

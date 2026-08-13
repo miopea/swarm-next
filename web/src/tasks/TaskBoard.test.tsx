@@ -129,7 +129,7 @@ test("keeps Jira identity and remote status visible while routing work", () => {
   renderBoard({
     tasks: [{ ...task, state: "ready", assigned_worker_id: worker.id }],
     jiraTaskLinks: [{
-      issue_id: "20001", issue_key: "WEB-42", binding_id: "binding-1",
+      issue_id: "20001", issue_key: "WEB-42", issue_url: "https://jira.example.test/browse/WEB-42", binding_id: "binding-1",
       project_key: "WEB", project_name: "Website Services", task_id: task.id,
       jira_status_id: "1", jira_status_name: "To Do",
       jira_assignee_account_id: "account-1", jira_assignee_name: "Bradford",
@@ -141,6 +141,7 @@ test("keeps Jira identity and remote status visible while routing work", () => {
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Website Services");
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("To Do");
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Jira: Bradford");
+  expect(within(card).getByRole("link", { name: /WEB-42/ })).toHaveAttribute("href", "https://jira.example.test/browse/WEB-42");
   expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
 });
 
