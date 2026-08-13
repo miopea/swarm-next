@@ -660,7 +660,21 @@ export function App() {
         else void startExistingWorker(worker);
       },
     })),
-  ], [openTaskCount, pendingDecisionCount, workers, activeSessionId, operatorToken]);
+    ...tasks.filter((task) => task.state !== "completed").map((task) => ({
+      id: `task-${task.id}`,
+      label: task.title,
+      detail: `${taskStateLabel(task.state)} · ${workers.find((worker) => worker.id === task.assigned_worker_id)?.name ?? "Unassigned"}`,
+      group: "Work" as const,
+      run: () => setSurface("tasks"),
+    })),
+    ...decisions.filter((decision) => decision.state === "pending").map((decision) => ({
+      id: `decision-${decision.id}`,
+      label: decision.title,
+      detail: decision.reason,
+      group: "Attention" as const,
+      run: () => setSurface("decisions"),
+    })),
+  ], [openTaskCount, pendingDecisionCount, workers, tasks, decisions, activeSessionId, operatorToken]);
 
   useEffect(() => {
     if (surface !== "workers" || !activeSessionId) return;
@@ -889,6 +903,11 @@ function requireActiveSession(worker: Worker): string {
 
 function repositoryName(workspace: string): string {
   return workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace;
+}
+
+function taskStateLabel(state: Task["state"]): string {
+  if (state === "active") return "In progress";
+  return state[0].toUpperCase() + state.slice(1);
 }
 
 function presenceModeLabel(mode: PresenceMode) {

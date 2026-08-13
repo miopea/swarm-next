@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-export type CommandChoice = { id: string; label: string; detail: string; group: "Go to" | "Workers"; run: () => void };
+export type CommandChoice = { id: string; label: string; detail: string; group: "Go to" | "Workers" | "Work" | "Attention"; run: () => void };
 
 export default function CommandPalette({ choices, onClose }: { choices: CommandChoice[]; onClose: () => void }) {
   const [query, setQuery] = useState("");
