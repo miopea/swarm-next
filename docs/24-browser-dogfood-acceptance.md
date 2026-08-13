@@ -464,3 +464,25 @@ the independently updated terminal host through the API to worker settings:
   MiB/minute, and renderer JavaScript ended 0.49 MiB lower. DOM nodes remained
   exactly `448`, browser storage remained zero, and every memory, reconnect,
   process-identity, and page-error gate passed.
+- Releases through `0.1.0-43fec1ba2083` establish the first safe Jira intake
+  loop. Queen can preview and explicitly import Jira issues, refresh already
+  imported work, and transition linked issues without gaining access to Jira
+  credentials. Automatic reconciliation refreshes only issues already owned by
+  the Hive and never discovers or imports unseen Jira work. Imported task cards
+  expose a keyboard-accessible link to the canonical Jira issue.
+- Release `0.1.0-4a192bf7f7a4` removes the final bulk-import footgun: opening a
+  Jira project review selects no issues, reports `Add 0 to this Hive`, and keeps
+  import disabled until the operator explicitly chooses one or more tickets.
+  The live desktop and Android-sized gate passed every primary surface with no
+  page or card overflow, connected the same three exact worker sessions,
+  exercised Jira review, feedback image paste, maintenance confirmation, and a
+  valid 405,504-byte SQLite backup, and preserved authentication across complete
+  browser-process restarts at both viewport profiles. The API-only deployment
+  preserved terminal-host PID `400662` and all three running session IDs.
+- A paired ten-minute post-Jira soak collected 40 browser and 40 server samples
+  while actively cycling the UI. Edge browser private memory grew 1.5 MiB,
+  storage private memory grew 96 KiB, the complete owned browser tree grew 11.8
+  MiB, and renderer JavaScript grew 0.37 MiB; every fitted-slope and growth gate
+  passed. The server retained all three sessions with zero dropped terminal
+  history, API RSS between 6.6 and 7.4 MiB, and terminal-host cgroup memory
+  within a 1 MiB band.
