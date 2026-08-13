@@ -60,6 +60,7 @@ import WorkerRosterItem from "./workers/WorkerRosterItem";
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
 const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
+const ACTIVE_SESSION_STORAGE_KEY = "swarm-next.active-session.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
 type Surface = "decisions" | "tasks" | "workers" | "settings";
@@ -91,6 +92,9 @@ export function App() {
 
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
   useEffect(() => saveSurface(surface), [surface]);
+  useEffect(() => {
+    if (activeSessionId) saveActiveSessionId(activeSessionId);
+  }, [activeSessionId]);
 
   useEffect(() => { void loadTerminalView().catch(() => undefined); }, []);
   useEffect(() => {
@@ -141,7 +145,7 @@ export function App() {
         setWorkers(nextWorkers);
         setWorkspaces(nextWorkspaces);
         setTasks(nextTasks);
-        setActiveSessionId(preferredSessionId(nextWorkers, nextSessions));
+        setActiveSessionId(restoredSessionId(nextWorkers, nextSessions));
         setDecisions(nextDecisions);
       })
       .catch((error: unknown) => {
@@ -699,6 +703,26 @@ function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): stri
   return workers.find((worker) => worker.role === "queen" && worker.running)?.active_session_id
     ?? workers.find((worker) => worker.running)?.active_session_id
     ?? sessions.find((session) => session.running)?.session_id;
+}
+
+function restoredSessionId(workers: Worker[], sessions: SessionSummary[]): string | undefined {
+  try {
+    const saved = window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+    if (saved && sessions.some((session) => session.running && session.session_id === saved)) {
+      return saved;
+    }
+  } catch {
+    // Selection persistence is a non-critical convenience.
+  }
+  return preferredSessionId(workers, sessions);
+}
+
+function saveActiveSessionId(sessionId: string) {
+  try {
+    window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId);
+  } catch {
+    // Selection persistence is a non-critical convenience.
+  }
 }
 
 function DecisionIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a7 7 0 0 0-7 7v3l-2 3h18l-2-3v-3a7 7 0 0 0-7-7ZM9 20h6"/></svg>; }

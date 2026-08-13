@@ -191,3 +191,8 @@ worker:
   ADR 0003; Swarm does not silently override provider permissions.
 - The same pass found and corrected stale Settings shortcut labels so the
   displayed Alt+1 through Alt+4 mapping matches the running application.
+- Repeated desktop switching preserved the exact Queen, Swarm Next, and Clover
+  session IDs across nine selections. Reload then exposed a view mismatch: the
+  engagement lease correctly survived on Clover while the UI defaulted to
+  Queen. The client now restores the last selected live session so the visible
+  terminal and `With you` state remain coherent after reload or PWA reopen.

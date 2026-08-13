@@ -161,6 +161,35 @@ test("restores the worker surface after a refresh", async () => {
   expect(window.sessionStorage.getItem("swarm-next.surface.v1")).toBe("workers");
 });
 
+test("restores the last selected live worker after reload", async () => {
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  const queenSession = "019fedfc-1c30-70e1-a5e2-9a3c94268081";
+  const daisySession = "019fedfc-1c30-70e1-a5e2-9a3c94268082";
+  window.localStorage.setItem("swarm-next.active-session.v1", daisySession);
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({}))
+    .mockResolvedValueOnce(ok(hiveIdentity()))
+    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [
+      { session_id: queenSession, running: true },
+      { session_id: daisySession, running: true },
+    ] }))
+    .mockResolvedValueOnce(ok([
+      { id: "queen", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code", workspace: "/queen", autostart: true, position: 0, active_session_id: queenSession, running: true, attention_state: "buzzing", created_at: 1, updated_at: 1 },
+      { id: "daisy", hive_id: "hive-1", name: "Daisy", role: "worker", provider: "claude_code", workspace: "/daisy", autostart: false, position: 1, active_session_id: daisySession, running: true, attention_state: "with_operator", created_at: 1, updated_at: 1 },
+    ]))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]));
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "Daisy" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Daisy/ })).toHaveAttribute("aria-current", "page");
+});
+
 test("switching workers releases only the previously selected engagement", async () => {
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   const queenSession = "019fedfc-1c30-70e1-a5e2-9a3c94268091";
