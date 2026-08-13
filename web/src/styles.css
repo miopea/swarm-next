@@ -626,7 +626,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .jira-intake-heading, .jira-intake-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .jira-intake-heading > span { display: grid; min-width: 0; gap: 2px; }
 .jira-intake-heading small { color: var(--muted); }
-.jira-intake-actions { justify-content: flex-start; }
+.jira-intake-filter { display: grid; gap: 5px; min-width: 0; }
+.jira-intake-filter > span { color: var(--muted); font-size: 0.78rem; }
+.jira-intake-filter input { width: 100%; }
+.jira-intake-actions { justify-content: flex-start; flex-wrap: wrap; color: var(--muted); font-size: 0.82rem; }
 .jira-issue-list { display: grid; max-height: 340px; overflow: auto; border-block: 1px solid var(--line); }
 .jira-issue-row { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--line); color: var(--text); }
 .jira-issue-row:last-child { border-bottom: 0; }
@@ -634,6 +637,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .jira-issue-row > span { display: grid; min-width: 0; gap: 2px; }
 .jira-issue-row strong, .jira-issue-row small { overflow-wrap: anywhere; }
 .jira-issue-row small { color: var(--muted); }
+.jira-intake-empty { margin: 0; padding: 18px 6px; color: var(--muted); text-align: center; }
 .settings-message { margin: 0; color: var(--text); font-size: .78rem; }
 .mobile-presence-note { padding: .75rem .85rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
 .mobile-policy-choice { display: grid; gap: 7px; margin: 0; padding: 0; border: 0; }

@@ -46,10 +46,16 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
   const [message, setMessage] = useState("");
   const [intakeBinding, setIntakeBinding] = useState<JiraProjectBinding>();
   const [intakeIssues, setIntakeIssues] = useState<JiraIssue[]>([]);
+  const [intakeQuery, setIntakeQuery] = useState("");
   const [selectedIssueIds, setSelectedIssueIds] = useState<Set<string>>(new Set());
   const availableProjects = projects.filter(
     (project) => !bindings.some((binding) => binding.project_id === project.id),
   );
+  const normalizedIntakeQuery = intakeQuery.trim().toLocaleLowerCase();
+  const visibleIntakeIssues = normalizedIntakeQuery
+    ? intakeIssues.filter((issue) => [issue.key, issue.summary, issue.status_name, issue.assignee_name ?? "Unassigned in Jira"]
+      .some((value) => value.toLocaleLowerCase().includes(normalizedIntakeQuery)))
+    : intakeIssues;
 
   useEffect(() => {
     let cancelled = false;
@@ -120,6 +126,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
       const issues = await fetchJiraBindingIssues(operatorToken, binding.id);
       setIntakeBinding(binding);
       setIntakeIssues(issues);
+      setIntakeQuery("");
       setSelectedIssueIds(new Set());
       setMessage(issues.length ? "Review the Jira issues below before adding them to this Hive." : `${binding.project_name} has no visible issues.`);
     } catch (error) {
@@ -138,6 +145,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
       setMessage(`${tasks.length} Jira issue${tasks.length === 1 ? "" : "s"} added or refreshed from ${intakeBinding.project_name}.`);
       setIntakeBinding(undefined);
       setIntakeIssues([]);
+      setIntakeQuery("");
       setSelectedIssueIds(new Set());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Selected Jira issues could not be imported.");
@@ -208,15 +216,25 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
         <section className="jira-intake" aria-label={`Review ${intakeBinding.project_name} issues`}>
           <div className="jira-intake-heading">
             <span><strong>Choose work for this Hive</strong><small>{intakeBinding.project_key} · latest {intakeIssues.length} visible</small></span>
-            <button className="text-button" type="button" onClick={() => { setIntakeBinding(undefined); setIntakeIssues([]); setSelectedIssueIds(new Set()); }}>Close</button>
+            <button className="text-button" type="button" onClick={() => { setIntakeBinding(undefined); setIntakeIssues([]); setIntakeQuery(""); setSelectedIssueIds(new Set()); }}>Close</button>
           </div>
           <p className="privacy-note">Choose only the work this Hive should own. Nothing is selected or imported until you explicitly act.</p>
+          <label className="jira-intake-filter">
+            <span>Find an issue</span>
+            <input
+              value={intakeQuery}
+              placeholder="Key, title, status, or assignee"
+              autoComplete="off"
+              onChange={(event) => setIntakeQuery(event.target.value)}
+            />
+          </label>
           <div className="jira-intake-actions">
-            <button className="text-button" type="button" onClick={() => setSelectedIssueIds(new Set(intakeIssues.slice(0, 100).map((issue) => issue.id)))}>Select first 100</button>
+            <span>{visibleIntakeIssues.length} shown · {selectedIssueIds.size} selected</span>
+            <button className="text-button" type="button" disabled={visibleIntakeIssues.length === 0} onClick={() => setSelectedIssueIds(new Set(visibleIntakeIssues.slice(0, 100).map((issue) => issue.id)))}>Select shown</button>
             <button className="text-button" type="button" onClick={() => setSelectedIssueIds(new Set())}>Clear</button>
           </div>
           <div className="jira-issue-list">
-            {intakeIssues.map((issue) => (
+            {visibleIntakeIssues.map((issue) => (
               <label className="jira-issue-row" key={issue.id}>
                 <input
                   type="checkbox"
@@ -231,6 +249,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
                 <span><strong>{issue.key} · {issue.summary}</strong><small>{issue.status_name} · {issue.assignee_name ?? "Unassigned in Jira"}</small></span>
               </label>
             ))}
+            {visibleIntakeIssues.length === 0 ? <p className="jira-intake-empty">No Jira issues match this filter.</p> : null}
           </div>
           <button className="primary-action" type="button" disabled={busy || selectedIssueIds.size === 0} onClick={() => void importSelectedIssues()}>
             {busy ? "Importing…" : `Add ${selectedIssueIds.size} to this Hive`}

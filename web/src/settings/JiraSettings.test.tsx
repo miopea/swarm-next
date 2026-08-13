@@ -83,7 +83,14 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
   expect(doneIssue).not.toBeChecked();
   expect(screen.getByText(/Nothing is selected or imported/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Add 0 to this Hive" })).toBeDisabled();
-  fireEvent.click(openIssue);
+  fireEvent.change(screen.getByLabelText("Find an issue"), { target: { value: "bea" } });
+  expect(screen.getByText("1 shown · 0 selected")).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: /WEB-42/ })).toBeInTheDocument();
+  expect(screen.queryByRole("checkbox", { name: /WEB-43/ })).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Find an issue"), { target: { value: "missing" } });
+  expect(screen.getByText("No Jira issues match this filter.")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Find an issue"), { target: { value: "WEB-42" } });
+  fireEvent.click(screen.getByRole("checkbox", { name: /WEB-42/ }));
   fireEvent.click(screen.getByRole("button", { name: "Add 1 to this Hive" }));
   expect(await screen.findByText("1 Jira issue added or refreshed from Website Services.")).toBeInTheDocument();
   const sync = requests.find((request) => request.url.includes("/sync") && request.method === "POST");
