@@ -881,7 +881,12 @@ mod tests {
         let first = WorkerSessionId::new();
         store.bind_worker_session(worker.id, first).unwrap();
         store.release_worker_session(first).unwrap();
-        assert!(store.get_worker_profile(worker.id).unwrap().has_session_history);
+        assert!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .has_session_history
+        );
     }
 
     #[test]
