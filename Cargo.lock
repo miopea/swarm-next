@@ -2655,6 +2655,8 @@ dependencies = [
 name = "swarm-cli"
 version = "0.1.0"
 dependencies = [
+ "rusqlite",
+ "serde",
  "serde_json",
  "swarm-persistence",
  "swarm-terminal",

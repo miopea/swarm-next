@@ -73,3 +73,14 @@ to reproduce a legacy feature must state the user outcome it restores.
 - No dual write between legacy and Next.
 - Cutover rehearsals include rollback before real migration.
 
+The first executable migration tool is deliberately read-only:
+
+```text
+swarmctl inspect-legacy /absolute/path/to/swarm.db
+```
+
+It opens a snapshot with SQLite read-only flags, verifies integrity, identifies
+the legacy schema version, and emits a compact JSON inventory of worker, task,
+and group rows that are structurally eligible or invalid. It does not attach the
+file to the Next database, transform records, copy credentials, or touch the
+legacy installation. Import remains a later, separately rehearsed command.

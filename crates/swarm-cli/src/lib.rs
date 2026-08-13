@@ -1,4 +1,7 @@
-use std::{ffi::OsString, time::Duration};
+use std::{ffi::OsString, path::PathBuf, time::Duration};
+
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use serde::Serialize;
 
 use swarm_terminal::{
     HostClient, HostRequest, HostResponse, IpcError, PROTOCOL_VERSION, TerminalHostStatus,
@@ -16,12 +19,13 @@ pub enum LifecycleCommand {
     CancelDrain,
     WaitReady { timeout: Duration },
     VerifyDatabase { path: std::path::PathBuf },
+    InspectLegacy { path: std::path::PathBuf },
 }
 
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error(
-        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|verify-database PATH>"
+        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|verify-database PATH|inspect-legacy PATH>"
     )]
     Usage,
     #[error("wait timeout must be an integer from 1 through 86400 seconds")]
@@ -42,6 +46,8 @@ pub enum CliError {
     ReadyTimeout { running_sessions: usize },
     #[error("database verification failed: {0}")]
     Database(String),
+    #[error("legacy database inspection failed: {0}")]
+    LegacyDatabase(String),
 }
 
 impl CliError {
@@ -91,6 +97,13 @@ pub fn parse_command(
             }
             Ok(LifecycleCommand::VerifyDatabase { path })
         }
+        "inspect-legacy" => {
+            let path = arguments.next().map(PathBuf::from).ok_or(CliError::Usage)?;
+            if arguments.next().is_some() || !path.is_absolute() {
+                return Err(CliError::Usage);
+            }
+            Ok(LifecycleCommand::InspectLegacy { path })
+        }
         _ => Err(CliError::Usage),
     }
 }
@@ -125,8 +138,118 @@ pub async fn execute(
         LifecycleCommand::WaitReady { timeout } => {
             wait_until_ready(client, timeout, READY_POLL_INTERVAL).await
         }
-        LifecycleCommand::VerifyDatabase { .. } => Err(CliError::Usage),
+        LifecycleCommand::VerifyDatabase { .. } | LifecycleCommand::InspectLegacy { .. } => {
+            Err(CliError::Usage)
+        }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LegacyInspectionReport {
+    pub format: &'static str,
+    pub schema_version: Option<i64>,
+    pub workers: LegacyTableReport,
+    pub tasks: LegacyTableReport,
+    pub groups: LegacyTableReport,
+    pub warnings: Vec<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct LegacyTableReport {
+    pub present: bool,
+    pub records: i64,
+    pub eligible: i64,
+    pub invalid: i64,
+}
+
+/// Opens a legacy Swarm snapshot read-only and reports migration eligibility.
+/// It never attaches the database to the Next store and never changes either file.
+pub fn inspect_legacy_database(
+    path: impl AsRef<std::path::Path>,
+) -> Result<LegacyInspectionReport, CliError> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let integrity: String = connection
+        .pragma_query_value(None, "quick_check", |row| row.get(0))
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    if integrity != "ok" {
+        return Err(CliError::LegacyDatabase(format!(
+            "integrity check failed: {integrity}"
+        )));
+    }
+    let schema_version = if table_exists(&connection, "schema_version")? {
+        connection
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|error| CliError::LegacyDatabase(error.to_string()))?
+            .flatten()
+    } else {
+        None
+    };
+    let workers = inspect_table(
+        &connection,
+        "workers",
+        "trim(name) <> '' AND trim(path) <> ''",
+    )?;
+    let tasks = inspect_table(&connection, "tasks", "trim(title) <> ''")?;
+    let groups = inspect_table(&connection, "groups", "trim(name) <> ''")?;
+    let mut warnings = Vec::new();
+    if schema_version.is_none() {
+        warnings.push("legacy schema version is missing");
+    }
+    warnings.push("inspection only; no records were imported or modified");
+    warnings.push("sessions, terminal history, credentials, drones, and approval rules are intentionally excluded");
+    Ok(LegacyInspectionReport {
+        format: "swarm-legacy-sqlite",
+        schema_version,
+        workers,
+        tasks,
+        groups,
+        warnings,
+    })
+}
+
+fn table_exists(connection: &Connection, name: &str) -> Result<bool, CliError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            [name],
+            |row| row.get(0),
+        )
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))
+}
+
+fn inspect_table(
+    connection: &Connection,
+    name: &str,
+    eligible: &str,
+) -> Result<LegacyTableReport, CliError> {
+    if !table_exists(connection, name)? {
+        return Ok(LegacyTableReport::default());
+    }
+    let records: i64 = connection
+        .query_row(&format!("SELECT COUNT(*) FROM {name}"), [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let eligible: i64 = connection
+        .query_row(
+            &format!("SELECT COUNT(*) FROM {name} WHERE {eligible}"),
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    Ok(LegacyTableReport {
+        present: true,
+        records,
+        eligible,
+        invalid: records.saturating_sub(eligible),
+    })
 }
 
 /// Opens an exported Hive database and verifies its schema and SQLite integrity.
@@ -229,6 +352,13 @@ mod tests {
             ]),
             Ok(LifecycleCommand::VerifyDatabase { .. })
         ));
+        assert!(matches!(
+            parse_command([
+                OsString::from("inspect-legacy"),
+                OsString::from("/tmp/legacy.sqlite3")
+            ]),
+            Ok(LifecycleCommand::InspectLegacy { .. })
+        ));
     }
 
     #[test]
@@ -263,6 +393,40 @@ mod tests {
                 .running_sessions,
             1
         );
+    }
+
+    #[test]
+    fn legacy_inspection_is_read_only_and_reports_only_supported_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy.sqlite3");
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            connection.execute_batch(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL);
+                 INSERT INTO schema_version VALUES (19, 1);
+                 CREATE TABLE workers (id TEXT, name TEXT, path TEXT);
+                 INSERT INTO workers VALUES ('1', 'Daisy', '/projects/daisy'), ('2', '', '/projects/invalid');
+                 CREATE TABLE tasks (id TEXT, title TEXT);
+                 INSERT INTO tasks VALUES ('1', 'Ship this'), ('2', '');
+                 CREATE TABLE groups (id TEXT, name TEXT);
+                 INSERT INTO groups VALUES ('1', 'Web');",
+            ).unwrap();
+        }
+        let before = std::fs::metadata(&path).unwrap().len();
+        let report = inspect_legacy_database(&path).unwrap();
+        assert_eq!(report.schema_version, Some(19));
+        assert_eq!(
+            report.workers,
+            LegacyTableReport {
+                present: true,
+                records: 2,
+                eligible: 1,
+                invalid: 1
+            }
+        );
+        assert_eq!(report.tasks.eligible, 1);
+        assert_eq!(report.groups.invalid, 0);
+        assert_eq!(std::fs::metadata(path).unwrap().len(), before);
     }
 
     #[test]
