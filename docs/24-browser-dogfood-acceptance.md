@@ -281,3 +281,11 @@ the independently updated terminal host through the API to worker settings:
   real-PTY integration test performs the destructive half against an isolated
   old host and proves exact-version replacement, request cleanup, and durable
   recovery boundaries.
+- Release `0.1.0-d6b334bf0c06` made private dogfood feedback reachable on the
+  mobile control room instead of hiding it behind a desktop-only responsive
+  rule. The deployed gate opened the feedback dialog at both sizes, entered a
+  preview note, verified `Save to this Hive` was available, and closed without
+  creating test data. All eight primary views remained within their viewport,
+  the backup retained a valid SQLite signature, no authenticated-page browser
+  errors occurred, and terminal-host PID `400662` plus all three live sessions
+  were preserved.
