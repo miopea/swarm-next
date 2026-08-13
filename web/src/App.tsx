@@ -13,6 +13,7 @@ import {
   fetchQueenAutonomyPolicy,
   fetchPresence,
   fetchProviderCapabilities,
+  fetchPresentationPreferences,
   fetchSessions,
   fetchTaskActivity,
   fetchTasks,
@@ -23,6 +24,7 @@ import {
   releaseWorkerEngagement,
   revokeBrowserSession,
   setManualPresence,
+  setPresentationPreferences,
   setQueenAutonomyPolicy,
   startWorker,
   stopClaudeSession,
@@ -41,6 +43,7 @@ import {
   type PresenceMode,
   type ProviderKind,
   type ProviderCapabilities,
+  type PresentationDeviceClass,
   type QueenAutonomyPolicy,
   type SessionSummary,
   type Task,
@@ -57,10 +60,11 @@ import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette"
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
-import { PresenceController, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
+import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
+import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./terminal/MobileTerminalComposer";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 import WorkerRosterItem from "./workers/WorkerRosterItem";
 
@@ -89,6 +93,7 @@ export function App() {
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
+  const [mobileKeysVisible, setMobileKeysVisible] = useState(initialMobileKeysVisibility);
   const [liveFeedState, setLiveFeedState] = useState<LiveFeedState>("connecting");
   const [recentEvents, setRecentEvents] = useState<ControlRoomEvent[]>([]);
   const [presence, setPresence] = useState<OperatorPresence>();
@@ -99,6 +104,7 @@ export function App() {
   const [notificationState, setNotificationState] = useState<NotificationCapabilityState>("unsupported");
   const presenceController = useMemo(() => new PresenceController(), []);
   const notificationController = useMemo(() => new NotificationController(), []);
+  const presentationDevice = useMemo<PresentationDeviceClass>(() => deviceClass(), []);
 
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
   useEffect(() => saveSurface(surface), [surface]);
@@ -144,6 +150,29 @@ export function App() {
       .then(setProviders)
       .catch(() => setProviders({ claude_code: true, codex: false }));
   }, [operatorToken]);
+
+  useEffect(() => {
+    if (!operatorToken) return;
+    let cancelled = false;
+    void fetchPresentationPreferences(operatorToken, presentationDevice)
+      .then(async (preferences) => preferences.configured
+        ? preferences
+        : setPresentationPreferences(operatorToken, {
+            device_class: presentationDevice,
+            color_theme: initialColorTheme(),
+            terminal_keys_visible: initialMobileKeysVisibility(),
+          }))
+      .then((preferences) => {
+        if (cancelled) return;
+        setColorTheme(preferences.color_theme);
+        setMobileKeysVisible(preferences.terminal_keys_visible);
+        rememberMobileKeysVisibility(preferences.terminal_keys_visible);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setOperationError(error instanceof Error ? error.message : "Presentation preferences could not be loaded");
+      });
+    return () => { cancelled = true; };
+  }, [operatorToken, presentationDevice]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -195,7 +224,8 @@ export function App() {
     feed.start(
       operatorToken,
       async (page) => {
-        const [controlRoom, refreshedPresence, refreshedNotifications, refreshedQueenPolicy] = await Promise.all([
+        const runtimeChanged = page.events.some((event) => event.kind === "runtime_changed");
+        const [controlRoom, refreshedPresence, refreshedNotifications, refreshedQueenPolicy, refreshedPresentation] = await Promise.all([
           loadControlRoom(operatorToken),
           page.events.some((event) => event.kind === "presence_changed")
             ? fetchPresence(operatorToken)
@@ -203,8 +233,11 @@ export function App() {
           page.events.some((event) => event.kind === "notifications_changed")
             ? fetchNotificationSettings(operatorToken)
             : Promise.resolve(undefined),
-          page.events.some((event) => event.kind === "runtime_changed")
+          runtimeChanged
             ? fetchQueenAutonomyPolicy(operatorToken)
+            : Promise.resolve(undefined),
+          runtimeChanged
+            ? fetchPresentationPreferences(operatorToken, presentationDevice)
             : Promise.resolve(undefined),
         ]);
         if (cancelled) return;
@@ -217,6 +250,11 @@ export function App() {
         if (refreshedPresence) setPresence(refreshedPresence);
         if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
         if (refreshedQueenPolicy) setQueenPolicy(refreshedQueenPolicy);
+        if (refreshedPresentation?.configured) {
+          setColorTheme(refreshedPresentation.color_theme);
+          setMobileKeysVisible(refreshedPresentation.terminal_keys_visible);
+          rememberMobileKeysVisibility(refreshedPresentation.terminal_keys_visible);
+        }
         setRecentEvents((current) => page.reset_required
           ? page.events.slice(-16)
           : [...current, ...page.events].filter((event, index, events) =>
@@ -234,7 +272,7 @@ export function App() {
       cancelled = true;
       feed.stop();
     };
-  }, [operatorToken]);
+  }, [operatorToken, presentationDevice]);
 
   async function authenticate(event: FormEvent) {
     event.preventDefault();
@@ -252,6 +290,31 @@ export function App() {
       setActiveSessionId((current) => current ?? preferredSessionId(controlRoom.workers, controlRoom.sessions));
       setDecisions(controlRoom.decisions);
       setTokenDraft("");
+    });
+  }
+
+  function changeColorTheme(theme: ColorTheme) {
+    setColorTheme(theme);
+    if (!operatorToken) return;
+    void perform(async () => {
+      await setPresentationPreferences(operatorToken, {
+        device_class: presentationDevice,
+        color_theme: theme,
+        terminal_keys_visible: mobileKeysVisible,
+      });
+    });
+  }
+
+  function changeMobileKeysVisibility(visible: boolean) {
+    setMobileKeysVisible(visible);
+    rememberMobileKeysVisibility(visible);
+    if (!operatorToken) return;
+    void perform(async () => {
+      await setPresentationPreferences(operatorToken, {
+        device_class: presentationDevice,
+        color_theme: colorTheme,
+        terminal_keys_visible: visible,
+      });
     });
   }
 
@@ -662,7 +725,7 @@ export function App() {
             {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
             {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
-            <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => setColorTheme((current) => current === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
+            <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" onClick={() => void refreshControlRoom()} disabled={busy}><RefreshIcon /></button>}
             {operatorToken && <button className="secondary-button" onClick={() => void logout()} disabled={busy}>Lock</button>}
           </div>
@@ -715,7 +778,7 @@ export function App() {
             sessions={sessions}
             workers={workers}
             workspaces={workspaces}
-            onThemeChange={setColorTheme}
+            onThemeChange={changeColorTheme}
             onPresenceChange={changePresenceMode}
             onEnableLockDetection={enableLockDetection}
             onNotificationPolicyChange={changeNotificationPolicy}
@@ -730,7 +793,7 @@ export function App() {
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}`}>
             <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
-              <TerminalView operatorToken={operatorToken} session={activeSession} onStop={() => void stopSession(activeSession.session_id)} busy={busy} canStop={activeWorker?.role !== "queen"} />
+              <TerminalView operatorToken={operatorToken} session={activeSession} onStop={() => void stopSession(activeSession.session_id)} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} />
             </Suspense>
           </TerminalLoadBoundary>
         ) : (

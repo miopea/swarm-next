@@ -33,8 +33,9 @@ use swarm_domain::{
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE,
-    NotificationSettings, PushSubscriptionInput, TaskDispatch, TaskDispatchFailure,
-    TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
+    NotificationSettings, PresentationColorTheme, PresentationDeviceClass, PresentationPreferences,
+    PushSubscriptionInput, TaskDispatch, TaskDispatchFailure, TaskOutcomeDispatch,
+    TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
@@ -671,6 +672,12 @@ struct SetQueenAutonomyPolicyRequest {
     night_watch: QueenAutonomyLevel,
 }
 
+#[derive(Debug, Deserialize)]
+struct SetPresentationPreferencesRequest {
+    color_theme: PresentationColorTheme,
+    terminal_keys_visible: bool,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 struct ProviderCapabilitiesView {
     claude_code: bool,
@@ -958,6 +965,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/orchestration/queen-policy",
             get(queen_autonomy_policy).put(set_queen_autonomy_policy),
+        )
+        .route(
+            "/api/v1/preferences/presentation/{device_class}",
+            get(presentation_preferences).put(set_presentation_preferences),
         )
         .route(
             "/api/v1/notifications/subscriptions/{device_id}",
@@ -1251,6 +1262,40 @@ async fn set_queen_autonomy_policy(
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(policy)).into_response())
+}
+
+async fn presentation_preferences(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_class): Path<PresentationDeviceClass>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let preferences = task_store(&state)?
+        .presentation_preferences(device_class)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(preferences)).into_response())
+}
+
+async fn set_presentation_preferences(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_class): Path<PresentationDeviceClass>,
+    Json(request): Json<SetPresentationPreferencesRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let preferences = task_store(&state)?
+        .set_presentation_preferences(
+            PresentationPreferences {
+                device_class,
+                color_theme: request.color_theme,
+                terminal_keys_visible: request.terminal_keys_visible,
+                configured: true,
+            },
+            unix_timestamp(),
+        )
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(preferences)).into_response())
 }
 
 async fn set_notification_policy(
@@ -3135,6 +3180,59 @@ mod tests {
             response_json(authorized_get(app, "/api/v1/orchestration/queen-policy").await).await;
         assert_eq!(fetched["at_hive"], "local_execution");
         assert_eq!(fetched["night_watch"], "coordinate");
+    }
+
+    #[tokio::test]
+    async fn presentation_preferences_are_private_device_scoped_and_persisted() {
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(TaskStore::in_memory().unwrap()),
+        );
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/preferences/presentation/mobile")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let initial = response_json(
+            authorized_get(app.clone(), "/api/v1/preferences/presentation/mobile").await,
+        )
+        .await;
+        assert_eq!(initial["configured"], false);
+        assert_eq!(initial["color_theme"], "light");
+
+        let updated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/preferences/presentation/mobile")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"color_theme":"dark","terminal_keys_visible":false}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status(), StatusCode::OK);
+        let updated = response_json(updated).await;
+        assert_eq!(updated["configured"], true);
+        assert_eq!(updated["terminal_keys_visible"], false);
+
+        let desktop =
+            response_json(authorized_get(app, "/api/v1/preferences/presentation/desktop").await)
+                .await;
+        assert_eq!(desktop["configured"], false);
+        assert_eq!(desktop["color_theme"], "light");
     }
 
     #[tokio::test]

@@ -25,6 +25,8 @@ pub use notifications::{
     VapidKeyMaterial,
 };
 mod orchestration;
+mod presentation;
+pub use presentation::{PresentationColorTheme, PresentationDeviceClass, PresentationPreferences};
 mod task_dispatches;
 pub use task_dispatches::{TaskDispatch, TaskDispatchFailure};
 mod task_outcomes;
@@ -34,7 +36,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 17;
+const CURRENT_SCHEMA_VERSION: i64 = 18;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -157,7 +159,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=16 => {
+            0..=17 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -960,6 +962,9 @@ fn migrate_schema(
     if schema_version < 17 {
         migrate_queen_autonomy(transaction)?;
     }
+    if schema_version < 18 {
+        migrate_presentation_preferences(transaction)?;
+    }
     Ok(())
 }
 
@@ -973,6 +978,22 @@ fn migrate_queen_autonomy(transaction: &rusqlite::Transaction<'_>) -> rusqlite::
              updated_at INTEGER NOT NULL
          );
          PRAGMA user_version = 17;",
+    )
+}
+
+fn migrate_presentation_preferences(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS presentation_preferences (
+             operator_id TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+             device_class TEXT NOT NULL CHECK (device_class IN ('desktop','mobile')),
+             color_theme TEXT NOT NULL CHECK (color_theme IN ('light','dark')),
+             terminal_keys_visible INTEGER NOT NULL CHECK (terminal_keys_visible IN (0,1)),
+             updated_at INTEGER NOT NULL,
+             PRIMARY KEY (operator_id, device_class)
+         );
+         PRAGMA user_version = 18;",
     )
 }
 
@@ -2384,6 +2405,37 @@ mod tests {
         assert_eq!(
             migrated.queen_autonomy_policy().unwrap(),
             swarm_domain::QueenAutonomyPolicy::default()
+        );
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+    }
+    #[test]
+    fn migrates_schema_v17_to_device_presentation_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "DROP TABLE presentation_preferences;
+                     PRAGMA user_version = 17;",
+                )
+                .unwrap();
+        }
+        let migrated = TaskStore::open(path).unwrap();
+        assert!(
+            !migrated
+                .presentation_preferences(PresentationDeviceClass::Desktop)
+                .unwrap()
+                .configured
         );
         assert_eq!(
             migrated

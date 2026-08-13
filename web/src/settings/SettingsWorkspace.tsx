@@ -151,7 +151,7 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
       </section>
       <section className="settings-card" aria-labelledby="appearance-heading">
         <div><p className="eyebrow">Appearance</p><h3 id="appearance-heading">Comfortable in long sessions</h3></div>
-        <p>Both themes use the same soft natural palette and high-legibility type system.</p>
+        <p>Both themes use the same soft natural palette and high-legibility type system. This choice follows your {mobile ? "mobile" : "desktop"} profile and is included in Hive backups.</p>
         <div className="theme-choice" role="group" aria-label="Color theme">
           <button aria-pressed={colorTheme === "light"} onClick={() => onThemeChange("light")}><span className="theme-swatch light" /> Light meadow</button>
           <button aria-pressed={colorTheme === "dark"} onClick={() => onThemeChange("dark")}><span className="theme-swatch dark" /> Night hive</button>
@@ -200,7 +200,7 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
         <div className="settings-actions">
           <button className="primary-action" disabled={busy} onClick={() => void downloadBackup()}>Download Hive backup</button>
         </div>
-        <small className="privacy-note">This file contains private operational data. Store it like a credential. Verified restore and full environment configuration export are the next backup checkpoint.</small>
+        <small className="privacy-note">This file contains private operational data. Store it like a credential. Verified restore is available through the package manager; host credentials and repository contents remain intentionally separate.</small>
       </section>
 
 <DiagnosticsWorkspace operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} />

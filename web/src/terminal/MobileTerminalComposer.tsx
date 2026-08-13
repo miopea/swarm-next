@@ -18,6 +18,14 @@ export const MOBILE_TERMINAL_KEYS = {
 
 const MOBILE_KEYS_VISIBILITY = "swarm-next-mobile-keys-expanded";
 
+export function initialMobileKeysVisibility(): boolean {
+  return localStorage.getItem(MOBILE_KEYS_VISIBILITY) !== "false";
+}
+
+export function rememberMobileKeysVisibility(visible: boolean): void {
+  localStorage.setItem(MOBILE_KEYS_VISIBILITY, String(visible));
+}
+
 export function composeTerminalSubmission(draft: string): string {
   const normalized = draft.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (normalized.includes("\n")) {
@@ -29,11 +37,14 @@ export function composeTerminalSubmission(draft: string): string {
 interface MobileTerminalComposerProps {
   connectionState: TerminalConnectionState;
   onInput: (text: string) => void;
+  keysExpanded?: boolean;
+  onKeysExpandedChange?: (expanded: boolean) => void;
 }
 
-export function MobileTerminalComposer({ connectionState, onInput }: MobileTerminalComposerProps) {
+export function MobileTerminalComposer({ connectionState, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange }: MobileTerminalComposerProps) {
   const [draft, setDraft] = useState("");
-  const [keysExpanded, setKeysExpanded] = useState(() => localStorage.getItem(MOBILE_KEYS_VISIBILITY) !== "false");
+  const [localKeysExpanded, setLocalKeysExpanded] = useState(initialMobileKeysVisibility);
+  const keysExpanded = controlledKeysExpanded ?? localKeysExpanded;
   const textarea = useRef<HTMLTextAreaElement>(null);
   const connected = connectionState === "connected";
 
@@ -50,10 +61,10 @@ export function MobileTerminalComposer({ connectionState, onInput }: MobileTermi
   }
 
   function toggleKeys() {
-    setKeysExpanded((current) => {
-      localStorage.setItem(MOBILE_KEYS_VISIBILITY, String(!current));
-      return !current;
-    });
+    const next = !keysExpanded;
+    rememberMobileKeysVisibility(next);
+    setLocalKeysExpanded(next);
+    onKeysExpandedChange?.(next);
   }
 
   return (

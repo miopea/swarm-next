@@ -13,9 +13,11 @@ export interface TerminalViewProps {
   onStop: () => void;
   busy: boolean;
   canStop?: boolean;
+  mobileKeysVisible?: boolean;
+  onMobileKeysVisibleChange?: (visible: boolean) => void;
 }
 
-export default function TerminalView({ session, operatorToken, onStop, busy, canStop = true }: TerminalViewProps) {
+export default function TerminalView({ session, operatorToken, onStop, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange }: TerminalViewProps) {
   const mount = useRef<HTMLDivElement>(null);
   const controller = useMemo<TerminalController>(() => {
     terminalWorkspace.authenticate(operatorToken);
@@ -86,7 +88,7 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
         ) : <span className="protected-worker">Always active</span>}
       </div>
       <div className="terminal-mount" ref={mount} />
-      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => controller.sendInput(text)} />
+      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => controller.sendInput(text)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} />
     </div>
   );
 }

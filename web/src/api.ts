@@ -8,6 +8,13 @@ export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type WorkerRole = "queen" | "worker";
 export type ProviderKind = "claude_code" | "codex";
 export type ProviderCapabilities = { claude_code: boolean; codex: boolean };
+export type PresentationDeviceClass = "desktop" | "mobile";
+export type PresentationPreferences = {
+  device_class: PresentationDeviceClass;
+  color_theme: "light" | "dark";
+  terminal_keys_visible: boolean;
+  configured: boolean;
+};
 export type WorkerAttentionState = "sleeping" | "buzzing" | "with_operator" | "blocked";
 export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed" | "decisions_changed" | "presence_changed" | "notifications_changed";
 export type PresenceMode = "at_hive" | "away" | "night_watch";
@@ -470,6 +477,33 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
 export async function fetchProviderCapabilities(operatorToken: string): Promise<ProviderCapabilities> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/providers");
   return response.json() as Promise<ProviderCapabilities>;
+}
+
+export async function fetchPresentationPreferences(
+  operatorToken: string,
+  deviceClass: PresentationDeviceClass,
+): Promise<PresentationPreferences> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/preferences/presentation/${deviceClass}`);
+  return response.json() as Promise<PresentationPreferences>;
+}
+
+export async function setPresentationPreferences(
+  operatorToken: string,
+  preferences: Omit<PresentationPreferences, "configured">,
+): Promise<PresentationPreferences> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/preferences/presentation/${preferences.device_class}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        color_theme: preferences.color_theme,
+        terminal_keys_visible: preferences.terminal_keys_visible,
+      }),
+    },
+  );
+  return response.json() as Promise<PresentationPreferences>;
 }
 
 export async function fetchQueenAutonomyPolicy(operatorToken: string): Promise<QueenAutonomyPolicy> {

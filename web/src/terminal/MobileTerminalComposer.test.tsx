@@ -74,6 +74,22 @@ test("remembers when the operator collapses the mobile key pad", () => {
   expect(screen.getByRole("button", { name: "Show" })).toHaveAttribute("aria-expanded", "false");
 });
 
+test("reports controlled key visibility for the durable mobile profile", () => {
+  const onKeysExpandedChange = vi.fn();
+  render(
+    <MobileTerminalComposer
+      connectionState="connected"
+      keysExpanded={false}
+      onInput={vi.fn()}
+      onKeysExpandedChange={onKeysExpandedChange}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Show" }));
+
+  expect(onKeysExpandedChange).toHaveBeenCalledWith(true);
+});
+
 test("retains the draft and blocks controls while disconnected", () => {
   const onInput = vi.fn();
   render(<MobileTerminalComposer connectionState="disconnected" onInput={onInput} />);
