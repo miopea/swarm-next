@@ -176,6 +176,7 @@ export default function TaskBoard({
             <input
               id="task-title"
               ref={titleInput}
+              autoFocus={Boolean(composeRequest)}
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="What should be true when this is done?"
