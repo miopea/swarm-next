@@ -62,6 +62,9 @@ browser storage usage. The browser PID is pinned and authenticated-page errors
 fail the run. After a five-sample warmup, a run fails only when both material
 net growth and a sustained positive slope exceed the documented bounds, so a
 normal warm cache does not masquerade as a leak.
+Every minute it also cycles through Workers, Tasks, and Settings using only
+read operations, exercising terminal detach/reattach, control-room listeners,
+and route cleanup rather than measuring a completely idle tab.
 
 Example from Windows, where Edge was the original problem surface:
 

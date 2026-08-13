@@ -12,6 +12,7 @@ const operatorToken = process.env.SWARM_OPERATOR_TOKEN;
 const browserExecutable = process.env.SWARM_BROWSER_EXECUTABLE;
 const durationSeconds = boundedInteger("SWARM_BROWSER_SOAK_DURATION_SECONDS", 1800, 60, 86400);
 const sampleSeconds = boundedInteger("SWARM_BROWSER_SOAK_SAMPLE_SECONDS", 30, 5, 300);
+const activitySeconds = boundedInteger("SWARM_BROWSER_SOAK_ACTIVITY_SECONDS", 60, 15, 600);
 const outputRoot = process.env.SWARM_BROWSER_SOAK_EVIDENCE || path.resolve("dist", "browser-soak");
 
 if (!operatorToken) throw new Error("SWARM_OPERATOR_TOKEN is required");
@@ -34,6 +35,7 @@ async function main() {
   const pageCdp = await context.newCDPSession(page);
   const samples = [];
   let pinnedBrowserPid;
+  let nextActivityAt = activitySeconds;
 
   try {
     await openAuthenticatedSettings(page);
@@ -86,6 +88,10 @@ async function main() {
       await fs.appendFile(samplesPath, `${Object.values(sample).join(",")}\n`, "utf8");
       if (browserErrors.length) throw new Error(`authenticated page errors: ${browserErrors.join(" | ")}`);
       if (elapsedSeconds >= durationSeconds) break;
+      if (elapsedSeconds >= nextActivityAt) {
+        await exerciseReadOnlySurface(page);
+        nextActivityAt += activitySeconds;
+      }
       await delay(Math.min(sampleSeconds, durationSeconds - elapsedSeconds) * 1000);
     }
 
@@ -100,6 +106,7 @@ async function main() {
       base_url: baseUrl,
       duration_seconds: durationSeconds,
       sample_seconds: sampleSeconds,
+      activity_seconds: activitySeconds,
       sample_count: samples.length,
       browser_pid: pinnedBrowserPid,
       browser_private: browserPrivate,
@@ -116,6 +123,15 @@ async function main() {
   } finally {
     await context.close();
     await browser.close();
+  }
+}
+
+async function exerciseReadOnlySurface(page) {
+  for (const surface of [/Workers/, /Tasks/, /Settings/]) {
+    await page.getByRole("button", { name: surface }).click();
+    if (surface.source === "Workers") await page.locator(".terminal-panel").waitFor();
+    if (surface.source === "Tasks") await page.getByRole("heading", { name: "Task board" }).waitFor();
+    if (surface.source === "Settings") await page.getByRole("heading", { name: "Settings" }).waitFor();
   }
 }
 
