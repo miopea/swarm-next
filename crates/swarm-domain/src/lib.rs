@@ -110,7 +110,6 @@ pub struct JiraProjectBinding {
     pub scope: JiraProjectScope,
     pub hive_id: HiveId,
     pub apiary_id: Option<ApiaryId>,
-    pub default_worker_id: Option<WorkerId>,
     pub access_verified: bool,
     pub workflow_mapped: bool,
 }
@@ -1743,7 +1742,6 @@ mod tests {
             scope: JiraProjectScope::Apiary,
             hive_id,
             apiary_id: Some(apiary_id),
-            default_worker_id: None,
             access_verified: true,
             workflow_mapped: true,
         };
@@ -1784,7 +1782,6 @@ mod tests {
             scope: JiraProjectScope::Hive,
             hive_id,
             apiary_id: None,
-            default_worker_id: None,
             access_verified: false,
             workflow_mapped: false,
         };

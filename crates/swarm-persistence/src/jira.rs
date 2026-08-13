@@ -6,7 +6,7 @@ use std::{
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     ApiaryId, ControlRoomEventKind, JiraIssueLink, JiraProjectBinding, JiraProjectBindingId,
-    JiraProjectScope, JiraStatusMapping, Task, TaskId, TaskState, WorkerId,
+    JiraProjectScope, JiraStatusMapping, Task, TaskId, TaskState,
 };
 
 use super::{TaskStore, TaskStoreError, insert_control_room_event, parse_domain_id};
@@ -29,7 +29,6 @@ pub struct JiraProjectBindingInput<'a> {
     pub project_name: &'a str,
     pub scope: JiraProjectScope,
     pub apiary_id: Option<ApiaryId>,
-    pub default_worker_id: Option<WorkerId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,7 +49,7 @@ impl TaskStore {
     ///
     /// # Errors
     ///
-    /// Returns an error when the project or worker is invalid or persistence fails.
+    /// Returns an error when the project is invalid or persistence fails.
     pub fn upsert_jira_project_binding(
         &self,
         input: &JiraProjectBindingInput<'_>,
@@ -68,19 +67,6 @@ impl TaskStore {
         let identity = self.local_hive_identity()?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        if let Some(worker_id) = input.default_worker_id {
-            let worker_hive = transaction
-                .query_row(
-                    "SELECT hive_id FROM worker_profiles WHERE id = ?1",
-                    [worker_id.to_string()],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-                .ok_or(TaskStoreError::WorkerNotFound)?;
-            if worker_hive != identity.hive.id.to_string() {
-                return Err(TaskStoreError::WorkerNotFound);
-            }
-        }
         let existing_id = transaction
             .query_row(
                 "SELECT id FROM jira_project_bindings WHERE hive_id = ?1 AND project_id = ?2",
@@ -96,14 +82,14 @@ impl TaskStore {
         transaction.execute(
             "INSERT INTO jira_project_bindings (
                  id, hive_id, project_id, project_key, project_name, scope, apiary_id,
-                 default_worker_id, access_verified
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)
+                 access_verified
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
              ON CONFLICT(hive_id, project_id) DO UPDATE SET
                  project_key = excluded.project_key,
                  project_name = excluded.project_name,
                  scope = excluded.scope,
                  apiary_id = excluded.apiary_id,
-                 default_worker_id = excluded.default_worker_id,
+                 default_worker_id = NULL,
                  access_verified = 1,
                  updated_at = unixepoch()",
             params![
@@ -114,7 +100,6 @@ impl TaskStore {
                 project_name,
                 input.scope.to_string(),
                 input.apiary_id.map(|value| value.to_string()),
-                input.default_worker_id.map(|value| value.to_string()),
             ],
         )?;
         transaction.commit()?;
@@ -132,7 +117,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT id, project_id, project_key, project_name, scope, hive_id, apiary_id,
-                    default_worker_id, access_verified, workflow_mapped
+                    access_verified, workflow_mapped
              FROM jira_project_bindings WHERE hive_id = ?1
              ORDER BY project_name COLLATE NOCASE, project_key",
         )?;
@@ -155,7 +140,7 @@ impl TaskStore {
         connection
             .query_row(
                 "SELECT id, project_id, project_key, project_name, scope, hive_id, apiary_id,
-                        default_worker_id, access_verified, workflow_mapped
+                        access_verified, workflow_mapped
                  FROM jira_project_bindings WHERE id = ?1",
                 [id.to_string()],
                 jira_binding_from_row,
@@ -265,13 +250,6 @@ impl TaskStore {
         if !binding.access_verified || !binding.workflow_mapped {
             return Err(TaskStoreError::InvalidJiraWorkflowMapping);
         }
-        let worker_id = binding
-            .default_worker_id
-            .ok_or(TaskStoreError::InvalidJiraProject)?;
-        let worker = self.get_worker_profile(worker_id)?;
-        if worker.hive_id != binding.hive_id {
-            return Err(TaskStoreError::WorkerNotFound);
-        }
         let states = self
             .list_jira_status_mappings(binding_id)?
             .into_iter()
@@ -289,6 +267,10 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let mut task_ids = Vec::with_capacity(issues.len());
         let mut tasks_changed = false;
+        // The task schema still requires a non-empty execution location. Jira
+        // intake has no repository yet, so keep an internal non-filesystem scope
+        // until assignment replaces it with the selected worker's workspace.
+        let unassigned_scope = format!("jira://project/{}", binding.project_id);
         for issue in issues {
             let issue_id = issue.issue_id.trim();
             let issue_key = issue.issue_key.trim();
@@ -339,7 +321,7 @@ impl TaskStore {
                         task_id.to_string(),
                         binding.hive_id.to_string(),
                         summary,
-                        worker.workspace,
+                        unassigned_scope,
                         target_state.to_string(),
                     ],
                 )?;
@@ -440,12 +422,8 @@ fn jira_binding_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JiraProjec
             .get::<_, Option<String>>(6)?
             .map(|value| parse_domain_id(&value))
             .transpose()?,
-        default_worker_id: row
-            .get::<_, Option<String>>(7)?
-            .map(|value| parse_domain_id(&value))
-            .transpose()?,
-        access_verified: row.get(8)?,
-        workflow_mapped: row.get(9)?,
+        access_verified: row.get(7)?,
+        workflow_mapped: row.get(8)?,
     })
 }
 
@@ -525,15 +503,6 @@ mod tests {
     #[test]
     fn project_binding_is_idempotent_by_remote_project_id() {
         let store = TaskStore::in_memory().unwrap();
-        let worker = store
-            .create_worker(
-                "Daisy",
-                ProviderKind::ClaudeCode,
-                "/projects/site",
-                false,
-                1,
-            )
-            .unwrap();
         let first = store
             .upsert_jira_project_binding(&JiraProjectBindingInput {
                 project_id: "10001",
@@ -541,7 +510,6 @@ mod tests {
                 project_name: "Website Services",
                 scope: JiraProjectScope::Hive,
                 apiary_id: None,
-                default_worker_id: Some(worker.id),
             })
             .unwrap();
         let refreshed = store
@@ -551,7 +519,6 @@ mod tests {
                 project_name: "Web Services",
                 scope: JiraProjectScope::Hive,
                 apiary_id: None,
-                default_worker_id: Some(worker.id),
             })
             .unwrap();
         assert_eq!(first.id, refreshed.id);
@@ -569,7 +536,6 @@ mod tests {
                 project_name: "Operations",
                 scope: JiraProjectScope::Hive,
                 apiary_id: None,
-                default_worker_id: None,
             })
             .unwrap();
         assert!(!binding.workflow_mapped);
@@ -623,7 +589,6 @@ mod tests {
                 project_name: "Website Services",
                 scope: JiraProjectScope::Hive,
                 apiary_id: None,
-                default_worker_id: Some(worker.id),
             })
             .unwrap();
         store
@@ -659,7 +624,7 @@ mod tests {
             )
             .unwrap()
             .remove(0);
-        assert_eq!(first.workspace, "/projects/website");
+        assert_eq!(first.workspace, "jira://project/10001");
         assert_eq!(first.state, TaskState::Ready);
         assert_eq!(first.assigned_worker_id, None);
         store
@@ -672,6 +637,10 @@ mod tests {
             )
             .unwrap();
         store.assign_task_to_worker(first.id, worker.id).unwrap();
+        assert_eq!(
+            store.get_task(first.id).unwrap().workspace,
+            "/projects/website"
+        );
 
         let refreshed = store
             .sync_jira_issues(

@@ -9,13 +9,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("discovers a project, maps its workflow, and binds it to a repository worker", async () => {
+test("discovers a project, maps its workflow, and connects it as a shared Hive pool", async () => {
   const requests: { url: string; method: string; body?: string }[] = [];
+  let bound = false;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
     requests.push({ url, method, body: typeof init?.body === "string" ? init.body : undefined });
-    if (url.includes("/bindings") && method === "GET") return ok([]);
+    if (url.includes("/bindings") && method === "GET") return ok(bound ? [{
+      id: "binding-1", project_id: "10001", project_key: "WEB", project_name: "Website Services",
+      scope: "hive", hive_id: "hive-1", apiary_id: null, access_verified: true, workflow_mapped: true,
+    }] : []);
     if (url.includes("/projects?") && method === "GET") {
       return ok([{ id: "10001", key: "WEB", name: "Website Services" }]);
     }
@@ -27,6 +31,7 @@ test("discovers a project, maps its workflow, and binds it to a repository worke
       ]);
     }
     if (url.endsWith("/bindings") && method === "POST") {
+      bound = true;
       return new Response(JSON.stringify({ id: "binding-1" }), { status: 201, headers: { "Content-Type": "application/json" } });
     }
     if (url.includes("/bindings/binding-1/mappings") && method === "PUT") return ok([]);
@@ -38,23 +43,21 @@ test("discovers a project, maps its workflow, and binds it to a repository worke
       operatorToken="operator-token"
       readiness={{ configured: true, connection: "ready", account_name: "Bea" }}
       unavailable={false}
-      workers={[{
-        id: "worker-1", hive_id: "hive-1", name: "Website", role: "worker", provider: "claude_code",
-        workspace: "/projects/website", autostart: false, position: 1, active_session_id: null,
-        created_at: 1, updated_at: 1, running: false, attention_state: "sleeping",
-      }]}
     />,
   );
 
   fireEvent.change(screen.getByLabelText("Find a Jira project"), { target: { value: "web" } });
   fireEvent.click(await screen.findByRole("option", { name: "WEB Website Services" }));
   expect(await screen.findByText("In Progress")).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("Repository worker"), { target: { value: "worker-1" } });
+  expect(screen.getByText("Issues arrive unassigned. Assign or claim each one when its repository and worker are known.")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Connect project" }));
 
   expect(await screen.findByText("Website Services is ready for this Hive.")).toBeInTheDocument();
+  expect(screen.getByText("Shared with this Hive")).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "WEB Website Services" })).not.toBeInTheDocument();
   const create = requests.find((request) => request.url.endsWith("/bindings") && request.method === "POST");
-  expect(JSON.parse(create?.body ?? "{}")).toMatchObject({ project_id: "10001", default_worker_id: "worker-1" });
+  expect(JSON.parse(create?.body ?? "{}")).toMatchObject({ project_id: "10001" });
+  expect(JSON.parse(create?.body ?? "{}")).not.toHaveProperty("default_worker_id");
   const mapping = requests.find((request) => request.url.includes("/mappings") && request.method === "PUT");
   expect(JSON.parse(mapping?.body ?? "{}").mappings).toEqual([
     { jira_status_id: "1", jira_status_name: "To Do", task_state: "ready" },
@@ -79,7 +82,6 @@ test("offers an operator-facing Atlassian connection instead of host-setting ins
       operatorToken="operator-token"
       readiness={{ configured: true, connection: "not_connected", account_name: null }}
       unavailable={false}
-      workers={[]}
       onNavigate={assign}
     />,
   );

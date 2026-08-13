@@ -92,7 +92,6 @@ export type JiraProjectBinding = {
   scope: "hive" | "apiary";
   hive_id: string;
   apiary_id: string | null;
-  default_worker_id: string | null;
   access_verified: boolean;
   workflow_mapped: boolean;
 };
@@ -595,7 +594,6 @@ export async function fetchJiraBindings(operatorToken: string): Promise<JiraProj
 export async function createJiraBinding(
   operatorToken: string,
   project: JiraProject,
-  defaultWorkerId: string | null,
 ): Promise<JiraProjectBinding> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/bindings", {
     method: "POST",
@@ -604,7 +602,6 @@ export async function createJiraBinding(
       project_id: project.id,
       project_key: project.key,
       project_name: project.name,
-      default_worker_id: defaultWorkerId,
     }),
   });
   return response.json() as Promise<JiraProjectBinding>;

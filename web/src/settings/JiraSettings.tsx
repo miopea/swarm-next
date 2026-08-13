@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   beginJiraAuthorization,
@@ -15,14 +15,12 @@ import {
   type JiraReadiness,
   type JiraStatusMapping,
   type TaskState,
-  type Worker,
 } from "../api";
 
 type Props = {
   operatorToken: string;
   readiness: JiraReadiness | undefined;
   unavailable: boolean;
-  workers: Worker[];
   onNavigate?: (url: string) => void;
 };
 
@@ -35,17 +33,18 @@ const taskStates: { value: TaskState; label: string }[] = [
   { value: "completed", label: "Done" },
 ];
 
-export default function JiraSettings({ operatorToken, readiness, unavailable, workers, onNavigate = (url) => window.location.assign(url) }: Props) {
-  const repositoryWorkers = useMemo(() => workers.filter((worker) => worker.role === "worker"), [workers]);
+export default function JiraSettings({ operatorToken, readiness, unavailable, onNavigate = (url) => window.location.assign(url) }: Props) {
   const [bindings, setBindings] = useState<JiraProjectBinding[]>([]);
   const [query, setQuery] = useState("");
   const [projects, setProjects] = useState<JiraProject[]>([]);
   const [selectedProject, setSelectedProject] = useState<JiraProject>();
   const [statuses, setStatuses] = useState<JiraProjectStatus[]>([]);
   const [mapping, setMapping] = useState<Record<string, TaskState>>({});
-  const [workerId, setWorkerId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const availableProjects = projects.filter(
+    (project) => !bindings.some((binding) => binding.project_id === project.id),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -85,11 +84,11 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, wo
   }
 
   async function saveProject() {
-    if (!selectedProject || !workerId || statuses.length === 0) return;
+    if (!selectedProject || statuses.length === 0) return;
     setBusy(true);
     setMessage("");
     try {
-      const binding = await createJiraBinding(operatorToken, selectedProject, workerId);
+      const binding = await createJiraBinding(operatorToken, selectedProject);
       const mappings: JiraStatusMapping[] = statuses.map((status) => ({
         jira_status_id: status.id,
         jira_status_name: status.name,
@@ -101,7 +100,6 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, wo
       setSelectedProject(undefined);
       setStatuses([]);
       setMapping({});
-      setWorkerId("");
       setQuery("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The Jira project could not be connected.");
@@ -150,7 +148,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, wo
   return (
     <section id="settings-integrations" className="settings-card integration-settings" aria-labelledby="integration-heading">
       <div><p className="eyebrow">Integrations</p><h3 id="integration-heading">Bring Jira into your Hive</h3></div>
-      <p>Connect Jira projects to the worker who owns the repository. Queen can then reason about work and assignment without handling credentials or workspace paths.</p>
+      <p>Connect Jira projects to this Hive as shared ticket pools. Queen and the operator can then route each issue to the right repository worker.</p>
       <div className="integration-status" role="status">
         <span className={`presence ${readiness?.connection === "ready" ? "online" : unavailable || readiness?.connection === "credentials_invalid" || readiness?.connection === "permission_denied" ? "offline" : "waiting"}`} />
         <span><strong>{jiraReadinessLabel(readiness, unavailable)}</strong><small>{jiraReadinessDetail(readiness, unavailable)}</small></span>
@@ -171,16 +169,13 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, wo
 
       {bindings.length > 0 ? (
         <div className="jira-binding-list" aria-label="Connected Jira projects">
-          {bindings.map((binding) => {
-            const worker = workers.find((candidate) => candidate.id === binding.default_worker_id);
-            return (
+          {bindings.map((binding) => (
               <div key={binding.id} className="jira-binding-card">
                 <span><strong>{binding.project_key}</strong><small>{binding.project_name}</small></span>
-                <span><strong>{worker?.name ?? "Choose a worker"}</strong><small>{binding.workflow_mapped ? "Workflow mapped" : "Mapping needed"}</small></span>
-                <button className="secondary-button" type="button" disabled={busy || !binding.workflow_mapped || !binding.default_worker_id} onClick={() => void syncProject(binding)}>Sync now</button>
+                <span><strong>Shared with this Hive</strong><small>{binding.workflow_mapped ? "Workflow mapped" : "Mapping needed"}</small></span>
+                <button className="secondary-button" type="button" disabled={busy || !binding.workflow_mapped} onClick={() => void syncProject(binding)}>Sync now</button>
               </div>
-            );
-          })}
+          ))}
         </div>
       ) : <small className="privacy-note">No Jira projects are connected to this Hive yet.</small>}
 
@@ -195,9 +190,9 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, wo
               onChange={(event) => { setQuery(event.target.value); setSelectedProject(undefined); setStatuses([]); }}
             />
           </label>
-          {!selectedProject && projects.length > 0 ? (
+          {!selectedProject && availableProjects.length > 0 ? (
             <div className="jira-project-results" role="listbox" aria-label="Visible Jira projects">
-              {projects.slice(0, 12).map((project) => (
+              {availableProjects.slice(0, 12).map((project) => (
                 <button key={project.id} type="button" role="option" onClick={() => void chooseProject(project)}>
                   <strong>{project.key}</strong><span>{project.name}</span>
                 </button>
@@ -206,13 +201,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, wo
           ) : null}
           {selectedProject ? (
             <div className="jira-workflow-setup">
-              <label>
-                <span>Repository worker</span>
-                <select value={workerId} onChange={(event) => setWorkerId(event.target.value)}>
-                  <option value="">Choose the worker who owns this code</option>
-                  {repositoryWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}</option>)}
-                </select>
-              </label>
+              <p className="privacy-note">Issues arrive unassigned. Assign or claim each one when its repository and worker are known.</p>
               <div className="jira-status-map" aria-label="Jira workflow mapping">
                 {statuses.map((status) => (
                   <label key={status.id}>
@@ -223,7 +212,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, wo
                   </label>
                 ))}
               </div>
-              <button className="primary-action" type="button" disabled={busy || !workerId || statuses.length === 0} onClick={() => void saveProject()}>
+              <button className="primary-action" type="button" disabled={busy || statuses.length === 0} onClick={() => void saveProject()}>
                 {busy ? "Connecting…" : "Connect project"}
               </button>
             </div>

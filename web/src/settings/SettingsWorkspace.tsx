@@ -244,7 +244,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         ) : null}
       </section>
 
-      <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} workers={workers} />
+      <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} />
 
       <section id="settings-backup" className="settings-card" aria-labelledby="backup-heading">
         <div><p className="eyebrow">Backup</p><h3 id="backup-heading">Carry your Hive safely</h3></div>

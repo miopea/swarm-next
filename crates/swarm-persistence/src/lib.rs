@@ -758,7 +758,11 @@ impl TaskStore {
             [id.to_string()],
         )?;
         transaction.execute(
-            "UPDATE tasks SET assigned_worker_id = ?2, updated_at = unixepoch() WHERE id = ?1",
+            "UPDATE tasks
+             SET assigned_worker_id = ?2,
+                 workspace = (SELECT workspace FROM worker_profiles WHERE id = ?2),
+                 updated_at = unixepoch()
+             WHERE id = ?1",
             params![id.to_string(), worker_id.to_string()],
         )?;
         if let Some(session_id) = session_id {

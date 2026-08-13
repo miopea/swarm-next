@@ -962,10 +962,12 @@ struct JiraProjectsQuery {
 
 #[derive(Debug, Deserialize)]
 struct CreateJiraProjectBindingRequest {
-    project_id: String,
-    project_key: String,
-    project_name: String,
-    default_worker_id: Option<WorkerId>,
+    #[serde(rename = "project_id")]
+    id: String,
+    #[serde(rename = "project_key")]
+    key: String,
+    #[serde(rename = "project_name")]
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2308,12 +2310,11 @@ async fn create_jira_binding(
     authorize(&state, &headers)?;
     let binding = task_store(&state)?
         .upsert_jira_project_binding(&JiraProjectBindingInput {
-            project_id: &request.project_id,
-            project_key: &request.project_key,
-            project_name: &request.project_name,
+            project_id: &request.id,
+            project_key: &request.key,
+            project_name: &request.name,
             scope: JiraProjectScope::Hive,
             apiary_id: None,
-            default_worker_id: request.default_worker_id,
         })
         .map_err(|error| task_store_error(&error))?;
     Ok((
@@ -3857,15 +3858,6 @@ mod tests {
     #[tokio::test]
     async fn jira_project_binding_and_workflow_mapping_are_private_and_durable() {
         let store = TaskStore::in_memory().unwrap();
-        let worker = store
-            .create_worker(
-                "Website",
-                ProviderKind::ClaudeCode,
-                "/projects/website",
-                false,
-                1,
-            )
-            .unwrap();
         let app = router(
             AppState::default()
                 .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
@@ -3883,7 +3875,6 @@ mod tests {
                             "project_id": "10001",
                             "project_key": "WEB",
                             "project_name": "Website Services",
-                            "default_worker_id": worker.id,
                         })
                         .to_string(),
                     ))
@@ -3906,7 +3897,6 @@ mod tests {
                             "project_id": "10001",
                             "project_key": "WEB",
                             "project_name": "Website Services",
-                            "default_worker_id": worker.id,
                         })
                         .to_string(),
                     ))
@@ -3918,7 +3908,7 @@ mod tests {
         assert_eq!(create.headers()[header::CACHE_CONTROL], "no-store");
         let binding = response_json(create).await;
         let binding_id = binding["id"].as_str().unwrap();
-        assert_eq!(binding["default_worker_id"], worker.id.to_string());
+        assert!(binding.get("default_worker_id").is_none());
 
         let mapped = app
             .clone()
@@ -3973,15 +3963,6 @@ mod tests {
         tokio::spawn(async move { axum::serve(listener, jira_server).await.unwrap() });
 
         let store = TaskStore::in_memory().unwrap();
-        let worker = store
-            .create_worker(
-                "Website",
-                ProviderKind::ClaudeCode,
-                "/projects/website",
-                false,
-                1,
-            )
-            .unwrap();
         let binding = store
             .upsert_jira_project_binding(&JiraProjectBindingInput {
                 project_id: "10001",
@@ -3989,7 +3970,6 @@ mod tests {
                 project_name: "Website Services",
                 scope: JiraProjectScope::Hive,
                 apiary_id: None,
-                default_worker_id: Some(worker.id),
             })
             .unwrap();
         store
