@@ -165,7 +165,7 @@ async function checkSurface(browser, surface) {
           if (issueCount === 0 || intakeBounds.scrollWidth > intakeBounds.clientWidth + 1) {
             throw new Error(`${surface.name}: Jira task intake is empty or horizontally clipped`);
           }
-          if (!/assigned to .*or unassigned .*open only/i.test(await intake.innerText())) {
+          if (!/unassigned .*open only/i.test(await intake.innerText())) {
             throw new Error(`${surface.name}: Jira task intake does not explain its Hive scope`);
           }
           const checkedCount = await intake.getByRole("checkbox", { checked: true }).count();

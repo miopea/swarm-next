@@ -48,6 +48,7 @@ export class TerminalController {
   #stateDetail: string | undefined;
   #pendingFocus: "container" | "input" | undefined;
   #focusOnConnect: "container" | "input" | undefined;
+  #lastRequestedFocus: "container" | "input" | undefined;
 
   constructor(surfaceFactory: TerminalSurfaceFactory, connectionFactory: TerminalConnectionFactory) {
     this.#surface = surfaceFactory();
@@ -95,6 +96,7 @@ export class TerminalController {
   requestFocus(input: boolean): void {
     if (this.#disposed) return;
     this.#pendingFocus = input ? "input" : "container";
+    this.#lastRequestedFocus = this.#pendingFocus;
     this.#focusOnConnect = this.#state === "connected" ? undefined : this.#pendingFocus;
     this.#applyPendingFocus();
   }
@@ -155,6 +157,8 @@ export class TerminalController {
     this.#connection.start({
       onOutput: (bytes) => this.#surface.write(bytes),
       onSnapshot: async (snapshot) => {
+        const restoreFocus = document.activeElement === this.#host
+          || Boolean(document.activeElement && this.#host.contains(document.activeElement));
         await this.#surface.restore(snapshot);
         try {
           const fitted = await this.#surface.fit();
@@ -164,6 +168,7 @@ export class TerminalController {
           // without measurable font metrics. The canonical snapshot is already
           // restored; ResizeObserver will publish the settled dimensions.
         }
+        if (restoreFocus && this.#lastRequestedFocus) this.#pendingFocus = this.#lastRequestedFocus;
         this.#applyPendingFocus();
       },
       onState: (state, detail) => this.#setState(state, detail),
