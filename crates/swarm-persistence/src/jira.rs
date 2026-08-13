@@ -24,6 +24,16 @@ const MAX_REMOTE_TIMESTAMP_BYTES: usize = 128;
 const MAX_TRANSITION_CLAIMS: i64 = 16;
 const MAX_TRANSITION_ATTEMPTS: i64 = 3;
 const MAX_PENDING_TRANSITIONS: i64 = 256;
+const MAX_PENDING_COMMENTS: i64 = 256;
+const MAX_COMMENT_BYTES: usize = 4_000;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JiraCommentDispatch {
+    pub id: String,
+    pub task_id: TaskId,
+    pub issue_key: String,
+    pub body: String,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JiraTransitionDispatch {
@@ -754,6 +764,213 @@ impl TaskStore {
             .optional()
             .map_err(Into::into)
     }
+
+    /// Queues one bounded Jira comment for durable delivery.
+    pub fn queue_jira_comment(
+        &self,
+        task_id: TaskId,
+        body: &str,
+    ) -> Result<String, TaskStoreError> {
+        let body = body.trim();
+        if body.is_empty() || body.len() > MAX_COMMENT_BYTES || body.chars().any(|c| c == '\0') {
+            return Err(TaskStoreError::InvalidJiraComment);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let linked = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM jira_issue_links WHERE task_id = ?1)",
+            [task_id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !linked {
+            return Err(TaskStoreError::NotFound);
+        }
+        let pending = transaction.query_row(
+            "SELECT COUNT(*) FROM jira_comment_deliveries
+             WHERE state IN ('queued','dispatching')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        if pending >= MAX_PENDING_COMMENTS {
+            return Err(TaskStoreError::JiraCommentQueueFull);
+        }
+        let id = uuid::Uuid::now_v7().to_string();
+        transaction.execute(
+            "INSERT INTO jira_comment_deliveries (id, task_id, body, state)
+             VALUES (?1, ?2, ?3, 'queued')",
+            params![id, task_id.to_string(), body],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, note)
+             VALUES (?1, 'details_updated', ?2)",
+            params![task_id.to_string(), "Jira comment queued"],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        Ok(id)
+    }
+
+    /// Atomically claims a bounded batch of queued Jira comments.
+    pub fn claim_jira_comments(
+        &self,
+        now: i64,
+    ) -> Result<Vec<JiraCommentDispatch>, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let candidates = {
+            let mut statement = transaction.prepare(
+                "SELECT delivery.id, delivery.task_id, link.issue_key, delivery.body
+                 FROM jira_comment_deliveries delivery
+                 JOIN jira_issue_links link ON link.task_id = delivery.task_id
+                 WHERE delivery.state = 'queued' AND delivery.available_at <= ?1
+                   AND delivery.attempts < 3
+                 ORDER BY delivery.created_at, delivery.id LIMIT 16",
+            )?;
+            statement
+                .query_map([now], |row| {
+                    Ok(JiraCommentDispatch {
+                        id: row.get(0)?,
+                        task_id: parse_domain_id(&row.get::<_, String>(1)?)?,
+                        issue_key: row.get(2)?,
+                        body: row.get(3)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for delivery in &candidates {
+            let changed = transaction.execute(
+                "UPDATE jira_comment_deliveries
+                 SET state = 'dispatching', attempts = attempts + 1,
+                     attempted_at = ?2, updated_at = ?2
+                 WHERE id = ?1 AND state = 'queued' AND attempts < 3",
+                params![delivery.id, now],
+            )?;
+            if changed != 1 {
+                return Err(TaskStoreError::IntegrityFailure(
+                    "Jira comment claim lost atomic ownership".into(),
+                ));
+            }
+        }
+        if !candidates.is_empty() {
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
+        transaction.commit()?;
+        Ok(candidates)
+    }
+
+    pub fn complete_jira_comment(&self, id: &str, now: i64) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let task_id = transaction
+            .query_row(
+                "SELECT task_id FROM jira_comment_deliveries
+                 WHERE id = ?1 AND state = 'dispatching'",
+                [id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(task_id) = task_id else {
+            return Ok(false);
+        };
+        let changed = transaction.execute(
+            "UPDATE jira_comment_deliveries
+             SET state = 'delivered', delivered_at = ?2, last_error = NULL, updated_at = ?2
+             WHERE id = ?1 AND state = 'dispatching'",
+            params![id, now],
+        )? == 1;
+        if changed {
+            transaction.execute(
+                "INSERT INTO task_activity (task_id, kind, note)
+                 VALUES (?1, 'details_updated', 'Comment delivered to Jira')",
+                [task_id],
+            )?;
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
+    pub fn fail_jira_comment(
+        &self,
+        id: &str,
+        now: i64,
+        retryable: bool,
+        error_code: &str,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let attempts = transaction
+            .query_row(
+                "SELECT attempts FROM jira_comment_deliveries
+                 WHERE id = ?1 AND state = 'dispatching'",
+                [id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        let Some(attempts) = attempts else {
+            return Ok(false);
+        };
+        let (state, available_at) = if retryable && attempts < 3 {
+            (
+                "queued",
+                now.saturating_add(30_i64.saturating_mul(attempts.max(1))),
+            )
+        } else {
+            ("conflict", now)
+        };
+        let changed = transaction.execute(
+            "UPDATE jira_comment_deliveries
+             SET state = ?2, available_at = ?3, last_error = ?4, updated_at = ?5
+             WHERE id = ?1 AND state = 'dispatching'",
+            params![id, state, available_at, error_code, now],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
+    pub fn recover_inflight_jira_comments(&self) -> Result<usize, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "UPDATE jira_comment_deliveries
+                 SET state = 'uncertain', last_error = 'delivery_interrupted', updated_at = unixepoch()
+                 WHERE state = 'dispatching'",
+                [],
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn jira_comment_state_for_task(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<String>, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT state FROM jira_comment_deliveries
+                 WHERE task_id = ?1 AND state <> 'delivered'
+                 ORDER BY updated_at DESC, id DESC LIMIT 1",
+                [task_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn retry_jira_comments(&self, task_id: TaskId) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE jira_comment_deliveries
+             SET state = 'queued', attempts = 0, available_at = unixepoch(),
+                 attempted_at = NULL, last_error = NULL, updated_at = unixepoch()
+             WHERE task_id = ?1 AND state IN ('conflict','uncertain')",
+            [task_id.to_string()],
+        )?;
+        Ok(changed > 0)
+    }
 }
 
 pub(super) fn queue_jira_transition(
@@ -1243,6 +1460,23 @@ mod tests {
         let link = store.jira_issue_link_for_task(task.id).unwrap().unwrap();
         assert_eq!(link.jira_status_id, "3");
         assert_eq!(link.jira_status_name, "In Progress");
+
+        let comment_id = store
+            .queue_jira_comment(task.id, "Verified on desktop and mobile")
+            .unwrap();
+        assert_eq!(
+            store
+                .jira_comment_state_for_task(task.id)
+                .unwrap()
+                .as_deref(),
+            Some("queued")
+        );
+        let comment = store.claim_jira_comments(now + 40).unwrap().remove(0);
+        assert_eq!(comment.id, comment_id);
+        assert_eq!(comment.issue_key, "WEB-42");
+        assert_eq!(comment.body, "Verified on desktop and mobile");
+        assert!(store.complete_jira_comment(&comment.id, now + 41).unwrap());
+        assert_eq!(store.jira_comment_state_for_task(task.id).unwrap(), None);
     }
 
     #[test]
@@ -1363,6 +1597,6 @@ mod tests {
             .unwrap()
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap();
-        assert_eq!(version, 22);
+        assert_eq!(version, crate::CURRENT_SCHEMA_VERSION);
     }
 }

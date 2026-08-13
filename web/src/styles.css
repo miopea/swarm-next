@@ -269,6 +269,14 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-history li { grid-template-columns: 6px minmax(0, 1fr) auto; }
 .task-history-handoff { display: block; margin-top: 3px; color: var(--text); font-size: .71rem; line-height: 1.4; }
 .task-history time { color: var(--quiet); font-size: .67rem; white-space: nowrap; }
+.jira-discussion { display: grid; margin-top: 11px; padding-top: 11px; gap: 10px; border-top: 1px solid var(--line); }
+.jira-discussion-heading, .jira-discussion form { display: grid; gap: 5px; }
+.jira-discussion-heading small, .jira-discussion li small { color: var(--muted); white-space: pre-wrap; }
+.jira-discussion ol { display: grid; margin: 0; padding: 0; gap: 8px; list-style: none; }
+.jira-discussion li { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 10px; gap: 10px; border-radius: 12px; background: var(--surface-soft); }
+.jira-discussion li span { display: grid; min-width: 0; gap: 3px; }
+.jira-discussion time { color: var(--quiet); font-size: .68rem; }
+.jira-discussion textarea { min-height: 80px; resize: vertical; }
 .task-edit-form { display: grid; gap: 7px; margin: -5px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); }
 .task-edit-form input, .task-edit-form select, .task-edit-form textarea { min-height: 34px; padding: 7px 9px; font-size: .78rem; }
 .task-edit-row { display: grid; grid-template-columns: minmax(90px, .45fr) minmax(150px, 1fr); gap: 8px; }
@@ -683,6 +691,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .jira-task-source-heading { align-items: start; flex-direction: column; gap: 5px; }
   .jira-project-actions { display: grid; grid-template-columns: 1fr; }
   .jira-project-actions button { justify-content: space-between; width: 100%; }
+  .jira-discussion li { grid-template-columns: 1fr; }
 }
 .maintenance-action > p { margin: 0; color: var(--muted); font-size: .79rem; line-height: 1.5; }
 .maintenance-confirmation { display: grid; gap: .35rem; }

@@ -24,7 +24,7 @@ const worker: Worker = {
 function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> = {}) {
   const props: React.ComponentProps<typeof TaskBoard> = {
     tasks: [task], jiraTaskLinks: [], operatorToken: "operator-token", sessions: [], workers: [worker], busy: false,
-    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onRetryJira: vi.fn(), onJiraImported: vi.fn().mockResolvedValue(undefined), onReorder: vi.fn(),
+    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onFetchJiraComments: vi.fn().mockResolvedValue([]), onAddJiraComment: vi.fn().mockResolvedValue({ state: "delivered" }), onRetryJira: vi.fn(), onJiraImported: vi.fn().mockResolvedValue(undefined), onReorder: vi.fn(),
     ...overrides,
   };
   return { props, ...render(<TaskBoard {...props} />) };
@@ -148,6 +148,33 @@ test("keeps Jira identity and remote status visible while routing work", () => {
   expect(onRetryJira).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
   expect(within(card).getByRole("link", { name: /WEB-42/ })).toHaveAttribute("href", "https://jira.example.test/browse/WEB-42");
   expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
+});
+
+test("reads and posts Jira discussion without leaving the task", async () => {
+  const onFetchJiraComments = vi.fn().mockResolvedValue([{
+    id: "comment-1", author_name: "Bea", body: "Ready for review",
+    created_at: "2026-08-13T13:00:00Z", updated_at: "2026-08-13T13:00:00Z",
+  }]);
+  const onAddJiraComment = vi.fn().mockResolvedValue({ state: "delivered" });
+  renderBoard({
+    jiraTaskLinks: [{
+      issue_id: "20001", issue_key: "WEB-42", issue_url: "https://jira.example.test/browse/WEB-42", binding_id: "binding-1",
+      project_key: "WEB", project_name: "Website Services", task_id: task.id,
+      jira_status_id: "1", jira_status_name: "To Do", jira_assignee_account_id: "account-1", jira_assignee_name: "Bradford",
+      remote_updated_at: "2026-08-13T13:00:00Z", last_synced_at: 1, outbound_state: null,
+    }],
+    onFetchJiraComments,
+    onAddJiraComment,
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "Discussion" }));
+  const discussion = await screen.findByRole("region", { name: "Jira discussion for WEB-42" });
+  expect(within(discussion).getByText("Ready for review")).toBeInTheDocument();
+  fireEvent.change(within(discussion).getByLabelText("Add an update"), { target: { value: "Shipped cleanly" } });
+  fireEvent.click(within(discussion).getByRole("button", { name: "Share to Jira" }));
+  await waitFor(() => expect(onAddJiraComment).toHaveBeenCalledWith(task.id, "Shipped cleanly"));
+  expect(within(discussion).getByText("Shared to Jira.")).toBeInTheDocument();
+  expect(onFetchJiraComments).toHaveBeenCalledTimes(2);
 });
 
 test("opens the assigned running worker directly from her task", () => {

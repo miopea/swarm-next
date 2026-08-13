@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 
-import type { JiraTaskLink, SessionSummary, Task, TaskActivity, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput, Worker } from "../api";
+import type { JiraComment, JiraTaskLink, SessionSummary, Task, TaskActivity, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import JiraTaskIntake from "./JiraTaskIntake";
 
@@ -21,6 +21,8 @@ type Props = {
   onStartWorker: (task: Task) => Promise<void>;
   onOpenWorker: (sessionId: string) => void;
   onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
+  onFetchJiraComments: (taskId: string) => Promise<JiraComment[]>;
+  onAddJiraComment: (taskId: string, body: string) => Promise<{ state: string }>;
   onRetryJira: (task: Task) => Promise<void>;
   onJiraImported: () => Promise<void>;
   onReorder: (taskIds: string[]) => Promise<void>;
@@ -85,6 +87,8 @@ export default function TaskBoard({
   onStartWorker,
   onOpenWorker,
   onFetchActivity,
+  onFetchJiraComments,
+  onAddJiraComment,
   onRetryJira,
   onJiraImported,
   onReorder,
@@ -256,6 +260,8 @@ export default function TaskBoard({
                 onStartWorker={onStartWorker}
                 onOpenWorker={onOpenWorker}
                 onFetchActivity={onFetchActivity}
+                onFetchJiraComments={onFetchJiraComments}
+                onAddJiraComment={onAddJiraComment}
                 onRetryJira={onRetryJira}
                 canMoveEarlier={index > 0}
                 canMoveLater={index < openTasks.length - 1}
@@ -309,6 +315,8 @@ export default function TaskBoard({
                 onStartWorker={onStartWorker}
                 onOpenWorker={onOpenWorker}
                 onFetchActivity={onFetchActivity}
+                onFetchJiraComments={onFetchJiraComments}
+                onAddJiraComment={onAddJiraComment}
                 onRetryJira={onRetryJira}
                 canMoveEarlier={false}
                 canMoveLater={false}
@@ -330,7 +338,7 @@ function initialComposerOpen(): boolean {
   return typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 680px)").matches;
 }
 
-function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "operatorToken" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onJiraImported" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "operatorToken" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onJiraImported" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
   const targetWorker = assignableWorkers.find((worker) => worker.id === task.assigned_worker_id)
@@ -341,6 +349,12 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
   const [historyError, setHistoryError] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [discussionOpen, setDiscussionOpen] = useState(false);
+  const [comments, setComments] = useState<JiraComment[]>([]);
+  const [commentBody, setCommentBody] = useState("");
+  const [discussionLoading, setDiscussionLoading] = useState(false);
+  const [discussionError, setDiscussionError] = useState("");
+  const [discussionMessage, setDiscussionMessage] = useState("");
   const cardRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -376,6 +390,42 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
     }
     setHistoryOpen(true);
     void loadActivity();
+  }
+
+  async function toggleDiscussion() {
+    if (discussionOpen) {
+      setDiscussionOpen(false);
+      return;
+    }
+    setDiscussionOpen(true);
+    setDiscussionLoading(true);
+    setDiscussionError("");
+    setDiscussionMessage("");
+    try {
+      setComments(await onFetchJiraComments(task.id));
+    } catch (error) {
+      setDiscussionError(error instanceof Error ? error.message : "Jira discussion is unavailable.");
+    } finally {
+      setDiscussionLoading(false);
+    }
+  }
+
+  async function submitComment(event: FormEvent) {
+    event.preventDefault();
+    const body = commentBody.trim();
+    if (!body) return;
+    setDiscussionLoading(true);
+    setDiscussionError("");
+    try {
+      const result = await onAddJiraComment(task.id, body);
+      setCommentBody("");
+      setComments(await onFetchJiraComments(task.id));
+      setDiscussionMessage(result.state === "delivered" ? "Shared to Jira." : "Saved safely; Jira delivery is pending.");
+    } catch (error) {
+      setDiscussionError(error instanceof Error ? error.message : "The Jira update could not be sent.");
+    } finally {
+      setDiscussionLoading(false);
+    }
   }
   return (
     <article
@@ -462,6 +512,7 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
       <div className="task-actions">
         {!editing && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} targetWorker={targetWorker} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}
         {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
+        {!editing && jiraLink && <button className="text-button" disabled={busy} onClick={() => void toggleDiscussion()}>{discussionOpen ? "Hide discussion" : "Discussion"}</button>}
         {!editing && (
           <button className="task-menu-trigger" aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)}>
             <span aria-hidden="true">•••</span>
@@ -485,6 +536,26 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
           failed={historyError}
           onRetry={() => void loadActivity()}
         />
+      )}
+      {discussionOpen && jiraLink && (
+        <section className="jira-discussion" aria-label={`Jira discussion for ${jiraLink.issue_key}`}>
+          <div className="jira-discussion-heading"><strong>Jira discussion</strong><small>Two-way · shared with everyone on the issue</small></div>
+          {discussionLoading && comments.length === 0 ? <p>Loading discussion…</p> : null}
+          {discussionError ? <p className="settings-error" role="alert">{discussionError}</p> : null}
+          {discussionMessage ? <p className="settings-message" role="status">{discussionMessage}</p> : null}
+          {comments.length > 0 ? (
+            <ol>
+              {comments.map((comment) => (
+                <li key={comment.id}><span><strong>{comment.author_name}</strong><small>{comment.body}</small></span><time>{new Date(comment.created_at).toLocaleString()}</time></li>
+              ))}
+            </ol>
+          ) : !discussionLoading ? <p>No Jira comments yet.</p> : null}
+          <form onSubmit={(event) => void submitComment(event)}>
+            <label htmlFor={`jira-comment-${task.id}`}>Add an update</label>
+            <textarea id={`jira-comment-${task.id}`} value={commentBody} maxLength={4000} placeholder="Progress, a question, evidence, or a handoff" onChange={(event) => setCommentBody(event.target.value)} />
+            <button className="secondary-button" type="submit" disabled={discussionLoading || !commentBody.trim()}>Share to Jira</button>
+          </form>
+        </section>
       )}
     </article>
   );

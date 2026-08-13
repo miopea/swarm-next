@@ -192,6 +192,8 @@ impl ServerHandler for AgentMcp {
         let mut tools = vec![
             list_tasks_tool(),
             transition_task_tool(),
+            list_jira_comments_tool(),
+            comment_jira_task_tool(),
             list_decisions_tool(),
             request_decision_tool(),
         ];
@@ -222,6 +224,8 @@ impl ServerHandler for AgentMcp {
                 .list_visible_tasks(self.principal)
                 .and_then(|tasks| structured(json!({ "tasks": tasks }))),
             "swarm_transition_task" => self.transition_task(arguments).await,
+            "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
+            "swarm_comment_jira_task" => self.comment_jira_task(arguments),
             "swarm_list_workers" => self
                 .tasks
                 .list_workers(self.principal)
@@ -346,6 +350,44 @@ impl AgentMcp {
             .transition_task(self.principal, task_id, input.state, &input.note)?;
         crate::deliver_jira_transition_batch(store, &self.jira, self.changed.as_ref()).await;
         structured(task)
+    }
+
+    async fn list_jira_comments(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<JiraTaskInput>(arguments)?;
+        let task_id = self.visible_task_id(&input.task_id)?;
+        let link = self
+            .tasks
+            .store()
+            .jira_issue_link_for_task(task_id)?
+            .ok_or(ApplicationError::NotAuthorized)?;
+        let comments = self
+            .jira
+            .comments(&link.issue_key)
+            .await
+            .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
+        structured(json!({ "issue_key": link.issue_key, "comments": comments }))
+    }
+
+    fn comment_jira_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<CommentJiraTaskInput>(arguments)?;
+        let task_id = self.visible_task_id(&input.task_id)?;
+        self.tasks
+            .store()
+            .queue_jira_comment(task_id, &input.body)?;
+        structured(json!({ "task_id": task_id, "state": "queued" }))
+    }
+
+    fn visible_task_id(&self, value: &str) -> Result<TaskId, ApplicationError> {
+        let task_id = TaskId::from_str(value).map_err(|_| ApplicationError::NotAuthorized)?;
+        self.tasks
+            .list_visible_tasks(self.principal)?
+            .into_iter()
+            .any(|task| task.id == task_id)
+            .then_some(task_id)
+            .ok_or(ApplicationError::NotAuthorized)
     }
 
     async fn preview_jira_project(
@@ -524,6 +566,17 @@ struct SyncJiraProjectInput {
 #[derive(Deserialize)]
 struct PreviewJiraProjectInput {
     binding_id: String,
+}
+
+#[derive(Deserialize)]
+struct JiraTaskInput {
+    task_id: String,
+}
+
+#[derive(Deserialize)]
+struct CommentJiraTaskInput {
+    task_id: String,
+    body: String,
 }
 
 #[derive(Deserialize)]
@@ -707,6 +760,37 @@ fn transition_task_tool() -> Tool {
                 "note": { "type": "string", "maxLength": 4000, "description": "Concise blocker reason, review handoff, or transition context" }
             },
             "required": ["task_id", "state"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn list_jira_comments_tool() -> Tool {
+    tool(
+        "swarm_list_jira_comments",
+        "Read the Jira discussion for a linked task visible to this agent. Workers may read only their current assignment; Queen may read any Hive task.",
+        &json!({
+            "type": "object",
+            "properties": { "task_id": { "type": "string", "format": "uuid" } },
+            "required": ["task_id"],
+            "additionalProperties": false
+        }),
+        true,
+    )
+}
+
+fn comment_jira_task_tool() -> Tool {
+    tool(
+        "swarm_comment_jira_task",
+        "Queue a durable progress update, question, evidence note, or handoff in the Jira discussion for a linked task visible to this agent.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "body": { "type": "string", "minLength": 1, "maxLength": 4000 }
+            },
+            "required": ["task_id", "body"],
             "additionalProperties": false
         }),
         false,
@@ -916,6 +1000,8 @@ mod tests {
         assert!(queen_names.contains(&"swarm_preview_jira_project"));
         assert!(queen_names.contains(&"swarm_sync_jira_project"));
         assert!(queen_names.contains(&"swarm_refresh_jira_project"));
+        assert!(queen_names.contains(&"swarm_list_jira_comments"));
+        assert!(queen_names.contains(&"swarm_comment_jira_task"));
         assert!(!worker_names.contains(&"swarm_preview_jira_project"));
         assert!(!worker_names.contains(&"swarm_sync_jira_project"));
         assert!(!worker_names.contains(&"swarm_refresh_jira_project"));
@@ -924,6 +1010,8 @@ mod tests {
             [
                 "swarm_list_tasks",
                 "swarm_transition_task",
+                "swarm_list_jira_comments",
+                "swarm_comment_jira_task",
                 "swarm_list_decisions",
                 "swarm_request_decision"
             ]

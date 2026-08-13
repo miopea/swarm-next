@@ -71,6 +71,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "crash-interrupted Jira updates require reconciliation"
         );
     }
+    let recovered_jira_comments = state.recover_jira_comment_deliveries()?;
+    if recovered_jira_comments > 0 {
+        tracing::warn!(
+            recovered_jira_comments,
+            "crash-interrupted Jira comments require reconciliation"
+        );
+    }
     state.supervise_workers().await;
     let supervisor = state.clone();
     tokio::spawn(async move {

@@ -245,6 +245,7 @@ impl AppState {
     /// project refresh is isolated so local work and other connected projects continue.
     pub async fn reconcile_jira(&self) {
         self.deliver_jira_transitions().await;
+        self.deliver_jira_comments().await;
         let Some(store) = self.task_store.as_ref() else {
             return;
         };
@@ -306,6 +307,19 @@ impl AppState {
         .await;
     }
 
+    pub async fn deliver_jira_comments(&self) {
+        let _guard = self.jira_delivery.lock().await;
+        let Some(store) = self.task_store.as_ref() else {
+            return;
+        };
+        deliver_jira_comment_batch(
+            store,
+            &self.jira_readiness,
+            self.control_room_notify.as_ref(),
+        )
+        .await;
+    }
+
     /// Recovers a crash-interrupted Jira write as explicit uncertainty.
     ///
     /// # Errors
@@ -314,6 +328,12 @@ impl AppState {
         self.task_store
             .as_ref()
             .map_or(Ok(0), TaskStore::recover_inflight_jira_transitions)
+    }
+
+    pub fn recover_jira_comment_deliveries(&self) -> Result<usize, TaskStoreError> {
+        self.task_store
+            .as_ref()
+            .map_or(Ok(0), TaskStore::recover_inflight_jira_comments)
     }
     #[must_use]
     pub fn with_terminal_host(
@@ -818,6 +838,54 @@ pub(crate) async fn deliver_jira_transition_batch(
     }
 }
 
+pub(crate) async fn deliver_jira_comment_batch(
+    store: &TaskStore,
+    jira: &jira::JiraReadinessProbe,
+    control_room_notify: &Notify,
+) {
+    let deliveries = match store.claim_jira_comments(unix_timestamp()) {
+        Ok(deliveries) => deliveries,
+        Err(error) => {
+            tracing::warn!(%error, "Jira comment queue could not be claimed");
+            return;
+        }
+    };
+    for delivery in deliveries {
+        let outcome = match jira.add_comment(&delivery.issue_key, &delivery.body).await {
+            Ok(()) => store.complete_jira_comment(&delivery.id, unix_timestamp()),
+            Err(error) => {
+                let retryable = error == jira::JiraAdapterError::NetworkUnavailable;
+                tracing::warn!(
+                    task_id = %delivery.task_id,
+                    issue = %delivery.issue_key,
+                    %error,
+                    "durable Jira comment was not acknowledged"
+                );
+                store.fail_jira_comment(
+                    &delivery.id,
+                    unix_timestamp(),
+                    retryable,
+                    jira_adapter_error_code(error),
+                )
+            }
+        };
+        match outcome {
+            Ok(true) => control_room_notify.notify_waiters(),
+            Ok(false) => tracing::warn!(
+                task_id = %delivery.task_id,
+                issue = %delivery.issue_key,
+                "Jira comment claim was no longer active"
+            ),
+            Err(error) => tracing::warn!(
+                task_id = %delivery.task_id,
+                issue = %delivery.issue_key,
+                %error,
+                "Jira comment outcome could not be persisted"
+            ),
+        }
+    }
+}
+
 fn jira_adapter_error_code(error: jira::JiraAdapterError) -> &'static str {
     match error {
         jira::JiraAdapterError::NotConfigured => "not_configured",
@@ -1069,6 +1137,10 @@ struct TransitionTaskRequest {
     state: TaskState,
     #[serde(default)]
     note: String,
+}
+#[derive(Debug, Deserialize)]
+struct JiraCommentRequest {
+    body: String,
 }
 #[derive(Debug, Deserialize)]
 struct ResolveDecisionRequest {
@@ -1362,6 +1434,10 @@ fn api_router(state: AppState) -> Router {
             get(jira_bindings).post(create_jira_binding),
         )
         .route("/api/v1/integrations/jira/task-links", get(jira_task_links))
+        .route(
+            "/api/v1/integrations/jira/task-links/{task_id}/comments",
+            get(jira_task_comments).post(create_jira_task_comment),
+        )
         .route(
             "/api/v1/integrations/jira/task-links/{task_id}/retry",
             post(retry_jira_task_link),
@@ -2515,7 +2591,10 @@ async fn jira_task_links(
         {
             let outbound_state = store
                 .jira_transition_state_for_task(link.task_id)
-                .map_err(|error| task_store_error(&error))?;
+                .map_err(|error| task_store_error(&error))?
+                .or(store
+                    .jira_comment_state_for_task(link.task_id)
+                    .map_err(|error| task_store_error(&error))?);
             let issue_url = browser_base_url
                 .as_ref()
                 .and_then(|base_url| jira::issue_url(base_url, &link.issue_key));
@@ -2541,6 +2620,56 @@ async fn jira_task_links(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(links)).into_response())
 }
 
+async fn jira_task_comments(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let link = task_store(&state)?
+        .jira_issue_link_for_task(parse_task_id(&task_id)?)
+        .map_err(|error| task_store_error(&error))?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "jira_link_not_found",
+                "this task is not linked to Jira",
+            )
+        })?;
+    let comments = state
+        .jira_readiness
+        .comments(&link.issue_key)
+        .await
+        .map_err(jira_adapter_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(comments)).into_response())
+}
+
+async fn create_jira_task_comment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<JiraCommentRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    let store = task_store(&state)?;
+    store
+        .queue_jira_comment(task_id, &request.body)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    state.deliver_jira_comments().await;
+    let state_name = store
+        .jira_comment_state_for_task(task_id)
+        .map_err(|error| task_store_error(&error))?
+        .unwrap_or_else(|| "delivered".into());
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({ "state": state_name })),
+    )
+        .into_response())
+}
+
 async fn retry_jira_task_link(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2548,10 +2677,14 @@ async fn retry_jira_task_link(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let task_id = parse_task_id(&task_id)?;
-    let retried = task_store(&state)?
+    let store = task_store(&state)?;
+    let retried_transition = store
         .retry_jira_transition(task_id)
         .map_err(|error| task_store_error(&error))?;
-    if !retried {
+    let retried_comments = store
+        .retry_jira_comments(task_id)
+        .map_err(|error| task_store_error(&error))?;
+    if !retried_transition && !retried_comments {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "jira_transition_not_retryable",
@@ -2560,6 +2693,7 @@ async fn retry_jira_task_link(
     }
     state.control_room_notify.notify_waiters();
     state.deliver_jira_transitions().await;
+    state.deliver_jira_comments().await;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -3700,6 +3834,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "jira_transition_queue_full",
             error.to_string(),
         ),
+        TaskStoreError::InvalidJiraComment => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_jira_comment",
+            error.to_string(),
+        ),
+        TaskStoreError::JiraCommentQueueFull => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "jira_comment_queue_full",
+            error.to_string(),
+        ),
         TaskStoreError::WorkerNotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "worker_not_found", error.to_string())
         }
@@ -4268,6 +4412,8 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let assignment_writes = Arc::new(AtomicUsize::new(0));
         let written = assignment_writes.clone();
+        let comment_writes = Arc::new(AtomicUsize::new(0));
+        let comment_written = comment_writes.clone();
         let jira_server = axum::Router::new()
             .route(
                 "/rest/api/3/myself",
@@ -4313,6 +4459,34 @@ mod tests {
                         assert_eq!(body["accountId"], "account-1");
                         written.fetch_add(1, Ordering::SeqCst);
                         StatusCode::NO_CONTENT
+                    }
+                }),
+            )
+            .route(
+                "/rest/api/3/issue/WEB-42/comment",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "comments": [{
+                            "id": "comment-1",
+                            "author": { "accountId": "account-1", "displayName": "Bea" },
+                            "body": { "type": "doc", "version": 1, "content": [{
+                                "type": "paragraph",
+                                "content": [{ "type": "text", "text": "Ready for review" }]
+                            }]},
+                            "created": "2026-08-13T13:00:00.000+0000",
+                            "updated": "2026-08-13T13:00:00.000+0000"
+                        }]
+                    }))
+                })
+                .post(move |Json(body): Json<serde_json::Value>| {
+                    let comment_written = comment_written.clone();
+                    async move {
+                        assert_eq!(
+                            body["body"]["content"][0]["content"][0]["text"],
+                            "Shipped cleanly"
+                        );
+                        comment_written.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::CREATED
                     }
                 }),
             )
@@ -4426,6 +4600,38 @@ mod tests {
         assert_eq!(links[0]["task_id"], tasks[0]["id"]);
         assert_eq!(links[1]["issue_key"], "WEB-43");
         assert_eq!(links[1]["jira_assignee_name"], "Bea");
+
+        let comments = response_json(
+            authorized_get(
+                app.clone(),
+                &format!(
+                    "/api/v1/integrations/jira/task-links/{}/comments",
+                    tasks[0]["id"].as_str().unwrap()
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(comments[0]["body"], "Ready for review");
+        let commented = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/integrations/jira/task-links/{}/comments",
+                        tasks[0]["id"].as_str().unwrap()
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"body":"Shipped cleanly"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(commented.status(), StatusCode::ACCEPTED);
+        assert_eq!(response_json(commented).await["state"], "delivered");
+        assert_eq!(comment_writes.load(Ordering::SeqCst), 1);
 
         let transitioned = app
             .clone()

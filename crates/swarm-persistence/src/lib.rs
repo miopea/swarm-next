@@ -20,7 +20,8 @@ mod feedback;
 mod jira;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
 pub use jira::{
-    JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionDispatch, JiraTransitionFailure,
+    JiraCommentDispatch, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionDispatch,
+    JiraTransitionFailure,
 };
 mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
@@ -42,7 +43,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 22;
+const CURRENT_SCHEMA_VERSION: i64 = 23;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -93,6 +94,10 @@ pub enum TaskStoreError {
     InvalidTaskActivityNote,
     #[error("this Hive already has the maximum number of pending Queen handoffs")]
     TaskOutcomeQueueFull,
+    #[error("Jira comment content is invalid")]
+    InvalidJiraComment,
+    #[error("this Hive already has the maximum number of pending Jira comments")]
+    JiraCommentQueueFull,
     #[error("task title must contain 1 to {MAX_TASK_TITLE_BYTES} bytes")]
     InvalidTitle,
     #[error("task description must not exceed {MAX_TASK_DESCRIPTION_BYTES} bytes")]
@@ -1043,7 +1048,35 @@ fn migrate_schema(
     if schema_version < 22 {
         migrate_jira_transition_deliveries(transaction)?;
     }
+    if schema_version < 23 {
+        migrate_jira_comment_deliveries(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_jira_comment_deliveries(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS jira_comment_deliveries (
+             id TEXT PRIMARY KEY,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             body TEXT NOT NULL,
+             state TEXT NOT NULL CHECK (
+                 state IN ('queued','dispatching','delivered','conflict','uncertain')
+             ),
+             attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0 AND attempts <= 3),
+             available_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             attempted_at INTEGER,
+             delivered_at INTEGER,
+             last_error TEXT,
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         CREATE INDEX IF NOT EXISTS jira_comment_delivery_queue
+             ON jira_comment_deliveries(state, available_at, created_at);
+         PRAGMA user_version = 23;",
+    )
 }
 
 fn migrate_jira_transition_deliveries(

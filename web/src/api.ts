@@ -127,6 +127,13 @@ export type JiraTaskLink = {
   last_synced_at: number;
   outbound_state: "queued" | "dispatching" | "conflict" | "uncertain" | null;
 };
+export type JiraComment = {
+  id: string;
+  author_name: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+};
 
 export type Worker = {
   id: string;
@@ -544,6 +551,34 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
     `/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}`,
     { method: "DELETE" },
   );
+}
+
+export async function fetchJiraComments(
+  operatorToken: string,
+  taskId: string,
+): Promise<JiraComment[]> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/integrations/jira/task-links/${encodeURIComponent(taskId)}/comments`,
+  );
+  return response.json() as Promise<JiraComment[]>;
+}
+
+export async function addJiraComment(
+  operatorToken: string,
+  taskId: string,
+  body: string,
+): Promise<{ state: "queued" | "dispatching" | "delivered" | "conflict" | "uncertain" }> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/integrations/jira/task-links/${encodeURIComponent(taskId)}/comments`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body }),
+    },
+  );
+  return response.json() as Promise<{ state: "queued" | "dispatching" | "delivered" | "conflict" | "uncertain" }>;
 }
 
 export async function saveDogfoodReport(

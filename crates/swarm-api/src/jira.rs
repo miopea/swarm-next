@@ -16,6 +16,7 @@ const MAX_PROJECT_STATUSES: usize = 128;
 const MAX_ISSUES: usize = 200;
 const MAX_TRANSITIONS: usize = 128;
 const MAX_ISSUE_DESCRIPTION_BYTES: usize = 10_000;
+const MAX_COMMENTS: usize = 100;
 
 #[derive(Clone, Default)]
 pub(crate) enum JiraReadinessProbe {
@@ -78,6 +79,15 @@ pub(crate) struct JiraIssue {
     pub status_name: String,
     pub assignee_account_id: Option<String>,
     pub assignee_name: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct JiraComment {
+    pub id: String,
+    pub author_name: String,
+    pub body: String,
+    pub created_at: String,
     pub updated_at: String,
 }
 
@@ -194,6 +204,21 @@ struct JiraIssueAssignee {
 struct JiraTransitionsResponse {
     #[serde(default)]
     transitions: Vec<JiraTransitionResponse>,
+}
+
+#[derive(Deserialize)]
+struct JiraCommentPage {
+    #[serde(default)]
+    comments: Vec<JiraCommentResponse>,
+}
+
+#[derive(Deserialize)]
+struct JiraCommentResponse {
+    id: String,
+    author: JiraIssueAssignee,
+    body: serde_json::Value,
+    created: String,
+    updated: String,
 }
 
 #[derive(Deserialize)]
@@ -578,6 +603,108 @@ impl JiraReadinessProbe {
             issue.assignee_name = account.display_name.clone();
         }
         Ok(())
+    }
+
+    pub(crate) async fn comments(
+        &self,
+        issue_id_or_key: &str,
+    ) -> Result<Vec<JiraComment>, JiraAdapterError> {
+        let issue = issue_id_or_key.trim();
+        if issue.is_empty() || issue.len() > 128 || issue.chars().any(char::is_control) {
+            return Err(JiraAdapterError::InvalidResponse);
+        }
+        let access = self.access().await?;
+        let mut url = endpoint(&access.base_url, "/rest/api/3/issue/")?;
+        url.path_segments_mut()
+            .map_err(|()| JiraAdapterError::InvalidResponse)?
+            .pop_if_empty()
+            .push(issue)
+            .push("comment");
+        url.query_pairs_mut()
+            .append_pair("startAt", "0")
+            .append_pair("maxResults", &MAX_COMMENTS.to_string())
+            .append_pair("orderBy", "created");
+        let response = authorize(access.client.get(url), &access.authorization)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|_| JiraAdapterError::NetworkUnavailable)?;
+        ensure_success(response.status())?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| JiraAdapterError::InvalidResponse)?;
+        let page = serde_json::from_slice::<JiraCommentPage>(&bytes)
+            .map_err(|_| JiraAdapterError::InvalidResponse)?;
+        if page.comments.len() > MAX_COMMENTS {
+            return Err(JiraAdapterError::ResponseLimitExceeded);
+        }
+        Ok(page
+            .comments
+            .into_iter()
+            .filter_map(|comment| {
+                let body = jira_document_text(&comment.body);
+                let author_name = comment
+                    .author
+                    .display_name
+                    .unwrap_or_else(|| "Jira user".into());
+                if comment.id.trim().is_empty()
+                    || body.is_empty()
+                    || comment.created.trim().is_empty()
+                    || comment.updated.trim().is_empty()
+                {
+                    return None;
+                }
+                Some(JiraComment {
+                    id: comment.id,
+                    author_name,
+                    body,
+                    created_at: comment.created,
+                    updated_at: comment.updated,
+                })
+            })
+            .collect())
+    }
+
+    pub(crate) async fn add_comment(
+        &self,
+        issue_id_or_key: &str,
+        body: &str,
+    ) -> Result<(), JiraAdapterError> {
+        let issue = issue_id_or_key.trim();
+        let body = body.trim();
+        if issue.is_empty()
+            || issue.len() > 128
+            || issue.chars().any(char::is_control)
+            || body.is_empty()
+            || body.len() > 4_000
+            || body.chars().any(|character| character == '\0')
+        {
+            return Err(JiraAdapterError::InvalidResponse);
+        }
+        let access = self.access().await?;
+        let mut url = endpoint(&access.base_url, "/rest/api/3/issue/")?;
+        url.path_segments_mut()
+            .map_err(|()| JiraAdapterError::InvalidResponse)?
+            .pop_if_empty()
+            .push(issue)
+            .push("comment");
+        let response = authorize(access.client.post(url), &access.authorization)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(&serde_json::json!({
+                "body": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [{
+                        "type": "paragraph",
+                        "content": [{ "type": "text", "text": body }]
+                    }]
+                }
+            }))
+            .send()
+            .await
+            .map_err(|_| JiraAdapterError::NetworkUnavailable)?;
+        ensure_success(response.status())
     }
 
     pub(crate) async fn transition_issue(
@@ -1149,6 +1276,59 @@ mod tests {
         assert_eq!(account.account_id, "account-1");
         adapter
             .assign_issue("WEB-42", &account.account_id)
+            .await
+            .unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn reads_and_writes_bounded_rich_text_comments() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let written = writes.clone();
+        let app = Router::new().route(
+            "/rest/api/3/issue/WEB-42/comment",
+            get(|| async {
+                Json(json!({
+                    "comments": [{
+                        "id": "comment-1",
+                        "author": { "accountId": "account-1", "displayName": "Bea" },
+                        "body": { "type": "doc", "version": 1, "content": [{
+                            "type": "paragraph",
+                            "content": [{ "type": "text", "text": "Ready for review" }]
+                        }]},
+                        "created": "2026-08-13T12:00:00.000+0000",
+                        "updated": "2026-08-13T12:00:00.000+0000"
+                    }]
+                }))
+            })
+            .post(move |Json(body): Json<serde_json::Value>| {
+                let written = written.clone();
+                async move {
+                    assert_eq!(
+                        body["body"]["content"][0]["content"][0]["text"],
+                        "Shipped cleanly"
+                    );
+                    written.fetch_add(1, Ordering::SeqCst);
+                    AxumStatus::CREATED
+                }
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let adapter = JiraReadinessProbe::configured(
+            &format!("http://{address}"),
+            "operator@example.test",
+            "token",
+        )
+        .unwrap();
+
+        let comments = adapter.comments("WEB-42").await.unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].author_name, "Bea");
+        assert_eq!(comments[0].body, "Ready for review");
+        adapter
+            .add_comment("WEB-42", "Shipped cleanly")
             .await
             .unwrap();
         assert_eq!(writes.load(Ordering::SeqCst), 1);
