@@ -89,6 +89,14 @@ export default function TaskBoard({
     else if (workerId && !assignableWorkers.some((worker) => worker.id === workerId)) setWorkerId(assignableWorkers[0]?.id ?? "");
   }, [assignableWorkers, workerId]);
 
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mobile = window.matchMedia("(max-width: 680px)");
+    const adapt = (event: MediaQueryListEvent) => setComposeOpen(!event.matches);
+    mobile.addEventListener?.("change", adapt);
+    return () => mobile.removeEventListener?.("change", adapt);
+  }, []);
+
   const openTasks = tasks
     .filter((task) => task.state !== "completed")
     .sort((left, right) => left.position - right.position);

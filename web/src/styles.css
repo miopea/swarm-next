@@ -190,7 +190,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-compose { display: grid; grid-template-columns: minmax(220px, .75fr) minmax(360px, 1.25fr); max-width: 1400px; gap: 34px; margin: 0 auto 30px; padding: 24px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: var(--shadow); }
 .task-compose h3 { margin-bottom: 8px; font-size: 1.17rem; letter-spacing: -.015em; }
 .task-compose > div > p:last-child { max-width: 460px; margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.55; }
-.task-compose-toggle { margin-top: 16px; }
+.task-compose-toggle { display: none; margin-top: 16px; }
 .task-compose form { display: grid; grid-template-columns: minmax(230px, 1.2fr) minmax(180px, .8fr) auto; align-content: end; align-items: end; gap: 10px; }
 .field-stack { display: grid; min-width: 0; gap: 7px; }
 .task-compose form button { white-space: nowrap; }
@@ -513,7 +513,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-compose { padding: 18px; }
   .task-compose.compose-collapsed { grid-template-columns: minmax(0, 1fr); margin-bottom: 18px; }
   .task-compose.compose-collapsed > div > p:last-of-type { margin-bottom: 0; }
-  .task-compose-toggle { width: 100%; }
+  .task-compose-toggle { display: block; width: 100%; }
   .task-compose form { grid-template-columns: 1fr; }
   .task-compose form button { width: 100%; justify-self: stretch; }
   .empty-card { flex-direction: column; padding: 20px; text-align: center; }
