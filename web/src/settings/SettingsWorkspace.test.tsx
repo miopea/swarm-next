@@ -15,6 +15,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   const onPresenceChange = vi.fn().mockResolvedValue(undefined);
   const onEnableLockDetection = vi.fn().mockResolvedValue(undefined);
   const onNotificationPolicyChange = vi.fn().mockResolvedValue(undefined);
+  const onQueenPolicyChange = vi.fn().mockResolvedValue(undefined);
   const onEnableNotifications = vi.fn().mockResolvedValue(undefined);
   const onDisableNotifications = vi.fn().mockResolvedValue(undefined);
   const onTestNotification = vi.fn().mockResolvedValue(undefined);
@@ -42,6 +43,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       presence={{ mode: "away", manual_mode: null, source: "screen_locked" }}
       lockDetectionState="available"
       notificationSettings={{ policy: "important_only", subscription_count: 0, vapid_public_key: "public-key" }}
+      queenPolicy={{ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }}
       notificationState="available"
       recentEvents={[{ sequence: 7, hive_id: "hive-1", kind: "workers_changed", occurred_at: 1 }]}
       hiveIdentity={{ operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } }}
@@ -53,6 +55,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       onPresenceChange={onPresenceChange}
       onEnableLockDetection={onEnableLockDetection}
       onNotificationPolicyChange={onNotificationPolicyChange}
+      onQueenPolicyChange={onQueenPolicyChange}
       onEnableNotifications={onEnableNotifications}
       onDisableNotifications={onDisableNotifications}
       onTestNotification={onTestNotification}
@@ -68,6 +71,8 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   fireEvent.click(screen.getByRole("button", { name: "Enable" }));
   expect(onEnableLockDetection).toHaveBeenCalledOnce();
   expect(screen.getByText("Available when you choose")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Away"), { target: { value: "advisory" } });
+  expect(onQueenPolicyChange).toHaveBeenCalledWith({ at_hive: "coordinate", away: "advisory", night_watch: "local_execution" });
   fireEvent.change(screen.getByLabelText("Notify me"), { target: { value: "all_decisions" } });
   expect(onNotificationPolicyChange).toHaveBeenCalledWith("all_decisions");
   fireEvent.click(screen.getByRole("button", { name: "Enable this device" }));
@@ -145,11 +150,11 @@ function minimalProps() {
   return {
     busy: false, colorTheme: "light" as const, liveFeedState: "connected" as const, operatorToken: "secret-token",
     presence: { mode: "at_hive" as const, manual_mode: null, source: "active_device" as const }, lockDetectionState: "unsupported" as const,
-    notificationSettings: { policy: "important_only" as const, subscription_count: 0, vapid_public_key: "public-key" }, notificationState: "available" as const,
+    notificationSettings: { policy: "important_only" as const, subscription_count: 0, vapid_public_key: "public-key" }, queenPolicy: { at_hive: "coordinate" as const, away: "coordinate" as const, night_watch: "local_execution" as const }, notificationState: "available" as const,
     recentEvents: [], sessions: [], workers: [], workspaces: [], health: { status: "ok" as const, version: "0.1.0" },
     hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
     onThemeChange: vi.fn(), onPresenceChange: vi.fn(), onEnableLockDetection: vi.fn(), onNotificationPolicyChange: vi.fn(),
-    onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(),
+    onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(),
   };
 }
 function ok(body: unknown) {

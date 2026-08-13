@@ -1,4 +1,4 @@
-import { downloadDatabaseBackup, type ControlRoomEvent, type Health, type HiveIdentity, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type SessionSummary, type Worker, type WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, type ControlRoomEvent, type Health, type HiveIdentity, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type Worker, type WorkspaceChoice } from "../api";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
@@ -17,6 +17,7 @@ type Props = {
   presence: OperatorPresence | undefined;
   lockDetectionState: LockDetectionState;
   notificationSettings: NotificationSettings | undefined;
+  queenPolicy: QueenAutonomyPolicy | undefined;
   notificationState: NotificationCapabilityState;
   recentEvents: ControlRoomEvent[];
   sessions: SessionSummary[];
@@ -26,6 +27,7 @@ type Props = {
   onPresenceChange: (mode: PresenceMode | null) => Promise<void>;
   onEnableLockDetection: () => Promise<void>;
   onNotificationPolicyChange: (policy: NotificationPolicy) => Promise<void>;
+  onQueenPolicyChange: (policy: QueenAutonomyPolicy) => Promise<void>;
   onEnableNotifications: () => Promise<void>;
   onDisableNotifications: () => Promise<void>;
   onTestNotification: () => Promise<void>;
@@ -34,7 +36,7 @@ type Props = {
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
 };
 
-export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, lockDetectionState, notificationSettings, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers }: Props) {
+export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers }: Props) {
   const mobile = deviceClass() === "mobile";
   async function downloadBackup() {
     const blob = await downloadDatabaseBackup(operatorToken);
@@ -74,6 +76,27 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
           </button>
         </div>}
         {mobile && <p className="mobile-presence-note">Your workstation reports when it is locked. This phone follows that presence and carries notifications when you are away.</p>}
+      </section>
+      <section className="settings-card queen-policy-settings" aria-labelledby="queen-policy-heading">
+        <div><p className="eyebrow">Queen autonomy</p><h3 id="queen-policy-heading">Choose how far she may carry work</h3></div>
+        <p>Presence changes the ceiling for unattended work. These deterministic limits never expand from model confidence.</p>
+        <div className="queen-policy-grid">
+          {(["at_hive", "away", "night_watch"] as const).map((mode) => (
+            <label key={mode} htmlFor={`queen-policy-${mode}`}><span>{presenceLabel(mode)}</span>
+              <select
+                id={`queen-policy-${mode}`}
+                value={queenPolicy?.[mode] ?? "coordinate"}
+                disabled={busy || !queenPolicy}
+                onChange={(event) => void onQueenPolicyChange({ ...queenPolicy!, [mode]: event.target.value as QueenAutonomyLevel })}
+              >
+                <option value="advisory">Advise only</option>
+                <option value="coordinate">Coordinate workers</option>
+                <option value="local_execution">Allow local execution</option>
+              </select>
+            </label>
+          ))}
+        </div>
+        <small className="privacy-note">Pushes, deployments, messages, purchases, and other external effects still require a separately recorded approval. Repository and environment overrides come before unattended execution is enabled.</small>
       </section>
       <section className="settings-card notification-settings" aria-labelledby="notification-heading">
         <div><p className="eyebrow">Mobile attention</p><h3 id="notification-heading">Let urgent work find you</h3></div>

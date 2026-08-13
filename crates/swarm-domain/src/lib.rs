@@ -1064,6 +1064,99 @@ pub enum PresenceMode {
     NightWatch,
 }
 
+/// Highest class of work Queen may continue without a new operator decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueenAutonomyLevel {
+    Advisory,
+    Coordinate,
+    LocalExecution,
+}
+
+impl fmt::Display for QueenAutonomyLevel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Advisory => "advisory",
+            Self::Coordinate => "coordinate",
+            Self::LocalExecution => "local_execution",
+        })
+    }
+}
+
+impl FromStr for QueenAutonomyLevel {
+    type Err = ParseQueenAutonomyLevelError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "advisory" => Ok(Self::Advisory),
+            "coordinate" => Ok(Self::Coordinate),
+            "local_execution" => Ok(Self::LocalExecution),
+            _ => Err(ParseQueenAutonomyLevelError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseQueenAutonomyLevelError;
+impl fmt::Display for ParseQueenAutonomyLevelError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown Queen autonomy level")
+    }
+}
+impl std::error::Error for ParseQueenAutonomyLevelError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct QueenAutonomyPolicy {
+    pub at_hive: QueenAutonomyLevel,
+    pub away: QueenAutonomyLevel,
+    pub night_watch: QueenAutonomyLevel,
+}
+
+impl Default for QueenAutonomyPolicy {
+    fn default() -> Self {
+        Self {
+            at_hive: QueenAutonomyLevel::Coordinate,
+            away: QueenAutonomyLevel::Coordinate,
+            night_watch: QueenAutonomyLevel::LocalExecution,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueenActionClass {
+    Advise,
+    Coordinate,
+    ModifyWorkspace,
+    ExternalSideEffect,
+}
+
+impl QueenAutonomyPolicy {
+    /// Applies the deterministic presence policy. External effects always require a
+    /// separately recorded approval; model confidence never expands authority.
+    #[must_use]
+    pub const fn permits(
+        self,
+        presence: PresenceMode,
+        action: QueenActionClass,
+        explicit_external_approval: bool,
+    ) -> bool {
+        let level = match presence {
+            PresenceMode::AtHive => self.at_hive,
+            PresenceMode::Away => self.away,
+            PresenceMode::NightWatch => self.night_watch,
+        };
+        match action {
+            QueenActionClass::Advise => true,
+            QueenActionClass::Coordinate => !matches!(level, QueenAutonomyLevel::Advisory),
+            QueenActionClass::ModifyWorkspace => {
+                matches!(level, QueenAutonomyLevel::LocalExecution)
+            }
+            QueenActionClass::ExternalSideEffect => {
+                matches!(level, QueenAutonomyLevel::LocalExecution) && explicit_external_approval
+            }
+        }
+    }
+}
+
 impl fmt::Display for PresenceMode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -1471,5 +1564,35 @@ mod tests {
         ] {
             assert!(!blocked.can_collapse());
         }
+    }
+
+    #[test]
+    fn queen_autonomy_is_presence_bounded_and_external_actions_fail_closed() {
+        let policy = QueenAutonomyPolicy::default();
+        assert!(policy.permits(PresenceMode::Away, QueenActionClass::Coordinate, false));
+        assert!(!policy.permits(PresenceMode::Away, QueenActionClass::ModifyWorkspace, false));
+        assert!(policy.permits(
+            PresenceMode::NightWatch,
+            QueenActionClass::ModifyWorkspace,
+            false
+        ));
+        assert!(!policy.permits(
+            PresenceMode::NightWatch,
+            QueenActionClass::ExternalSideEffect,
+            false
+        ));
+        assert!(policy.permits(
+            PresenceMode::NightWatch,
+            QueenActionClass::ExternalSideEffect,
+            true
+        ));
+
+        let advisory = QueenAutonomyPolicy {
+            at_hive: QueenAutonomyLevel::Advisory,
+            away: QueenAutonomyLevel::Advisory,
+            night_watch: QueenAutonomyLevel::Advisory,
+        };
+        assert!(advisory.permits(PresenceMode::AtHive, QueenActionClass::Advise, false));
+        assert!(!advisory.permits(PresenceMode::AtHive, QueenActionClass::Coordinate, true));
     }
 }

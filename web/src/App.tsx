@@ -10,6 +10,7 @@ import {
   createWorker,
   fetchHive,
   fetchNotificationSettings,
+  fetchQueenAutonomyPolicy,
   fetchPresence,
   fetchSessions,
   fetchTaskActivity,
@@ -21,6 +22,7 @@ import {
   releaseWorkerEngagement,
   revokeBrowserSession,
   setManualPresence,
+  setQueenAutonomyPolicy,
   startWorker,
   stopClaudeSession,
   stopWorker,
@@ -36,6 +38,7 @@ import {
   type NotificationSettings,
   type OperatorPresence,
   type PresenceMode,
+  type QueenAutonomyPolicy,
   type SessionSummary,
   type Task,
   type TaskDraftInput,
@@ -88,6 +91,7 @@ export function App() {
   const [presence, setPresence] = useState<OperatorPresence>();
   const [lockDetectionState, setLockDetectionState] = useState<LockDetectionState>("unsupported");
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>();
+  const [queenPolicy, setQueenPolicy] = useState<QueenAutonomyPolicy>();
   const [notificationState, setNotificationState] = useState<NotificationCapabilityState>("unsupported");
   const presenceController = useMemo(() => new PresenceController(), []);
   const notificationController = useMemo(() => new NotificationController(), []);
@@ -119,6 +123,16 @@ export function App() {
     void notificationController.start(operatorToken, setNotificationSettings, setNotificationState);
     return () => notificationController.stop();
   }, [notificationController, operatorToken]);
+
+  useEffect(() => {
+    if (!operatorToken) {
+      setQueenPolicy(undefined);
+      return;
+    }
+    void fetchQueenAutonomyPolicy(operatorToken)
+      .then(setQueenPolicy)
+      .catch((error: unknown) => setOperationError(error instanceof Error ? error.message : "Queen policy could not be loaded"));
+  }, [operatorToken]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -170,13 +184,16 @@ export function App() {
     feed.start(
       operatorToken,
       async (page) => {
-        const [controlRoom, refreshedPresence, refreshedNotifications] = await Promise.all([
+        const [controlRoom, refreshedPresence, refreshedNotifications, refreshedQueenPolicy] = await Promise.all([
           loadControlRoom(operatorToken),
           page.events.some((event) => event.kind === "presence_changed")
             ? fetchPresence(operatorToken)
             : Promise.resolve(undefined),
           page.events.some((event) => event.kind === "notifications_changed")
             ? fetchNotificationSettings(operatorToken)
+            : Promise.resolve(undefined),
+          page.events.some((event) => event.kind === "runtime_changed")
+            ? fetchQueenAutonomyPolicy(operatorToken)
             : Promise.resolve(undefined),
         ]);
         if (cancelled) return;
@@ -188,6 +205,7 @@ export function App() {
         setDecisions(controlRoom.decisions);
         if (refreshedPresence) setPresence(refreshedPresence);
         if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
+        if (refreshedQueenPolicy) setQueenPolicy(refreshedQueenPolicy);
         setRecentEvents((current) => page.reset_required
           ? page.events.slice(-16)
           : [...current, ...page.events].filter((event, index, events) =>
@@ -240,6 +258,11 @@ export function App() {
 
   async function enableNotifications() {
     await perform(async () => { await notificationController.enable(); });
+  }
+
+  async function changeQueenPolicy(policy: QueenAutonomyPolicy) {
+    if (!operatorToken) return;
+    await perform(async () => setQueenPolicy(await setQueenAutonomyPolicy(operatorToken, policy)));
   }
 
   async function disableNotifications() {
@@ -675,6 +698,7 @@ export function App() {
             presence={presence}
             lockDetectionState={lockDetectionState}
             notificationSettings={notificationSettings}
+            queenPolicy={queenPolicy}
             notificationState={notificationState}
             sessions={sessions}
             workers={workers}
@@ -683,6 +707,7 @@ export function App() {
             onPresenceChange={changePresenceMode}
             onEnableLockDetection={enableLockDetection}
             onNotificationPolicyChange={changeNotificationPolicy}
+            onQueenPolicyChange={changeQueenPolicy}
             onEnableNotifications={enableNotifications}
             onDisableNotifications={disableNotifications}
             onTestNotification={testNotification}

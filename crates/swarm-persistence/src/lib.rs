@@ -24,6 +24,7 @@ pub use notifications::{
     NotificationDeliveryFailure, NotificationDispatch, NotificationSettings, PushSubscriptionInput,
     VapidKeyMaterial,
 };
+mod orchestration;
 mod task_dispatches;
 pub use task_dispatches::{TaskDispatch, TaskDispatchFailure};
 mod task_outcomes;
@@ -33,7 +34,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 16;
+const CURRENT_SCHEMA_VERSION: i64 = 17;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -956,7 +957,23 @@ fn migrate_schema(
     if schema_version < 16 {
         migrate_engagement_ownership(transaction)?;
     }
+    if schema_version < 17 {
+        migrate_queen_autonomy(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_queen_autonomy(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS queen_autonomy_preferences (
+             operator_id TEXT PRIMARY KEY REFERENCES operators(id) ON DELETE CASCADE,
+             at_hive TEXT NOT NULL CHECK (at_hive IN ('advisory','coordinate','local_execution')),
+             away TEXT NOT NULL CHECK (away IN ('advisory','coordinate','local_execution')),
+             night_watch TEXT NOT NULL CHECK (night_watch IN ('advisory','coordinate','local_execution')),
+             updated_at INTEGER NOT NULL
+         );
+         PRAGMA user_version = 17;",
+    )
 }
 
 fn migrate_worker_roster(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {

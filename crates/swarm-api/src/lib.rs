@@ -28,8 +28,8 @@ use swarm_application::{ApplicationError, TaskService};
 use swarm_domain::{
     ControlRoomEventKind, DecisionRequestId, NotificationPolicy, PresenceDeviceClass,
     PresenceDeviceId, PresenceMode, PresenceObservationState, ProviderConversationId, ProviderKind,
-    TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId,
-    WorkerProfile, WorkerSessionId,
+    QueenAutonomyLevel, QueenAutonomyPolicy, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
+    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE,
@@ -665,6 +665,13 @@ struct SetNotificationPolicyRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct SetQueenAutonomyPolicyRequest {
+    at_hive: QueenAutonomyLevel,
+    away: QueenAutonomyLevel,
+    night_watch: QueenAutonomyLevel,
+}
+
+#[derive(Debug, Deserialize)]
 struct SaveNotificationSubscriptionRequest {
     device_class: PresenceDeviceClass,
     endpoint: String,
@@ -943,6 +950,10 @@ fn api_router(state: AppState) -> Router {
             get(notification_settings).put(set_notification_policy),
         )
         .route(
+            "/api/v1/orchestration/queen-policy",
+            get(queen_autonomy_policy).put(set_queen_autonomy_policy),
+        )
+        .route(
             "/api/v1/notifications/subscriptions/{device_id}",
             put(save_notification_subscription).delete(remove_notification_subscription),
         )
@@ -1204,6 +1215,35 @@ async fn notification_settings(
         }),
     )
         .into_response())
+}
+
+async fn queen_autonomy_policy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let policy = task_store(&state)?
+        .queen_autonomy_policy()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(policy)).into_response())
+}
+
+async fn set_queen_autonomy_policy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SetQueenAutonomyPolicyRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let policy = QueenAutonomyPolicy {
+        at_hive: request.at_hive,
+        away: request.away,
+        night_watch: request.night_watch,
+    };
+    let policy = task_store(&state)?
+        .set_queen_autonomy_policy(policy, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(policy)).into_response())
 }
 
 async fn set_notification_policy(
@@ -2997,6 +3037,51 @@ mod tests {
             "manual"
         );
     }
+
+    #[tokio::test]
+    async fn queen_policy_route_is_private_and_persists_all_presence_tiers() {
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orchestration/queen-policy")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let updated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/orchestration/queen-policy")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"at_hive":"local_execution","away":"advisory","night_watch":"coordinate"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status(), StatusCode::OK);
+        assert_eq!(updated.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(updated).await["away"], "advisory");
+        let fetched =
+            response_json(authorized_get(app, "/api/v1/orchestration/queen-policy").await).await;
+        assert_eq!(fetched["at_hive"], "local_execution");
+        assert_eq!(fetched["night_watch"], "coordinate");
+    }
+
     #[tokio::test]
     async fn notification_routes_are_private_bounded_and_reject_arbitrary_endpoints() {
         let store = TaskStore::in_memory().unwrap();

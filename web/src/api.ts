@@ -16,6 +16,8 @@ export type PresenceObservationState = "active" | "idle" | "locked" | "hidden";
 export type OperatorPresence = { mode: PresenceMode; manual_mode: PresenceMode | null; source: PresenceSource };
 export type NotificationPolicy = "important_only" | "all_decisions" | "off";
 export type NotificationSettings = { policy: NotificationPolicy; subscription_count: number; vapid_public_key: string };
+export type QueenAutonomyLevel = "advisory" | "coordinate" | "local_execution";
+export type QueenAutonomyPolicy = { at_hive: QueenAutonomyLevel; away: QueenAutonomyLevel; night_watch: QueenAutonomyLevel };
 export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };
 export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: number; reset_required: boolean };
 export type TerminalHostStatus = {
@@ -462,6 +464,23 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
     `/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}`,
     { method: "DELETE" },
   );
+}
+
+export async function fetchQueenAutonomyPolicy(operatorToken: string): Promise<QueenAutonomyPolicy> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-policy");
+  return response.json() as Promise<QueenAutonomyPolicy>;
+}
+
+export async function setQueenAutonomyPolicy(
+  operatorToken: string,
+  policy: QueenAutonomyPolicy,
+): Promise<QueenAutonomyPolicy> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-policy", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(policy),
+  });
+  return response.json() as Promise<QueenAutonomyPolicy>;
 }
 
 export async function downloadDatabaseBackup(operatorToken: string): Promise<Blob> {
