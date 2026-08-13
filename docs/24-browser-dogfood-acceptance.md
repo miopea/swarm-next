@@ -326,3 +326,7 @@ the independently updated terminal host through the API to worker settings:
   then selected Queen, Swarm Next, and Dogfood Clover in turn at desktop and
   Android sizes, verified each exact session became selected and connected,
   and completed every prior surface check without console or runtime errors.
+  The same gate now closes the authenticated page, opens a fresh page in the
+  browser context, and requires the control room to return without another
+  operator-token prompt before any remaining checks run; both device profiles
+  passed that PWA-reopen approximation.

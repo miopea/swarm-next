@@ -42,13 +42,16 @@ async function checkSurface(browser, surface) {
     hasTouch: surface.mobile,
     ...(surface.mobile ? { userAgent: "Mozilla/5.0 (Linux; Android 15; Swarm Dogfood) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36" } : {}),
   });
-  const page = await context.newPage();
+  let page = await context.newPage();
   const consoleErrors = [];
   const pageErrors = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
-  });
-  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const observePage = (candidate) => {
+    candidate.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    candidate.on("pageerror", (error) => pageErrors.push(error.message));
+  };
+  observePage(page);
 
   try {
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
@@ -62,6 +65,14 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: /Workers/ }).waitFor();
     if (await tokenInput.isVisible().catch(() => false)) {
       throw new Error(`${surface.name}: browser session did not survive reload`);
+    }
+    await page.close();
+    page = await context.newPage();
+    observePage(page);
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /Workers/ }).waitFor();
+    if (await page.getByLabel("Operator token").isVisible().catch(() => false)) {
+      throw new Error(`${surface.name}: browser session did not survive page reopen`);
     }
     // A fresh context probes the saved session before the first explicit unlock;
     // discard that expected 401 and inspect only the authenticated app below.
