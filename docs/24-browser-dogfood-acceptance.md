@@ -395,3 +395,16 @@ the independently updated terminal host through the API to worker settings:
   remained zero, and no page error was recorded. This directly covers the
   browser and storage processes implicated in the legacy incident; it is a
   bounded active sample, not a substitute for the Ring 2 multi-day soak.
+- Release `0.1.0-0e2d095ab54b` completes the first global-search workflow.
+  Quick navigation searches running or sleeping workers, open or completed
+  work, and pending or resolved decisions; keyboard selection remains visible,
+  Enter opens the exact result, completed containers expand automatically, and
+  linked task/worker context is directly navigable. `Create task` opens the
+  responsive composer and retains title focus in an actual Android-sized Edge
+  context. The final deployed gate passed all eight primary surfaces, exact
+  selection and connection of the same three live sessions, durable browser
+  authentication, repository-first worker creation, feedback, maintenance,
+  Jira readiness, restore guidance, and a valid 356,352-byte SQLite backup.
+  Every desktop and mobile document/card remained bounded with no authenticated
+  browser error. API PID `995654` now serves the release while terminal-host
+  PID `400662` and all three worker session identities remain unchanged.
