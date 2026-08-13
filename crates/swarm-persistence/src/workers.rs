@@ -607,7 +607,8 @@ impl TaskStore {
             return Err(TaskStoreError::QueenAlreadyExists);
         }
         let id = WorkerId::new();
-        let provider_conversation_id = ProviderConversationId::new();
+        let provider_conversation_id =
+            (provider == ProviderKind::ClaudeCode).then(ProviderConversationId::new);
         transaction.execute(
             "INSERT INTO worker_profiles
              (id, hive_id, name, role, provider, workspace, autostart, position,
@@ -622,7 +623,7 @@ impl TaskStore {
                 workspace,
                 autostart,
                 position,
-                provider_conversation_id.to_string()
+                provider_conversation_id.map(|value| value.to_string())
             ],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
@@ -866,6 +867,21 @@ mod tests {
         let recovered = store.get_worker_profile(worker.id).unwrap();
         assert_eq!(recovered.provider_conversation_id, Some(conversation_id));
         assert!(recovered.has_session_history);
+    }
+
+    #[test]
+    fn codex_profiles_leave_thread_identity_to_the_provider() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Aster", ProviderKind::Codex, "/workspace", false, 1)
+            .unwrap();
+        assert_eq!(worker.provider_conversation_id, None);
+        assert!(!worker.has_session_history);
+
+        let first = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, first).unwrap();
+        store.release_worker_session(first).unwrap();
+        assert!(store.get_worker_profile(worker.id).unwrap().has_session_history);
     }
 
     #[test]

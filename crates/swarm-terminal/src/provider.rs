@@ -11,6 +11,13 @@ pub enum ClaudeConversationStart {
     Continue,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum CodexConversationStart {
+    New,
+    Continue,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderCommand {
     pub executable: PathBuf,
@@ -90,6 +97,33 @@ impl ProviderTerminalAdapter for ClaudeCodeAdapter {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct CodexAdapter;
+
+impl CodexAdapter {
+    /// Builds the interactive Codex CLI command for a repository-owned worker.
+    /// Codex owns its thread identifier; recovery therefore uses its cwd-scoped
+    /// `resume --last` contract instead of manufacturing an external UUID.
+    pub fn command_for(
+        &self,
+        workspace: &Path,
+        conversation: CodexConversationStart,
+    ) -> Result<ProviderCommand, ProviderCommandError> {
+        if !workspace.is_absolute() {
+            return Err(ProviderCommandError::WorkspaceNotAbsolute);
+        }
+        let arguments = match conversation {
+            CodexConversationStart::New => Vec::new(),
+            CodexConversationStart::Continue => vec!["resume".into(), "--last".into()],
+        };
+        Ok(ProviderCommand {
+            executable: PathBuf::from("codex"),
+            arguments,
+            working_directory: workspace.to_path_buf(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +192,25 @@ mod tests {
                 .command_for(Path::new("relative"), ClaudeConversationStart::Continue,),
             Err(ProviderCommandError::WorkspaceNotAbsolute)
         );
+    }
+
+    #[test]
+    fn codex_starts_new_and_recovers_the_latest_repository_thread() {
+        let adapter = CodexAdapter;
+        let fresh = adapter
+            .command_for(
+                Path::new("/workspaces/example"),
+                CodexConversationStart::New,
+            )
+            .unwrap();
+        assert_eq!(fresh.executable, PathBuf::from("codex"));
+        assert!(fresh.arguments.is_empty());
+        let recovered = adapter
+            .command_for(
+                Path::new("/workspaces/example"),
+                CodexConversationStart::Continue,
+            )
+            .unwrap();
+        assert_eq!(recovered.arguments, ["resume", "--last"]);
     }
 }

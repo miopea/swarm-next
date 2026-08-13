@@ -9,9 +9,9 @@ use std::{
 use nix::unistd::Uid;
 use swarm_domain::WorkerSessionId;
 use swarm_terminal::{
-    ClaudeCodeAdapter, HostRequest, HostResponse, HostSessionSummary, MAX_REQUEST_BYTES,
-    MAX_RESPONSE_BYTES, PROTOCOL_VERSION, ProviderTerminalAdapter, SessionRegistry,
-    TerminalHostStatus,
+    ClaudeCodeAdapter, CodexAdapter, HostRequest, HostResponse, HostSessionSummary,
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION, ProviderTerminalAdapter,
+    SessionRegistry, TerminalHostStatus,
 };
 use thiserror::Error;
 use tokio::{
@@ -259,6 +259,21 @@ fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostRe
             mcp_config,
         } => ClaudeCodeAdapter
             .command_for_with_mcp(&workspace, conversation, mcp_config.as_deref())
+            .map_err(|error| error.to_string())
+            .and_then(|command| {
+                registry
+                    .spawn(&command, size)
+                    .map_err(|error| error.to_string())
+            })
+            .map(|session| HostResponse::SessionStarted {
+                session_id: session.id(),
+            }),
+        HostRequest::StartCodex {
+            workspace,
+            size,
+            conversation,
+        } => CodexAdapter
+            .command_for(&workspace, conversation)
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry

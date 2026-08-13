@@ -12,8 +12,8 @@ use tokio::{
 };
 
 use crate::{
-    ClaudeConversationStart, HistoryCursor, HistoryDiagnostics, HistoryPage, HistorySessionSummary,
-    ProcessResourceSample, Resume, TerminalSize,
+    ClaudeConversationStart, CodexConversationStart, HistoryCursor, HistoryDiagnostics,
+    HistoryPage, HistorySessionSummary, ProcessResourceSample, Resume, TerminalSize,
 };
 
 pub const PROTOCOL_VERSION: u16 = 7;
@@ -38,6 +38,11 @@ pub enum HostRequest {
         size: TerminalSize,
         conversation: ClaudeConversationStart,
         mcp_config: Option<PathBuf>,
+    },
+    StartCodex {
+        workspace: PathBuf,
+        size: TerminalSize,
+        conversation: CodexConversationStart,
     },
     ListSessions,
     HistoryDiagnostics,

@@ -21,8 +21,8 @@ pub use process::{
     MIN_TERMINAL_ROWS, ProcessTerminalSession, SessionRegistry, SessionRegistryError, TerminalSize,
 };
 pub use provider::{
-    ClaudeCodeAdapter, ClaudeConversationStart, ProviderCommand, ProviderCommandError,
-    ProviderTerminalAdapter,
+    ClaudeCodeAdapter, ClaudeConversationStart, CodexAdapter, CodexConversationStart,
+    ProviderCommand, ProviderCommandError, ProviderTerminalAdapter,
 };
 pub use resources::{ProcessResourceSample, sample_current_process};
 pub use state::{

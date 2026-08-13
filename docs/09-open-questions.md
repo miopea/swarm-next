@@ -10,7 +10,9 @@ by rebuilding legacy behavior in advance.
 
 1. **First provider: Claude Code.** It exercises the current primary Swarm
    workflow. Codex follows after the terminal/session contract passes recovery
-   and soak tests; the adapter contract is designed against both first.
+   and soak tests. Its adapter now preserves the provider boundary: Codex owns
+   its thread identifier and recovers the latest cwd-scoped thread with
+   `codex resume --last`; Swarm does not manufacture a Claude-style UUID.
 2. **Terminal retention: time and byte bounds.** Use a small in-memory journal
    for fast resume plus bounded on-disk history with time and byte eviction.
    Set exact values from a representative output trace and soak test, not

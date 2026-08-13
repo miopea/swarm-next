@@ -38,7 +38,7 @@ use swarm_persistence::{
 };
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
-    HistoryCursor, HostClient, HostRequest, HostResponse, JournalLimits,
+    CodexConversationStart, HistoryCursor, HostClient, HostRequest, HostResponse, JournalLimits,
     MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
     MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProcessResourceSample, TerminalSize,
     sample_current_process,
@@ -2080,29 +2080,25 @@ async fn start_worker_process(
     {
         return Ok(worker_view(profile, true, None));
     }
-    if profile.provider != ProviderKind::ClaudeCode {
-        return Err(ApiError::new(
-            StatusCode::NOT_IMPLEMENTED,
-            "provider_not_available",
-            "this worker provider is not available in the current runtime",
-        ));
-    }
-    let mcp_config = state
-        .agent_bridge
-        .as_ref()
-        .map(|bridge| bridge.ensure_worker_config(worker_id))
-        .transpose()
-        .map_err(|error| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "agent_config_unavailable",
-                error.to_string(),
-            )
-        })?;
+    let mcp_config = if profile.provider == ProviderKind::ClaudeCode {
+        state
+            .agent_bridge
+            .as_ref()
+            .map(|bridge| bridge.ensure_worker_config(worker_id))
+            .transpose()
+            .map_err(|error| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "agent_config_unavailable",
+                    error.to_string(),
+                )
+            })?
+    } else {
+        None
+    };
 
-    let response = request_host(
-        state,
-        HostRequest::StartClaude {
+    let request = match profile.provider {
+        ProviderKind::ClaudeCode => HostRequest::StartClaude {
             workspace: PathBuf::from(&profile.workspace),
             size,
             conversation: match (
@@ -2121,8 +2117,17 @@ async fn start_worker_process(
             },
             mcp_config,
         },
-    )
-    .await?;
+        ProviderKind::Codex => HostRequest::StartCodex {
+            workspace: PathBuf::from(&profile.workspace),
+            size,
+            conversation: if profile.has_session_history {
+                CodexConversationStart::Continue
+            } else {
+                CodexConversationStart::New
+            },
+        },
+    };
+    let response = request_host(state, request).await?;
     let HostResponse::SessionStarted { session_id } = response else {
         return Err(ApiError::new(
             StatusCode::BAD_GATEWAY,
