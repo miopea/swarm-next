@@ -150,7 +150,7 @@ async function checkSurface(browser, surface) {
         if (surface.mobile) {
           await page.getByRole("heading", { name: "Active work" }).waitFor();
         }
-        const jiraSource = page.getByRole("region", { name: "Bring assigned work onto this board" });
+        const jiraSource = page.getByRole("region", { name: "Bring your Jira work onto this board" });
         await jiraSource.waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
         if (await jiraSource.isVisible().catch(() => false)) {
           const chooseWork = jiraSource.locator(".jira-project-actions button").first();
@@ -165,7 +165,7 @@ async function checkSurface(browser, surface) {
           if (issueCount === 0 || intakeBounds.scrollWidth > intakeBounds.clientWidth + 1) {
             throw new Error(`${surface.name}: Jira task intake is empty or horizontally clipped`);
           }
-          if (!/assigned to .*open only/i.test(await intake.innerText())) {
+          if (!/assigned to .*or unassigned .*open only/i.test(await intake.innerText())) {
             throw new Error(`${surface.name}: Jira task intake does not explain its Hive scope`);
           }
           const checkedCount = await intake.getByRole("checkbox", { checked: true }).count();
