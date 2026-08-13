@@ -17,3 +17,10 @@ test("filters and opens a named worker", () => {
   expect(close).toHaveBeenCalledOnce();
   expect(run).toHaveBeenCalledOnce();
 });
+
+test("offers a visible close action for touch users", () => {
+  const close = vi.fn();
+  render(<CommandPalette onClose={close} choices={[]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(close).toHaveBeenCalledOnce();
+});
