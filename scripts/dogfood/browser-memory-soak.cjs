@@ -45,7 +45,7 @@ async function main() {
     browserErrors.length = 0;
     await pageCdp.send("Performance.enable");
     await fs.writeFile(samplesPath, [
-      "timestamp,elapsed_seconds,browser_pid,browser_working_set_bytes,browser_private_bytes,storage_working_set_bytes,storage_private_bytes,total_working_set_bytes,total_private_bytes,js_heap_bytes,dom_nodes,storage_usage_bytes,page_errors",
+      "timestamp,elapsed_seconds,browser_pid,process_count,storage_process_count,browser_working_set_bytes,browser_private_bytes,storage_working_set_bytes,storage_private_bytes,total_working_set_bytes,total_private_bytes,js_heap_bytes,dom_nodes,storage_usage_bytes,page_errors",
       "",
     ].join("\n"), "utf8");
 
@@ -74,6 +74,8 @@ async function main() {
         timestamp: new Date().toISOString(),
         elapsed_seconds: elapsedSeconds,
         browser_pid: pinnedBrowserPid,
+        process_count: processInfo.length,
+        storage_process_count: storagePids.size,
         browser_working_set_bytes: browserMemory.working_set_bytes,
         browser_private_bytes: browserMemory.private_bytes,
         storage_working_set_bytes: storageMemory.working_set_bytes,
@@ -118,6 +120,8 @@ async function main() {
       renderer_js_heap: jsHeap,
       storage_usage_bytes: { min: Math.min(...samples.map((sample) => sample.storage_usage_bytes)), max: Math.max(...samples.map((sample) => sample.storage_usage_bytes)) },
       dom_nodes: { min: Math.min(...samples.map((sample) => sample.dom_nodes)), max: Math.max(...samples.map((sample) => sample.dom_nodes)) },
+      process_count: { min: Math.min(...samples.map((sample) => sample.process_count)), max: Math.max(...samples.map((sample) => sample.process_count)) },
+      storage_process_count: { min: Math.min(...samples.map((sample) => sample.storage_process_count)), max: Math.max(...samples.map((sample) => sample.storage_process_count)) },
       samples_file: samplesPath,
     };
     await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
