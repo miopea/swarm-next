@@ -355,6 +355,20 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .diagnostics-card, .shortcuts-card { grid-column: 1 / -1; }
 .diagnostic-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .diagnostic-preview { max-height: 320px; margin: 0; padding: 14px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-md); color: var(--terminal-text); background: var(--terminal-frame); font-family: "Atkinson Hyperlegible Mono Variable", monospace; font-size: .7rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.saved-feedback { display: grid; gap: 10px; padding-top: 4px; border-top: 1px solid var(--line); }
+.saved-feedback > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.saved-feedback h4, .saved-feedback p { margin: 0; }
+.saved-feedback small { color: var(--muted); }
+.saved-feedback-list { display: grid; gap: 7px; }
+.saved-feedback-list details { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-soft); }
+.saved-feedback-list summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 11px 12px; cursor: pointer; }
+.saved-feedback-list summary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.saved-feedback-list time { color: var(--muted); font-size: .76rem; }
+.saved-feedback-list dl { display: grid; gap: 8px; margin: 0; padding: 0 12px 12px; }
+.saved-feedback-list dl div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; }
+.saved-feedback-list dt { color: var(--muted); font-size: .76rem; }
+.saved-feedback-list dd { margin: 0; overflow-wrap: anywhere; }
+.saved-feedback-list button { margin: 0 12px 12px; }
 .feedback-backdrop { position: fixed; z-index: 40; inset: 0; display: grid; padding: 24px; place-items: center; background: color-mix(in srgb, var(--terminal-frame) 62%, transparent); backdrop-filter: blur(3px); }
 .feedback-dialog { display: grid; width: min(860px, 100%); max-height: min(820px, calc(100dvh - 48px)); gap: 16px; padding: 24px; overflow: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); color: var(--text); background: var(--panel-raised); box-shadow: 0 20px 60px color-mix(in srgb, var(--terminal-frame) 42%, transparent); }
 .feedback-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
@@ -502,6 +516,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .feedback-fields { grid-template-columns: minmax(0, 1fr); }
   .feedback-screenshot-preview { grid-template-columns: 72px minmax(0, 1fr); }
   .feedback-screenshot-preview img { width: 72px; height: 54px; grid-row: span 2; }
+  .saved-feedback > div:first-child, .saved-feedback-list summary { align-items: start; }
+  .saved-feedback-list summary { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .command-backdrop { padding: 10px; }
   .command-palette { max-height: calc(100dvh - 20px); padding: 16px; }
   .command-results > button { align-items: flex-start; flex-direction: column; gap: 3px; }

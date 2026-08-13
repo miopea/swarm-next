@@ -501,6 +501,17 @@ export async function saveDogfoodReport(
   return response.json() as Promise<DogfoodReport>;
 }
 
+export async function fetchDogfoodReports(
+  operatorToken: string,
+  limit = 5,
+): Promise<DogfoodReport[]> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/feedback/reports?limit=${encodeURIComponent(String(limit))}`,
+  );
+  return response.json() as Promise<DogfoodReport[]>;
+}
+
 export async function uploadDogfoodScreenshot(operatorToken: string, image: File): Promise<string> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/feedback/attachments", {
     method: "POST",

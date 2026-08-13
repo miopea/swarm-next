@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 
 import {
   fetchHistoryDiagnostics,
+  fetchDogfoodReports,
   fetchRuntimeResources,
   fetchTerminalHostStatus,
   type ControlRoomEvent,
+  type DogfoodReport,
   type Health,
   type HistoryDiagnostics,
   type HiveIdentity,
@@ -30,6 +32,9 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
   const [runtime, setRuntime] = useState<RuntimeDiagnostics>({ loaded: false });
   const [preview, setPreview] = useState<string>();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "unavailable">("idle");
+  const [savedReports, setSavedReports] = useState<DogfoodReport[]>();
+  const [savedReportsUnavailable, setSavedReportsUnavailable] = useState(false);
+  const [copiedReportId, setCopiedReportId] = useState<string>();
 
   useEffect(() => {
     let cancelled = false;
@@ -46,6 +51,14 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
         loaded: true,
       });
     });
+    return () => { cancelled = true; };
+  }, [operatorToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchDogfoodReports(operatorToken)
+      .then((reports) => { if (!cancelled) setSavedReports(reports); })
+      .catch(() => { if (!cancelled) setSavedReportsUnavailable(true); });
     return () => { cancelled = true; };
   }, [operatorToken]);
 
@@ -75,6 +88,16 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
     }
   }
 
+  async function copySavedReport(report: DogfoodReport) {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(report.diagnostic_bundle);
+      setCopiedReportId(report.id);
+    } catch {
+      setCopiedReportId(undefined);
+    }
+  }
+
   return (
     <section className="settings-card diagnostics-card" aria-labelledby="diagnostics-heading">
       <div><p className="eyebrow">Diagnostics</p><h3 id="diagnostics-heading">Know which layer needs attention</h3></div>
@@ -95,6 +118,24 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
       </div>
       {copyState === "unavailable" ? <p role="status">Clipboard access is unavailable. Select the preview and copy it manually.</p> : null}
       {preview ? <pre className="diagnostic-preview" aria-label="Sanitized diagnostic report">{preview}</pre> : null}
+      <div className="saved-feedback" aria-labelledby="saved-feedback-heading">
+        <div><h4 id="saved-feedback-heading">Saved dogfood reports</h4><small>Private to this Hive · newest first</small></div>
+        {savedReportsUnavailable ? <p role="status">Saved reports are unavailable right now.</p> : savedReports === undefined ? <p>Loading saved reports…</p> : savedReports.length === 0 ? <p>No reports saved yet.</p> : (
+          <div className="saved-feedback-list">
+            {savedReports.map((report) => (
+              <details key={report.id}>
+                <summary><span>{report.observation.trim() || report.expectation.trim()}</span><time dateTime={new Date(report.created_at * 1000).toISOString()}>{formatReportDate(report.created_at)}</time></summary>
+                <dl>
+                  <div><dt>Expected</dt><dd>{report.expectation || "Not provided"}</dd></div>
+                  <div><dt>Observed</dt><dd>{report.observation || "Not provided"}</dd></div>
+                  <div><dt>Screenshot</dt><dd>{report.attachment_name ? "Attached privately" : "None"}</dd></div>
+                </dl>
+                <button type="button" className="secondary-button" onClick={() => void copySavedReport(report)}>{copiedReportId === report.id ? "Copied report" : "Copy report for developer"}</button>
+              </details>
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -116,4 +157,8 @@ function resourceClass(pressure: RuntimeResources["api"]["pressure"] | undefined
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function formatReportDate(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp * 1000));
 }

@@ -22,6 +22,14 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   const onUpdateWorkerEngine = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("feedback/reports")) return ok([{
+      id: "report-1",
+      expectation: "Worker remains readable",
+      observation: "Terminal wrapped too narrowly",
+      diagnostic_bundle: "sanitized saved evidence",
+      attachment_name: "screen-123.png",
+      created_at: 1_786_000_000,
+    }]);
     if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 5, host_version: "0.1.0-host", draining: false, running_sessions: 1, retained_sessions: 3 } });
     if (url.includes("runtime/resources")) return ok({
       sampled_at: 1,
@@ -103,6 +111,11 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Workers").parentElement).toHaveTextContent("WorkersAlt3");
   expect(screen.getByText("Settings").parentElement).toHaveTextContent("SettingsAlt4");
   expect(screen.getByText("Quick navigation").parentElement).toHaveTextContent("Quick navigationAltK");
+  const savedReportSummary = await screen.findByText("Terminal wrapped too narrowly", { selector: "summary span" });
+  expect(savedReportSummary).toBeInTheDocument();
+  fireEvent.click(savedReportSummary);
+  expect(screen.getByText("Worker remains readable")).toBeInTheDocument();
+  expect(screen.getByText("Attached privately")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Preview report" }));
   const preview = screen.getByLabelText("Sanitized diagnostic report");
@@ -137,6 +150,7 @@ test("downloads a consistent Hive database snapshot", async () => {
   const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("feedback/reports")) return ok([]);
     if (url === "/api/v1/backups/database") {
       return new Response(new Uint8Array([83, 81, 76]), { status: 200, headers: { "Content-Type": "application/vnd.sqlite3" } });
     }
