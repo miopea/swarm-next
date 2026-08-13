@@ -227,11 +227,18 @@ async function checkSurface(browser, surface) {
     const restoreCommandVisible = await page.getByText(/swarm-next-package restore/).isVisible();
     if (!restoreCommandVisible) throw new Error(`${surface.name}: Hive restore guidance is unavailable`);
     await page.getByRole("button", { name: "Open quick navigation" }).click();
-    const addWorkerShortcutVisible = await page.getByRole("button", { name: /Add worker Configure a repository worker/ }).isVisible();
+    const addWorkerShortcutVisible = await page.getByRole("option", { name: /Add worker Configure a repository worker/ }).isVisible();
     if (!addWorkerShortcutVisible) throw new Error(`${surface.name}: worker creation is not discoverable from quick navigation`);
-    await page.getByRole("button", { name: "Close" }).click();
+    const commandSearch = page.getByRole("combobox", { name: "Find work, decisions, or workers" });
+    await commandSearch.fill("Create task");
+    await commandSearch.press("Enter");
+    await page.getByRole("heading", { name: "Task board" }).waitFor();
+    const taskTitle = page.getByLabel("Task title");
+    await taskTitle.waitFor();
+    const createTaskFocused = await taskTitle.evaluate((input) => input === document.activeElement);
+    if (!createTaskFocused) throw new Error(`${surface.name}: quick task creation did not focus the title`);
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, repositoryPicker: "name-first", addWorkerShortcutVisible, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, repositoryPicker: "name-first", addWorkerShortcutVisible, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }
