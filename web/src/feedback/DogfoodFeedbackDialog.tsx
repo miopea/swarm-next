@@ -23,6 +23,7 @@ type Props = {
   hiveIdentity: HiveIdentity | undefined;
   liveFeedState: LiveFeedState;
   onClose: () => void;
+  onSaved?: () => void;
   operatorToken: string;
   recentEvents: ControlRoomEvent[];
   sessions: SessionSummary[];
@@ -30,7 +31,7 @@ type Props = {
   workers: Worker[];
 };
 
-export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIdentity, liveFeedState, onClose, operatorToken, recentEvents, sessions, surface, workers }: Props) {
+export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIdentity, liveFeedState, onClose, onSaved, operatorToken, recentEvents, sessions, surface, workers }: Props) {
   const [expectation, setExpectation] = useState("");
   const [observation, setObservation] = useState("");
   const [runtime, setRuntime] = useState<RuntimeDiagnostics>({ loaded: false });
@@ -155,6 +156,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
         attachment_name: attachmentName,
       });
       setSaveState("saved");
+      onSaved?.();
     } catch {
       setSaveState("error");
     }

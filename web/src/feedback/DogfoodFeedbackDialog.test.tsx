@@ -89,7 +89,8 @@ test("saves reviewed notes and an optional screenshot privately to the Hive", as
     return ok({ type: "history_diagnostics", diagnostics: null });
   });
   vi.stubGlobal("fetch", fetch);
-  render(<DogfoodFeedbackDialog activeSessionId={undefined} health={{ status: "ok", version: "0.1.0" }} hiveIdentity={undefined} liveFeedState="connected" onClose={vi.fn()} operatorToken="token" recentEvents={[]} sessions={[]} surface="workers" workers={[]} />);
+  const onSaved = vi.fn();
+  render(<DogfoodFeedbackDialog activeSessionId={undefined} health={{ status: "ok", version: "0.1.0" }} hiveIdentity={undefined} liveFeedState="connected" onClose={vi.fn()} onSaved={onSaved} operatorToken="token" recentEvents={[]} sessions={[]} surface="workers" workers={[]} />);
   fireEvent.change(screen.getByLabelText("What did you expect?"), { target: { value: "Worker should recover" } });
   fireEvent.change(screen.getByLabelText("What happened instead?"), { target: { value: "Terminal stayed blank" } });
   const image = new File([new Uint8Array([1, 2, 3])], "terminal.png", { type: "image/png" });
@@ -98,6 +99,7 @@ test("saves reviewed notes and an optional screenshot privately to the Hive", as
   fireEvent.click(screen.getByRole("button", { name: "Save to this Hive" }));
 
   expect(await screen.findByText(/Saved privately/)).toBeInTheDocument();
+  expect(onSaved).toHaveBeenCalledOnce();
   expect(screen.getByRole("button", { name: "Saved to Hive" })).toBeDisabled();
   expect(fetch).toHaveBeenCalledWith("/api/v1/feedback/attachments", expect.objectContaining({ method: "POST", body: image }));
   expect(fetch).toHaveBeenCalledWith("/api/v1/feedback/reports", expect.objectContaining({

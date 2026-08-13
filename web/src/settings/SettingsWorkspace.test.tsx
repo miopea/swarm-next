@@ -55,6 +55,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
     <SettingsWorkspace
       busy={false}
       colorTheme="light"
+      feedbackRevision={0}
       liveFeedState="connected"
       operatorToken="secret-token"
       presence={{ mode: "away", manual_mode: null, source: "screen_locked" }}
@@ -185,7 +186,7 @@ test("downloads a consistent Hive database snapshot", async () => {
 
 function minimalProps() {
   return {
-    busy: false, colorTheme: "light" as const, liveFeedState: "connected" as const, operatorToken: "secret-token",
+    busy: false, colorTheme: "light" as const, feedbackRevision: 0, liveFeedState: "connected" as const, operatorToken: "secret-token",
     presence: { mode: "at_hive" as const, manual_mode: null, source: "active_device" as const }, lockDetectionState: "unsupported" as const,
     notificationSettings: { policy: "important_only" as const, subscription_count: 0, vapid_public_key: "public-key" }, queenPolicy: { at_hive: "coordinate" as const, away: "coordinate" as const, night_watch: "local_execution" as const }, notificationState: "available" as const,
     recentEvents: [], sessions: [], workers: [], workspaces: [], providers: { claude_code: true, codex: false }, health: { status: "ok" as const, version: "0.1.0" },

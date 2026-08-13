@@ -20,6 +20,7 @@ import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import { serializeDiagnosticReport, type RuntimeDiagnostics } from "./diagnosticReport";
 
 type Props = {
+  feedbackRevision: number;
   operatorToken: string;
   health: Health | undefined;
   hiveIdentity: HiveIdentity | undefined;
@@ -29,7 +30,7 @@ type Props = {
   workers: Worker[];
 };
 
-export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdentity, liveFeedState, recentEvents, sessions, workers }: Props) {
+export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, health, hiveIdentity, liveFeedState, recentEvents, sessions, workers }: Props) {
   const [runtime, setRuntime] = useState<RuntimeDiagnostics>({ loaded: false });
   const [preview, setPreview] = useState<string>();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "unavailable">("idle");
@@ -63,7 +64,7 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
       .then((reports) => { if (!cancelled) setSavedReports(reports); })
       .catch(() => { if (!cancelled) setSavedReportsUnavailable(true); });
     return () => { cancelled = true; };
-  }, [operatorToken]);
+  }, [operatorToken, feedbackRevision]);
 
   const launchFailures = workers.filter((worker) => Boolean(worker.runtime_error)).length;
   const providerStatus = launchFailures > 0 ? "Needs attention" : "Healthy";

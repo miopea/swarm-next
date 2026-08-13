@@ -12,6 +12,7 @@ import WorkerSettings from "./WorkerSettings";
 type Props = {
   busy: boolean;
   colorTheme: ColorTheme;
+  feedbackRevision: number;
   health: Health | undefined;
   hiveIdentity: HiveIdentity | undefined;
   liveFeedState: LiveFeedState;
@@ -40,7 +41,7 @@ type Props = {
   onUpdateWorkerEngine: () => Promise<void>;
 };
 
-export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers, onUpdateWorkerEngine }: Props) {
+export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers, onUpdateWorkerEngine }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
@@ -242,7 +243,7 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
         <small className="privacy-note">This file contains private operational data. Store it like a credential. Verified restore is available through the package manager; host credentials and repository contents remain intentionally separate.</small>
       </section>
 
-<DiagnosticsWorkspace operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} />
+<DiagnosticsWorkspace feedbackRevision={feedbackRevision} operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} />
 
       <section className="settings-card shortcuts-card" aria-labelledby="shortcuts-heading">
         <div><p className="eyebrow">Keyboard</p><h3 id="shortcuts-heading">Move without losing focus</h3></div>

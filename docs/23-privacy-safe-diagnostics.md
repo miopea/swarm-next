@@ -40,7 +40,8 @@ moment of failure and a trusted developer can later read it through
 `GET /api/v1/feedback/reports`. No hidden data is recollected after submission.
 Settings also shows the newest reports as collapsed summaries and copies the
 already-reviewed bundle on demand; diagnostic payloads are not expanded by
-default.
+default. Saving a report while Settings is already mounted refreshes that queue
+immediately, so the operator never has to reload the application to find it.
 
 A trusted operator can download a retained screenshot from its saved report.
 The authenticated endpoint serves only opaque attachment names that are still

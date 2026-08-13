@@ -89,6 +89,7 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [decisions, setDecisions] = useState<DecisionRequest[]>([]);
   const [showFeedback, setShowFeedback] = useState(false);
+  const [feedbackRevision, setFeedbackRevision] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
   const [surface, setSurface] = useState<Surface>(readSavedSurface);
   const [operationError, setOperationError] = useState<string>();
@@ -765,6 +766,7 @@ export function App() {
             hiveIdentity={hiveIdentity}
             liveFeedState={liveFeedState}
             onClose={() => setShowFeedback(false)}
+            onSaved={() => setFeedbackRevision((current) => current + 1)}
             operatorToken={operatorToken}
             recentEvents={recentEvents}
             sessions={sessions}
@@ -790,6 +792,7 @@ export function App() {
           <SettingsWorkspace
             busy={busy}
             colorTheme={colorTheme}
+            feedbackRevision={feedbackRevision}
             hiveIdentity={hiveIdentity}
             liveFeedState={liveFeedState}
             health={loadState.kind === "ready" ? loadState.health : undefined}
