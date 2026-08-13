@@ -36,6 +36,7 @@ async function main() {
   const samples = [];
   let pinnedBrowserPid;
   let nextActivityAt = activitySeconds;
+  let activityCycles = 0;
 
   try {
     await openAuthenticatedSettings(page);
@@ -90,6 +91,7 @@ async function main() {
       if (elapsedSeconds >= durationSeconds) break;
       if (elapsedSeconds >= nextActivityAt) {
         await exerciseReadOnlySurface(page);
+        activityCycles += 1;
         nextActivityAt += activitySeconds;
       }
       await delay(Math.min(sampleSeconds, durationSeconds - elapsedSeconds) * 1000);
@@ -107,6 +109,7 @@ async function main() {
       duration_seconds: durationSeconds,
       sample_seconds: sampleSeconds,
       activity_seconds: activitySeconds,
+      activity_cycles: activityCycles,
       sample_count: samples.length,
       browser_pid: pinnedBrowserPid,
       browser_private: browserPrivate,
