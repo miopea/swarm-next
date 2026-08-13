@@ -11,6 +11,13 @@ export default function CommandPalette({ choices, onClose }: { choices: CommandC
   }, [choices, query]);
   useEffect(() => setActiveIndex(0), [query]);
   useEffect(() => {
+    setActiveIndex((current) => Math.min(current, Math.max(filtered.length - 1, 0)));
+  }, [filtered.length]);
+  useEffect(() => {
+    const choice = filtered[activeIndex];
+    if (choice) document.getElementById(`command-${choice.id}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex, filtered]);
+  useEffect(() => {
     const close = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
