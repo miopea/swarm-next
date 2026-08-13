@@ -335,3 +335,11 @@ the independently updated terminal host through the API to worker settings:
   for internal horizontal overflow. The live desktop workspace measured 1,154
   pixels exactly in both directions; mobile measured 412 pixels exactly, with
   zero overflowing cards in either profile.
+- Release `0.1.0-36325e8497b2` refreshes the saved-feedback queue immediately
+  after a report is retained, including when Settings was already mounted. All
+  108 frontend tests and the production build passed. The deployed desktop and
+  Android gates then exercised every primary surface and all three live workers,
+  authenticated page reopen, guarded maintenance, feedback, Jira readiness,
+  and the SQLite backup with no overflow or browser errors. The API-only update
+  preserved terminal-host PID `400662`, all three running sessions, all five
+  retained sessions, and the host's measured memory across the deployment.
