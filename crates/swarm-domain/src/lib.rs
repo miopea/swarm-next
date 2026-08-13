@@ -112,6 +112,7 @@ pub struct JiraProjectBinding {
     pub apiary_id: Option<ApiaryId>,
     pub access_verified: bool,
     pub workflow_mapped: bool,
+    pub auto_sync_assigned: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -664,6 +665,7 @@ pub struct WorkerProfile {
 #[serde(rename_all = "snake_case")]
 pub enum WorkerAttentionState {
     Sleeping,
+    Resting,
     Buzzing,
     WithOperator,
     AwaitingOperator,
@@ -1744,6 +1746,7 @@ mod tests {
             apiary_id: Some(apiary_id),
             access_verified: true,
             workflow_mapped: true,
+            auto_sync_assigned: true,
         };
         assert_eq!(
             binding.readiness(JiraConnectionState::Ready, Some(apiary_id), false),
@@ -1784,6 +1787,7 @@ mod tests {
             apiary_id: None,
             access_verified: false,
             workflow_mapped: false,
+            auto_sync_assigned: true,
         };
         assert_eq!(
             binding.readiness(JiraConnectionState::CredentialsInvalid, None, false),

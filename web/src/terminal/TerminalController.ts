@@ -156,8 +156,14 @@ export class TerminalController {
       onOutput: (bytes) => this.#surface.write(bytes),
       onSnapshot: async (snapshot) => {
         await this.#surface.restore(snapshot);
-        const fitted = await this.#surface.fit();
-        this.#connection.resize(fitted.rows, fitted.columns);
+        try {
+          const fitted = await this.#surface.fit();
+          this.#connection.resize(fitted.rows, fitted.columns);
+        } catch {
+          // Responsive PWA transitions can briefly leave the mounted surface
+          // without measurable font metrics. The canonical snapshot is already
+          // restored; ResizeObserver will publish the settled dimensions.
+        }
         this.#applyPendingFocus();
       },
       onState: (state, detail) => this.#setState(state, detail),

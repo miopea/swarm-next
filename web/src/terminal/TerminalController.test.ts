@@ -238,6 +238,29 @@ test("canonical snapshots reset the renderer through its controller", async () =
   expect(surface.write).not.toHaveBeenCalled();
 });
 
+test("a canonical restore survives transient responsive renderer metrics", async () => {
+  const surface = fakeSurface();
+  vi.mocked(surface.fit)
+    .mockResolvedValueOnce({ rows: 24, columns: 80 })
+    .mockRejectedValueOnce(new Error("renderer metrics are not ready"));
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+
+  await expect(handlers.onSnapshot({
+    sequence: 10,
+    rows: 24,
+    columns: 80,
+    truncated: false,
+    bytes: new Uint8Array(),
+  })).resolves.toBeUndefined();
+
+  expect(surface.restore).toHaveBeenCalledOnce();
+  expect(connection.dispose).not.toHaveBeenCalled();
+});
+
 test("transport waits for a post-layout renderer fit", async () => {
   let resolveFit: ((size: { rows: number; columns: number }) => void) | undefined;
   const surface = fakeSurface();

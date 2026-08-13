@@ -8,6 +8,7 @@ import {
   fetchJiraProjects,
   fetchJiraProjectStatuses,
   replaceJiraMappings,
+  setJiraAssignedSync,
   type JiraProject,
   type JiraProjectBinding,
   type JiraProjectStatus,
@@ -131,6 +132,22 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
     }
   }
 
+  async function changeAssignedSync(binding: JiraProjectBinding, enabled: boolean) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const updated = await setJiraAssignedSync(operatorToken, binding.id, enabled);
+      setBindings((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setMessage(enabled
+        ? `${binding.project_name} will automatically add open Jira work assigned to you.`
+        : `${binding.project_name} will only refresh Jira work already on this board.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Assigned Jira synchronization could not be changed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section id="settings-integrations" className="settings-card integration-settings" aria-labelledby="integration-heading">
       <div><p className="eyebrow">Integrations</p><h3 id="integration-heading">Bring Jira into your Hive</h3></div>
@@ -159,7 +176,10 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
               <div key={binding.id} className="jira-binding-card">
                 <span><strong>{binding.project_key}</strong><small>{binding.project_name}</small></span>
                 <span><strong>Shared with this Hive</strong><small>{binding.workflow_mapped ? "Workflow mapped" : "Mapping needed"}</small></span>
-                <span className="jira-binding-destination"><strong>Task board</strong><small>Choose daily work there</small></span>
+                <label className="jira-binding-destination worker-autostart">
+                  <input type="checkbox" checked={binding.auto_sync_assigned} disabled={busy || !binding.workflow_mapped} onChange={(event) => void changeAssignedSync(binding, event.target.checked)} />
+                  <span><strong>Automatically sync my assigned work</strong><small>Open issues assigned to you appear on the task board</small></span>
+                </label>
               </div>
           ))}
         </div>
@@ -187,7 +207,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
           ) : null}
           {selectedProject ? (
             <div className="jira-workflow-setup">
-              <p className="privacy-note">Issues arrive unassigned. Assign or claim each one when its repository and worker are known.</p>
+              <p className="privacy-note">Open issues assigned to you synchronize automatically. Unassigned issues remain available to claim from the task board.</p>
               <p className="privacy-note"><strong>Assignment is tracked separately from workflow.</strong> A Ready issue becomes Assigned when routed to a worker; In progress means work has actually begun.</p>
               <div className="jira-status-map" aria-label="Jira workflow mapping">
                 {statuses.map((status) => (

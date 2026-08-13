@@ -5,6 +5,7 @@ import BeeMascot from "../brand/BeeMascot";
 
 const attentionPresentation = {
   sleeping: { label: "Sleeping", expression: "sleeping", presence: "offline" },
+  resting: { label: "Resting", expression: "available", presence: "online" },
   buzzing: { label: "Buzzing", expression: "thinking", presence: "online" },
   with_operator: { label: "With you", expression: "focused", presence: "engaged" },
   awaiting_operator: { label: "Awaiting you", expression: "available", presence: "waiting" },
@@ -26,11 +27,11 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
   const [, refreshAttention] = useState(0);
   const rowRef = useRef<HTMLDivElement>(null);
   const primaryAction = worker.running ? onOpen : onStart;
-  const primaryActionLabel = worker.running ? "Open terminal" : worker.runtime_error ? "Retry worker" : "Start worker";
+  const primaryActionLabel = worker.running ? "Open terminal" : worker.runtime_error ? "Retry worker" : "Wake worker";
   const engagementExpired = worker.attention_state === "with_operator"
     && worker.engagement_expires_at !== undefined
     && worker.engagement_expires_at * 1000 <= Date.now();
-  const attention = attentionPresentation[engagementExpired ? "buzzing" : worker.attention_state];
+  const attention = attentionPresentation[engagementExpired ? "resting" : worker.attention_state];
 
   useEffect(() => {
     if (worker.attention_state !== "with_operator" || worker.engagement_expires_at === undefined) return;
@@ -95,7 +96,7 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
             {primaryActionLabel}
           </button>
           {worker.running && worker.role !== "queen" && (
-            <button className="danger-text" role="menuitem" onClick={() => run(onStop)}>Stop worker</button>
+            <button className="danger-text" role="menuitem" onClick={() => run(onStop)}>Put worker to sleep</button>
           )}
           {worker.role === "queen" && <span className="protected-menu-note">Queen is always active</span>}
         </div>

@@ -88,7 +88,7 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
           )}
         </div>
         {canStop ? (
-          <button className="danger-button" onClick={onStop} disabled={busy}>Stop worker</button>
+          <button className="danger-button" onClick={onStop} disabled={busy}>Put worker to sleep</button>
         ) : <span className="protected-worker">Always active</span>}
       </div>
       <div className="terminal-mount" ref={mount} />

@@ -147,7 +147,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT id, project_id, project_key, project_name, scope, hive_id, apiary_id,
-                    access_verified, workflow_mapped
+                    access_verified, workflow_mapped, auto_sync_assigned
              FROM jira_project_bindings WHERE hive_id = ?1
              ORDER BY project_name COLLATE NOCASE, project_key",
         )?;
@@ -170,13 +170,34 @@ impl TaskStore {
         connection
             .query_row(
                 "SELECT id, project_id, project_key, project_name, scope, hive_id, apiary_id,
-                        access_verified, workflow_mapped
+                        access_verified, workflow_mapped, auto_sync_assigned
                  FROM jira_project_bindings WHERE id = ?1",
                 [id.to_string()],
                 jira_binding_from_row,
             )
             .optional()?
             .ok_or(TaskStoreError::JiraProjectBindingNotFound)
+    }
+
+    /// Controls whether open Jira issues assigned to the connected operator are
+    /// automatically synchronized into this Hive.
+    pub fn set_jira_auto_sync_assigned(
+        &self,
+        id: JiraProjectBindingId,
+        enabled: bool,
+    ) -> Result<JiraProjectBinding, TaskStoreError> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE jira_project_bindings
+             SET auto_sync_assigned = ?2, updated_at = unixepoch()
+             WHERE id = ?1",
+            params![id.to_string(), enabled],
+        )?;
+        drop(connection);
+        if changed != 1 {
+            return Err(TaskStoreError::JiraProjectBindingNotFound);
+        }
+        self.get_jira_project_binding(id)
     }
 
     /// Atomically replaces the complete workflow mapping for a project.
@@ -1066,6 +1087,7 @@ fn jira_binding_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JiraProjec
             .transpose()?,
         access_verified: row.get(7)?,
         workflow_mapped: row.get(8)?,
+        auto_sync_assigned: row.get(9)?,
     })
 }
 
@@ -1166,6 +1188,11 @@ mod tests {
             .unwrap();
         assert_eq!(first.id, refreshed.id);
         assert_eq!(refreshed.project_key, "SITE");
+        assert!(!refreshed.auto_sync_assigned);
+        let enabled = store
+            .set_jira_auto_sync_assigned(refreshed.id, true)
+            .unwrap();
+        assert!(enabled.auto_sync_assigned);
         assert_eq!(store.list_jira_project_bindings().unwrap().len(), 1);
     }
 

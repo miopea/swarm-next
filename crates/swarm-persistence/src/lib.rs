@@ -43,7 +43,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 23;
+const CURRENT_SCHEMA_VERSION: i64 = 24;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -1051,7 +1051,31 @@ fn migrate_schema(
     if schema_version < 23 {
         migrate_jira_comment_deliveries(transaction)?;
     }
+    if schema_version < 24 {
+        migrate_jira_assigned_sync_preference(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_jira_assigned_sync_preference(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let column_exists: bool = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM pragma_table_info('jira_project_bindings')
+             WHERE name = 'auto_sync_assigned'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if !column_exists {
+        transaction.execute_batch(
+            "ALTER TABLE jira_project_bindings
+                 ADD COLUMN auto_sync_assigned INTEGER NOT NULL DEFAULT 0
+                 CHECK (auto_sync_assigned IN (0,1));",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", 24)
 }
 
 fn migrate_jira_comment_deliveries(
@@ -2258,6 +2282,42 @@ mod tests {
             CURRENT_SCHEMA_VERSION
         );
         reopened.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn migrates_schema_v23_to_opt_in_assigned_jira_sync() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE jira_project_bindings (
+                     id TEXT PRIMARY KEY,
+                     project_name TEXT NOT NULL
+                 );
+                 INSERT INTO jira_project_bindings (id, project_name)
+                 VALUES ('binding-1', 'Website Services');
+                 PRAGMA user_version = 23;",
+            )
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        migrate_schema(&transaction, 23).unwrap();
+        transaction.commit().unwrap();
+
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT auto_sync_assigned FROM jira_project_bindings WHERE id = 'binding-1'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
     }
 
     #[test]

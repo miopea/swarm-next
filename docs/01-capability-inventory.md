@@ -32,7 +32,7 @@ Decision meanings:
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
 | Routine approval drones | Remove | Provider-native permissions own provider tool approval. Keep only typed Swarm-level operator decisions. |
-| Idle detection and nudging | Redesign | Valuable only where provider session status is authoritative enough; avoid screen-scraping heuristics where possible. |
+| Worker activity and attention | Redesign | Implemented from the bounded host-owned terminal surface: Sleeping is unloaded, Resting is live and idle, Buzzing is active or conservatively unknown, and operator decisions are explicit. Provider classifiers and content-free state-change events keep the roster authoritative without browser polling. |
 | Crash/revival automation | Redesign | Becomes worker lifecycle recovery, not a drone. |
 | Host pressure management | Redesign | Observation-first API and terminal-host memory evidence now has explicit thresholds and operator visibility; automated recovery waits for soak evidence and a safe target. |
 | Context-pressure handling | Investigate | Reassess against current provider compaction and context-management capabilities. |

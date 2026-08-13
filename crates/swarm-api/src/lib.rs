@@ -23,6 +23,7 @@ use axum::{
     routing::{delete, get, patch, post, put},
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
+use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -45,8 +46,8 @@ use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
     CodexConversationStart, HistoryCursor, HostClient, HostRequest, HostResponse, JournalLimits,
     MAX_CANONICAL_SNAPSHOT_BYTES, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
-    MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProcessResourceSample, TerminalSize,
-    sample_current_process,
+    MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProcessResourceSample, ProviderActivity, TerminalSize,
+    classify_provider_activity, sample_current_process,
 };
 use tokio::{
     sync::{Mutex, Notify, RwLock, Semaphore},
@@ -82,6 +83,7 @@ pub struct AppState {
     jira_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
+    provider_activity: Arc<RwLock<HashMap<WorkerSessionId, ProviderActivity>>>,
     control_room_notify: Arc<Notify>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
@@ -107,6 +109,7 @@ impl AppState {
             jira_delivery: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
+            provider_activity: Arc::new(RwLock::new(HashMap::new())),
             control_room_notify: Arc::new(Notify::new()),
             notification_sender: None,
             attachment_store: None,
@@ -239,10 +242,8 @@ impl AppState {
         }
     }
 
-    /// Refreshes only Jira issues that are already part of this Hive.
-    ///
-    /// New Jira work always requires explicit operator or Queen intake. A failed
-    /// project refresh is isolated so local work and other connected projects continue.
+    /// Automatically imports open Jira issues assigned to the operator when enabled,
+    /// then refreshes every Jira issue already owned by this Hive.
     pub async fn reconcile_jira(&self) {
         self.deliver_jira_transitions().await;
         self.deliver_jira_comments().await;
@@ -258,13 +259,39 @@ impl AppState {
         };
         for binding in bindings {
             let links = match store.list_jira_issue_links(binding.id) {
-                Ok(links) if links.is_empty() => continue,
                 Ok(links) => links,
                 Err(error) => {
                     tracing::warn!(%error, project = %binding.project_key, "Jira reconciliation could not read imported work");
                     continue;
                 }
             };
+            if binding.auto_sync_assigned && binding.workflow_mapped {
+                match self
+                    .jira_readiness
+                    .assigned_open_issues(&binding.project_id)
+                    .await
+                {
+                    Ok(issues) => {
+                        for batch in issues.chunks(100) {
+                            let snapshots =
+                                batch.iter().map(jira_issue_snapshot).collect::<Vec<_>>();
+                            match store.sync_jira_issues(binding.id, &snapshots) {
+                                Ok(_) => self.control_room_notify.notify_waiters(),
+                                Err(error) => {
+                                    tracing::warn!(%error, project = %binding.project_key, "assigned Jira work could not synchronize automatically");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, project = %binding.project_key, "assigned Jira work is temporarily unavailable");
+                    }
+                }
+            }
+            if links.is_empty() {
+                continue;
+            }
             let imported = links
                 .into_iter()
                 .map(|link| link.issue_id)
@@ -348,10 +375,13 @@ impl AppState {
 
     /// Reconciles durable worker identities with the terminal host and starts autostart workers.
     pub async fn supervise_workers(&self) {
-        if let Err(error) = reconcile_worker_bindings(self).await {
-            tracing::warn!(message = %error.message, "worker supervisor could not inspect the terminal host");
-            return;
-        }
+        let live = match reconcile_worker_bindings(self).await {
+            Ok(live) => live,
+            Err(error) => {
+                tracing::warn!(message = %error.message, "worker supervisor could not inspect the terminal host");
+                return;
+            }
+        };
         let Ok(profiles) = task_store(self).and_then(|store| {
             store
                 .list_worker_profiles()
@@ -360,6 +390,7 @@ impl AppState {
             tracing::warn!("worker supervisor could not load the durable roster");
             return;
         };
+        refresh_provider_activity(self, &profiles, &live).await;
         let now = unix_timestamp();
         {
             let mut attempts = self.worker_recovery_attempts.write().await;
@@ -1077,6 +1108,7 @@ fn worker_view(
     running: bool,
     awaiting_operator: bool,
     runtime_error: Option<String>,
+    provider_activity: ProviderActivity,
 ) -> WorkerView {
     let engagement_expires_at = profile.engagement_expires_at;
     let attention_state = if runtime_error.is_some() {
@@ -1087,6 +1119,10 @@ fn worker_view(
         WorkerAttentionState::WithOperator
     } else if awaiting_operator {
         WorkerAttentionState::AwaitingOperator
+    } else if provider_activity == ProviderActivity::AwaitingOperator {
+        WorkerAttentionState::AwaitingOperator
+    } else if provider_activity == ProviderActivity::Resting {
+        WorkerAttentionState::Resting
     } else {
         WorkerAttentionState::Buzzing
     };
@@ -1192,6 +1228,11 @@ struct CreateJiraProjectBindingRequest {
     key: String,
     #[serde(rename = "project_name")]
     name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct JiraAssignedSyncRequest {
+    enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1445,6 +1486,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/integrations/jira/bindings/{binding_id}/mappings",
             get(jira_mappings).put(replace_jira_mappings),
+        )
+        .route(
+            "/api/v1/integrations/jira/bindings/{binding_id}/assigned-sync",
+            put(set_jira_assigned_sync),
         )
         .route(
             "/api/v1/integrations/jira/bindings/{binding_id}/issues",
@@ -2413,13 +2458,15 @@ async fn list_workers(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let live = reconcile_worker_bindings(&state).await?;
+    let profiles = task_store(&state)?
+        .list_worker_profiles()
+        .map_err(|error| task_store_error(&error))?;
+    let provider_activity = refresh_provider_activity(&state, &profiles, &live).await;
     let awaiting_operator = task_store(&state)?
         .workers_awaiting_operator()
         .map_err(|error| task_store_error(&error))?;
     let errors = state.worker_errors.read().await;
-    let workers = task_store(&state)?
-        .list_worker_profiles()
-        .map_err(|error| task_store_error(&error))?
+    let workers = profiles
         .into_iter()
         .map(|profile| {
             let running = profile
@@ -2427,10 +2474,79 @@ async fn list_workers(
                 .is_some_and(|session_id| live.contains(&session_id));
             let runtime_error = errors.get(&profile.id).cloned();
             let needs_operator = awaiting_operator.contains(&profile.id);
-            worker_view(profile, running, needs_operator, runtime_error)
+            let activity = profile
+                .active_session_id
+                .and_then(|session_id| provider_activity.get(&session_id).copied())
+                .unwrap_or(ProviderActivity::Unknown);
+            worker_view(profile, running, needs_operator, runtime_error, activity)
         })
         .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(workers)).into_response())
+}
+
+async fn observe_provider_activity(
+    state: &AppState,
+    profiles: &[WorkerProfile],
+    live: &HashSet<WorkerSessionId>,
+) -> HashMap<WorkerSessionId, ProviderActivity> {
+    let observations = profiles
+        .iter()
+        .filter_map(|profile| {
+            let session_id = profile.active_session_id?;
+            live.contains(&session_id)
+                .then_some((session_id, profile.provider))
+        })
+        .collect::<Vec<_>>();
+    stream::iter(observations)
+        .map(|(session_id, provider)| async move {
+            match request_host(
+                state,
+                HostRequest::Read {
+                    session_id,
+                    after_sequence: None,
+                },
+            )
+            .await
+            {
+                Ok(HostResponse::Output {
+                    resume: swarm_terminal::Resume::Snapshot { snapshot },
+                    running: true,
+                    ..
+                }) => Some((session_id, classify_provider_activity(provider, &snapshot))),
+                _ => None,
+            }
+        })
+        .buffer_unordered(8)
+        .filter_map(async move |observation| observation)
+        .collect()
+        .await
+}
+
+async fn refresh_provider_activity(
+    state: &AppState,
+    profiles: &[WorkerProfile],
+    live: &HashSet<WorkerSessionId>,
+) -> HashMap<WorkerSessionId, ProviderActivity> {
+    let observed = observe_provider_activity(state, profiles, live).await;
+    let changed = {
+        let mut previous = state.provider_activity.write().await;
+        if *previous == observed {
+            false
+        } else {
+            *previous = observed.clone();
+            true
+        }
+    };
+    if changed {
+        if let Some(store) = &state.task_store
+            && let Err(error) =
+                store.record_control_room_event(ControlRoomEventKind::RuntimeChanged)
+        {
+            tracing::warn!(%error, "provider activity change could not publish its runtime event");
+        }
+        state.control_room_notify.notify_waiters();
+    }
+    observed
 }
 
 async fn list_provider_capabilities(
@@ -2745,6 +2861,22 @@ async fn replace_jira_mappings(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(mappings)).into_response())
 }
 
+async fn set_jira_assigned_sync(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(binding_id): Path<JiraProjectBindingId>,
+    Json(request): Json<JiraAssignedSyncRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let binding = task_store(&state)?
+        .set_jira_auto_sync_assigned(binding_id, request.enabled)
+        .map_err(|error| task_store_error(&error))?;
+    if request.enabled {
+        state.reconcile_jira().await;
+    }
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(binding)).into_response())
+}
+
 async fn jira_binding_issues(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -3002,7 +3134,13 @@ async fn create_worker(
     state.control_room_notify.notify_waiters();
     Ok((
         StatusCode::CREATED,
-        Json(worker_view(profile, false, false, None)),
+        Json(worker_view(
+            profile,
+            false,
+            false,
+            None,
+            ProviderActivity::Unknown,
+        )),
     )
         .into_response())
 }
@@ -3041,7 +3179,14 @@ async fn update_worker(
     }
     let running = profile.active_session_id.is_some();
     state.control_room_notify.notify_waiters();
-    Ok(Json(worker_view(profile, running, false, None)).into_response())
+    Ok(Json(worker_view(
+        profile,
+        running,
+        false,
+        None,
+        ProviderActivity::Unknown,
+    ))
+    .into_response())
 }
 
 async fn start_worker(
@@ -3098,7 +3243,14 @@ async fn stop_worker(
     let profile = task_store(&state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
-    Ok(Json(worker_view(profile, false, false, None)).into_response())
+    Ok(Json(worker_view(
+        profile,
+        false,
+        false,
+        None,
+        ProviderActivity::Unknown,
+    ))
+    .into_response())
 }
 
 async fn list_sessions(
@@ -3271,7 +3423,13 @@ async fn start_worker_process(
     if let Some(session_id) = profile.active_session_id
         && live.contains(&session_id)
     {
-        return Ok(worker_view(profile, true, false, None));
+        return Ok(worker_view(
+            profile,
+            true,
+            false,
+            None,
+            ProviderActivity::Unknown,
+        ));
     }
     let mcp_config = if profile.provider == ProviderKind::ClaudeCode {
         state
@@ -3337,7 +3495,13 @@ async fn start_worker_process(
     let profile = task_store(state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
-    Ok(worker_view(profile, true, false, None))
+    Ok(worker_view(
+        profile,
+        true,
+        false,
+        None,
+        ProviderActivity::Unknown,
+    ))
 }
 
 async fn reconcile_worker_bindings(state: &AppState) -> Result<HashSet<WorkerSessionId>, ApiError> {
@@ -4284,14 +4448,41 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let profile = store.ensure_queen("/workspace/queen").unwrap();
         assert_eq!(
-            worker_view(profile.clone(), true, true, None).attention_state,
+            worker_view(profile.clone(), true, true, None, ProviderActivity::Resting)
+                .attention_state,
             WorkerAttentionState::AwaitingOperator
         );
         let mut engaged = profile;
         engaged.engagement_expires_at = Some(400);
         assert_eq!(
-            worker_view(engaged, true, true, None).attention_state,
+            worker_view(engaged, true, true, None, ProviderActivity::Resting).attention_state,
             WorkerAttentionState::WithOperator
+        );
+    }
+
+    #[test]
+    fn provider_activity_distinguishes_loaded_idle_from_active_and_unloaded() {
+        let store = TaskStore::in_memory().unwrap();
+        let profile = store.ensure_queen("/workspace/queen").unwrap();
+        assert_eq!(
+            worker_view(
+                profile.clone(),
+                true,
+                false,
+                None,
+                ProviderActivity::Resting,
+            )
+            .attention_state,
+            WorkerAttentionState::Resting
+        );
+        assert_eq!(
+            worker_view(profile.clone(), true, false, None, ProviderActivity::Active,)
+                .attention_state,
+            WorkerAttentionState::Buzzing
+        );
+        assert_eq!(
+            worker_view(profile, false, false, None, ProviderActivity::Active).attention_state,
+            WorkerAttentionState::Sleeping
         );
     }
 
@@ -4718,6 +4909,9 @@ mod tests {
             )
             .unwrap();
         store
+            .set_jira_auto_sync_assigned(binding.id, false)
+            .unwrap();
+        store
             .sync_jira_issues(
                 binding.id,
                 &[JiraIssueSnapshot {
@@ -4752,6 +4946,69 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].jira_assignee_name.as_deref(), Some("Fern"));
         assert_eq!(links[0].jira_status_id, "4");
+    }
+
+    #[tokio::test]
+    async fn enabled_jira_assigned_sync_imports_open_operator_work() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let jira_server = axum::Router::new().route(
+            "/rest/api/3/search/jql",
+            get(|| async {
+                Json(serde_json::json!({
+                    "isLast": true,
+                    "issues": [{
+                        "id": "20003",
+                        "key": "WEB-44",
+                        "fields": {
+                            "summary": "Assigned operator work",
+                            "status": { "id": "3", "name": "In Progress" },
+                            "assignee": { "accountId": "account-1", "displayName": "Bea" },
+                            "updated": "2026-08-13T15:00:00.000+0000"
+                        }
+                    }]
+                }))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, jira_server).await.unwrap() });
+
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "3".into(),
+                    jira_status_name: "In Progress".into(),
+                    task_state: TaskState::Active,
+                }],
+            )
+            .unwrap();
+        store.set_jira_auto_sync_assigned(binding.id, true).unwrap();
+        let state = AppState::default()
+            .with_task_store(store.clone())
+            .with_jira_configuration(
+                &format!("http://{address}"),
+                "operator@example.test",
+                "api-token",
+            )
+            .unwrap();
+
+        state.reconcile_jira().await;
+
+        let tasks = store.list_tasks().unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Assigned operator work");
+        assert_eq!(tasks[0].state, TaskState::Active);
+        assert_eq!(store.list_jira_issue_links(binding.id).unwrap().len(), 1);
     }
 
     #[tokio::test]

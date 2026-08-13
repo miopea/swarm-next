@@ -472,7 +472,15 @@ impl JiraReadinessProbe {
         &self,
         project_id: &str,
     ) -> Result<Vec<JiraIssue>, JiraAdapterError> {
-        self.issues_with_scope(project_id, JiraIssueScope::HiveIntake)
+        self.issues_with_scope(project_id, JiraIssueScope::UnassignedOpen)
+            .await
+    }
+
+    pub(crate) async fn assigned_open_issues(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<JiraIssue>, JiraAdapterError> {
+        self.issues_with_scope(project_id, JiraIssueScope::AssignedToCurrentUserOpen)
             .await
     }
 
@@ -502,8 +510,11 @@ impl JiraReadinessProbe {
         };
         let jql = match scope {
             JiraIssueScope::All => format!("project = {jql_project} ORDER BY updated DESC"),
-            JiraIssueScope::HiveIntake => format!(
-                "project = {jql_project} AND (assignee = currentUser() OR assignee IS EMPTY) AND statusCategory != Done ORDER BY updated DESC"
+            JiraIssueScope::UnassignedOpen => format!(
+                "project = {jql_project} AND assignee IS EMPTY AND statusCategory != Done ORDER BY updated DESC"
+            ),
+            JiraIssueScope::AssignedToCurrentUserOpen => format!(
+                "project = {jql_project} AND assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
             ),
         };
         let mut issues = Vec::new();
@@ -804,7 +815,8 @@ impl JiraReadinessProbe {
 #[derive(Clone, Copy)]
 enum JiraIssueScope {
     All,
-    HiveIntake,
+    UnassignedOpen,
+    AssignedToCurrentUserOpen,
 }
 
 pub(crate) fn issue_url(base_url: &Url, issue_key: &str) -> Option<String> {
@@ -1211,7 +1223,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hive_intake_requests_current_users_and_unassigned_open_work() {
+    async fn hive_intake_requests_only_unassigned_open_work() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let app = Router::new().route(
@@ -1219,8 +1231,8 @@ mod tests {
             get(|Query(query): Query<HashMap<String, String>>| async move {
                 let jql = query.get("jql").map(String::as_str).unwrap_or_default();
                 assert!(jql.contains("project = 10001"));
-                assert!(jql.contains("assignee = currentUser()"));
                 assert!(jql.contains("assignee IS EMPTY"));
+                assert!(!jql.contains("currentUser()"));
                 assert!(jql.contains("statusCategory != Done"));
                 Json(json!({ "isLast": true, "issues": [] }))
             }),
@@ -1236,6 +1248,38 @@ mod tests {
         assert!(
             adapter
                 .hive_intake_issues("10001")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn assigned_sync_requests_only_current_users_open_work() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/rest/api/3/search/jql",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                let jql = query.get("jql").map(String::as_str).unwrap_or_default();
+                assert!(jql.contains("project = 10001"));
+                assert!(jql.contains("assignee = currentUser()"));
+                assert!(!jql.contains("assignee IS EMPTY"));
+                assert!(jql.contains("statusCategory != Done"));
+                Json(json!({ "isLast": true, "issues": [] }))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let adapter = JiraReadinessProbe::configured(
+            &format!("http://{address}"),
+            "operator@example.test",
+            "token",
+        )
+        .unwrap();
+
+        assert!(
+            adapter
+                .assigned_open_issues("10001")
                 .await
                 .unwrap()
                 .is_empty()

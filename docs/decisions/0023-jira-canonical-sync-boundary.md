@@ -33,10 +33,11 @@ Jira is an adapter-private integration behind typed application commands.
 - Settings owns authentication, project binding, and workflow mapping. Daily
   issue selection belongs on the task board, where imported work is assigned,
   ordered, and executed.
-- Personal Hive intake is a deliberately narrow Jira view: non-terminal issues
-  assigned to the connected operator plus non-terminal unassigned issues. The
-  API enforces that scope in Jira JQL both when previewing and when revalidating
-  an explicit selection. Selecting unassigned work must first assign it to the
+- Personal Hive synchronization has two deliberately separate paths. When enabled
+  per project, non-terminal issues assigned to the connected operator synchronize
+  automatically; disabling it leaves existing linked work synchronized without
+  importing newly assigned issues. The task-board intake shows only non-terminal
+  unassigned issues. Selecting that available work must first assign it to the
   connected operator in Jira; Swarm creates the local link only after Jira
   acknowledges that claim. Apiary-owned projects will use a separate governed
   shared-pool policy rather than silently inheriting the personal-Hive filter.

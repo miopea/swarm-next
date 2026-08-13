@@ -23,6 +23,7 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
     if (url.includes("/bindings") && method === "GET") return ok(bound ? [{
       id: "binding-1", project_id: "10001", project_key: "WEB", project_name: "Website Services",
       scope: "hive", hive_id: "hive-1", apiary_id: null, access_verified: true, workflow_mapped: true,
+      auto_sync_assigned: false,
     }] : []);
     if (url.includes("/projects?") && method === "GET") {
       return ok([{ id: "10001", key: "WEB", name: "Website Services" }]);
@@ -39,6 +40,11 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
       return new Response(JSON.stringify({ id: "binding-1" }), { status: 201, headers: { "Content-Type": "application/json" } });
     }
     if (url.includes("/bindings/binding-1/mappings") && method === "PUT") return ok([]);
+    if (url.includes("/bindings/binding-1/assigned-sync") && method === "PUT") return ok({
+      id: "binding-1", project_id: "10001", project_key: "WEB", project_name: "Website Services",
+      scope: "hive", hive_id: "hive-1", apiary_id: null, access_verified: true, workflow_mapped: true,
+      auto_sync_assigned: true,
+    });
     throw new Error(`Unexpected request: ${method} ${url}`);
   }));
 
@@ -53,7 +59,7 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
   fireEvent.change(screen.getByLabelText("Find a Jira project"), { target: { value: "web" } });
   fireEvent.click(await screen.findByRole("option", { name: "WEB Website Services" }));
   expect(await screen.findByText("In Progress")).toBeInTheDocument();
-  expect(screen.getByText("Issues arrive unassigned. Assign or claim each one when its repository and worker are known.")).toBeInTheDocument();
+  expect(screen.getByText("Open issues assigned to you synchronize automatically. Unassigned issues remain available to claim from the task board.")).toBeInTheDocument();
   expect(screen.getByText(/Assignment is tracked separately from workflow/)).toBeInTheDocument();
   expect(screen.getAllByRole("option", { name: "In progress" }).length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name: "Connect project" }));
@@ -71,9 +77,12 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
     { jira_status_id: "5", jira_status_name: "Done", task_state: "completed" },
   ]);
 
-  expect(screen.getByText("Task board")).toBeInTheDocument();
-  expect(screen.getByText("Choose daily work there")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Review issues" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("checkbox", { name: /Automatically sync my assigned work/ }));
+  expect(await screen.findByText("Website Services will automatically add open Jira work assigned to you.")).toBeInTheDocument();
+  const assignedSync = requests.find((request) => request.url.includes("/assigned-sync") && request.method === "PUT");
+  expect(JSON.parse(assignedSync?.body ?? "{}")).toEqual({ enabled: true });
 });
 
 test("offers an operator-facing Atlassian connection instead of host-setting instructions", async () => {

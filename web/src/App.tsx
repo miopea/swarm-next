@@ -95,6 +95,7 @@ export function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [jiraTaskLinks, setJiraTaskLinks] = useState<JiraTaskLink[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>();
+  const [terminalRevision, setTerminalRevision] = useState(0);
   const [decisions, setDecisions] = useState<DecisionRequest[]>([]);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackRevision, setFeedbackRevision] = useState(0);
@@ -375,6 +376,8 @@ export function App() {
       setTasks(controlRoom.tasks);
       setJiraTaskLinks(controlRoom.jiraTaskLinks);
       setDecisions(controlRoom.decisions);
+      if (activeSessionId) terminalWorkspace.closeSession(activeSessionId);
+      setTerminalRevision((current) => current + 1);
       setActiveSessionId((current) =>
         current && controlRoom.sessions.some((session) => session.session_id === current)
           ? current
@@ -660,6 +663,9 @@ export function App() {
     () => sessions.filter((session) => session.running && !workers.some((worker) => worker.active_session_id === session.session_id)),
     [sessions, workers],
   );
+  const liveWorkerCount = workers.filter((worker) => worker.running).length
+    + orphanSessions.filter((session) => session.running).length;
+  const rosterWorkerCount = workers.length + orphanSessions.length;
   const tasksBySession = useMemo(
     () => new Map(
       tasks
@@ -733,8 +739,8 @@ export function App() {
               <button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} onClick={() => setSurface("tasks")}>
                 <span><TaskIcon /> Tasks</span><small>{openTaskCount}</small>
               </button>
-              <button className={surface === "workers" ? "selected" : ""} aria-current={surface === "workers" ? "page" : undefined} onClick={() => setSurface("workers")}>
-                <span><TerminalIcon /> Workers</span><small>{workers.filter((worker) => worker.running).length + orphanSessions.filter((session) => session.running).length}</small>
+              <button className={surface === "workers" ? "selected" : ""} aria-current={surface === "workers" ? "page" : undefined} aria-label={`Workers, ${liveWorkerCount} active of ${rosterWorkerCount}`} onClick={() => setSurface("workers")}>
+                <span><TerminalIcon /> Workers</span><small>{liveWorkerCount}/{rosterWorkerCount}</small>
               </button>
               <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => setSurface("settings")}>
                 <span><SettingsIcon /> Settings</span>
@@ -874,7 +880,7 @@ export function App() {
             onUpdateWorkerEngine={maintainWorkerEngine}
           />
         ) : activeSession ? (
-          <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}`}>
+          <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}:${terminalRevision}`}>
             <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
               <TerminalView operatorToken={operatorToken} session={activeSession} onStop={() => void stopSession(activeSession.session_id)} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} />
             </Suspense>

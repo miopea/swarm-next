@@ -16,7 +16,7 @@ export type PresentationPreferences = {
   terminal_keys_visible: boolean;
   configured: boolean;
 };
-export type WorkerAttentionState = "sleeping" | "buzzing" | "with_operator" | "awaiting_operator" | "blocked";
+export type WorkerAttentionState = "sleeping" | "resting" | "buzzing" | "with_operator" | "awaiting_operator" | "blocked";
 export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed" | "decisions_changed" | "presence_changed" | "notifications_changed";
 export type PresenceMode = "at_hive" | "away" | "night_watch";
 export type PresenceSource = "manual" | "active_device" | "screen_locked" | "inactive_device" | "timed_out";
@@ -94,6 +94,7 @@ export type JiraProjectBinding = {
   apiary_id: string | null;
   access_verified: boolean;
   workflow_mapped: boolean;
+  auto_sync_assigned: boolean;
 };
 export type JiraStatusMapping = {
   jira_status_id: string;
@@ -704,6 +705,23 @@ export async function fetchJiraMappings(operatorToken: string, bindingId: string
     `/api/v1/integrations/jira/bindings/${encodeURIComponent(bindingId)}/mappings`,
   );
   return response.json() as Promise<JiraStatusMapping[]>;
+}
+
+export async function setJiraAssignedSync(
+  operatorToken: string,
+  bindingId: string,
+  enabled: boolean,
+): Promise<JiraProjectBinding> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/integrations/jira/bindings/${encodeURIComponent(bindingId)}/assigned-sync`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    },
+  );
+  return response.json() as Promise<JiraProjectBinding>;
 }
 
 export async function fetchJiraBindingIssues(operatorToken: string, bindingId: string): Promise<JiraIssue[]> {

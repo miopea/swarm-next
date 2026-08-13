@@ -65,3 +65,5 @@ Current decision records:
 - [ADR 0018: Layered operator presence](decisions/0018-layered-operator-presence.md)
 - [ADR 0019: Policy-driven mobile attention](decisions/0019-policy-driven-mobile-attention.md)
 - [ADR 0020: Owned runtime resource evidence](decisions/0020-owned-runtime-resource-evidence.md)
+- [ADR 0023: Jira canonical sync boundary](decisions/0023-jira-canonical-sync-boundary.md)
+- [ADR 0024: Provider-derived worker attention](decisions/0024-provider-derived-worker-attention.md)

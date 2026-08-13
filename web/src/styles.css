@@ -194,7 +194,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-compose form { display: grid; grid-template-columns: minmax(230px, 1.2fr) minmax(180px, .8fr) auto; align-content: end; align-items: end; gap: 10px; }
 .field-stack { display: grid; min-width: 0; gap: 7px; }
 .task-compose form button { white-space: nowrap; }
-.jira-task-source { display: grid; max-width: 1400px; gap: 14px; margin: -12px auto 30px; padding: 18px 20px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--accent-soft) 42%, var(--panel)); }
+.jira-task-source { display: grid; grid-column: 1 / -1; gap: 12px; margin-top: 2px; padding-top: 16px; border-top: 1px solid var(--line); }
 .jira-task-source-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; }
 .jira-task-source-heading h3 { margin: 0; font-size: 1rem; }
 .jira-task-source-heading > span { color: var(--muted); font-size: .78rem; }
@@ -434,10 +434,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .feedback-screenshot-preview span { display: grid; min-width: 0; gap: 2px; }
 .feedback-screenshot-preview span strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .command-backdrop { position: fixed; z-index: 45; inset: 0; display: grid; padding: max(12vh, 48px) 18px 18px; align-items: start; justify-items: center; background: color-mix(in srgb, var(--terminal-frame) 55%, transparent); backdrop-filter: blur(3px); }
-.command-palette { display: grid; width: min(620px, 100%); max-height: min(680px, calc(100dvh - 72px)); gap: 13px; padding: 20px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel-raised); box-shadow: 0 22px 70px color-mix(in srgb, var(--terminal-frame) 45%, transparent); }
+.command-palette { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; width: min(620px, 100%); max-height: min(680px, calc(100dvh - 72px)); gap: 13px; padding: 20px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel-raised); box-shadow: 0 22px 70px color-mix(in srgb, var(--terminal-frame) 45%, transparent); }
 .command-header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .command-palette h2 { margin: 0; font-size: 1.15rem; }
-.command-results { display: grid; gap: 5px; overflow-y: auto; }
+.command-results { display: grid; min-height: 0; gap: 5px; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; scrollbar-gutter: stable; }
 .command-results > button { display: flex; min-height: 54px; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 11px; border-color: transparent; color: var(--text); background: transparent; text-align: left; }
 .command-results > button:hover, .command-results > button:focus-visible, .command-results > button[aria-selected="true"] { border-color: var(--good); background: var(--good-soft); }
 .command-results > button > span:first-child { display: grid; gap: 2px; }
@@ -687,7 +687,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .jira-intake { padding: 12px; }
   .jira-intake-heading { align-items: start; }
   .jira-intake > .primary-action { width: 100%; }
-  .jira-task-source { margin: 0 auto 18px; padding: 15px; }
+  .jira-task-source { margin: 0; padding: 14px 0 0; }
   .jira-task-source-heading { align-items: start; flex-direction: column; gap: 5px; }
   .jira-project-actions { display: grid; grid-template-columns: 1fr; }
   .jira-project-actions button { justify-content: space-between; width: 100%; }

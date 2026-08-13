@@ -42,6 +42,18 @@ function taskStateLabel(task: Task): string {
   return stateLabels[task.state];
 }
 
+function workerAttentionLabel(worker: Worker): string {
+  const labels = {
+    sleeping: "sleeping",
+    resting: "resting",
+    buzzing: "buzzing",
+    with_operator: "with you",
+    awaiting_operator: "awaiting you",
+    blocked: "blocked",
+  } as const;
+  return labels[worker.attention_state] ?? (worker.running ? "resting" : "sleeping");
+}
+
 const priorityLabels: Record<TaskPriority, string> = {
   low: "Low",
   normal: "Normal",
@@ -233,9 +245,8 @@ export default function TaskBoard({
           </div>
           <button disabled={busy || !title.trim() || !workerId}>Create draft</button>
         </form>}
+        <JiraTaskIntake operatorToken={operatorToken} onImported={onJiraImported} />
       </section>
-
-      <JiraTaskIntake operatorToken={operatorToken} onImported={onJiraImported} />
 
       <section className="task-section" aria-labelledby="active-work-heading">
         <div className="section-heading">
@@ -492,7 +503,7 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
             <option value="">Choose worker</option>
             {assignableWorkers.map((worker) => (
               <option key={worker.id} value={worker.id}>
-                {worker.name} · {worker.running ? "buzzing" : "sleeping"}
+                {worker.name} · {workerAttentionLabel(worker)}
               </option>
             ))}
           </select>

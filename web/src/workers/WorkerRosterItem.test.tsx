@@ -19,7 +19,7 @@ test("right click opens the same accessible action menu and protects Queen", () 
 
   expect(screen.getByRole("menu", { name: "Queen actions" })).toBeInTheDocument();
   expect(screen.getByText("Queen is always active")).toBeInTheDocument();
-  expect(screen.queryByRole("menuitem", { name: "Stop worker" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("menuitem", { name: "Put worker to sleep" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("menuitem", { name: "Open terminal" }));
   expect(onOpen).toHaveBeenCalledOnce();
 });
@@ -32,7 +32,7 @@ test("a running worker exposes stop through its visible menu", () => {
   fireEvent.pointerDown(document.body);
   expect(screen.queryByRole("menu", { name: "Daisy actions" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Actions for Daisy" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "Stop worker" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Put worker to sleep" }));
 
   expect(onStop).toHaveBeenCalledOnce();
   expect(screen.queryByRole("menu", { name: "Daisy actions" })).not.toBeInTheDocument();
@@ -63,7 +63,7 @@ test("offers an explicit retry after a worker launch failure", () => {
   expect(onStart).toHaveBeenCalledOnce();
 });
 
-test("returns to buzzing when the operator engagement lease expires", () => {
+test("returns to resting when the operator engagement lease expires", () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date(100_000));
   const { container } = render(<WorkerRosterItem worker={{ ...queen, attention_state: "with_operator", engagement_expires_at: 101 }} selected detail="Direct steering" busy={false} onOpen={vi.fn()} onStart={vi.fn()} onStop={vi.fn()} />);
@@ -71,7 +71,7 @@ test("returns to buzzing when the operator engagement lease expires", () => {
 
   expect(item.getByText("With you")).toBeInTheDocument();
   act(() => vi.advanceTimersByTime(1_000));
-  expect(item.getByText("Buzzing")).toBeInTheDocument();
-  expect(item.getByTitle("Buzzing")).toHaveClass("online");
+  expect(item.getByText("Resting")).toBeInTheDocument();
+  expect(item.getByTitle("Resting")).toHaveClass("online");
   vi.useRealTimers();
 });
