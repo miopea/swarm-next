@@ -242,8 +242,16 @@ async function checkSurface(browser, surface) {
       throw new Error(`${surface.name}: browser errors: ${[...consoleErrors, ...pageErrors].join(" | ")}`);
     }
     await page.getByRole("button", { name: "Report a problem" }).click();
-    await page.getByRole("dialog", { name: "Capture what felt wrong" }).waitFor();
+    const feedbackDialog = page.getByRole("dialog", { name: "Capture what felt wrong" });
+    await feedbackDialog.waitFor();
     await page.getByLabel("What did you expect?").fill("Acceptance preview only");
+    await feedbackDialog.evaluate((dialog) => {
+      const clipboard = new DataTransfer();
+      clipboard.items.add(new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "acceptance-screenshot.png", { type: "image/png" }));
+      dialog.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }));
+    });
+    await page.getByText("acceptance-screenshot.png", { exact: true }).waitFor();
+    const feedbackImagePaste = true;
     const privateSaveVisible = await page.getByRole("button", { name: "Save to this Hive" }).isVisible();
     if (!privateSaveVisible) throw new Error(`${surface.name}: private feedback save is unavailable`);
     await page.getByRole("button", { name: "Close" }).click();
@@ -337,7 +345,7 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
     accessibleControlCount += await verifyAccessibleControls(page, `${surface.name}/settings-detail`);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }
@@ -397,6 +405,16 @@ async function verifyRunningWorkerSelection(page, surfaceName) {
     await page.getByRole("heading", { name: worker.name, exact: true }).waitFor();
     await page.locator(".terminal-panel").waitFor();
     await page.getByText("connected", { exact: true }).waitFor();
+    try {
+      await page.waitForFunction(() => document.activeElement?.closest(".terminal-panel") !== null, undefined, { timeout: 5_000 });
+    } catch {
+      const focus = await page.evaluate(() => ({
+        tag: document.activeElement?.tagName,
+        className: document.activeElement instanceof HTMLElement ? document.activeElement.className : undefined,
+        text: document.activeElement?.textContent?.trim().slice(0, 80),
+      }));
+      throw new Error(`${surfaceName}: selecting ${worker.name} did not focus its terminal: ${JSON.stringify(focus)}`);
+    }
     if (await button.getAttribute("aria-current") !== "page") {
       throw new Error(`${surfaceName}: ${worker.name} did not become the selected terminal`);
     }
