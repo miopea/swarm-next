@@ -52,6 +52,40 @@ The automated harness establishes duration and resource evidence. The browser
 test establishes the end-user interaction contract; neither substitutes for
 the other.
 
+`scripts/dogfood/browser-memory-soak.cjs` adds the missing endurance half. It
+launches one isolated headless Chromium-family browser, authenticates normally,
+and leaves the live Settings surface subscribed without mutating tasks or
+workers. Chrome DevTools identifies the exact browser and storage-service
+processes; OS counters then sample their working set and private bytes alongside
+the complete owned browser tree, renderer JavaScript heap, DOM nodes, and
+browser storage usage. The browser PID is pinned and authenticated-page errors
+fail the run. After a five-sample warmup, a run fails only when both material
+net growth and a sustained positive slope exceed the documented bounds, so a
+normal warm cache does not masquerade as a leak.
+
+Example from Windows, where Edge was the original problem surface:
+
+```powershell
+$env:SWARM_OPERATOR_TOKEN = '<private token>'
+$env:SWARM_BASE_URL = 'https://swarm2.example.test'
+$env:SWARM_BROWSER_EXECUTABLE = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+$env:SWARM_BROWSER_SOAK_DURATION_SECONDS = '86400'
+node scripts\dogfood\browser-memory-soak.cjs
+```
+
+The token is read only from the environment and never written to evidence.
+CSV samples and a compact JSON verdict default to `dist/browser-soak`.
+
+The first live harness validation on 2026-08-13 ran release
+`0.1.0-67d625162b60` in isolated headless Edge for 60 seconds and 13 samples.
+Browser PID `49736` stayed fixed; its private memory remained between 61.5 and
+61.9 MiB and ended lower than the post-warmup baseline. The storage service
+remained between 9.9 and 10.0 MiB, the owned browser tree ended 22.3 MiB lower,
+renderer heap ended lower, DOM nodes remained exactly 440, browser storage
+remained zero bytes, and no authenticated-page error occurred. This validates
+the harness and rules out violent immediate growth; it does not replace the
+24-hour browser soak.
+
 ## Read-only live observation
 
 `scripts/dogfood/observe-live-soak.sh` monitors the actual dogfood crew without

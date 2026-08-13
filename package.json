@@ -5,6 +5,7 @@
   "scripts": {
     "build": "pnpm --dir web build",
     "check": "pnpm --dir web check",
-    "test": "pnpm --dir web test"
+    "test": "pnpm --dir web test",
+    "test:dogfood": "node --test scripts/dogfood/*.test.cjs"
   }
 }
