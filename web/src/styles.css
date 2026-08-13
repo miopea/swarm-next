@@ -410,7 +410,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .command-palette h2 { margin: 0; font-size: 1.15rem; }
 .command-results { display: grid; gap: 5px; overflow-y: auto; }
 .command-results > button { display: flex; min-height: 54px; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 11px; border-color: transparent; color: var(--text); background: transparent; text-align: left; }
-.command-results > button:hover, .command-results > button:focus-visible { border-color: var(--good); background: var(--good-soft); }
+.command-results > button:hover, .command-results > button:focus-visible, .command-results > button[aria-selected="true"] { border-color: var(--good); background: var(--good-soft); }
 .command-results > button > span:first-child { display: grid; gap: 2px; }
 .command-results small { color: var(--quiet); font-size: .66rem; letter-spacing: .07em; text-transform: uppercase; }
 .command-results > button > span:last-child { color: var(--muted); font-size: .78rem; }

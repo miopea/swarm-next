@@ -4,10 +4,12 @@ export type CommandChoice = { id: string; label: string; detail: string; group: 
 
 export default function CommandPalette({ choices, onClose }: { choices: CommandChoice[]; onClose: () => void }) {
   const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return needle ? choices.filter((choice) => `${choice.label} ${choice.detail}`.toLocaleLowerCase().includes(needle)) : choices;
   }, [choices, query]);
+  useEffect(() => setActiveIndex(0), [query]);
   useEffect(() => {
     const close = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", close);
@@ -20,12 +22,35 @@ export default function CommandPalette({ choices, onClose }: { choices: CommandC
         <button type="button" className="secondary-button" onClick={onClose}>Close</button>
       </header>
       <label className="sr-only" htmlFor="command-query">Find work, decisions, or workers</label>
-      <input id="command-query" autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find work, decisions, or workers…" />
-      <div className="command-results">
-        {filtered.map((choice) => <button key={choice.id} type="button" onClick={() => { onClose(); choice.run(); }}>
+      <input
+        id="command-query"
+        autoFocus
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" && filtered.length) {
+            event.preventDefault();
+            setActiveIndex((current) => (current + 1) % filtered.length);
+          } else if (event.key === "ArrowUp" && filtered.length) {
+            event.preventDefault();
+            setActiveIndex((current) => (current - 1 + filtered.length) % filtered.length);
+          } else if (event.key === "Enter" && filtered[activeIndex]) {
+            event.preventDefault();
+            onClose();
+            filtered[activeIndex].run();
+          }
+        }}
+        placeholder="Find work, decisions, or workers…"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-controls="command-results"
+        aria-activedescendant={filtered[activeIndex] ? `command-${filtered[activeIndex].id}` : undefined}
+      />
+      <div className="command-results" id="command-results" role="listbox">
+        {filtered.map((choice, index) => <button id={`command-${choice.id}`} aria-selected={index === activeIndex} role="option" key={choice.id} type="button" onMouseEnter={() => setActiveIndex(index)} onClick={() => { onClose(); choice.run(); }}>
           <span><small>{choice.group}</small><strong>{choice.label}</strong></span><span>{choice.detail}</span>
         </button>)}
-        {filtered.length === 0 ? <p>No matching view or worker.</p> : null}
+        {filtered.length === 0 ? <p>No matching result.</p> : null}
       </div>
       <small className="privacy-note">Tip: press Alt+K anywhere outside a terminal or text field. Sleeping workers wake when selected.</small>
     </section>

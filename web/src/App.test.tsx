@@ -311,7 +311,7 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
 
   fireEvent.keyDown(screen.getByRole("button", { name: "Tasks 0" }), { key: "k", altKey: true });
   expect(screen.getByRole("dialog", { name: "Where would you like to go?" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /Add worker Configure a repository worker/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /Add worker Configure a repository worker/ })).toBeInTheDocument();
   fireEvent.keyDown(window, { key: "Escape" });
   expect(screen.queryByRole("dialog", { name: "Where would you like to go?" })).not.toBeInTheDocument();
 
@@ -433,7 +433,7 @@ test("waking a task worker assigns the stable worker rather than its new session
 
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "Open quick navigation" }));
-  expect(screen.getByRole("button", { name: /Daisy Wake sleeping worker/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /Daisy Wake sleeping worker/ })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   fireEvent.click(await screen.findByRole("button", { name: "Wake Daisy" }));
 
