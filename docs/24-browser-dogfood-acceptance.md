@@ -260,3 +260,9 @@ the independently updated terminal host through the API to worker settings:
   release mechanics or implying the update failed. The packaged-runtime test
   proves both binaries match the bundle version, and the deployed desktop and
   Android browser gate asserts the maintenance state is present and readable.
+- The same deployed desktop gate now downloads a fresh authenticated Hive
+  backup, reads the entire artifact, verifies the SQLite file signature and a
+  non-trivial bounded size, and deletes the browser's temporary download. The
+  server integration test independently reopens the backup and runs SQLite
+  integrity verification, so browser delivery and database validity are both
+  covered without retaining private dogfood data.

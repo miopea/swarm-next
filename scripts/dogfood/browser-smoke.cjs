@@ -87,14 +87,35 @@ async function checkSurface(browser, surface) {
     if (consoleErrors.length || pageErrors.length) {
       throw new Error(`${surface.name}: browser errors: ${[...consoleErrors, ...pageErrors].join(" | ")}`);
     }
+    const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
     await page.screenshot({
       path: path.join(outputRoot, `${surface.name}-settings.png`),
       fullPage: true,
     });
-    return { surface: surface.name, ...dimensions, codexDisabled, workerEngineText, status: "passed" };
+    return { surface: surface.name, ...dimensions, codexDisabled, workerEngineText, backup, status: "passed" };
   } finally {
     await context.close();
   }
+}
+
+async function verifyBackupDownload(page) {
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "Download Hive backup" }).click(),
+  ]);
+  const stream = await download.createReadStream();
+  let size = 0;
+  let header = Buffer.alloc(0);
+  for await (const chunk of stream) {
+    const bytes = Buffer.from(chunk);
+    size += bytes.length;
+    if (header.length < 16) header = Buffer.concat([header, bytes]).subarray(0, 16);
+  }
+  await download.delete();
+  if (header.toString("binary") !== "SQLite format 3\u0000" || size < 4096) {
+    throw new Error(`desktop: Hive backup is not a valid SQLite artifact (${size} bytes)`);
+  }
+  return { sqliteHeader: true, bytes: size };
 }
 
 main().catch((error) => {
