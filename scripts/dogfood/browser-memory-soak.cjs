@@ -152,6 +152,7 @@ async function main() {
 
 async function recoverAfterGatewayInterruption(page, elapsedSeconds) {
   const startedAt = Date.now();
+  const cookieBefore = await browserSessionMetadata(page.context());
   const deadline = startedAt + 15_000;
   let healthy = false;
   while (Date.now() < deadline) {
@@ -168,9 +169,22 @@ async function recoverAfterGatewayInterruption(page, elapsedSeconds) {
   await page.reload({ waitUntil: "domcontentloaded", timeout: 15_000 });
   await page.getByRole("heading", { name: "Settings" }).waitFor({ timeout: 15_000 });
   if (await page.getByLabel("Operator token").isVisible().catch(() => false)) {
-    throw new Error("browser authentication did not survive the gateway interruption");
+    const cookieAfter = await browserSessionMetadata(page.context());
+    const sessionStatus = await page.request.get(`${baseUrl}/api/v1/auth/session`).then((response) => response.status()).catch(() => 0);
+    throw new Error(`browser authentication did not survive the gateway interruption: before=${JSON.stringify(cookieBefore)} after=${JSON.stringify(cookieAfter)} session_status=${sessionStatus}`);
   }
   return { elapsed_seconds: elapsedSeconds, recovery_milliseconds: Date.now() - startedAt };
+}
+
+async function browserSessionMetadata(context) {
+  const cookie = (await context.cookies(baseUrl)).find((candidate) => candidate.name === "swarm_next_operator_session");
+  return cookie ? {
+    present: true,
+    value_length: cookie.value.length,
+    secure: cookie.secure,
+    same_site: cookie.sameSite,
+    expires_in_seconds: Math.round(cookie.expires - Date.now() / 1000),
+  } : { present: false };
 }
 
 async function exerciseReadOnlySurface(page) {
