@@ -242,6 +242,10 @@ fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostRe
         HostRequest::HostStatus => terminal_host_status(registry)
             .map(|status| HostResponse::HostStatus { status })
             .map_err(|error| error.to_string()),
+        HostRequest::ProviderCapabilities => Ok(HostResponse::ProviderCapabilities {
+            claude_code: executable_in_path("claude"),
+            codex: executable_in_path("codex"),
+        }),
         HostRequest::BeginDrain => registry
             .begin_drain()
             .and_then(|_| terminal_host_status(registry))
@@ -341,6 +345,16 @@ fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostRe
             .map_err(|error| error.to_string()),
     };
     result.unwrap_or_else(|message| error_response("terminal_operation_failed", &message))
+}
+
+fn executable_in_path(name: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|directory| {
+            fs::metadata(directory.join(name)).is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            })
+        })
+    })
 }
 
 fn terminal_host_status(

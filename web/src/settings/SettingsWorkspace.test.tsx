@@ -44,6 +44,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       lockDetectionState="available"
       notificationSettings={{ policy: "important_only", subscription_count: 0, vapid_public_key: "public-key" }}
       queenPolicy={{ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }}
+      providers={{ claude_code: true, codex: false }}
       notificationState="available"
       recentEvents={[{ sequence: 7, hive_id: "hive-1", kind: "workers_changed", occurred_at: 1 }]}
       hiveIdentity={{ operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } }}
@@ -153,7 +154,7 @@ function minimalProps() {
     busy: false, colorTheme: "light" as const, liveFeedState: "connected" as const, operatorToken: "secret-token",
     presence: { mode: "at_hive" as const, manual_mode: null, source: "active_device" as const }, lockDetectionState: "unsupported" as const,
     notificationSettings: { policy: "important_only" as const, subscription_count: 0, vapid_public_key: "public-key" }, queenPolicy: { at_hive: "coordinate" as const, away: "coordinate" as const, night_watch: "local_execution" as const }, notificationState: "available" as const,
-    recentEvents: [], sessions: [], workers: [], workspaces: [], health: { status: "ok" as const, version: "0.1.0" },
+    recentEvents: [], sessions: [], workers: [], workspaces: [], providers: { claude_code: true, codex: false }, health: { status: "ok" as const, version: "0.1.0" },
     hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
     onThemeChange: vi.fn(), onPresenceChange: vi.fn(), onEnableLockDetection: vi.fn(), onNotificationPolicyChange: vi.fn(),
     onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(),

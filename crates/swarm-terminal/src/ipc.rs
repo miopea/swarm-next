@@ -31,6 +31,7 @@ pub fn default_terminal_socket_path() -> PathBuf {
 pub enum HostRequest {
     Ping,
     HostStatus,
+    ProviderCapabilities,
     BeginDrain,
     CancelDrain,
     StartClaude {
@@ -97,6 +98,10 @@ pub enum HostResponse {
     },
     HostStatus {
         status: TerminalHostStatus,
+    },
+    ProviderCapabilities {
+        claude_code: bool,
+        codex: bool,
     },
     SessionStarted {
         session_id: WorkerSessionId,

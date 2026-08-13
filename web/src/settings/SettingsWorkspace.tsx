@@ -1,4 +1,4 @@
-import { downloadDatabaseBackup, type ControlRoomEvent, type Health, type HiveIdentity, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type Worker, type WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, type ControlRoomEvent, type Health, type HiveIdentity, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type Worker, type WorkspaceChoice } from "../api";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
@@ -15,6 +15,7 @@ type Props = {
   liveFeedState: LiveFeedState;
   operatorToken: string;
   presence: OperatorPresence | undefined;
+  providers: ProviderCapabilities;
   lockDetectionState: LockDetectionState;
   notificationSettings: NotificationSettings | undefined;
   queenPolicy: QueenAutonomyPolicy | undefined;
@@ -36,7 +37,7 @@ type Props = {
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
 };
 
-export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers }: Props) {
+export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers }: Props) {
   const mobile = deviceClass() === "mobile";
   async function downloadBackup() {
     const blob = await downloadDatabaseBackup(operatorToken);
@@ -49,7 +50,7 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
   }
   return (
     <div className="settings-workspace">
-      <WorkerSettings workers={workers} workspaces={workspaces} busy={busy} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onReorder={onReorderWorkers} />
+      <WorkerSettings workers={workers} workspaces={workspaces} busy={busy} providers={providers} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onReorder={onReorderWorkers} />
       <section className="settings-card presence-settings" aria-labelledby="presence-heading">
         <div><p className="eyebrow">Presence</p><h3 id="presence-heading">Let attention follow you</h3></div>
         <p>Automatic presence uses this device's activity, visibility, and expiry. A manual mode stays in effect until you return to Automatic.</p>

@@ -7,6 +7,7 @@ export type TaskState = "draft" | "ready" | "active" | "blocked" | "review" | "c
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type WorkerRole = "queen" | "worker";
 export type ProviderKind = "claude_code" | "codex";
+export type ProviderCapabilities = { claude_code: boolean; codex: boolean };
 export type WorkerAttentionState = "sleeping" | "buzzing" | "with_operator" | "blocked";
 export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed" | "decisions_changed" | "presence_changed" | "notifications_changed";
 export type PresenceMode = "at_hive" | "away" | "night_watch";
@@ -464,6 +465,11 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
     `/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}`,
     { method: "DELETE" },
   );
+}
+
+export async function fetchProviderCapabilities(operatorToken: string): Promise<ProviderCapabilities> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/providers");
+  return response.json() as Promise<ProviderCapabilities>;
 }
 
 export async function fetchQueenAutonomyPolicy(operatorToken: string): Promise<QueenAutonomyPolicy> {

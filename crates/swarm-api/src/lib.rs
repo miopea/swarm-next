@@ -671,6 +671,12 @@ struct SetQueenAutonomyPolicyRequest {
     night_watch: QueenAutonomyLevel,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+struct ProviderCapabilitiesView {
+    claude_code: bool,
+    codex: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct SaveNotificationSubscriptionRequest {
     device_class: PresenceDeviceClass,
@@ -978,6 +984,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/tasks/{task_id}/state", patch(transition_task))
         .route("/api/v1/tasks/{task_id}/assignment", put(assign_task))
         .route("/api/v1/workers", get(list_workers).post(create_worker))
+        .route("/api/v1/providers", get(list_provider_capabilities))
         .route("/api/v1/workers/order", put(reorder_workers))
         .route("/api/v1/workers/{worker_id}", patch(update_worker))
         .route("/api/v1/workspaces", get(list_workspaces))
@@ -1662,6 +1669,23 @@ async fn list_workers(
         })
         .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(workers)).into_response())
+}
+
+async fn list_provider_capabilities(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let capabilities = match request_host(&state, HostRequest::ProviderCapabilities).await {
+        Ok(HostResponse::ProviderCapabilities { claude_code, codex }) => {
+            ProviderCapabilitiesView { claude_code, codex }
+        }
+        _ => ProviderCapabilitiesView {
+            claude_code: true,
+            codex: false,
+        },
+    };
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(capabilities)).into_response())
 }
 
 async fn list_workspaces(
@@ -2925,6 +2949,32 @@ mod tests {
         assert_eq!(json["hive"]["id"], expected.hive.id.to_string());
         assert_eq!(json["hive"]["name"], "My Hive");
         assert!(json["hive"]["apiary_id"].is_null());
+    }
+
+    #[tokio::test]
+    async fn provider_capabilities_are_private_and_degrade_for_an_older_host() {
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret"),
+        );
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/providers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/providers").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(response).await;
+        assert_eq!(json["claude_code"], true);
+        assert_eq!(json["codex"], false);
     }
 
     #[tokio::test]

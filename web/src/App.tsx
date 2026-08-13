@@ -12,6 +12,7 @@ import {
   fetchNotificationSettings,
   fetchQueenAutonomyPolicy,
   fetchPresence,
+  fetchProviderCapabilities,
   fetchSessions,
   fetchTaskActivity,
   fetchTasks,
@@ -39,6 +40,7 @@ import {
   type OperatorPresence,
   type PresenceMode,
   type ProviderKind,
+  type ProviderCapabilities,
   type QueenAutonomyPolicy,
   type SessionSummary,
   type Task,
@@ -93,6 +95,7 @@ export function App() {
   const [lockDetectionState, setLockDetectionState] = useState<LockDetectionState>("unsupported");
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>();
   const [queenPolicy, setQueenPolicy] = useState<QueenAutonomyPolicy>();
+  const [providers, setProviders] = useState<ProviderCapabilities>({ claude_code: true, codex: false });
   const [notificationState, setNotificationState] = useState<NotificationCapabilityState>("unsupported");
   const presenceController = useMemo(() => new PresenceController(), []);
   const notificationController = useMemo(() => new NotificationController(), []);
@@ -133,6 +136,13 @@ export function App() {
     void fetchQueenAutonomyPolicy(operatorToken)
       .then(setQueenPolicy)
       .catch((error: unknown) => setOperationError(error instanceof Error ? error.message : "Queen policy could not be loaded"));
+  }, [operatorToken]);
+
+  useEffect(() => {
+    if (!operatorToken) return;
+    void fetchProviderCapabilities(operatorToken)
+      .then(setProviders)
+      .catch(() => setProviders({ claude_code: true, codex: false }));
   }, [operatorToken]);
 
   useEffect(() => {
@@ -700,6 +710,7 @@ export function App() {
             lockDetectionState={lockDetectionState}
             notificationSettings={notificationSettings}
             queenPolicy={queenPolicy}
+            providers={providers}
             notificationState={notificationState}
             sessions={sessions}
             workers={workers}

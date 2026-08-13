@@ -1,18 +1,19 @@
 import { useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 
-import type { ProviderKind, Worker, WorkspaceChoice } from "../api";
+import type { ProviderCapabilities, ProviderKind, Worker, WorkspaceChoice } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 
 type Props = {
   workers: Worker[];
   workspaces: WorkspaceChoice[];
   busy: boolean;
+  providers: ProviderCapabilities;
   onCreate: (name: string, workspace: string, provider: ProviderKind) => Promise<void>;
   onUpdate: (workerId: string, name: string, autostart: boolean) => Promise<void>;
   onReorder: (workerIds: string[]) => Promise<void>;
 };
 
-export default function WorkerSettings({ workers, workspaces, busy, onCreate, onUpdate, onReorder }: Props) {
+export default function WorkerSettings({ workers, workspaces, busy, providers, onCreate, onUpdate, onReorder }: Props) {
   const roster = workers.filter((worker) => worker.role !== "queen");
   const available = workspaces.filter((workspace) => !workspace.configured_worker_id);
   const [name, setName] = useState("");
@@ -108,10 +109,10 @@ export default function WorkerSettings({ workers, workspaces, busy, onCreate, on
         <div className="field-stack provider-field">
           <label htmlFor="configured-worker-provider">Coding provider</label>
           <select id="configured-worker-provider" value={provider} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
-            <option value="claude_code">Claude Code</option>
-            <option value="codex" disabled>Codex · runtime setup required</option>
+            <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
+            <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · waiting for maintenance"}</option>
           </select>
-          <small>Codex profiles will unlock after its durable login and recovery adapter are installed on this Hive.</small>
+          <small>{providers.codex ? "Codex is ready for new repository-owned workers." : "Codex is installed and authenticated; it unlocks after the terminal host's next zero-session maintenance update."}</small>
         </div>
         <div className="field-stack">
           <label htmlFor="configured-worker-repository">Repository path</label>

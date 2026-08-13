@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 
 import type { Worker } from "../api";
 import WorkerSettings from "./WorkerSettings";
@@ -7,6 +7,8 @@ import WorkerSettings from "./WorkerSettings";
 const queen = worker("queen", "Queen", "/projects/queen", 0, "queen");
 const budget = worker("budget", "Daisy", "/projects/budgetbug", 1);
 const studio = worker("studio", "Poppy", "/projects/sculpt-studio", 2);
+
+afterEach(cleanup);
 
 test("configures and reorders durable workers with progressive path completion", async () => {
   const onCreate = vi.fn().mockResolvedValue(undefined);
@@ -21,6 +23,7 @@ test("configures and reorders durable workers with progressive path completion",
         { name: "public-website", path: "/projects/public-website", kind: "repository", configured_worker_id: null },
       ]}
       busy={false}
+      providers={{ claude_code: true, codex: false }}
       onCreate={onCreate}
       onUpdate={onUpdate}
       onReorder={onReorder}
@@ -32,7 +35,7 @@ test("configures and reorders durable workers with progressive path completion",
   expect(onReorder).toHaveBeenCalledWith([studio.id, budget.id]);
 
   fireEvent.change(screen.getByLabelText("Worker name"), { target: { value: "Clover" } });
-  expect(screen.getByRole("option", { name: "Codex · runtime setup required" })).toBeDisabled();
+  expect(screen.getByRole("option", { name: "Codex · waiting for maintenance" })).toBeDisabled();
   const pathInput = screen.getByLabelText("Repository path");
   fireEvent.focus(pathInput);
   fireEvent.change(pathInput, { target: { value: "projects/pub" } });
@@ -57,6 +60,7 @@ test("accepts a complete typed path when it is not in the bounded suggestions", 
       workers={[queen]}
       workspaces={[]}
       busy={false}
+      providers={{ claude_code: true, codex: false }}
       onCreate={onCreate}
       onUpdate={vi.fn()}
       onReorder={vi.fn()}
@@ -71,6 +75,27 @@ test("accepts a complete typed path when it is not in the bounded suggestions", 
   expect(onCreate).toHaveBeenCalledWith("Clover", "/home/bschleifer/projects/personal/budgetbug", "claude_code");
 });
 
+test("offers Codex only when the terminal host reports it ready", () => {
+  const onCreate = vi.fn().mockResolvedValue(undefined);
+  const { container } = render(
+    <WorkerSettings
+      workers={[queen]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={onCreate}
+      onUpdate={vi.fn()}
+      onReorder={vi.fn()}
+    />,
+  );
+  const rendered = within(container);
+  fireEvent.change(container.querySelector("#configured-worker-name")!, { target: { value: "Aster" } });
+  fireEvent.change(container.querySelector("#configured-worker-provider")!, { target: { value: "codex" } });
+  fireEvent.change(container.querySelector("#configured-worker-repository")!, { target: { value: "/projects/aster" } });
+  fireEvent.click(rendered.getByRole("button", { name: "Add sleeping worker" }));
+  expect(onCreate).toHaveBeenCalledWith("Aster", "/projects/aster", "codex");
+});
+
 test("desktop drag ordering keeps accessible arrow controls as a fallback", () => {
   const onReorder = vi.fn().mockResolvedValue(undefined);
   const { container } = render(
@@ -78,6 +103,7 @@ test("desktop drag ordering keeps accessible arrow controls as a fallback", () =
       workers={[queen, budget, studio]}
       workspaces={[]}
       busy={false}
+      providers={{ claude_code: true, codex: false }}
       onCreate={vi.fn()}
       onUpdate={vi.fn()}
       onReorder={onReorder}
