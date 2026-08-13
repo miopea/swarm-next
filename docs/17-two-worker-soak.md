@@ -51,3 +51,23 @@ The soak is paired with browser automation against the packaged public UI:
 The automated harness establishes duration and resource evidence. The browser
 test establishes the end-user interaction contract; neither substitutes for
 the other.
+
+## Read-only live observation
+
+`scripts/dogfood/observe-live-soak.sh` monitors the actual dogfood crew without
+changing it. It snapshots every session that is running when observation
+begins, proves each remains running, pins the terminal-host PID, and samples
+service memory, task counts, retained history, and dropped history. It makes no
+POST, PUT, PATCH, or DELETE request and never restarts a service.
+
+This is the safe choice while the operator is doing real work. It complements
+the synthetic harness: live observation proves that normal use remains bounded,
+while the synthetic run remains responsible for deliberate API replacement and
+worker cleanup behavior.
+
+The first bounded validation on 2026-08-13 observed three existing sessions for
+six samples over 60 seconds. Terminal-host PID `400662` remained unchanged, API
+memory stayed between 4.4 and 4.7 MiB, the host cgroup stayed between 882.8 and
+883.6 MiB, retained history remained exactly 2,466,880 bytes, and dropped
+history remained zero. This validates the read-only harness; it is not the
+24-hour promotion result.
