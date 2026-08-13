@@ -158,6 +158,7 @@ export class TerminalController {
         await this.#surface.restore(snapshot);
         const fitted = await this.#surface.fit();
         this.#connection.resize(fitted.rows, fitted.columns);
+        this.#applyPendingFocus();
       },
       onState: (state, detail) => this.#setState(state, detail),
       onRunningChange: (running) => {
@@ -187,9 +188,12 @@ export class TerminalController {
   #applyPendingFocus(): void {
     if (!this.#pendingFocus || !this.#host.parentElement || !this.#opened || !this.#started) return;
     const focus = this.#pendingFocus;
-    this.#pendingFocus = undefined;
     if (focus === "input") this.#surface.focus();
     else this.#host.focus({ preventScroll: true });
+    const activeElement = document.activeElement;
+    if (activeElement === this.#host || (activeElement && this.#host.contains(activeElement))) {
+      this.#pendingFocus = undefined;
+    }
   }
 }
 

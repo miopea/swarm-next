@@ -59,6 +59,38 @@ test("a mobile worker selection focuses the terminal region without opening its 
   mount.remove();
 });
 
+test("focus waits through a hidden canonical restore until the terminal is focusable", async () => {
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  const mount = document.createElement("div");
+  document.body.append(mount);
+  controller.attach(mount);
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  const host = mount.querySelector<HTMLElement>(".terminal-surface")!;
+  host.style.visibility = "hidden";
+  const focusWhenVisible = host.focus.bind(host);
+  host.focus = vi.fn();
+
+  controller.requestFocus(false);
+  expect(document.activeElement).not.toBe(host);
+  vi.mocked(surface.restore).mockImplementation(async () => {
+    host.style.visibility = "";
+    host.focus = focusWhenVisible;
+  });
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  await handlers.onSnapshot({
+    sequence: 1,
+    rows: 24,
+    columns: 80,
+    truncated: false,
+    bytes: new Uint8Array(),
+  });
+
+  expect(document.activeElement).toBe(host);
+  mount.remove();
+});
+
 function fakeConnection(): TerminalConnectionLike {
   return { start: vi.fn(), sendInput: vi.fn(), resize: vi.fn(), dispose: vi.fn() };
 }
