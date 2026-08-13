@@ -174,7 +174,9 @@ async function recoverAfterGatewayInterruption(page, elapsedSeconds) {
     const sessionStatus = await page.request.get(`${baseUrl}/api/v1/auth/session`).then((response) => response.status()).catch(() => 0);
     throw new Error(`browser authentication did not survive the gateway interruption: before=${JSON.stringify(cookieBefore)} after=${JSON.stringify(cookieAfter)} session_status=${sessionStatus}`);
   }
-  return { elapsed_seconds: elapsedSeconds, recovery_milliseconds: Date.now() - startedAt };
+  const runtimeStatus = (await page.locator(".rail-footer").innerText()).trim();
+  if (!runtimeStatus.startsWith("Runtime 0.1.0-")) throw new Error(`runtime health did not recover after the gateway interruption: ${runtimeStatus}`);
+  return { elapsed_seconds: elapsedSeconds, recovery_milliseconds: Date.now() - startedAt, runtime_status: runtimeStatus };
 }
 
 async function browserSessionMetadata(context) {
