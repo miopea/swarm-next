@@ -130,8 +130,10 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: "Close" }).click();
     const savedFeedbackVisible = await page.getByRole("heading", { name: "Saved dogfood reports" }).isVisible();
     if (!savedFeedbackVisible) throw new Error(`${surface.name}: saved feedback queue is unavailable`);
+    const jiraReadinessVisible = await page.getByText("Jira not connected", { exact: true }).isVisible();
+    if (!jiraReadinessVisible) throw new Error(`${surface.name}: Jira readiness is unavailable`);
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }

@@ -295,3 +295,9 @@ the independently updated terminal host through the API to worker settings:
   exposing it by default. The deployed desktop and Android gates verified that
   the queue is visible without overflow or browser errors. The API update again
   preserved terminal-host PID `400662` and all three active sessions.
+- Release `0.1.0-d8d469156fa6` added the first read-only Jira Cloud readiness
+  adapter. The live endpoint reported the expected explicit `not_connected`
+  state with no credentials configured. Desktop and Android Settings rendered
+  that state without blocking local work, overflow, or browser errors, and the
+  expanded gate verified it alongside every prior surface. Deployment retained
+  terminal-host PID `400662` and all three active sessions.
