@@ -31,6 +31,10 @@ Targets are refined after legacy baseline measurements.
 - Crash, restart, reconnect, and stale-client tests.
 - Slow-consumer and resource-exhaustion tests.
 - Security boundary and authorization tests.
+- Production dependency advisory checks for both the Rust lockfile and web
+  package graph. Any exception names one advisory and documents why its
+  vulnerable operation is unreachable; blanket or severity-wide ignores are
+  not accepted.
 - Linux/WSL platform tests; native Windows only when explicitly targeted.
 - 24–72-hour soak tests before promotion to daily-driver status.
 
@@ -56,4 +60,3 @@ A feature is not done when its success path renders. It is done when:
 - observability identifies its failures;
 - automated tests cover material invariants;
 - the primary operator has successfully dogfooded it at the appropriate ring.
-

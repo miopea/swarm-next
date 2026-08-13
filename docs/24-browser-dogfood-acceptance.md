@@ -432,3 +432,14 @@ the independently updated terminal host through the API to worker settings:
   worker's MCP task list to non-completed work bound to its current session,
   preventing historical tasks from polluting agent context while Queen keeps
   the complete Hive view.
+- Release `0.1.0-4c2b31542f31` closes the adjacent terminal recovery gap found
+  by the active browser soak. Terminal attachment previously exhausted its
+  bounded retry budget before the replaceable API's supported update window
+  ended. The retry window now matches authenticated bootstrap while remaining
+  finite, and soak failures report the exact session, connection state, and
+  content-free detail. A deliberate live API restart recovered Settings and
+  the selected terminal in 7.1 seconds, retained the same sidecar PID and all
+  three sessions, and passed 18 owned-browser memory samples. The complete
+  post-deploy desktop and Android gate then reselected all three exact sessions
+  as Connected, exercised all eight primary surfaces, found no document or
+  Settings-card overflow, and downloaded a valid 356,352-byte Hive backup.

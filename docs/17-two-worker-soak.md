@@ -102,6 +102,21 @@ The soak permits only that exact bounded gateway signature, requires public
 health and an authenticated-only Settings control to return, and still fails
 every other console or runtime error.
 
+A later 10-minute navigation reproduction on release
+`0.1.0-c836ebec1772` completed 40 samples and 19 Workers/Tasks/Settings cycles
+without an update. Browser private memory grew only 0.4 MiB, the storage
+process grew 0.1 MiB, storage usage remained zero, DOM nodes remained exactly
+448, and every growth gate passed. This isolated an earlier connection timeout
+to the rolling API handoff rather than steady-state navigation. Release
+`0.1.0-4c2b31542f31` extends the terminal attachment retry schedule to the same
+bounded 15.85-second recovery window used by authenticated application
+bootstrap. A deliberate API-only restart during an active three-minute Edge
+run then produced five expected gateway errors, recovered the authenticated
+runtime and selected terminal in 7.1 seconds, completed eight navigation
+cycles, and passed all browser, storage-process, owned-process, and renderer
+memory bounds. Terminal-host PID `400662` and all three worker sessions were
+preserved.
+
 ## Read-only live observation
 
 `scripts/dogfood/observe-live-soak.sh` monitors the actual dogfood crew without
