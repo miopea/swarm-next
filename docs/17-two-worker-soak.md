@@ -58,7 +58,9 @@ the other.
 changing it. It snapshots every session that is running when observation
 begins, proves each remains running, pins the terminal-host PID, and samples
 service memory, task counts, retained history, and dropped history. It makes no
-POST, PUT, PATCH, or DELETE request and never restarts a service.
+POST, PUT, PATCH, or DELETE request and never restarts a service. The API PID is
+pinned as well, so restarting either owned process fails the run instead of
+making a growing memory series appear healthy by resetting it midway.
 
 This is the safe choice while the operator is doing real work. It complements
 the synthetic harness: live observation proves that normal use remains bounded,

@@ -49,6 +49,9 @@ fi
 initial_host="$(api_json "${base_url}/api/v1/runtime/terminal-host")"
 host_version="$(jq -er '.status.host_version' <<<"${initial_host}")"
 host_pid="$(systemctl --user show swarm-next-terminal-host.service -p MainPID --value)"
+initial_health="$(curl --fail --silent --show-error --max-time 5 "${base_url}/health")"
+api_version="$(jq -er '.version' <<<"${initial_health}")"
+api_pid="$(systemctl --user show swarm-next-api.service -p MainPID --value)"
 printf 'timestamp_utc,elapsed_seconds,api_memory_bytes,api_tasks,terminal_host_memory_bytes,terminal_host_tasks,running_sessions,retained_sessions,history_bytes,dropped_history_bytes\n' >"${samples_file}"
 
 started_at="$(date +%s)"
@@ -64,6 +67,11 @@ while (( $(date +%s) < deadline )); do
   current_host_pid="$(systemctl --user show swarm-next-terminal-host.service -p MainPID --value)"
   if [[ "${current_host_pid}" != "${host_pid}" ]]; then
     echo "terminal host changed from ${host_pid} to ${current_host_pid}" >&2
+    exit 1
+  fi
+  current_api_pid="$(systemctl --user show swarm-next-api.service -p MainPID --value)"
+  if [[ "${current_api_pid}" != "${api_pid}" ]]; then
+    echo "API changed from ${api_pid} to ${current_api_pid}; its memory series is no longer continuous" >&2
     exit 1
   fi
   host_status="$(api_json "${base_url}/api/v1/runtime/terminal-host")"
@@ -95,13 +103,14 @@ for value in "${api_min}" "${api_max}" "${host_min}" "${host_max}" "${history_mi
   fi
 done
 jq -n \
-  --arg run_id "${run_id}" --arg host_version "${host_version}" --arg host_pid "${host_pid}" \
+  --arg run_id "${run_id}" --arg api_version "${api_version}" --arg api_pid "${api_pid}" \
+  --arg host_version "${host_version}" --arg host_pid "${host_pid}" \
   --arg samples_file "${samples_file}" --argjson duration_seconds "${duration_seconds}" \
   --argjson sample_count "${sample_count}" --argjson observed_sessions "${#session_ids[@]}" \
   --argjson api_memory_min "${api_min}" --argjson api_memory_max "${api_max}" \
   --argjson host_memory_min "${host_min}" --argjson host_memory_max "${host_max}" \
   --argjson history_bytes_min "${history_min}" --argjson history_bytes_max "${history_max}" \
   --argjson dropped_history_bytes_max "${dropped_max}" \
-  '{run_id:$run_id,result:"passed",mode:"read_only_live",duration_seconds:$duration_seconds,sample_count:$sample_count,observed_sessions:$observed_sessions,terminal_host:{version:$host_version,pid:$host_pid},memory_bytes:{api:{min:$api_memory_min,max:$api_memory_max},terminal_host_cgroup:{min:$host_memory_min,max:$host_memory_max}},history_bytes:{min:$history_bytes_min,max:$history_bytes_max,dropped_max:$dropped_history_bytes_max},samples_file:$samples_file}' \
+  '{run_id:$run_id,result:"passed",mode:"read_only_live",duration_seconds:$duration_seconds,sample_count:$sample_count,observed_sessions:$observed_sessions,api:{version:$api_version,pid:$api_pid},terminal_host:{version:$host_version,pid:$host_pid},memory_bytes:{api:{min:$api_memory_min,max:$api_memory_max},terminal_host_cgroup:{min:$host_memory_min,max:$host_memory_max}},history_bytes:{min:$history_bytes_min,max:$history_bytes_max,dropped_max:$dropped_history_bytes_max},samples_file:$samples_file}' \
   >"${summary_file}"
 cat "${summary_file}"
