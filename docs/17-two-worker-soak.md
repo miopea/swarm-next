@@ -153,3 +153,11 @@ cgroup, including the three Claude processes, remained between 1.21 and 1.24
 GiB. Retained history ranged from 69,519,004 to 69,526,930 bytes with zero
 dropped bytes. The run passed on API release `0.1.0-da686ff83eb1`; it remains a
 bounded overnight checkpoint rather than the required 24-hour promotion soak.
+
+The 2026-08-13 exact-release run for `0.1.0-0c4ecb179c10` completed 120
+read-only samples over one hour with three live sessions, API PID `1037954`,
+and terminal-host PID `400662` unchanged. API RSS stayed between 5,914,624 and
+8,318,976 bytes; the terminal-host cgroup stayed between 1,658,208,256 and
+1,776,128,000 bytes; retained history advanced only 12,212 bytes and dropped
+history remained zero. The paired Edge run also passed all growth and slope
+limits over 120 samples and 59 active navigation cycles.

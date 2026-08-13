@@ -443,3 +443,24 @@ the independently updated terminal host through the API to worker settings:
   post-deploy desktop and Android gate then reselected all three exact sessions
   as Connected, exercised all eight primary surfaces, found no document or
   Settings-card overflow, and downloaded a valid 356,352-byte Hive backup.
+- Releases through `0.1.0-0c4ecb179c10` harden the remaining renderer lifecycle
+  boundaries exposed by repeated real-browser navigation. Fit dimensions are
+  finite safe integers, a transient reattach before layout no longer poisons a
+  healthy connection, focus remains pending through canonical snapshot restore,
+  and ordinary worker selection delivers focus after React mounts the selected
+  terminal. The deployed desktop and Android gate selected Queen, Swarm Next,
+  and Dogfood Clover as Connected, proved each terminal owned focus, exercised
+  all eight primary surfaces without overflow, pasted an image into dogfood
+  feedback, and preserved authentication across complete browser-process
+  restarts at both viewport profiles. All 291 visible controls had accessible
+  names and no authenticated-page browser error occurred.
+- The final unchanged release then completed a paired one-hour acceptance run.
+  The server observer collected 120 samples with all three sessions and
+  terminal-host PID `400662` unchanged, zero dropped history, API RSS between
+  5.6 and 7.9 MiB, and terminal-host cgroup memory between 1.54 and 1.65 GiB.
+  Headless Edge collected 120 samples across 59 Workers/Tasks/Settings cycles:
+  browser private memory grew 5.2 MiB at 0.06 MiB/minute, storage private memory
+  grew 0.15 MiB, the complete owned process tree grew 28.6 MiB at 0.30
+  MiB/minute, and renderer JavaScript ended 0.49 MiB lower. DOM nodes remained
+  exactly `448`, browser storage remained zero, and every memory, reconnect,
+  process-identity, and page-error gate passed.
