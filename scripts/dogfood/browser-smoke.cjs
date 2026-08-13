@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require("node:fs/promises");
+const os = require("node:os");
 const path = require("node:path");
 const { chromium } = require("playwright");
 
@@ -32,7 +33,48 @@ async function main() {
   } finally {
     await browser.close();
   }
-  process.stdout.write(`${JSON.stringify({ baseUrl, results }, null, 2)}\n`);
+  const browserRestartPersistence = await verifyBrowserRestartPersistence();
+  process.stdout.write(`${JSON.stringify({ baseUrl, results, browserRestartPersistence }, null, 2)}\n`);
+}
+
+async function verifyBrowserRestartPersistence() {
+  const profileDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-next-browser-smoke-"));
+  const launchOptions = {
+    headless: true,
+    viewport: surfaces[0].viewport,
+    ...(browserExecutable ? { executablePath: browserExecutable } : {}),
+  };
+
+  try {
+    let context = await chromium.launchPersistentContext(profileDirectory, launchOptions);
+    try {
+      const page = context.pages()[0] || await context.newPage();
+      await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+      const tokenInput = page.getByLabel("Operator token");
+      if (await tokenInput.isVisible().catch(() => false)) {
+        await tokenInput.fill(operatorToken);
+        await page.getByRole("button", { name: "Unlock Swarm" }).click();
+      }
+      await page.getByRole("button", { name: /Workers/ }).waitFor();
+    } finally {
+      await context.close();
+    }
+
+    context = await chromium.launchPersistentContext(profileDirectory, launchOptions);
+    try {
+      const page = context.pages()[0] || await context.newPage();
+      await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+      await page.getByRole("button", { name: /Workers/ }).waitFor();
+      if (await page.getByLabel("Operator token").isVisible().catch(() => false)) {
+        throw new Error("desktop: browser session did not survive a complete browser restart");
+      }
+      return { surface: "desktop", preservedAcrossBrowserRestart: true, status: "passed" };
+    } finally {
+      await context.close();
+    }
+  } finally {
+    await fs.rm(profileDirectory, { recursive: true, force: true });
+  }
 }
 
 async function checkSurface(browser, surface) {
