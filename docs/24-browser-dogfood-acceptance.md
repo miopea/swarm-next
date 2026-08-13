@@ -247,3 +247,10 @@ the independently updated terminal host through the API to worker settings:
   4.4 MiB. The terminal-host cgroup, including three Claude processes, remained
   between 920 and 927 MiB and ended at 925.7 MiB. This is bounded short-run
   evidence; it does not replace the 24-hour promotion soak.
+- Release `0.1.0-400b5f82b1f3` migrated the live Hive to schema 18 and stored
+  independent desktop and mobile presentation profiles. Existing local theme
+  and terminal-key choices seed each profile once; later changes propagate
+  through the control-room feed and are included in database backup/restore.
+  The deployed browser gate passed both profiles with real desktop and Android
+  user agents, durable authentication, no overflow, and no authenticated-page
+  browser errors while preserving terminal-host PID `400662`.

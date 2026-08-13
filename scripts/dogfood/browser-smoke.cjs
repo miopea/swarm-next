@@ -40,6 +40,7 @@ async function checkSurface(browser, surface) {
     viewport: surface.viewport,
     isMobile: surface.mobile,
     hasTouch: surface.mobile,
+    ...(surface.mobile ? { userAgent: "Mozilla/5.0 (Linux; Android 15; Swarm Dogfood) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36" } : {}),
   });
   const page = await context.newPage();
   const consoleErrors = [];
