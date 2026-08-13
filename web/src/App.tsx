@@ -648,6 +648,7 @@ export function App() {
     { id: "decisions", label: "Needs you", detail: `${pendingDecisionCount} pending`, group: "Go to", run: () => setSurface("decisions") },
     { id: "tasks", label: "Tasks", detail: `${openTaskCount} open`, group: "Go to", run: () => setSurface("tasks") },
     { id: "workers", label: "Workers", detail: `${workers.filter((worker) => worker.running).length} running`, group: "Go to", run: () => setSurface("workers") },
+    { id: "add-worker", label: "Add worker", detail: "Configure a repository worker", group: "Go to", run: () => setSurface("settings") },
     { id: "settings", label: "Settings", detail: "Preferences and diagnostics", group: "Go to", run: () => setSurface("settings") },
     ...workers.map((worker) => ({
       id: `worker-${worker.id}`,
