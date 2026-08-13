@@ -307,3 +307,12 @@ the independently updated terminal host through the API to worker settings:
   exercise both transitions; the deployed regression gate kept every desktop
   and Android surface bounded and error-free. Terminal-host PID `400662` and
   all three active sessions were again preserved.
+- Release `0.1.0-c12380556b45` completed private screenshot retrieval for
+  saved dogfood reports. Downloads require operator authentication, accept
+  only opaque image names referenced by a retained report, revalidate the
+  stored signature, disable caching and content sniffing, and force attachment
+  download. The full Rust and frontend gates passed. The deployed desktop and
+  Android pass kept all eight primary views within their viewports with no
+  authenticated-page errors and verified feedback, Jira readiness, maintenance
+  confirmation, and a valid SQLite backup. The API update preserved terminal-
+  host PID `400662` and all three active sessions.
