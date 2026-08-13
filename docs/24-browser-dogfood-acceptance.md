@@ -343,3 +343,12 @@ the independently updated terminal host through the API to worker settings:
   and the SQLite backup with no overflow or browser errors. The API-only update
   preserved terminal-host PID `400662`, all three running sessions, all five
   retained sessions, and the host's measured memory across the deployment.
+- Release `0.1.0-cad55ededfc5` adds a sticky Settings section navigator so the
+  growing daily-driver configuration surface no longer requires a blind long
+  scroll. Crew, Presence, Queen, Appearance, System, Integrations, Backup, and
+  Diagnostics remain keyboard reachable and become a bounded horizontal strip
+  on mobile. The live gate used that navigator to reveal Diagnostics at both
+  1,440 by 900 and 412 by 915, measured no document or card overflow, selected
+  every live worker, and completed the full regression suite without browser
+  errors. The API-only deployment again preserved terminal-host PID `400662`
+  and all three running sessions.
