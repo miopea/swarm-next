@@ -312,6 +312,7 @@ async function checkSurface(browser, surface) {
     }
     const jiraReview = jiraRegion.getByRole("button", { name: "Review issues" }).first();
     let jiraIssueReview = false;
+    let jiraIssueFilter = false;
     if (await jiraReview.isVisible().catch(() => false)) {
       await jiraReview.click();
       const intake = jiraRegion.getByRole("region", { name: /Review .* issues/ });
@@ -324,6 +325,20 @@ async function checkSurface(browser, surface) {
       if (issueCount === 0 || intakeBounds.scrollWidth > intakeBounds.clientWidth + 1) {
         throw new Error(`${surface.name}: Jira issue review is empty or horizontally clipped`);
       }
+      const checkedCount = await intake.getByRole("checkbox", { checked: true }).count();
+      const addButton = intake.getByRole("button", { name: "Add 0 to this Hive" });
+      if (checkedCount !== 0 || !(await addButton.isDisabled())) {
+        throw new Error(`${surface.name}: Jira issue review did not open with a safe empty selection`);
+      }
+      const firstIssueLabel = await intake.getByRole("checkbox").first().evaluate((input) => input.labels?.[0]?.innerText ?? "");
+      const firstIssueKey = firstIssueLabel.match(/[A-Z][A-Z0-9]+-\d+/)?.[0];
+      if (!firstIssueKey) throw new Error(`${surface.name}: Jira issue review did not expose an issue key`);
+      await intake.getByLabel("Find an issue").fill(firstIssueKey);
+      const filteredCount = await intake.getByRole("checkbox").count();
+      if (filteredCount === 0 || filteredCount > issueCount) {
+        throw new Error(`${surface.name}: Jira issue filtering did not retain the matching issue`);
+      }
+      jiraIssueFilter = true;
       await page.screenshot({ path: path.join(outputRoot, `${surface.name}-settings-jira-intake.png`), fullPage: true });
       await intake.getByRole("button", { name: "Close" }).click();
       jiraIssueReview = true;
@@ -373,7 +388,7 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
     accessibleControlCount += await verifyAccessibleControls(page, `${surface.name}/settings-detail`);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, jiraIssueFilter, backup, status: "passed" };
   } finally {
     await context.close();
   }
