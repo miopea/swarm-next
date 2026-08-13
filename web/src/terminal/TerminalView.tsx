@@ -54,6 +54,10 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
       if (text) controller.sendInput(terminalTextPaste(text));
       return;
     }
+    await addImage(image);
+  }
+
+  async function addImage(image: File) {
     setAttachmentState("uploading");
     try {
       const path = await uploadTerminalImage(operatorToken, session.session_id, image);
@@ -88,7 +92,7 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
         ) : <span className="protected-worker">Always active</span>}
       </div>
       <div className="terminal-mount" ref={mount} />
-      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => controller.sendInput(text)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} />
+      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => controller.sendInput(text)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onImage={addImage} attachmentState={attachmentState} />
     </div>
   );
 }

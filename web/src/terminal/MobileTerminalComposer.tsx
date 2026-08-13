@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
 
 import type { TerminalConnectionState } from "./TerminalConnection";
 
@@ -39,13 +39,16 @@ interface MobileTerminalComposerProps {
   onInput: (text: string) => void;
   keysExpanded?: boolean;
   onKeysExpandedChange?: (expanded: boolean) => void;
+  onImage?: (image: File) => Promise<void>;
+  attachmentState?: "idle" | "uploading" | "ready" | "error";
 }
 
-export function MobileTerminalComposer({ connectionState, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange }: MobileTerminalComposerProps) {
+export function MobileTerminalComposer({ connectionState, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onImage, attachmentState = "idle" }: MobileTerminalComposerProps) {
   const [draft, setDraft] = useState("");
   const [localKeysExpanded, setLocalKeysExpanded] = useState(initialMobileKeysVisibility);
   const keysExpanded = controlledKeysExpanded ?? localKeysExpanded;
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
   const connected = connectionState === "connected";
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -65,6 +68,13 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
     rememberMobileKeysVisibility(next);
     setLocalKeysExpanded(next);
     onKeysExpandedChange?.(next);
+  }
+
+  async function chooseImage(event: ChangeEvent<HTMLInputElement>) {
+    const image = event.target.files?.[0];
+    event.target.value = "";
+    if (!connected || !image || !onImage) return;
+    await onImage(image);
   }
 
   return (
@@ -88,8 +98,12 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
         <button type="submit" disabled={!connected || draft.length === 0}>Send</button>
       </form>
       <div className="mobile-terminal-key-heading">
-        <span>Terminal keys</span>
-        <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} onClick={toggleKeys}>{keysExpanded ? "Hide" : "Show"}</button>
+        <span>Terminal tools</span>
+        <div>
+          <input ref={imageInput} hidden type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => void chooseImage(event)} />
+          <button type="button" className="terminal-image-button" disabled={!connected || !onImage || attachmentState === "uploading"} onClick={() => imageInput.current?.click()}>{attachmentState === "uploading" ? "Adding…" : "Add image"}</button>
+          <button type="button" className="terminal-keys-toggle" aria-expanded={keysExpanded} onClick={toggleKeys}>{keysExpanded ? "Hide keys" : "Show keys"}</button>
+        </div>
       </div>
       {keysExpanded && <div className="mobile-terminal-keys" aria-label="Terminal keys">
         <div className="terminal-dpad">

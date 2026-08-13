@@ -66,12 +66,12 @@ test("sends mobile navigation and Claude mode controls as terminal key sequences
 
 test("remembers when the operator collapses the mobile key pad", () => {
   const first = render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} />);
-  fireEvent.click(screen.getByRole("button", { name: "Hide" }));
+  fireEvent.click(screen.getByRole("button", { name: "Hide keys" }));
   expect(screen.queryByRole("button", { name: "Arrow up" })).not.toBeInTheDocument();
   first.unmount();
 
   render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} />);
-  expect(screen.getByRole("button", { name: "Show" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("button", { name: "Show keys" })).toHaveAttribute("aria-expanded", "false");
 });
 
 test("reports controlled key visibility for the durable mobile profile", () => {
@@ -85,7 +85,7 @@ test("reports controlled key visibility for the durable mobile profile", () => {
     />,
   );
 
-  fireEvent.click(screen.getByRole("button", { name: "Show" }));
+  fireEvent.click(screen.getByRole("button", { name: "Show keys" }));
 
   expect(onKeysExpandedChange).toHaveBeenCalledWith(true);
 });
@@ -100,4 +100,17 @@ test("retains the draft and blocks controls while disconnected", () => {
   expect(onInput).not.toHaveBeenCalled();
   expect(screen.getByLabelText(/Message worker/)).toHaveValue("keep me");
   expect(screen.getByRole("button", { name: "Cycle mode" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add image" })).toBeDisabled();
+});
+
+test("offers a first-class mobile image picker without submitting the draft", async () => {
+  const onImage = vi.fn().mockResolvedValue(undefined);
+  const { container } = render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} onImage={onImage} />);
+  const image = new File([new Uint8Array([1, 2, 3])], "screen.png", { type: "image/png" });
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+
+  fireEvent.change(input!, { target: { files: [image] } });
+
+  await vi.waitFor(() => expect(onImage).toHaveBeenCalledWith(image));
+  expect(screen.getByRole("button", { name: "Add image" })).toBeEnabled();
 });
