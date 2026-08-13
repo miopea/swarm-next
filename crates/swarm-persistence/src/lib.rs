@@ -186,7 +186,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=21 => {
+            found if found < CURRENT_SCHEMA_VERSION => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -2203,6 +2203,45 @@ mod tests {
             .query_row(
                 "SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'jira_transition_deliveries'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()
+            .unwrap()
+            .is_some();
+        assert!(table_exists);
+        assert_eq!(
+            reopened
+                .connection()
+                .unwrap()
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+        reopened.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn migrates_schema_v22_to_durable_jira_comment_deliveries() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            let connection = store.connection().unwrap();
+            connection
+                .execute_batch(
+                    "DROP TABLE jira_comment_deliveries;
+                     PRAGMA user_version = 22;",
+                )
+                .unwrap();
+        }
+        let reopened = TaskStore::open(path).unwrap();
+        let table_exists = reopened
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'jira_comment_deliveries'",
                 [],
                 |_| Ok(()),
             )
