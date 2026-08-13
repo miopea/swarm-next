@@ -50,6 +50,9 @@ const SNAPSHOT_FRAME_TYPE = 2;
 const MAX_PENDING_RENDER_BYTES = 3 * 1024 * 1024;
 const DEFAULT_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 const DEFAULT_CONFIRMATION_TIMEOUT_MS = 3_000;
+// Browsers may send only 1000 or application-owned 3000-4999 close codes.
+const CLOSE_PROTOCOL_FAILURE = 4008;
+const CLOSE_FRESH_SNAPSHOT = 4013;
 
 /** Owns one browser attachment independently from React component lifetime. */
 export class TerminalConnection {
@@ -341,7 +344,7 @@ export class TerminalConnection {
     this.#renderGeneration += 1;
     this.#clearConfirmationTimer();
     this.#handlers?.onState("recovery_required", detail);
-    this.#socket?.close(1008, detail.slice(0, 100));
+    this.#socket?.close(CLOSE_PROTOCOL_FAILURE, detail.slice(0, 100));
   }
 
   #recoverFromSnapshot(detail: string): void {
@@ -351,7 +354,7 @@ export class TerminalConnection {
     this.#hasCanonicalState = false;
     this.#sequence = 0;
     this.#handlers?.onState("disconnected", `${detail}; requesting a fresh snapshot`);
-    this.#socket?.close(1013, "fresh terminal snapshot required");
+    this.#socket?.close(CLOSE_FRESH_SNAPSHOT, "fresh terminal snapshot required");
   }
 
   #confirmConnection(): void {
@@ -374,7 +377,7 @@ export class TerminalConnection {
       this.#confirmationTimer = undefined;
       if (socket !== this.#socket || this.#disposed || this.#fatal) return;
       this.#socket = undefined;
-      socket.close(1013, "terminal confirmation timed out");
+      socket.close(CLOSE_FRESH_SNAPSHOT, "terminal confirmation timed out");
       this.#scheduleReconnect("terminal connection received no confirmation");
     }, this.#confirmationTimeoutMs);
   }

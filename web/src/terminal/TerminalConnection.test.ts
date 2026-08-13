@@ -282,7 +282,7 @@ test("an unconfirmed socket is abandoned inside the bounded retry budget", async
   sockets[0].open();
 
   await vi.advanceTimersByTimeAsync(1);
-  expect(sockets[0].close).toHaveBeenCalledWith(1013, "terminal confirmation timed out");
+  expect(sockets[0].close).toHaveBeenCalledWith(4013, "terminal confirmation timed out");
   expect(handlers.onState).toHaveBeenCalledWith(
     "disconnected",
     "terminal connection received no confirmation",
@@ -291,6 +291,21 @@ test("an unconfirmed socket is abandoned inside the bounded retry budget", async
   await vi.advanceTimersByTimeAsync(1);
   await vi.advanceTimersByTimeAsync(0);
   expect(sockets).toHaveLength(2);
+});
+
+test("protocol failures use a browser-valid application close code", async () => {
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+
+  sockets[0].message("not-json");
+
+  expect(sockets[0].close).toHaveBeenCalledWith(4008, "terminal WebSocket returned invalid JSON");
+  expect(handlers.onState).toHaveBeenCalledWith(
+    "recovery_required",
+    "terminal WebSocket returned invalid JSON",
+  );
 });
 
 test("state messages without canonical bytes cannot reset the reconnect budget", async () => {
@@ -374,7 +389,7 @@ test("renderer backlog is bounded and forces canonical recovery", async () => {
     sockets[0].message(outputBytesFrame(BigInt(sequence), 8_192));
   }
 
-  expect(sockets[0].close).toHaveBeenCalledWith(1013, "fresh terminal snapshot required");
+  expect(sockets[0].close).toHaveBeenCalledWith(4013, "fresh terminal snapshot required");
   expect(handlers.onState).toHaveBeenCalledWith(
     "disconnected",
     expect.stringContaining("bounded queue"),
