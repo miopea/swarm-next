@@ -36,7 +36,7 @@ test("configures and reorders durable workers with progressive path completion",
 
   fireEvent.change(screen.getByLabelText("Worker name"), { target: { value: "Clover" } });
   expect(screen.getByRole("option", { name: "Codex · waiting for maintenance" })).toBeDisabled();
-  const pathInput = screen.getByLabelText("Repository path");
+  const pathInput = screen.getByLabelText("Repository");
   fireEvent.focus(pathInput);
   fireEvent.change(pathInput, { target: { value: "projects/pub" } });
   expect(screen.getByRole("option", { name: /\/projects\/public-website Repository/ })).toBeInTheDocument();
@@ -69,7 +69,7 @@ test("accepts a complete typed path when it is not in the bounded suggestions", 
   const rendered = within(container);
 
   fireEvent.change(rendered.getByPlaceholderText("Daisy"), { target: { value: "Clover" } });
-  fireEvent.change(rendered.getByPlaceholderText("/home/bschleifer/projects/..."), { target: { value: "/home/bschleifer/projects/personal/budgetbug" } });
+  fireEvent.change(rendered.getByPlaceholderText("Search by name or path"), { target: { value: "/home/bschleifer/projects/personal/budgetbug" } });
   expect(rendered.getByText(/No suggestion yet/)).toBeInTheDocument();
   fireEvent.click(rendered.getByRole("button", { name: "Add sleeping worker" }));
   expect(onCreate).toHaveBeenCalledWith("Clover", "/home/bschleifer/projects/personal/budgetbug", "claude_code");

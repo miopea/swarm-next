@@ -112,10 +112,9 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · waiting for maintenance"}</option>
           </select>
-          <small>{providers.codex ? "Codex is ready for new repository-owned workers." : "Codex becomes available after its CLI is installed and authenticated and the terminal host completes a zero-session maintenance update."}</small>
         </div>
         <div className="field-stack">
-          <label htmlFor="configured-worker-repository">Repository path</label>
+          <label htmlFor="configured-worker-repository">Repository</label>
           <div
             className="workspace-combobox"
             onBlur={(event) => {
@@ -130,7 +129,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
               aria-expanded={workspaceOpen}
               aria-activedescendant={workspaceOpen && matchingWorkspaces.length > 0 ? `workspace-option-${highlightedWorkspace}` : undefined}
               value={workspace}
-              placeholder="/home/bschleifer/projects/..."
+              placeholder="Search by name or path"
               autoComplete="off"
               spellCheck={false}
               onFocus={() => setWorkspaceOpen(true)}
@@ -162,7 +161,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
               </div>
             )}
           </div>
-          <small>Type any part of the path, then choose a suggestion—or enter the complete path directly.</small>
+          <small>Start with a repository name and Swarm completes the path. Full paths still work.</small>
         </div>
         <button disabled={busy || !name.trim() || !workspace}>Add sleeping worker</button>
       </form>
