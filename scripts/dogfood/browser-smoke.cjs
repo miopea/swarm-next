@@ -237,6 +237,8 @@ async function checkSurface(browser, surface) {
     await taskTitle.waitFor();
     const createTaskFocused = await taskTitle.evaluate((input) => input === document.activeElement);
     if (!createTaskFocused) throw new Error(`${surface.name}: quick task creation did not focus the title`);
+    await page.getByRole("button", { name: /Settings/ }).click();
+    await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
     return { surface: surface.name, surfaces: surfaceResults, workerSelections, repositoryPicker: "name-first", addWorkerShortcutVisible, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
   } finally {
