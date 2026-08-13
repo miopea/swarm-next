@@ -24,7 +24,7 @@ const worker: Worker = {
 function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> = {}) {
   const props: React.ComponentProps<typeof TaskBoard> = {
     tasks: [task], sessions: [], workers: [worker], busy: false,
-    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onReorder: vi.fn(),
+    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onReorder: vi.fn(),
     ...overrides,
   };
   render(<TaskBoard {...props} />);
@@ -110,6 +110,20 @@ test("keeps worker ownership visible while the assigned worker is sleeping", () 
   const card = screen.getByRole("article", { name: task.title });
   expect(within(card).getByText("Daisy · swarm")).toBeInTheDocument();
   expect(within(card).getByLabelText("Worker")).toHaveValue(worker.id);
+});
+
+test("opens the assigned running worker directly from her task", () => {
+  const onOpenWorker = vi.fn();
+  const runningWorker = { ...worker, active_session_id: "session-1", running: true };
+  renderBoard({
+    tasks: [{ ...task, assigned_worker_id: worker.id, assigned_session_id: "session-1" }],
+    sessions: [{ session_id: "session-1", running: true }],
+    workers: [runningWorker],
+    onOpenWorker,
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "Daisy · swarm" }));
+  expect(onOpenWorker).toHaveBeenCalledWith("session-1");
 });
 
 test("edits task details and retains a failed form for retry", async () => {

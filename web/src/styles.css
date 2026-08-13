@@ -207,6 +207,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-card-topline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .task-signals { display: flex; align-items: center; gap: 9px; }
 .task-card-topline code { overflow: hidden; color: var(--quiet); font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
+.task-owner-link { width: auto; padding: 2px 0; border: 0; border-radius: 0; color: var(--muted); background: transparent; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; }
+.task-owner-link:hover, .task-owner-link:focus-visible { color: var(--text); background: transparent; text-decoration-color: currentColor; }
 .task-state { display: inline-flex; align-items: center; gap: 6px; color: var(--state); font-size: .69rem; font-weight: 500; letter-spacing: .055em; text-transform: uppercase; }
 .task-state::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; content: ""; }
 .task-card h4 { margin: 16px 0 18px; color: var(--text); font-size: 1rem; line-height: 1.42; }

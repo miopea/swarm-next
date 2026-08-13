@@ -16,6 +16,7 @@ type Props = {
   onTransition: (task: Task, state: TaskState) => Promise<void>;
   onAssign: (task: Task, workerId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
+  onOpenWorker: (sessionId: string) => void;
   onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
   onReorder: (taskIds: string[]) => Promise<void>;
 };
@@ -70,6 +71,7 @@ export default function TaskBoard({
   onTransition,
   onAssign,
   onStartWorker,
+  onOpenWorker,
   onFetchActivity,
   onReorder,
 }: Props) {
@@ -230,6 +232,7 @@ export default function TaskBoard({
                 onTransition={onTransition}
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
+                onOpenWorker={onOpenWorker}
                 onFetchActivity={onFetchActivity}
                 canMoveEarlier={index > 0}
                 canMoveLater={index < openTasks.length - 1}
@@ -280,6 +283,7 @@ export default function TaskBoard({
                 onTransition={onTransition}
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
+                onOpenWorker={onOpenWorker}
                 onFetchActivity={onFetchActivity}
                 canMoveEarlier={false}
                 canMoveLater={false}
@@ -301,7 +305,7 @@ function initialComposerOpen(): boolean {
   return typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 680px)").matches;
 }
 
-function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
   const targetWorker = assignableWorkers.find((worker) => worker.id === task.assigned_worker_id)
@@ -368,7 +372,9 @@ function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAss
           <span className={`task-state state-${task.state}`}>{stateLabels[task.state]}</span>
           <span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span>
         </div>
-        <span className="task-owner">{targetWorker?.name ?? "Choose worker"} · {repositoryName(task.workspace)}</span>
+        {targetWorker?.active_session_id ? (
+          <button type="button" className="task-owner task-owner-link" onClick={() => onOpenWorker(targetWorker.active_session_id!)}>{targetWorker.name} · {repositoryName(task.workspace)}</button>
+        ) : <span className="task-owner">{targetWorker?.name ?? "Choose worker"} · {repositoryName(task.workspace)}</span>}
       </div>
       <h4>{task.title}</h4>
       {task.description && !editing && <p className="task-description">{task.description}</p>}
