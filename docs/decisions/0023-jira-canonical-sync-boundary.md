@@ -30,6 +30,14 @@ Jira is an adapter-private integration behind typed application commands.
 - Workflow mapping is explicit per Jira status id. Status category supplies a
   recommended Swarm state, but the operator must confirm the complete mapping
   before synchronization is Ready.
+- Settings owns authentication, project binding, and workflow mapping. Daily
+  issue selection belongs on the task board, where imported work is assigned,
+  ordered, and executed.
+- Personal Hive intake is a deliberately narrow Jira view: non-terminal issues
+  assigned to the connected operator. The API enforces that scope in Jira JQL
+  both when previewing and when revalidating an explicit selection. Apiary-owned
+  projects will use a separate governed shared-pool policy rather than silently
+  inheriting the personal-Hive filter.
 - Imported issues retain Jira's immutable issue id and current issue key. The
   issue id is the idempotency key, so repeated synchronization updates one
   linked task rather than creating duplicates.

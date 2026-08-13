@@ -133,6 +133,8 @@ async function checkSurface(browser, surface) {
     let workerSelections = [];
     let completedTaskCount = 0;
     let completedTaskTitle;
+    let jiraIssueReview = false;
+    let jiraIssueFilter = false;
     for (const target of [
       { name: "needs-you", nav: /Needs you/, ready: () => page.getByRole("heading", { name: "Needs you" }) },
       { name: "tasks", nav: /Tasks/, ready: () => page.getByRole("heading", { name: "Task board" }) },
@@ -147,6 +149,41 @@ async function checkSurface(browser, surface) {
         if (!surface.mobile && !taskTitleVisible) throw new Error(`${surface.name}: desktop task composer is unexpectedly collapsed`);
         if (surface.mobile) {
           await page.getByRole("heading", { name: "Active work" }).waitFor();
+        }
+        const jiraSource = page.getByRole("region", { name: "Bring assigned work onto this board" });
+        if (await jiraSource.isVisible().catch(() => false)) {
+          const chooseWork = jiraSource.locator(".jira-project-actions button").first();
+          await chooseWork.click();
+          const intake = jiraSource.getByRole("region", { name: /Choose .* work/ });
+          await intake.waitFor();
+          const issueCount = await intake.getByRole("checkbox").count();
+          const intakeBounds = await intake.evaluate((element) => ({
+            scrollWidth: element.scrollWidth,
+            clientWidth: element.clientWidth,
+          }));
+          if (issueCount === 0 || intakeBounds.scrollWidth > intakeBounds.clientWidth + 1) {
+            throw new Error(`${surface.name}: Jira task intake is empty or horizontally clipped`);
+          }
+          if (!/assigned to .*open only/i.test(await intake.innerText())) {
+            throw new Error(`${surface.name}: Jira task intake does not explain its Hive scope`);
+          }
+          const checkedCount = await intake.getByRole("checkbox", { checked: true }).count();
+          const addButton = intake.getByRole("button", { name: "Add 0 to this board" });
+          if (checkedCount !== 0 || !(await addButton.isDisabled())) {
+            throw new Error(`${surface.name}: Jira task intake did not open with a safe empty selection`);
+          }
+          const firstIssueLabel = await intake.getByRole("checkbox").first().evaluate((input) => input.labels?.[0]?.innerText ?? "");
+          const firstIssueKey = firstIssueLabel.match(/[A-Z][A-Z0-9]+-\d+/)?.[0];
+          if (!firstIssueKey) throw new Error(`${surface.name}: Jira task intake did not expose an issue key`);
+          await intake.getByLabel("Find an issue").fill(firstIssueKey);
+          const filteredCount = await intake.getByRole("checkbox").count();
+          if (filteredCount === 0 || filteredCount > issueCount) {
+            throw new Error(`${surface.name}: Jira task filtering did not retain the matching issue`);
+          }
+          jiraIssueFilter = true;
+          await page.screenshot({ path: path.join(outputRoot, `${surface.name}-tasks-jira-intake.png`), fullPage: true });
+          await intake.getByRole("button", { name: "Close" }).click();
+          jiraIssueReview = true;
         }
         const completedTasks = page.locator("details.completed-tasks");
         if (await completedTasks.count()) {
@@ -309,39 +346,6 @@ async function checkSurface(browser, surface) {
     if (!/Jira (?:not connected|connected|credentials need attention|access was denied|is temporarily unavailable)/i.test(jiraReadiness)
       && !/Connected as /i.test(jiraReadiness)) {
       throw new Error(`${surface.name}: Jira readiness is unavailable`);
-    }
-    const jiraReview = jiraRegion.getByRole("button", { name: "Review issues" }).first();
-    let jiraIssueReview = false;
-    let jiraIssueFilter = false;
-    if (await jiraReview.isVisible().catch(() => false)) {
-      await jiraReview.click();
-      const intake = jiraRegion.getByRole("region", { name: /Review .* issues/ });
-      await intake.waitFor();
-      const issueCount = await intake.getByRole("checkbox").count();
-      const intakeBounds = await intake.evaluate((element) => ({
-        scrollWidth: element.scrollWidth,
-        clientWidth: element.clientWidth,
-      }));
-      if (issueCount === 0 || intakeBounds.scrollWidth > intakeBounds.clientWidth + 1) {
-        throw new Error(`${surface.name}: Jira issue review is empty or horizontally clipped`);
-      }
-      const checkedCount = await intake.getByRole("checkbox", { checked: true }).count();
-      const addButton = intake.getByRole("button", { name: "Add 0 to this Hive" });
-      if (checkedCount !== 0 || !(await addButton.isDisabled())) {
-        throw new Error(`${surface.name}: Jira issue review did not open with a safe empty selection`);
-      }
-      const firstIssueLabel = await intake.getByRole("checkbox").first().evaluate((input) => input.labels?.[0]?.innerText ?? "");
-      const firstIssueKey = firstIssueLabel.match(/[A-Z][A-Z0-9]+-\d+/)?.[0];
-      if (!firstIssueKey) throw new Error(`${surface.name}: Jira issue review did not expose an issue key`);
-      await intake.getByLabel("Find an issue").fill(firstIssueKey);
-      const filteredCount = await intake.getByRole("checkbox").count();
-      if (filteredCount === 0 || filteredCount > issueCount) {
-        throw new Error(`${surface.name}: Jira issue filtering did not retain the matching issue`);
-      }
-      jiraIssueFilter = true;
-      await page.screenshot({ path: path.join(outputRoot, `${surface.name}-settings-jira-intake.png`), fullPage: true });
-      await intake.getByRole("button", { name: "Close" }).click();
-      jiraIssueReview = true;
     }
     const restoreGuide = page.getByText("How to restore this backup", { exact: true });
     await restoreGuide.click();

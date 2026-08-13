@@ -448,6 +448,23 @@ impl JiraReadinessProbe {
         &self,
         project_id: &str,
     ) -> Result<Vec<JiraIssue>, JiraAdapterError> {
+        self.issues_with_scope(project_id, JiraIssueScope::All)
+            .await
+    }
+
+    pub(crate) async fn hive_intake_issues(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<JiraIssue>, JiraAdapterError> {
+        self.issues_with_scope(project_id, JiraIssueScope::HiveIntake)
+            .await
+    }
+
+    async fn issues_with_scope(
+        &self,
+        project_id: &str,
+        scope: JiraIssueScope,
+    ) -> Result<Vec<JiraIssue>, JiraAdapterError> {
         let access = self.access().await?;
         let project_id = project_id.trim();
         if project_id.is_empty()
@@ -467,7 +484,12 @@ impl JiraReadinessProbe {
                 project_id.replace('\\', "\\\\").replace('\"', "\\\"")
             )
         };
-        let jql = format!("project = {jql_project} ORDER BY updated DESC");
+        let jql = match scope {
+            JiraIssueScope::All => format!("project = {jql_project} ORDER BY updated DESC"),
+            JiraIssueScope::HiveIntake => format!(
+                "project = {jql_project} AND assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+            ),
+        };
         let mut issues = Vec::new();
         let mut next_page_token: Option<String> = None;
         for _ in 0..(MAX_ISSUES / PAGE_SIZE) {
@@ -602,6 +624,12 @@ impl JiraReadinessProbe {
     }
 }
 
+#[derive(Clone, Copy)]
+enum JiraIssueScope {
+    All,
+    HiveIntake,
+}
+
 pub(crate) fn issue_url(base_url: &Url, issue_key: &str) -> Option<String> {
     let issue_key = issue_key.trim();
     if issue_key.is_empty()
@@ -726,8 +754,9 @@ fn unavailable() -> JiraReadiness {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{Json, Router, http::StatusCode as AxumStatus, routing::get};
+    use axum::{Json, Router, extract::Query, http::StatusCode as AxumStatus, routing::get};
     use serde_json::json;
+    use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     async fn probe(project_status: AxumStatus, profile_status: AxumStatus) -> JiraReadiness {
@@ -905,5 +934,36 @@ mod tests {
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].key, "WEB-42");
         assert_eq!(issues[0].assignee_name.as_deref(), Some("Bea"));
+    }
+
+    #[tokio::test]
+    async fn hive_intake_requests_only_current_users_open_work() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/rest/api/3/search/jql",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                let jql = query.get("jql").map(String::as_str).unwrap_or_default();
+                assert!(jql.contains("project = 10001"));
+                assert!(jql.contains("assignee = currentUser()"));
+                assert!(jql.contains("statusCategory != Done"));
+                Json(json!({ "isLast": true, "issues": [] }))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let adapter = JiraReadinessProbe::configured(
+            &format!("http://{address}"),
+            "operator@example.test",
+            "token",
+        )
+        .unwrap();
+
+        assert!(
+            adapter
+                .hive_intake_issues("10001")
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

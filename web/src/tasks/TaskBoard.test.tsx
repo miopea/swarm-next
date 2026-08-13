@@ -23,8 +23,8 @@ const worker: Worker = {
 
 function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> = {}) {
   const props: React.ComponentProps<typeof TaskBoard> = {
-    tasks: [task], jiraTaskLinks: [], sessions: [], workers: [worker], busy: false,
-    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onRetryJira: vi.fn(), onReorder: vi.fn(),
+    tasks: [task], jiraTaskLinks: [], operatorToken: "operator-token", sessions: [], workers: [worker], busy: false,
+    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onRetryJira: vi.fn(), onJiraImported: vi.fn().mockResolvedValue(undefined), onReorder: vi.fn(),
     ...overrides,
   };
   return { props, ...render(<TaskBoard {...props} />) };

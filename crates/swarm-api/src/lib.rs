@@ -2622,7 +2622,7 @@ async fn jira_binding_issues(
         .map_err(|error| task_store_error(&error))?;
     let issues = state
         .jira_readiness
-        .issues(&binding.project_id)
+        .hive_intake_issues(&binding.project_id)
         .await
         .map_err(jira_adapter_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(issues)).into_response())
@@ -2641,7 +2641,7 @@ async fn sync_jira_binding(
         .map_err(|error| task_store_error(&error))?;
     let issues = state
         .jira_readiness
-        .issues(&binding.project_id)
+        .hive_intake_issues(&binding.project_id)
         .await
         .map_err(jira_adapter_error)?;
     let selected_ids = request

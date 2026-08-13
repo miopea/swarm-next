@@ -194,6 +194,13 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-compose form { display: grid; grid-template-columns: minmax(230px, 1.2fr) minmax(180px, .8fr) auto; align-content: end; align-items: end; gap: 10px; }
 .field-stack { display: grid; min-width: 0; gap: 7px; }
 .task-compose form button { white-space: nowrap; }
+.jira-task-source { display: grid; max-width: 1400px; gap: 14px; margin: -12px auto 30px; padding: 18px 20px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: var(--radius-lg); background: color-mix(in srgb, var(--accent-soft) 42%, var(--panel)); }
+.jira-task-source-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; }
+.jira-task-source-heading h3 { margin: 0; font-size: 1rem; }
+.jira-task-source-heading > span { color: var(--muted); font-size: .78rem; }
+.jira-project-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.jira-project-actions button { display: inline-flex; align-items: center; gap: 8px; }
+.jira-project-actions button span { color: var(--muted); font-size: .78rem; }
 .task-section { max-width: 1400px; margin: 0 auto; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 13px; }
 .section-heading h3 { margin: 0; font-size: 1.05rem; }
@@ -615,6 +622,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .jira-binding-card > span { display: grid; min-width: 0; gap: 2px; }
 .jira-binding-card > span:last-child { text-align: right; }
 .jira-binding-card small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.jira-binding-destination { text-align: right; }
 .jira-project-setup { position: relative; padding-top: 4px; }
 .jira-project-setup label, .jira-workflow-setup > label, .jira-status-map label { display: grid; gap: 6px; color: var(--muted); font-size: .76rem; font-weight: 650; }
 .jira-project-setup input, .jira-project-setup select { width: 100%; min-height: 42px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--panel-raised); color: var(--text); font: inherit; padding: 9px 11px; }
@@ -665,11 +673,16 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 @media (max-width: 680px) {
   .jira-binding-card { grid-template-columns: 1fr; gap: 8px; }
   .jira-binding-card > span:last-child { text-align: left; }
+  .jira-binding-destination { text-align: left; }
   .jira-auth-action { width: 100%; }
   .jira-status-map label { grid-template-columns: 1fr; }
   .jira-intake { padding: 12px; }
   .jira-intake-heading { align-items: start; }
   .jira-intake > .primary-action { width: 100%; }
+  .jira-task-source { margin: 0 auto 18px; padding: 15px; }
+  .jira-task-source-heading { align-items: start; flex-direction: column; gap: 5px; }
+  .jira-project-actions { display: grid; grid-template-columns: 1fr; }
+  .jira-project-actions button { justify-content: space-between; width: 100%; }
 }
 .maintenance-action > p { margin: 0; color: var(--muted); font-size: .79rem; line-height: 1.5; }
 .maintenance-confirmation { display: grid; gap: .35rem; }
