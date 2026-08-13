@@ -157,7 +157,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=15 => {
+            0..=16 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -2360,6 +2360,35 @@ mod tests {
         assert!(columns.iter().any(|column| column == "owner_device_id"));
         assert_eq!(
             connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+    }
+    #[test]
+    fn migrates_schema_v16_to_queen_autonomy_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "DROP TABLE queen_autonomy_preferences;
+                     PRAGMA user_version = 16;",
+                )
+                .unwrap();
+        }
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(
+            migrated.queen_autonomy_policy().unwrap(),
+            swarm_domain::QueenAutonomyPolicy::default()
+        );
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
                 .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
                 .unwrap(),
             CURRENT_SCHEMA_VERSION
