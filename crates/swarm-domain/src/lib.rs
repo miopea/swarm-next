@@ -69,15 +69,71 @@ pub enum JiraProjectScope {
     Apiary,
 }
 
+impl fmt::Display for JiraProjectScope {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Hive => "hive",
+            Self::Apiary => "apiary",
+        })
+    }
+}
+
+impl FromStr for JiraProjectScope {
+    type Err = ParseJiraProjectScopeError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "hive" => Ok(Self::Hive),
+            "apiary" => Ok(Self::Apiary),
+            _ => Err(ParseJiraProjectScopeError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseJiraProjectScopeError;
+
+impl fmt::Display for ParseJiraProjectScopeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown Jira project scope")
+    }
+}
+
+impl std::error::Error for ParseJiraProjectScopeError {}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct JiraProjectBinding {
     pub id: JiraProjectBindingId,
+    pub project_id: String,
     pub project_key: String,
+    pub project_name: String,
     pub scope: JiraProjectScope,
     pub hive_id: HiveId,
     pub apiary_id: Option<ApiaryId>,
+    pub default_worker_id: Option<WorkerId>,
     pub access_verified: bool,
     pub workflow_mapped: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct JiraStatusMapping {
+    pub jira_status_id: String,
+    pub jira_status_name: String,
+    pub task_state: TaskState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct JiraIssueLink {
+    pub issue_id: String,
+    pub issue_key: String,
+    pub binding_id: JiraProjectBindingId,
+    pub task_id: TaskId,
+    pub jira_status_id: String,
+    pub jira_status_name: String,
+    pub jira_assignee_account_id: Option<String>,
+    pub jira_assignee_name: Option<String>,
+    pub remote_updated_at: String,
+    pub last_synced_at: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1681,10 +1737,13 @@ mod tests {
         let apiary_id = ApiaryId::new();
         let binding = JiraProjectBinding {
             id: JiraProjectBindingId::new(),
+            project_id: "10001".into(),
             project_key: "WEB".into(),
+            project_name: "Website Services".into(),
             scope: JiraProjectScope::Apiary,
             hive_id,
             apiary_id: Some(apiary_id),
+            default_worker_id: None,
             access_verified: true,
             workflow_mapped: true,
         };
@@ -1719,10 +1778,13 @@ mod tests {
         let hive_id = HiveId::new();
         let mut binding = JiraProjectBinding {
             id: JiraProjectBindingId::new(),
+            project_id: "10002".into(),
             project_key: "OPS".into(),
+            project_name: "Operations".into(),
             scope: JiraProjectScope::Hive,
             hive_id,
             apiary_id: None,
+            default_worker_id: None,
             access_verified: false,
             workflow_mapped: false,
         };

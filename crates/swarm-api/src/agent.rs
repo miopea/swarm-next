@@ -28,9 +28,10 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use swarm_application::{AgentPrincipal, ApplicationError, DecisionRequestInput, TaskService};
 use swarm_domain::{
-    DecisionRequestKind, DecisionUrgency, TaskId, TaskPriority, TaskState, WorkerId, WorkerRole,
+    DecisionRequestKind, DecisionUrgency, JiraProjectBindingId, TaskId, TaskPriority, TaskState,
+    WorkerId, WorkerRole,
 };
-use swarm_persistence::{TaskStore, TaskStoreError};
+use swarm_persistence::{JiraIssueSnapshot, TaskStore, TaskStoreError};
 use tokio::sync::Notify;
 use tower::ServiceExt;
 
@@ -43,6 +44,7 @@ pub struct AgentBridge {
     mcp_url: Arc<str>,
     tasks: TaskService,
     changed: Arc<Notify>,
+    jira: crate::jira::JiraReadinessProbe,
 }
 
 impl AgentBridge {
@@ -58,7 +60,14 @@ impl AgentBridge {
             mcp_url: mcp_url.into(),
             tasks: TaskService::new(store),
             changed,
+            jira: crate::jira::JiraReadinessProbe::default(),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_jira(mut self, jira: crate::jira::JiraReadinessProbe) -> Self {
+        self.jira = jira;
+        self
     }
 
     /// Ensures one private provider config and durable digest exist for a worker.
@@ -139,6 +148,7 @@ pub async fn handle(bridge: AgentBridge, request: Request<Body>) -> Response {
         tasks: bridge.tasks.clone(),
         principal,
         changed: bridge.changed.clone(),
+        jira: bridge.jira.clone(),
     };
     let service: StreamableHttpService<AgentMcp, LocalSessionManager> = StreamableHttpService::new(
         move || Ok(handler.clone()),
@@ -159,6 +169,7 @@ struct AgentMcp {
     tasks: TaskService,
     principal: AgentPrincipal,
     changed: Arc<Notify>,
+    jira: crate::jira::JiraReadinessProbe,
 }
 
 impl ServerHandler for AgentMcp {
@@ -182,11 +193,18 @@ impl ServerHandler for AgentMcp {
             request_decision_tool(),
         ];
         if self.principal.role == WorkerRole::Queen {
-            tools.extend([list_workers_tool(), create_task_tool(), assign_task_tool()]);
+            tools.extend([
+                list_workers_tool(),
+                create_task_tool(),
+                assign_task_tool(),
+                list_jira_projects_tool(),
+                sync_jira_project_tool(),
+            ]);
         }
         Ok(ListToolsResult::with_all_items(tools))
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
@@ -233,6 +251,18 @@ impl ServerHandler for AgentMcp {
                     .assign_task(self.principal, task_id, worker_id)
                     .and_then(structured)
             }),
+            "swarm_list_jira_projects" => {
+                if self.principal.role == WorkerRole::Queen {
+                    self.tasks
+                        .store()
+                        .list_jira_project_bindings()
+                        .map_err(Into::into)
+                        .and_then(|projects| structured(json!({ "projects": projects })))
+                } else {
+                    Err(ApplicationError::NotAuthorized)
+                }
+            }
+            "swarm_sync_jira_project" => self.sync_jira_project(arguments).await,
             "swarm_list_decisions" => self
                 .tasks
                 .list_visible_decisions(Some(self.principal))
@@ -283,6 +313,42 @@ impl ServerHandler for AgentMcp {
     }
 }
 
+impl AgentMcp {
+    async fn sync_jira_project(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, ApplicationError> {
+        if self.principal.role != WorkerRole::Queen {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        let input = parse::<SyncJiraProjectInput>(arguments)?;
+        let binding_id = JiraProjectBindingId::from_str(&input.binding_id)
+            .map_err(|_| ApplicationError::NotAuthorized)?;
+        let store = self.tasks.store();
+        let binding = store.get_jira_project_binding(binding_id)?;
+        let issues = self
+            .jira
+            .issues(&binding.project_id)
+            .await
+            .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
+        let snapshots = issues
+            .iter()
+            .map(|issue| JiraIssueSnapshot {
+                issue_id: &issue.id,
+                issue_key: &issue.key,
+                summary: &issue.summary,
+                status_id: &issue.status_id,
+                status_name: &issue.status_name,
+                assignee_account_id: issue.assignee_account_id.as_deref(),
+                assignee_name: issue.assignee_name.as_deref(),
+                remote_updated_at: &issue.updated_at,
+            })
+            .collect::<Vec<_>>();
+        let tasks = store.sync_jira_issues(binding_id, &snapshots)?;
+        structured(json!({ "project": binding, "tasks": tasks }))
+    }
+}
+
 fn structured<T: serde::Serialize>(value: T) -> Result<CallToolResult, ApplicationError> {
     serde_json::to_value(value)
         .map(CallToolResult::structured)
@@ -309,6 +375,11 @@ struct CreateTaskInput {
 struct AssignTaskInput {
     task_id: String,
     worker_id: String,
+}
+
+#[derive(Deserialize)]
+struct SyncJiraProjectInput {
+    binding_id: String,
 }
 
 #[derive(Deserialize)]
@@ -416,6 +487,31 @@ fn assign_task_tool() -> Tool {
                 "worker_id": { "type": "string", "format": "uuid" }
             },
             "required": ["task_id", "worker_id"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn list_jira_projects_tool() -> Tool {
+    tool(
+        "swarm_list_jira_projects",
+        "Queen only: list Jira projects connected to this Hive, their repository worker, and workflow readiness before planning Jira work.",
+        &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        true,
+    )
+}
+
+fn sync_jira_project_tool() -> Tool {
+    tool(
+        "swarm_sync_jira_project",
+        "Queen only: refresh one connected Jira project into the Hive task queue. Jira owns issue identity and mapped workflow; Swarm preserves worker assignment and local execution notes.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "binding_id": { "type": "string", "format": "uuid" }
+            },
+            "required": ["binding_id"],
             "additionalProperties": false
         }),
         false,
@@ -636,6 +732,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(queen_names.contains(&"swarm_create_task"));
         assert!(queen_names.contains(&"swarm_assign_task"));
+        assert!(queen_names.contains(&"swarm_list_jira_projects"));
+        assert!(queen_names.contains(&"swarm_sync_jira_project"));
+        assert!(!worker_names.contains(&"swarm_sync_jira_project"));
         assert_eq!(
             worker_names,
             [

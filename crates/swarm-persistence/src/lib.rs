@@ -17,7 +17,9 @@ use uuid::Uuid;
 
 mod decisions;
 mod feedback;
+mod jira;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
+pub use jira::{JiraIssueSnapshot, JiraProjectBindingInput};
 mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
 pub use presence::PresenceMutation;
@@ -38,7 +40,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 20;
+const CURRENT_SCHEMA_VERSION: i64 = 21;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -129,6 +131,12 @@ pub enum TaskStoreError {
     InvalidDogfoodAttachment,
     #[error("dogfood report limit must be from 1 through 50")]
     InvalidDogfoodReportLimit,
+    #[error("Jira project metadata is invalid")]
+    InvalidJiraProject,
+    #[error("Jira workflow mapping is invalid")]
+    InvalidJiraWorkflowMapping,
+    #[error("Jira project binding was not found")]
+    JiraProjectBindingNotFound,
     #[error("worker order must contain every non-Queen worker exactly once")]
     InvalidWorkerOrder,
     #[error("database schema version {found} is newer than supported version {supported}")]
@@ -167,7 +175,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=19 => {
+            0..=20 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -1018,7 +1026,59 @@ fn migrate_schema(
     if schema_version < 20 {
         migrate_dogfood_reports(transaction)?;
     }
+    if schema_version < 21 {
+        migrate_jira_bindings(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_jira_bindings(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS jira_project_bindings (
+             id TEXT PRIMARY KEY,
+             hive_id TEXT NOT NULL REFERENCES hives(id),
+             project_id TEXT NOT NULL,
+             project_key TEXT NOT NULL,
+             project_name TEXT NOT NULL,
+             scope TEXT NOT NULL CHECK (scope IN ('hive','apiary')),
+             apiary_id TEXT REFERENCES apiaries(id),
+             default_worker_id TEXT REFERENCES worker_profiles(id),
+             access_verified INTEGER NOT NULL DEFAULT 0 CHECK (access_verified IN (0,1)),
+             workflow_mapped INTEGER NOT NULL DEFAULT 0 CHECK (workflow_mapped IN (0,1)),
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             UNIQUE(hive_id, project_id),
+             UNIQUE(hive_id, project_key),
+             CHECK ((scope = 'hive' AND apiary_id IS NULL) OR
+                    (scope = 'apiary' AND apiary_id IS NOT NULL))
+         );
+         CREATE INDEX IF NOT EXISTS jira_project_bindings_by_hive
+             ON jira_project_bindings(hive_id, project_name, project_key);
+         CREATE TABLE IF NOT EXISTS jira_status_mappings (
+             binding_id TEXT NOT NULL REFERENCES jira_project_bindings(id) ON DELETE CASCADE,
+             jira_status_id TEXT NOT NULL,
+             jira_status_name TEXT NOT NULL,
+             task_state TEXT NOT NULL CHECK (
+                 task_state IN ('draft','ready','active','blocked','review','completed')
+             ),
+             PRIMARY KEY(binding_id, jira_status_id)
+         );
+         CREATE TABLE IF NOT EXISTS jira_issue_links (
+             issue_id TEXT PRIMARY KEY,
+             issue_key TEXT NOT NULL UNIQUE,
+             binding_id TEXT NOT NULL REFERENCES jira_project_bindings(id) ON DELETE CASCADE,
+             task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+             jira_status_id TEXT NOT NULL,
+             jira_status_name TEXT NOT NULL,
+             jira_assignee_account_id TEXT,
+             jira_assignee_name TEXT,
+             remote_updated_at TEXT NOT NULL,
+             last_synced_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         CREATE INDEX IF NOT EXISTS jira_issue_links_by_binding
+             ON jira_issue_links(binding_id, issue_key);
+         PRAGMA user_version = 21;",
+    )
 }
 
 fn migrate_dogfood_reports(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {

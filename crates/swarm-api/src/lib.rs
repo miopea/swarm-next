@@ -27,16 +27,17 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use swarm_application::{ApplicationError, TaskService};
 use swarm_domain::{
-    ControlRoomEventKind, DecisionRequestId, NotificationPolicy, PresenceDeviceClass,
-    PresenceDeviceId, PresenceMode, PresenceObservationState, ProviderConversationId, ProviderKind,
-    QueenAutonomyLevel, QueenAutonomyPolicy, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
-    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    ControlRoomEventKind, DecisionRequestId, JiraProjectBindingId, JiraProjectScope,
+    JiraStatusMapping, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
+    QueenAutonomyPolicy, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState,
+    WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
-    DecisionDeliveryFailure, DecisionDispatch, MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE,
-    NotificationSettings, PresentationColorTheme, PresentationDeviceClass, PresentationPreferences,
-    PushSubscriptionInput, TaskDispatch, TaskDispatchFailure, TaskOutcomeDispatch,
-    TaskOutcomeFailure, TaskStore, TaskStoreError,
+    DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
+    MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE, NotificationSettings, PresentationColorTheme,
+    PresentationDeviceClass, PresentationPreferences, PushSubscriptionInput, TaskDispatch,
+    TaskDispatchFailure, TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
@@ -164,12 +165,15 @@ impl AppState {
         mcp_url: impl Into<Arc<str>>,
     ) -> Self {
         if let Some(store) = self.task_store.clone() {
-            self.agent_bridge = Some(agent::AgentBridge::new(
-                store,
-                config_root,
-                mcp_url,
-                self.control_room_notify.clone(),
-            ));
+            self.agent_bridge = Some(
+                agent::AgentBridge::new(
+                    store,
+                    config_root,
+                    mcp_url,
+                    self.control_room_notify.clone(),
+                )
+                .with_jira(self.jira_readiness.clone()),
+            );
         }
         self
     }
@@ -925,6 +929,24 @@ struct ReorderWorkersRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct JiraProjectsQuery {
+    query: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateJiraProjectBindingRequest {
+    project_id: String,
+    project_key: String,
+    project_name: String,
+    default_worker_id: Option<WorkerId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplaceJiraMappingsRequest {
+    mappings: Vec<JiraStatusMapping>,
+}
+
+#[derive(Debug, Deserialize)]
 struct HistoryQuery {
     segment: Option<u64>,
     record: Option<u32>,
@@ -1120,6 +1142,27 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/workers", get(list_workers).post(create_worker))
         .route("/api/v1/providers", get(list_provider_capabilities))
         .route("/api/v1/integrations/jira/readiness", get(jira_readiness))
+        .route("/api/v1/integrations/jira/projects", get(jira_projects))
+        .route(
+            "/api/v1/integrations/jira/projects/{project_id_or_key}/statuses",
+            get(jira_project_statuses),
+        )
+        .route(
+            "/api/v1/integrations/jira/bindings",
+            get(jira_bindings).post(create_jira_binding),
+        )
+        .route(
+            "/api/v1/integrations/jira/bindings/{binding_id}/mappings",
+            get(jira_mappings).put(replace_jira_mappings),
+        )
+        .route(
+            "/api/v1/integrations/jira/bindings/{binding_id}/issues",
+            get(jira_binding_issues),
+        )
+        .route(
+            "/api/v1/integrations/jira/bindings/{binding_id}/sync",
+            post(sync_jira_binding),
+        )
         .route("/api/v1/workers/order", put(reorder_workers))
         .route("/api/v1/workers/{worker_id}", patch(update_worker))
         .route("/api/v1/workspaces", get(list_workspaces))
@@ -2113,6 +2156,146 @@ async fn jira_readiness(
         .into_response())
 }
 
+async fn jira_projects(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<JiraProjectsQuery>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let projects = state
+        .jira_readiness
+        .projects(query.query.as_deref())
+        .await
+        .map_err(jira_adapter_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(projects)).into_response())
+}
+
+async fn jira_project_statuses(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(project_id_or_key): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let statuses = state
+        .jira_readiness
+        .project_statuses(&project_id_or_key)
+        .await
+        .map_err(jira_adapter_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(statuses)).into_response())
+}
+
+async fn jira_bindings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let bindings = task_store(&state)?
+        .list_jira_project_bindings()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(bindings)).into_response())
+}
+
+async fn create_jira_binding(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateJiraProjectBindingRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let binding = task_store(&state)?
+        .upsert_jira_project_binding(&JiraProjectBindingInput {
+            project_id: &request.project_id,
+            project_key: &request.project_key,
+            project_name: &request.project_name,
+            scope: JiraProjectScope::Hive,
+            apiary_id: None,
+            default_worker_id: request.default_worker_id,
+        })
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(binding),
+    )
+        .into_response())
+}
+
+async fn jira_mappings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(binding_id): Path<JiraProjectBindingId>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let mappings = task_store(&state)?
+        .list_jira_status_mappings(binding_id)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(mappings)).into_response())
+}
+
+async fn replace_jira_mappings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(binding_id): Path<JiraProjectBindingId>,
+    Json(request): Json<ReplaceJiraMappingsRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let mappings = task_store(&state)?
+        .replace_jira_status_mappings(binding_id, &request.mappings)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(mappings)).into_response())
+}
+
+async fn jira_binding_issues(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(binding_id): Path<JiraProjectBindingId>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let binding = task_store(&state)?
+        .get_jira_project_binding(binding_id)
+        .map_err(|error| task_store_error(&error))?;
+    let issues = state
+        .jira_readiness
+        .issues(&binding.project_id)
+        .await
+        .map_err(jira_adapter_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(issues)).into_response())
+}
+
+async fn sync_jira_binding(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(binding_id): Path<JiraProjectBindingId>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = task_store(&state)?;
+    let binding = store
+        .get_jira_project_binding(binding_id)
+        .map_err(|error| task_store_error(&error))?;
+    let issues = state
+        .jira_readiness
+        .issues(&binding.project_id)
+        .await
+        .map_err(jira_adapter_error)?;
+    let snapshots = issues
+        .iter()
+        .map(|issue| JiraIssueSnapshot {
+            issue_id: &issue.id,
+            issue_key: &issue.key,
+            summary: &issue.summary,
+            status_id: &issue.status_id,
+            status_name: &issue.status_name,
+            assignee_account_id: issue.assignee_account_id.as_deref(),
+            assignee_name: issue.assignee_name.as_deref(),
+            remote_updated_at: &issue.updated_at,
+        })
+        .collect::<Vec<_>>();
+    let tasks = store
+        .sync_jira_issues(binding_id, &snapshots)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
+}
+
 async fn list_workspaces(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2941,9 +3124,50 @@ fn application_error(error: ApplicationError) -> ApiError {
             "worker_session_not_active",
             error.to_string(),
         ),
+        ApplicationError::IntegrationUnavailable(_) => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "integration_unavailable",
+            error.to_string(),
+        ),
         ApplicationError::Store(error) => task_store_error(&error),
     }
 }
+
+fn jira_adapter_error(error: jira::JiraAdapterError) -> ApiError {
+    match error {
+        jira::JiraAdapterError::NotConfigured => ApiError::new(
+            StatusCode::CONFLICT,
+            "jira_not_configured",
+            "connect Jira before browsing projects",
+        ),
+        jira::JiraAdapterError::CredentialsInvalid => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "jira_credentials_invalid",
+            "Jira rejected this operator's credentials",
+        ),
+        jira::JiraAdapterError::PermissionDenied => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "jira_access_denied",
+            "Jira denied access to this project",
+        ),
+        jira::JiraAdapterError::NetworkUnavailable => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "jira_network_unavailable",
+            "Jira is temporarily unavailable",
+        ),
+        jira::JiraAdapterError::InvalidResponse => ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "jira_response_invalid",
+            "Jira returned an invalid response",
+        ),
+        jira::JiraAdapterError::ResponseLimitExceeded => ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "jira_response_limit_exceeded",
+            "Jira returned more data than this bounded operation permits",
+        ),
+    }
+}
+#[allow(clippy::too_many_lines)]
 fn task_store_error(error: &TaskStoreError) -> ApiError {
     match error {
         TaskStoreError::NotFound => {
@@ -3006,6 +3230,18 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         | TaskStoreError::InvalidDogfoodReportLimit => ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_dogfood_report",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidJiraProject | TaskStoreError::InvalidJiraWorkflowMapping => {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_jira_configuration",
+                error.to_string(),
+            )
+        }
+        TaskStoreError::JiraProjectBindingNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "jira_project_binding_not_found",
             error.to_string(),
         ),
         TaskStoreError::WorkerNotFound => {
@@ -3476,6 +3712,193 @@ mod tests {
         assert_eq!(json["configured"], false);
         assert_eq!(json["connection"], "not_connected");
         assert!(json["account_name"].is_null());
+    }
+
+    #[tokio::test]
+    async fn jira_project_binding_and_workflow_mapping_are_private_and_durable() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Website",
+                ProviderKind::ClaudeCode,
+                "/projects/website",
+                false,
+                1,
+            )
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/integrations/jira/bindings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "project_id": "10001",
+                            "project_key": "WEB",
+                            "project_name": "Website Services",
+                            "default_worker_id": worker.id,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let create = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/integrations/jira/bindings")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "project_id": "10001",
+                            "project_key": "WEB",
+                            "project_name": "Website Services",
+                            "default_worker_id": worker.id,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create.status(), StatusCode::CREATED);
+        assert_eq!(create.headers()[header::CACHE_CONTROL], "no-store");
+        let binding = response_json(create).await;
+        let binding_id = binding["id"].as_str().unwrap();
+        assert_eq!(binding["default_worker_id"], worker.id.to_string());
+
+        let mapped = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!(
+                        "/api/v1/integrations/jira/bindings/{binding_id}/mappings"
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "mappings": [
+                            { "jira_status_id": "1", "jira_status_name": "To Do", "task_state": "ready" },
+                            { "jira_status_id": "3", "jira_status_name": "In Progress", "task_state": "active" }
+                        ]})
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(mapped.status(), StatusCode::OK);
+        let listed =
+            response_json(authorized_get(app, "/api/v1/integrations/jira/bindings").await).await;
+        assert_eq!(listed[0]["project_key"], "WEB");
+        assert_eq!(listed[0]["workflow_mapped"], true);
+    }
+
+    #[tokio::test]
+    async fn jira_sync_composes_remote_search_mapping_and_idempotent_task_intake() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let jira_server = axum::Router::new().route(
+            "/rest/api/3/search/jql",
+            get(|| async {
+                Json(serde_json::json!({
+                    "isLast": true,
+                    "issues": [{
+                        "id": "20001",
+                        "key": "WEB-42",
+                        "fields": {
+                            "summary": "Polish the launch page",
+                            "status": { "id": "3", "name": "In Progress" },
+                            "assignee": { "accountId": "account-1", "displayName": "Bea" },
+                            "updated": "2026-08-13T13:00:00.000+0000"
+                        }
+                    }]
+                }))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, jira_server).await.unwrap() });
+
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Website",
+                ProviderKind::ClaudeCode,
+                "/projects/website",
+                false,
+                1,
+            )
+            .unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+                default_worker_id: Some(worker.id),
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "3".into(),
+                    jira_status_name: "In Progress".into(),
+                    task_state: TaskState::Active,
+                }],
+            )
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store)
+                .with_jira_configuration(
+                    &format!("http://{address}"),
+                    "operator@example.test",
+                    "api-token",
+                )
+                .unwrap(),
+        );
+        for expected_count in [1, 1] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/api/v1/integrations/jira/bindings/{}/sync",
+                            binding.id
+                        ))
+                        .header("authorization", "Bearer secret")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response_json(response).await.as_array().unwrap().len(),
+                expected_count
+            );
+        }
+        let tasks = response_json(authorized_get(app, "/api/v1/tasks").await).await;
+        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        assert_eq!(tasks[0]["title"], "Polish the launch page");
+        assert_eq!(tasks[0]["state"], "active");
     }
 
     #[tokio::test]

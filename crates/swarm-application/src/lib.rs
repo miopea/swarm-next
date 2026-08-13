@@ -366,6 +366,8 @@ pub enum ApplicationError {
     NotAuthorized,
     #[error("the target worker does not have an active session")]
     WorkerNotRunning,
+    #[error("integration unavailable: {0}")]
+    IntegrationUnavailable(String),
     #[error(transparent)]
     Store(#[from] TaskStoreError),
 }

@@ -33,8 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_maintenance_request_path(maintenance_request_path_from_env(&database_path))
         .with_workspace_roots(workspace_roots)
         .with_task_store(store)
-        .with_notifications(vapid_subject_from_env())?
-        .with_agent_configuration(agent_config_root, mcp_url_from_env(address));
+        .with_notifications(vapid_subject_from_env())?;
     let jira_values = (
         env::var("SWARM_JIRA_BASE_URL").ok(),
         env::var("SWARM_JIRA_EMAIL").ok(),
@@ -47,6 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => return Err("Jira configuration requires SWARM_JIRA_BASE_URL, SWARM_JIRA_EMAIL, and SWARM_JIRA_API_TOKEN together".into()),
     }
+    state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
     let recovered = state.recover_decision_deliveries()?;
     if recovered > 0 {
         tracing::warn!(

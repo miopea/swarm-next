@@ -30,6 +30,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       return new Response(new Uint8Array([137, 80, 78, 71]), { status: 200, headers: { "Content-Type": "image/png" } });
     }
     if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("integrations/jira/bindings")) return ok([]);
     if (url.includes("feedback/reports")) return ok([{
       id: "report-1",
       expectation: "Worker remains readable",
@@ -109,7 +110,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Bea")).toBeInTheDocument();
   expect(screen.getByText("Personal Hive")).toBeInTheDocument();
   expect(await screen.findByText("Jira not connected")).toBeInTheDocument();
-  expect(screen.getByText("Owned tasks continue; new shared claims wait")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Bring Jira into your Hive" }).closest("section")).toHaveTextContent("Owned tasks continue; new shared claims wait.");
   expect(screen.getByText("Live updates").parentElement).toHaveTextContent("Live updatesConnected");
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
@@ -171,6 +172,7 @@ test("downloads a consistent Hive database snapshot", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("integrations/jira/bindings")) return ok([]);
     if (url.includes("feedback/reports")) return ok([]);
     if (url === "/api/v1/backups/database") {
       return new Response(new Uint8Array([83, 81, 76]), { status: 200, headers: { "Content-Type": "application/vnd.sqlite3" } });

@@ -599,6 +599,22 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .integration-status { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-raised); }
 .integration-status > span:last-child { display: grid; gap: 1px; }
 .integration-status small { color: var(--muted); }
+.jira-binding-list, .jira-project-setup, .jira-workflow-setup, .jira-status-map { display: grid; gap: 10px; }
+.jira-binding-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-raised); }
+.jira-binding-card > span { display: grid; min-width: 0; gap: 2px; }
+.jira-binding-card > span:last-child { text-align: right; }
+.jira-binding-card small { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.jira-project-setup { position: relative; padding-top: 4px; }
+.jira-project-setup label, .jira-workflow-setup > label, .jira-status-map label { display: grid; gap: 6px; color: var(--muted); font-size: .76rem; font-weight: 650; }
+.jira-project-setup input, .jira-project-setup select { width: 100%; min-height: 42px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--panel-raised); color: var(--text); font: inherit; padding: 9px 11px; }
+.jira-project-results { display: grid; max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); box-shadow: 0 10px 24px color-mix(in srgb, var(--text) 10%, transparent); }
+.jira-project-results button { display: grid; grid-template-columns: minmax(60px, auto) minmax(0, 1fr); gap: 10px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text); padding: 11px 12px; text-align: left; }
+.jira-project-results button:last-child { border-bottom: 0; }
+.jira-project-results button:hover, .jira-project-results button:focus-visible { background: var(--accent-soft); }
+.jira-project-results span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jira-status-map { padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.jira-status-map label { grid-template-columns: minmax(0, 1fr) minmax(130px, .7fr); align-items: center; }
+.settings-message { margin: 0; color: var(--text); font-size: .78rem; }
 .mobile-presence-note { padding: .75rem .85rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
 .mobile-policy-choice { display: grid; gap: 7px; margin: 0; padding: 0; border: 0; }
 .mobile-policy-choice legend { margin-bottom: 2px; color: var(--text-muted); font-size: .78rem; font-weight: 700; }
@@ -618,6 +634,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .restore-guide p { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.45; }
 .restore-guide code { color: var(--text); overflow-wrap: anywhere; }
 .maintenance-action { display: grid; gap: .75rem; padding: .9rem; border: 1px solid color-mix(in srgb, var(--honey) 55%, var(--line)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--honey-soft) 55%, var(--panel)); }
+
+@media (max-width: 680px) {
+  .jira-binding-card { grid-template-columns: 1fr; gap: 8px; }
+  .jira-binding-card > span:last-child { text-align: left; }
+  .jira-status-map label { grid-template-columns: 1fr; }
+}
 .maintenance-action > p { margin: 0; color: var(--muted); font-size: .79rem; line-height: 1.5; }
 .maintenance-confirmation { display: grid; gap: .35rem; }
 .maintenance-confirmation > strong { font-size: .86rem; }

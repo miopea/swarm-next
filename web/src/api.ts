@@ -77,6 +77,30 @@ export type JiraReadiness = {
   connection: JiraConnectionState;
   account_name: string | null;
 };
+export type JiraProject = { id: string; key: string; name: string };
+export type JiraProjectStatus = {
+  id: string;
+  name: string;
+  category_key: string;
+  recommended_task_state: TaskState;
+};
+export type JiraProjectBinding = {
+  id: string;
+  project_id: string;
+  project_key: string;
+  project_name: string;
+  scope: "hive" | "apiary";
+  hive_id: string;
+  apiary_id: string | null;
+  default_worker_id: string | null;
+  access_verified: boolean;
+  workflow_mapped: boolean;
+};
+export type JiraStatusMapping = {
+  jira_status_id: string;
+  jira_status_name: string;
+  task_state: TaskState;
+};
 
 export type Worker = {
   id: string;
@@ -533,6 +557,71 @@ export async function downloadDogfoodScreenshot(
 export async function fetchJiraReadiness(operatorToken: string): Promise<JiraReadiness> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/readiness");
   return response.json() as Promise<JiraReadiness>;
+}
+
+export async function fetchJiraProjects(operatorToken: string, query = ""): Promise<JiraProject[]> {
+  const params = new URLSearchParams();
+  if (query.trim()) params.set("query", query.trim());
+  const suffix = params.size ? `?${params}` : "";
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/projects${suffix}`);
+  return response.json() as Promise<JiraProject[]>;
+}
+
+export async function fetchJiraProjectStatuses(operatorToken: string, projectIdOrKey: string): Promise<JiraProjectStatus[]> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/integrations/jira/projects/${encodeURIComponent(projectIdOrKey)}/statuses`,
+  );
+  return response.json() as Promise<JiraProjectStatus[]>;
+}
+
+export async function fetchJiraBindings(operatorToken: string): Promise<JiraProjectBinding[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/bindings");
+  return response.json() as Promise<JiraProjectBinding[]>;
+}
+
+export async function createJiraBinding(
+  operatorToken: string,
+  project: JiraProject,
+  defaultWorkerId: string | null,
+): Promise<JiraProjectBinding> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/bindings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: project.id,
+      project_key: project.key,
+      project_name: project.name,
+      default_worker_id: defaultWorkerId,
+    }),
+  });
+  return response.json() as Promise<JiraProjectBinding>;
+}
+
+export async function replaceJiraMappings(
+  operatorToken: string,
+  bindingId: string,
+  mappings: JiraStatusMapping[],
+): Promise<JiraStatusMapping[]> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/integrations/jira/bindings/${encodeURIComponent(bindingId)}/mappings`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mappings }),
+    },
+  );
+  return response.json() as Promise<JiraStatusMapping[]>;
+}
+
+export async function syncJiraBinding(operatorToken: string, bindingId: string): Promise<Task[]> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/integrations/jira/bindings/${encodeURIComponent(bindingId)}/sync`,
+    { method: "POST" },
+  );
+  return response.json() as Promise<Task[]>;
 }
 
 export async function uploadDogfoodScreenshot(operatorToken: string, image: File): Promise<string> {

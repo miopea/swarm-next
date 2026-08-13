@@ -7,6 +7,7 @@ import type { LockDetectionState } from "../presence/PresenceController";
 import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
+import JiraSettings from "./JiraSettings";
 import WorkerSettings from "./WorkerSettings";
 
 type Props = {
@@ -243,20 +244,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         ) : null}
       </section>
 
-      <section id="settings-integrations" className="settings-card integration-settings" aria-labelledby="integration-heading">
-        <div><p className="eyebrow">Integrations</p><h3 id="integration-heading">Bring Jira in without making it a bottleneck</h3></div>
-        <p>Your Hive stays useful on its own. Jira connections use this operator's identity; credentials and permissions never come from Queen or another Hive.</p>
-        <div className="integration-status" role="status">
-          <span className={`presence ${jiraReadiness?.connection === "ready" ? "online" : jiraUnavailable || jiraReadiness?.connection === "credentials_invalid" || jiraReadiness?.connection === "permission_denied" ? "offline" : "waiting"}`} />
-          <span><strong>{jiraReadinessLabel(jiraReadiness, jiraUnavailable)}</strong><small>{jiraReadinessDetail(jiraReadiness, jiraUnavailable)}</small></span>
-        </div>
-        <dl className="diagnostic-list">
-          <div><dt>Hive projects</dt><dd>Synced by this Hive</dd></div>
-          <div><dt>Apiary projects</dt><dd>Require membership and verified access</dd></div>
-          <div><dt>Offline work</dt><dd>Owned tasks continue; new shared claims wait</dd></div>
-        </dl>
-        <small className="privacy-note">Connection setup appears here when the Jira credential adapter is enabled. Swarm stores readiness and mappings, not browser passwords.</small>
-      </section>
+      <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} workers={workers} />
 
       <section id="settings-backup" className="settings-card" aria-labelledby="backup-heading">
         <div><p className="eyebrow">Backup</p><h3 id="backup-heading">Carry your Hive safely</h3></div>
@@ -342,23 +330,6 @@ function lockDetectionLabel(state: LockDetectionState) {
   if (state === "denied") return "Not granted; activity and visibility fallback remain active.";
   if (state === "error") return "Could not start; activity and visibility fallback remain active.";
   return "Unavailable in this browser; fallback presence remains active.";
-}
-function jiraReadinessLabel(readiness: JiraReadiness | undefined, unavailable: boolean) {
-  if (unavailable) return "Jira check unavailable";
-  if (!readiness) return "Checking Jira readiness";
-  if (readiness.connection === "ready") return readiness.account_name ? `Jira ready · ${readiness.account_name}` : "Jira ready";
-  if (readiness.connection === "credentials_invalid") return "Jira credentials need attention";
-  if (readiness.connection === "permission_denied") return "Jira access denied";
-  if (readiness.connection === "network_unavailable") return "Jira temporarily unreachable";
-  return "Jira not connected";
-}
-
-function jiraReadinessDetail(readiness: JiraReadiness | undefined, unavailable: boolean) {
-  if (unavailable || readiness?.connection === "network_unavailable") return "Local work continues; existing owned work remains safe";
-  if (readiness?.connection === "credentials_invalid") return "Refresh this operator's Jira API token";
-  if (readiness?.connection === "permission_denied") return "This Jira identity cannot read the requested scope";
-  if (readiness?.connection === "ready") return "Using this Hive operator's Jira identity";
-  return "Local workers and private tasks are unaffected";
 }
 function liveFeedLabel(state: LiveFeedState) {
   if (state === "connected") return "Connected";
