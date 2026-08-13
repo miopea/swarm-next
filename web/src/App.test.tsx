@@ -395,6 +395,48 @@ test("creates a persisted task draft from the task board", async () => {
   );
 });
 
+test("waking a task worker assigns the stable worker rather than its new session", async () => {
+  const sessionId = "019fedfc-1c30-70e1-a5e2-9a3c94268123";
+  const worker = {
+    id: "worker-daisy", hive_id: "hive-1", name: "Daisy", role: "worker", provider: "claude_code", workspace: "/daisy",
+    autostart: false, position: 1, active_session_id: null, running: false, attention_state: "sleeping", created_at: 1, updated_at: 1,
+  };
+  const task = {
+    id: "task-wake", title: "Resume durable work", workspace: worker.workspace, state: "ready",
+    assigned_worker_id: worker.id, assigned_session_id: null, created_at: 1, updated_at: 1,
+  };
+  const runningWorker = { ...worker, active_session_id: sessionId, running: true, attention_state: "buzzing" };
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: method === "GET" && fetch.mock.calls.some(([called]) => String(called).endsWith(`/workers/${worker.id}/start`)) ? [{ session_id: sessionId, running: true }] : [] }));
+    if (url === "/api/v1/workers") return Promise.resolve(ok(fetch.mock.calls.some(([called]) => String(called).endsWith(`/workers/${worker.id}/start`)) ? [runningWorker] : [worker]));
+    if (url === "/api/v1/workspaces") return Promise.resolve(ok([{ name: "daisy", path: worker.workspace, kind: "repository", configured_worker_id: worker.id }]));
+    if (url === "/api/v1/tasks") return Promise.resolve(ok([task]));
+    if (url === "/api/v1/decisions") return Promise.resolve(ok([]));
+    if (url.endsWith(`/workers/${worker.id}/start`)) return Promise.resolve(ok(runningWorker));
+    if (url.endsWith(`/tasks/${task.id}/assignment`)) return Promise.resolve(ok({ ...task, assigned_session_id: sessionId }));
+    if (url.endsWith(`/tasks/${task.id}/state`)) return Promise.resolve(ok({ ...task, state: "active", assigned_session_id: sessionId }));
+    if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
+    if (url.includes("/api/v1/providers")) return Promise.resolve(ok({ claude_code: true, codex: false }));
+    if (url.includes("/api/v1/preferences/presentation/desktop")) return Promise.resolve(ok({ device_class: "desktop", color_theme: "light", terminal_keys_visible: true, configured: true }));
+    return Promise.resolve(ok({ policy: "important_only", subscription_count: 0 }));
+  });
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Wake Daisy" }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+    `/api/v1/tasks/${task.id}/assignment`,
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ worker_id: worker.id }) }),
+  ));
+});
+
 function hiveIdentity() {
   return { operator: { id: "operator-1", display_name: "Operator" }, hive: { id: "hive-1", name: "My Hive", operator_id: "operator-1", apiary_id: null } };
 }

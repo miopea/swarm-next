@@ -403,7 +403,7 @@ export function App() {
       if (!profile) throw new Error("Choose a configured worker for this task before starting it.");
       const runningWorker = profile.running ? profile : await startWorker(operatorToken, profile.id);
       const sessionId = requireActiveSession(runningWorker);
-      await assignTask(operatorToken, task.id, sessionId);
+      await assignTask(operatorToken, task.id, profile.id);
       await transitionTask(operatorToken, task.id, "active");
       const controlRoom = await loadControlRoom(operatorToken);
       setHiveIdentity(controlRoom.hive);
