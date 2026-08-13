@@ -69,6 +69,7 @@ async function checkSurface(browser, surface) {
     pageErrors.length = 0;
 
     const surfaceResults = [];
+    let workerSelections = [];
     for (const target of [
       { name: "needs-you", nav: /Needs you/, ready: () => page.getByRole("heading", { name: "Needs you" }) },
       { name: "tasks", nav: /Tasks/, ready: () => page.getByRole("heading", { name: "Task board" }) },
@@ -77,6 +78,9 @@ async function checkSurface(browser, surface) {
     ]) {
       await page.getByRole("button", { name: target.nav }).click();
       await target.ready().first().waitFor();
+      if (target.name === "workers") {
+        workerSelections = await verifyRunningWorkerSelection(page, surface.name);
+      }
       await page.waitForTimeout(250);
       const dimensions = await page.evaluate(() => ({
         scrollWidth: document.documentElement.scrollWidth,
@@ -133,10 +137,34 @@ async function checkSurface(browser, surface) {
     const jiraReadinessVisible = await page.getByText("Jira not connected", { exact: true }).isVisible();
     if (!jiraReadinessVisible) throw new Error(`${surface.name}: Jira readiness is unavailable`);
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }
+}
+
+async function verifyRunningWorkerSelection(page, surfaceName) {
+  const workers = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/workers", { cache: "no-store", credentials: "same-origin" });
+    if (!response.ok) throw new Error(`worker list returned ${response.status}`);
+    return (await response.json()).filter((worker) => worker.running && worker.active_session_id)
+      .map((worker) => ({ name: worker.name, sessionId: worker.active_session_id }));
+  });
+  if (workers.length === 0) throw new Error(`${surfaceName}: no running worker was available`);
+
+  const selected = [];
+  for (const worker of workers) {
+    const button = page.locator(".worker-row .worker-button").filter({ hasText: worker.name }).first();
+    await button.click();
+    await page.getByRole("heading", { name: worker.name, exact: true }).waitFor();
+    await page.locator(".terminal-panel").waitFor();
+    await page.getByText("connected", { exact: true }).waitFor();
+    if (await button.getAttribute("aria-current") !== "page") {
+      throw new Error(`${surfaceName}: ${worker.name} did not become the selected terminal`);
+    }
+    selected.push({ name: worker.name, sessionId: worker.sessionId, connected: true });
+  }
+  return selected;
 }
 
 async function verifyBackupDownload(page) {

@@ -316,3 +316,13 @@ the independently updated terminal host through the API to worker settings:
   authenticated-page errors and verified feedback, Jira readiness, maintenance
   confirmation, and a valid SQLite backup. The API update preserved terminal-
   host PID `400662` and all three active sessions.
+- Releases `0.1.0-74656e51c4dc` and `0.1.0-83b829270bc2` followed with a
+  user-eye polish and recovery pass. Native checkbox/radio controls no longer
+  inherit full-width text-input sizing, and Queen autonomy values remain fully
+  readable in the two-column desktop Settings layout. The first deployed pass
+  exposed client use of reserved WebSocket close codes during canonical
+  recovery; the terminal now uses browser-valid application codes and unit
+  tests pin both failure and fresh-snapshot paths. The strengthened live gate
+  then selected Queen, Swarm Next, and Dogfood Clover in turn at desktop and
+  Android sizes, verified each exact session became selected and connected,
+  and completed every prior surface check without console or runtime errors.
