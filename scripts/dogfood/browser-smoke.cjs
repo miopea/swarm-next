@@ -81,6 +81,7 @@ async function checkSurface(browser, surface) {
 
     const surfaceResults = [];
     let workerSelections = [];
+    let completedTaskCount = 0;
     for (const target of [
       { name: "needs-you", nav: /Needs you/, ready: () => page.getByRole("heading", { name: "Needs you" }) },
       { name: "tasks", nav: /Tasks/, ready: () => page.getByRole("heading", { name: "Task board" }) },
@@ -95,6 +96,22 @@ async function checkSurface(browser, surface) {
         if (!surface.mobile && !taskTitleVisible) throw new Error(`${surface.name}: desktop task composer is unexpectedly collapsed`);
         if (surface.mobile) {
           await page.getByRole("heading", { name: "Active work" }).waitFor();
+        }
+        const completedTasks = page.locator("details.completed-tasks");
+        if (await completedTasks.count()) {
+          await completedTasks.locator("summary").click();
+          completedTaskCount = await completedTasks.locator(".task-card").count();
+          const overflowingCompletedCards = await completedTasks.locator(".task-card").evaluateAll((cards) => cards.filter((card) => card.scrollWidth > card.clientWidth + 1).length);
+          const overlappingCompletedCopy = await completedTasks.locator(".task-card").evaluateAll((cards) => cards.filter((card) => {
+            const title = card.querySelector("h4");
+            const description = card.querySelector(".task-description");
+            return title && description && description.getBoundingClientRect().top < title.getBoundingClientRect().bottom + 2;
+          }).length);
+          if (completedTaskCount === 0 || overflowingCompletedCards > 0 || overlappingCompletedCopy > 0) {
+            throw new Error(`${surface.name}: completed work is not a usable task history`);
+          }
+          await page.screenshot({ path: path.join(outputRoot, `${surface.name}-tasks-completed.png`), fullPage: true });
+          await completedTasks.locator("summary").click();
         }
       }
       if (target.name === "workers") {
@@ -255,7 +272,7 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: /Settings/ }).click();
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }

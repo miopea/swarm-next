@@ -275,6 +275,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .completed-tasks summary small { display: grid; min-width: 22px; height: 21px; place-items: center; border-radius: 7px; color: var(--muted); background: var(--panel-soft); font-size: .69rem; }
 .task-grid.compact .task-card { min-height: 118px; box-shadow: none; }
 .task-grid.compact .task-card h4 { margin: 15px 0 0; }
+.task-grid.compact .task-description { margin: 6px 0 14px; }
 .task-owner { max-width: 52%; color: var(--muted); font-size: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .decision-inbox { min-height: 0; padding: 26px; overflow-y: auto; }
