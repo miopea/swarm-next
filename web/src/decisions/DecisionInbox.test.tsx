@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import type { DecisionRequest, Task, Worker } from "../api";
@@ -97,4 +97,25 @@ test("returns the selected action with the operator note", () => {
     "durable_path",
     "Use the migration-safe option",
   );
+});
+
+test("reveals and focuses a resolved decision selected through global navigation", async () => {
+  const scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView = scrollIntoView;
+  render(
+    <DecisionInbox
+      decisions={[resolved]}
+      tasks={[task]}
+      workers={[worker]}
+      busy={false}
+      focusDecisionId={resolved.id}
+      focusRequest={1}
+      onResolve={vi.fn()}
+    />,
+  );
+
+  const card = await screen.findByRole("article", { name: "" });
+  await waitFor(() => expect(card).toHaveFocus());
+  expect(screen.getByRole("checkbox", { name: "Show resolved" })).toBeChecked();
+  expect(scrollIntoView).toHaveBeenCalled();
 });

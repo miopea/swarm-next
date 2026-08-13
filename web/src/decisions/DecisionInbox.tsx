@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { DecisionRequest, Task, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -16,16 +16,29 @@ type Props = {
   tasks: Task[];
   workers: Worker[];
   busy: boolean;
+  focusDecisionId?: string;
+  focusRequest?: number;
   onResolve: (decision: DecisionRequest, action: string, note: string) => Promise<void>;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, onResolve }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, onResolve }: Props) {
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const taskNames = useMemo(() => new Map(tasks.map((task) => [task.id, task.title])), [tasks]);
   const workerNames = useMemo(() => new Map(workers.map((worker) => [worker.id, worker.name])), [workers]);
   const visible = decisions.filter((decision) => showResolved || decision.state === "pending");
   const pending = decisions.filter((decision) => decision.state === "pending").length;
+
+  useEffect(() => {
+    if (!focusDecisionId) return;
+    if (decisions.some((decision) => decision.id === focusDecisionId && decision.state === "resolved")) setShowResolved(true);
+    const frame = requestAnimationFrame(() => {
+      const card = document.querySelector<HTMLElement>(`[data-decision-id="${CSS.escape(focusDecisionId)}"]`);
+      card?.scrollIntoView({ behavior: "smooth", block: "center" });
+      card?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [decisions, focusDecisionId, focusRequest]);
 
   return (
     <section className="decision-inbox" aria-labelledby="decision-inbox-heading">
@@ -54,7 +67,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, onResol
             const requester = workerNames.get(decision.requesting_worker_id) ?? "Worker";
             const note = notes[decision.id] ?? "";
             return (
-              <article className={`decision-card urgency-${decision.urgency} state-${decision.state}`} key={decision.id}>
+              <article className={`decision-card urgency-${decision.urgency} state-${decision.state}`} data-decision-id={decision.id} key={decision.id} tabIndex={-1}>
                 <header>
                   <div className="decision-requester">
                     <span className="decision-bee"><BeeMascot expression={decision.urgency === "time_sensitive" ? "blocked" : "focused"} /></span>

@@ -93,6 +93,7 @@ export function App() {
   const [showCommands, setShowCommands] = useState(false);
   const [surface, setSurface] = useState<Surface>(readSavedSurface);
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
+  const [decisionFocus, setDecisionFocus] = useState<{ id: string; request: number }>();
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
@@ -671,12 +672,15 @@ export function App() {
         setSurface("tasks");
       },
     })),
-    ...decisions.filter((decision) => decision.state === "pending").map((decision) => ({
+    ...decisions.map((decision) => ({
       id: `decision-${decision.id}`,
       label: decision.title,
       detail: decision.reason,
       group: "Attention" as const,
-      run: () => setSurface("decisions"),
+      run: () => {
+        setDecisionFocus((current) => ({ id: decision.id, request: (current?.request ?? 0) + 1 }));
+        setSurface("decisions");
+      },
     })),
   ], [openTaskCount, pendingDecisionCount, workers, tasks, decisions, activeSessionId, operatorToken]);
 
@@ -810,7 +814,7 @@ export function App() {
             <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
           </form>
         ) : surface === "decisions" ? (
-          <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} onResolve={resolveInboxDecision} />
+          <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
           <TaskBoard tasks={tasks} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
