@@ -298,8 +298,31 @@ async function checkSurface(browser, surface) {
       path: path.join(outputRoot, `${surface.name}-settings-diagnostics.png`),
       fullPage: true,
     });
-    const jiraReadinessVisible = await page.getByText("Jira not connected", { exact: true }).isVisible();
-    if (!jiraReadinessVisible) throw new Error(`${surface.name}: Jira readiness is unavailable`);
+    const jiraRegion = page.getByRole("region", { name: "Bring Jira into your Hive" });
+    await jiraRegion.waitFor();
+    const jiraReadiness = await jiraRegion.locator(".integration-status").innerText();
+    if (!/Jira (?:not connected|connected|credentials need attention|access was denied|is temporarily unavailable)/i.test(jiraReadiness)
+      && !/Connected as /i.test(jiraReadiness)) {
+      throw new Error(`${surface.name}: Jira readiness is unavailable`);
+    }
+    const jiraReview = jiraRegion.getByRole("button", { name: "Review issues" }).first();
+    let jiraIssueReview = false;
+    if (await jiraReview.isVisible().catch(() => false)) {
+      await jiraReview.click();
+      const intake = jiraRegion.getByRole("region", { name: /Review .* issues/ });
+      await intake.waitFor();
+      const issueCount = await intake.getByRole("checkbox").count();
+      const intakeBounds = await intake.evaluate((element) => ({
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+      }));
+      if (issueCount === 0 || intakeBounds.scrollWidth > intakeBounds.clientWidth + 1) {
+        throw new Error(`${surface.name}: Jira issue review is empty or horizontally clipped`);
+      }
+      await page.screenshot({ path: path.join(outputRoot, `${surface.name}-settings-jira-intake.png`), fullPage: true });
+      await intake.getByRole("button", { name: "Close" }).click();
+      jiraIssueReview = true;
+    }
     const restoreGuide = page.getByText("How to restore this backup", { exact: true });
     await restoreGuide.click();
     const restoreCommandVisible = await page.getByText(/swarm-next-package restore/).isVisible();
@@ -345,7 +368,7 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
     accessibleControlCount += await verifyAccessibleControls(page, `${surface.name}/settings-detail`);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, backup, status: "passed" };
   } finally {
     await context.close();
   }
