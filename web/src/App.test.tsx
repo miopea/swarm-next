@@ -190,6 +190,33 @@ test("restores the last selected live worker after reload", async () => {
   expect(screen.getByRole("button", { name: /^Daisy/ })).toHaveAttribute("aria-current", "page");
 });
 
+test("removes completed assignments from the live worker roster", async () => {
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  const workerSession = "019fedfc-1c30-70e1-a5e2-9a3c94268083";
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(ok({}))
+    .mockResolvedValueOnce(ok(hiveIdentity()))
+    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [{ session_id: workerSession, running: true }] }))
+    .mockResolvedValueOnce(ok([{
+      id: "daisy", hive_id: "hive-1", name: "Daisy", role: "worker", provider: "claude_code", workspace: "/daisy",
+      autostart: false, position: 1, active_session_id: workerSession, running: true, attention_state: "buzzing", created_at: 1, updated_at: 1,
+    }]))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([{
+      id: "task-1", title: "Already shipped", workspace: "/daisy", state: "completed", assigned_session_id: workerSession,
+      created_at: 1, updated_at: 2,
+    }]))
+    .mockResolvedValueOnce(ok([]));
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+
+  expect(await screen.findByRole("button", { name: /^Daisy/ })).toHaveTextContent("Unassigned session");
+  expect(screen.queryByText("Already shipped")).not.toBeInTheDocument();
+});
+
 test("switching workers releases only the previously selected engagement", async () => {
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   const queenSession = "019fedfc-1c30-70e1-a5e2-9a3c94268091";

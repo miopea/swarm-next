@@ -511,7 +511,11 @@ export function App() {
     [sessions, workers],
   );
   const tasksBySession = useMemo(
-    () => new Map(tasks.filter((task) => task.assigned_session_id).map((task) => [task.assigned_session_id, task])),
+    () => new Map(
+      tasks
+        .filter((task) => task.assigned_session_id && task.state !== "completed")
+        .map((task) => [task.assigned_session_id, task]),
+    ),
     [tasks],
   );
   const activeTask = activeSession ? tasksBySession.get(activeSession.session_id) : undefined;

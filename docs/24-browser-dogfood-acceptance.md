@@ -196,3 +196,9 @@ worker:
   engagement lease correctly survived on Clover while the UI defaulted to
   Queen. The client now restores the last selected live session so the visible
   terminal and `With you` state remain coherent after reload or PWA reopen.
+- Mobile-sized testing at 412 by 915 preserved a readable terminal, a complete
+  composer and D-pad, and zero document-level horizontal overflow. Selecting a
+  worker focused terminal input immediately, and the mobile composer delivered
+  a slash command without losing its controls. Completed assignments are now
+  removed from the live roster so shipped work cannot masquerade as a worker's
+  current task.
