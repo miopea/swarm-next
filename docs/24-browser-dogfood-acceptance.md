@@ -216,3 +216,9 @@ worker:
   MiB and the host cgroup, including all three Claude processes, between 937.5
   and 938.1 MiB. This bounded sample rules out rapid growth; it does not replace
   the documented 24-hour promotion soak.
+- Dogfood feedback now accepts a screenshot by paste, drop, or file selection,
+  previews it locally, and records only its filename, media type, and byte size
+  in the copied diagnostic text. Image bytes are neither inspected nor
+  uploaded automatically; the operator keeps the image as a separate explicit
+  attachment. Desktop and mobile CSS keep the preview actions inside the
+  bounded feedback dialog.
