@@ -167,8 +167,9 @@ async function recoverAfterGatewayInterruption(page, elapsedSeconds) {
   }
   if (!healthy) throw new Error("gateway interruption did not recover within 15 seconds");
   await page.reload({ waitUntil: "domcontentloaded", timeout: 15_000 });
-  await page.getByRole("heading", { name: "Settings" }).waitFor({ timeout: 15_000 });
-  if (await page.getByLabel("Operator token").isVisible().catch(() => false)) {
+  try {
+    await page.getByRole("button", { name: "Download Hive backup" }).waitFor({ timeout: 20_000 });
+  } catch {
     const cookieAfter = await browserSessionMetadata(page.context());
     const sessionStatus = await page.request.get(`${baseUrl}/api/v1/auth/session`).then((response) => response.status()).catch(() => 0);
     throw new Error(`browser authentication did not survive the gateway interruption: before=${JSON.stringify(cookieBefore)} after=${JSON.stringify(cookieAfter)} session_status=${sessionStatus}`);
