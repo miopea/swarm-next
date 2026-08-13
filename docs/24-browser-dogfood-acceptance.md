@@ -272,3 +272,12 @@ the independently updated terminal host through the API to worker settings:
   terminal rather than accepting its loading fallback, and each surface is
   captured for visual review. The deployed pass rendered all eight views with
   no authenticated-page console or runtime errors.
+- Release `0.1.0-0fa81dbbe144` added an explicit worker-engine maintenance
+  action for the always-active Queen case. Deployment retained host PID
+  `400662` and all three sessions while starting the private systemd path
+  watcher. The deployed desktop and Android gates each opened the second-step
+  confirmation, verified its full copy and controls without horizontal
+  overflow, and selected Not now; neither test stopped a worker. A separate
+  real-PTY integration test performs the destructive half against an isolated
+  old host and proves exact-version replacement, request cleanup, and durable
+  recovery boundaries.
