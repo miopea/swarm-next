@@ -357,3 +357,13 @@ the independently updated terminal host through the API to worker settings:
   terminal-host cgroup under PID `400662`, including all three Claude workers,
   between 1.19 and 1.21 GiB. All three sessions stayed live, retained history
   advanced only with terminal activity, and dropped history remained zero.
+- Release `0.1.0-366849aa1202` completed the next mobile and Settings polish
+  pass. Settings now exposes a visible 50-pixel section navigator with selected
+  state, and mobile terminals offer a first-class image picker beside their
+  optional key controls. Images use the existing private bounded attachment
+  path and remain unsubmitted until the operator presses Enter. The deployed
+  gate verified every primary surface and all three workers, the mobile picker,
+  Settings selection and jump behavior, authenticated reopen, maintenance,
+  feedback, Jira readiness, and backup with no browser errors or horizontal
+  page/card overflow. Deployment preserved terminal-host PID `400662`, all
+  three running sessions, and all five retained sessions.
