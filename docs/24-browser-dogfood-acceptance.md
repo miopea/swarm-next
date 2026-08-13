@@ -384,3 +384,14 @@ the independently updated terminal host through the API to worker settings:
   authenticated-page console or runtime error occurred. The API-only update
   replaced PID `969807` with `980976` while preserving terminal-host PID
   `400662`, the same three running session IDs, and all five retained sessions.
+- A 30-minute owned-process browser soak then exercised Workers, Tasks, and
+  Settings every minute against that unchanged deployed release. Sixty samples
+  pinned Edge browser PID `42888`: browser private memory stayed between 61.8
+  and 64.5 MiB and ended 0.8 MiB lower; its storage process stayed between 10.3
+  and 10.4 MiB with zero growth; and the complete owned browser tree stayed
+  between 323.9 and 343.1 MiB, ending 15.5 MiB higher with a 0.5 MiB/minute
+  fitted slope. Renderer JavaScript stayed between 5.3 and 6.2 MiB, ending only
+  0.2 MiB higher. DOM nodes remained exactly `440`, browser storage usage
+  remained zero, and no page error was recorded. This directly covers the
+  browser and storage processes implicated in the legacy incident; it is a
+  bounded active sample, not a substitute for the Ring 2 multi-day soak.
