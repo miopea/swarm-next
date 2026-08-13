@@ -72,6 +72,11 @@ async function checkSurface(browser, surface) {
     await page.getByRole("heading", { name: "Your familiar crew" }).waitFor();
     const provider = page.getByLabel("Coding provider");
     const codexDisabled = await provider.locator('option[value="codex"]').isDisabled();
+    await page.getByText(/^(Current|Update waiting) ·/).waitFor();
+    const workerEngineText = await page.getByText("Worker engine", { exact: true }).locator("..").innerText();
+    if (!/Current|Update waiting/.test(workerEngineText)) {
+      throw new Error(`${surface.name}: worker-engine maintenance state is unclear`);
+    }
     const dimensions = await page.evaluate(() => ({
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
@@ -86,7 +91,7 @@ async function checkSurface(browser, surface) {
       path: path.join(outputRoot, `${surface.name}-settings.png`),
       fullPage: true,
     });
-    return { surface: surface.name, ...dimensions, codexDisabled, status: "passed" };
+    return { surface: surface.name, ...dimensions, codexDisabled, workerEngineText, status: "passed" };
   } finally {
     await context.close();
   }

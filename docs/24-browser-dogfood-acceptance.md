@@ -254,3 +254,9 @@ the independently updated terminal host through the API to worker settings:
   The deployed browser gate passed both profiles with real desktop and Android
   user agents, durable authentication, no overflow, and no authenticated-page
   browser errors while preserving terminal-host PID `400662`.
+- Release `0.1.0-ce34b21f093b` embeds its exact package release in API health
+  and terminal-host status. The Settings runtime card now translates a safe
+  version mismatch into `Update waiting · 3 active` instead of exposing
+  release mechanics or implying the update failed. The packaged-runtime test
+  proves both binaries match the bundle version, and the deployed desktop and
+  Android browser gate asserts the maintenance state is present and readable.
