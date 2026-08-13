@@ -128,8 +128,10 @@ async function checkSurface(browser, surface) {
     const privateSaveVisible = await page.getByRole("button", { name: "Save to this Hive" }).isVisible();
     if (!privateSaveVisible) throw new Error(`${surface.name}: private feedback save is unavailable`);
     await page.getByRole("button", { name: "Close" }).click();
+    const savedFeedbackVisible = await page.getByRole("heading", { name: "Saved dogfood reports" }).isVisible();
+    if (!savedFeedbackVisible) throw new Error(`${surface.name}: saved feedback queue is unavailable`);
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }

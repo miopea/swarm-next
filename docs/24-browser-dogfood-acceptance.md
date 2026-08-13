@@ -289,3 +289,9 @@ the independently updated terminal host through the API to worker settings:
   the backup retained a valid SQLite signature, no authenticated-page browser
   errors occurred, and terminal-host PID `400662` plus all three live sessions
   were preserved.
+- Release `0.1.0-f571c6688566` closed the private feedback loop in the UI:
+  Settings lists the newest saved reports as compact, collapsed summaries and
+  lets an operator copy the reviewed diagnostic bundle for a developer without
+  exposing it by default. The deployed desktop and Android gates verified that
+  the queue is visible without overflow or browser errors. The API update again
+  preserved terminal-host PID `400662` and all three active sessions.
