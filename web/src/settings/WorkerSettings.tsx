@@ -74,7 +74,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
   }
 
   return (
-    <section className="settings-card worker-settings" aria-labelledby="worker-settings-heading">
+    <section id="settings-crew" className="settings-card worker-settings" aria-labelledby="worker-settings-heading">
       <div><p className="eyebrow">Worker roster</p><h3 id="worker-settings-heading">Your familiar crew</h3></div>
       <p>Workers remember their repository and provider conversation across stops, updates, and reboots. Reorder them to match how you work.</p>
       <div className="configured-workers">

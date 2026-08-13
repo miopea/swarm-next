@@ -72,8 +72,22 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   }
   return (
     <div className="settings-workspace">
+      <nav className="settings-section-nav" aria-label="Settings sections">
+        {([
+          ["settings-crew", "Crew"],
+          ["settings-presence", "Presence"],
+          ["settings-queen", "Queen"],
+          ["settings-appearance", "Appearance"],
+          ["settings-runtime", "System"],
+          ["settings-integrations", "Integrations"],
+          ["settings-backup", "Backup"],
+          ["settings-diagnostics", "Diagnostics"],
+        ] as const).map(([id, label]) => (
+          <button key={id} type="button" aria-controls={id} onClick={() => document.getElementById(id)?.scrollIntoView?.({ behavior: "smooth", block: "start" })}>{label}</button>
+        ))}
+      </nav>
       <WorkerSettings workers={workers} workspaces={workspaces} busy={busy} providers={providers} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onReorder={onReorderWorkers} />
-      <section className="settings-card presence-settings" aria-labelledby="presence-heading">
+      <section id="settings-presence" className="settings-card presence-settings" aria-labelledby="presence-heading">
         <div><p className="eyebrow">Presence</p><h3 id="presence-heading">Let attention follow you</h3></div>
         <p>Automatic presence uses this device's activity, visibility, and expiry. A manual mode stays in effect until you return to Automatic.</p>
         <label htmlFor="presence-mode"><span>Presence policy</span>
@@ -100,7 +114,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         </div>}
         {mobile && <p className="mobile-presence-note">Your workstation reports when it is locked. This phone follows that presence and carries notifications when you are away.</p>}
       </section>
-      <section className="settings-card queen-policy-settings" aria-labelledby="queen-policy-heading">
+      <section id="settings-queen" className="settings-card queen-policy-settings" aria-labelledby="queen-policy-heading">
         <div><p className="eyebrow">Queen autonomy</p><h3 id="queen-policy-heading">Choose how far she may carry work</h3></div>
         <p>Presence changes the ceiling for unattended work. These deterministic limits never expand from model confidence.</p>
         <div className="queen-policy-grid">
@@ -171,7 +185,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         </div>
         <small className="privacy-note">Notification text never includes repository names, task titles, evidence, credentials, or terminal output.</small>
       </section>
-      <section className="settings-card" aria-labelledby="appearance-heading">
+      <section id="settings-appearance" className="settings-card" aria-labelledby="appearance-heading">
         <div><p className="eyebrow">Appearance</p><h3 id="appearance-heading">Comfortable in long sessions</h3></div>
         <p>Both themes use the same soft natural palette and high-legibility type system. This choice follows your {mobile ? "mobile" : "desktop"} profile and is included in Hive backups.</p>
         <div className="theme-choice" role="group" aria-label="Color theme">
@@ -190,7 +204,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         </dl>
       </section>
 
-      <section className="settings-card" aria-labelledby="runtime-heading">
+      <section id="settings-runtime" className="settings-card" aria-labelledby="runtime-heading">
         <div><p className="eyebrow">Runtime</p><h3 id="runtime-heading">Local system</h3></div>
         <dl className="diagnostic-list">
           <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
@@ -219,7 +233,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         ) : null}
       </section>
 
-      <section className="settings-card integration-settings" aria-labelledby="integration-heading">
+      <section id="settings-integrations" className="settings-card integration-settings" aria-labelledby="integration-heading">
         <div><p className="eyebrow">Integrations</p><h3 id="integration-heading">Bring Jira in without making it a bottleneck</h3></div>
         <p>Your Hive stays useful on its own. Jira connections use this operator's identity; credentials and permissions never come from Queen or another Hive.</p>
         <div className="integration-status" role="status">
@@ -234,7 +248,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         <small className="privacy-note">Connection setup appears here when the Jira credential adapter is enabled. Swarm stores readiness and mappings, not browser passwords.</small>
       </section>
 
-      <section className="settings-card" aria-labelledby="backup-heading">
+      <section id="settings-backup" className="settings-card" aria-labelledby="backup-heading">
         <div><p className="eyebrow">Backup</p><h3 id="backup-heading">Carry your Hive safely</h3></div>
         <p>Download a consistent snapshot of workers, tasks, conversations, policies, and Hive identity. Repository contents are intentionally excluded.</p>
         <div className="settings-actions">

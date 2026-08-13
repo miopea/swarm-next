@@ -85,6 +85,11 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
     />,
   );
 
+  const settingsNavigation = screen.getByRole("navigation", { name: "Settings sections" });
+  expect(settingsNavigation).toHaveTextContent("CrewPresenceQueenAppearanceSystemIntegrationsBackupDiagnostics");
+  expect(screen.getByRole("button", { name: "Diagnostics" })).toHaveAttribute("aria-controls", "settings-diagnostics");
+  fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
+
   expect(screen.getAllByRole("status")[0]).toHaveTextContent("AwayComputer lock detected");
   fireEvent.change(screen.getByLabelText("Presence policy"), { target: { value: "night_watch" } });
   expect(onPresenceChange).toHaveBeenCalledWith("night_watch");

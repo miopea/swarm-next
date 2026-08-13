@@ -122,7 +122,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   }
 
   return (
-    <section className="settings-card diagnostics-card" aria-labelledby="diagnostics-heading">
+    <section id="settings-diagnostics" className="settings-card diagnostics-card" aria-labelledby="diagnostics-heading">
       <div><p className="eyebrow">Diagnostics</p><h3 id="diagnostics-heading">Know which layer needs attention</h3></div>
       <p>The report is previewed before copying and never includes terminal text, task content, workspace paths, credentials, or raw errors.</p>
       <dl className="diagnostic-list">
