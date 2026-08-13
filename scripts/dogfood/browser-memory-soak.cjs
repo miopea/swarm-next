@@ -194,8 +194,16 @@ async function exerciseReadOnlySurface(page) {
   for (const surface of [/Workers/, /Tasks/, /Settings/]) {
     await page.getByRole("button", { name: surface }).click();
     if (surface.source === "Workers") {
-      await page.locator(".terminal-panel").waitFor();
-      await page.getByText("connected", { exact: true }).waitFor();
+      const panel = page.locator(".terminal-panel");
+      await panel.waitFor();
+      try {
+        await panel.getByText("connected", { exact: true }).waitFor();
+      } catch {
+        const state = (await panel.locator(".connection-state").textContent().catch(() => null))?.trim() || "missing";
+        const detail = (await panel.locator(".terminal-toolbar small").first().textContent().catch(() => null))?.trim() || "none";
+        const sessionId = (await panel.locator(".terminal-toolbar strong").textContent().catch(() => null))?.trim() || "missing";
+        throw new Error(`terminal did not reconnect during navigation: session=${sessionId} state=${state} detail=${detail}`);
+      }
     }
     if (surface.source === "Tasks") await page.getByRole("heading", { name: "Task board" }).waitFor();
     if (surface.source === "Settings") await page.getByRole("heading", { name: "Settings" }).waitFor();

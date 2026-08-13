@@ -48,7 +48,9 @@ const GRANT_PROTOCOL_PREFIX = "swarm-grant.";
 const OUTPUT_FRAME_TYPE = 1;
 const SNAPSHOT_FRAME_TYPE = 2;
 const MAX_PENDING_RENDER_BYTES = 3 * 1024 * 1024;
-const DEFAULT_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
+// Match the bounded application bootstrap recovery window so an API-only
+// rolling update cannot leave an already-open terminal permanently detached.
+const DEFAULT_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000, 8_000] as const;
 const DEFAULT_CONFIRMATION_TIMEOUT_MS = 3_000;
 // Browsers may send only 1000 or application-owned 3000-4999 close codes.
 const CLOSE_PROTOCOL_FAILURE = 4008;

@@ -70,6 +70,7 @@ function harness(
   retryDelaysMs: readonly number[] = [1],
   confirmationTimeoutMs = 3_000,
   operatorToken = "secret",
+  useDefaultRetries = false,
 ) {
   const sockets: FakeWebSocket[] = [];
   const fetch = vi.fn().mockResolvedValue({
@@ -92,7 +93,7 @@ function harness(
     operatorToken,
     fetch,
     locationOrigin: "http://127.0.0.1:5173",
-    retryDelaysMs,
+    ...(useDefaultRetries ? {} : { retryDelaysMs }),
     confirmationTimeoutMs,
     deviceId: "019fedfc-1c30-70e1-a5e2-9a3c94268093",
     websocketFactory: (_url, protocols) => {
@@ -291,6 +292,27 @@ test("an unconfirmed socket is abandoned inside the bounded retry budget", async
   await vi.advanceTimersByTimeAsync(1);
   await vi.advanceTimersByTimeAsync(0);
   expect(sockets).toHaveLength(2);
+});
+
+test("the default reconnect budget spans a bounded rolling API handoff", async () => {
+  vi.useFakeTimers();
+  const { connection, fetch, handlers } = harness([], 3_000, "secret", true);
+  fetch.mockResolvedValue({ ok: false } as Response);
+  connection.start(handlers);
+
+  await vi.advanceTimersByTimeAsync(8_000);
+  expect(fetch.mock.calls.length).toBeGreaterThanOrEqual(7);
+  expect(handlers.onState).not.toHaveBeenCalledWith(
+    "error",
+    expect.stringContaining("reconnect limit reached"),
+  );
+
+  await vi.advanceTimersByTimeAsync(8_000);
+  expect(fetch).toHaveBeenCalledTimes(8);
+  expect(handlers.onState).toHaveBeenCalledWith(
+    "error",
+    expect.stringContaining("reconnect limit reached"),
+  );
 });
 
 test("protocol failures use a browser-valid application close code", async () => {
