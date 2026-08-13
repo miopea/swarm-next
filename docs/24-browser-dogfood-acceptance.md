@@ -486,3 +486,11 @@ the independently updated terminal host through the API to worker settings:
   passed. The server retained all three sessions with zero dropped terminal
   history, API RSS between 6.6 and 7.4 MiB, and terminal-host cgroup memory
   within a 1 MiB band.
+- The next Jira slice adds key/title/status/assignee filtering to large issue
+  reviews and verifies in the live desktop and Android-sized browser that no
+  ticket begins selected. Linked task transitions now commit a durable bounded
+  Jira outbox record atomically with local state, survive network failure and
+  API interruption, preserve pending local state against stale remote reads,
+  and expose Updating, needs-attention, and explicit Retry states on the task
+  card. Full workspace tests, strict clippy, all frontend tests, and the
+  production build gate this slice before deployment.

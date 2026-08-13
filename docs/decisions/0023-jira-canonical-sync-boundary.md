@@ -37,9 +37,10 @@ Jira is an adapter-private integration behind typed application commands.
   stores the last observed values and maps workflow state through the confirmed
   project mapping. Swarm-owned worker assignment, execution evidence, local
   notes, and terminal history are never overwritten by an import.
-- Reads and writes are separate capabilities. The first vertical slice performs
-  discovery, binding, mapping, and bounded read-only intake. Jira mutations use
-  a later durable outbox with bounded attempts and explicit conflict state.
+- Reads and writes are separate capabilities. Discovery, binding, mapping, and
+  bounded intake remain read paths. Jira mutations use a durable outbox with
+  bounded claims and attempts, crash-uncertain recovery, explicit conflict
+  state, and an operator retry action.
 - Temporary network failure preserves already imported and owned work. It never
   authorizes a new Apiary claim. Invalid credentials, denied access, incomplete
   mappings, and network loss remain distinct typed readiness states.
@@ -52,8 +53,8 @@ Jira is an adapter-private integration behind typed application commands.
 The operator can use Jira work from the normal task and Queen workflows without
 making the browser or Keeper a synchronization bottleneck. Duplicate imports,
 silent status guesses, and credential leakage fail closed. Write synchronization
-requires an additional outbox and conflict-resolution slice rather than being
-smuggled into read-only intake.
+cannot be smuggled into read-only intake or made dependent on an HTTP request
+lifetime.
 
 ## Validation
 
