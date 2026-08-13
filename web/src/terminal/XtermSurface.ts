@@ -54,9 +54,10 @@ export class XtermSurface implements TerminalSurface {
         await nextAnimationFrame();
         if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
         const dimensions = this.#fit.proposeDimensions();
-        if (!dimensions || dimensions.rows < MIN_TERMINAL_ROWS || dimensions.cols < MIN_TERMINAL_COLUMNS) continue;
-        this.#terminal.resize(dimensions.cols, dimensions.rows);
-        return { rows: dimensions.rows, columns: dimensions.cols };
+        const usable = usableDimensions(dimensions);
+        if (!usable) continue;
+        this.#terminal.resize(usable.columns, usable.rows);
+        return usable;
       }
       throw new Error("Terminal renderer metrics were not ready within the bounded fit window");
     } finally {
@@ -126,10 +127,19 @@ export class XtermSurface implements TerminalSurface {
   #fitIfUsable(): void {
     if (this.#disposed || !this.#element?.isConnected) return;
     const dimensions = this.#fit.proposeDimensions();
-    if (!dimensions || dimensions.rows < MIN_TERMINAL_ROWS || dimensions.cols < MIN_TERMINAL_COLUMNS) return;
-    if (dimensions.rows === this.#terminal.rows && dimensions.cols === this.#terminal.cols) return;
-    this.#terminal.resize(dimensions.cols, dimensions.rows);
+    const usable = usableDimensions(dimensions);
+    if (!usable) return;
+    if (usable.rows === this.#terminal.rows && usable.columns === this.#terminal.cols) return;
+    this.#terminal.resize(usable.columns, usable.rows);
   }
+}
+
+function usableDimensions(dimensions: { rows: number; cols: number } | undefined): { rows: number; columns: number } | undefined {
+  if (!dimensions || !Number.isFinite(dimensions.rows) || !Number.isFinite(dimensions.cols)) return undefined;
+  const rows = Math.floor(dimensions.rows);
+  const columns = Math.floor(dimensions.cols);
+  if (!Number.isSafeInteger(rows) || !Number.isSafeInteger(columns) || rows < MIN_TERMINAL_ROWS || columns < MIN_TERMINAL_COLUMNS) return undefined;
+  return { rows, columns };
 }
 
 function nextAnimationFrame(): Promise<void> {

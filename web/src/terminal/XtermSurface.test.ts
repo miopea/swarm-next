@@ -147,6 +147,38 @@ test("authoritative fit waits until xterm can propose real dimensions", async ()
   expect(xterm.terminal).toMatchObject({ rows: 38, cols: 132 });
 });
 
+test("authoritative fit rejects non-finite geometry and normalizes fractional measurements", async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  xterm.propose
+    .mockReset()
+    .mockReturnValueOnce({ rows: Number.NaN, cols: Number.POSITIVE_INFINITY })
+    .mockReturnValue({ rows: 38.9, cols: 132.7 });
+  const surface = new XtermSurface();
+  surface.open(document.createElement("div"));
+
+  const fitting = surface.fit();
+  await Promise.resolve();
+  frames.shift()?.(0);
+  await Promise.resolve();
+  expect(xterm.terminal).toMatchObject({ rows: 24, cols: 80 });
+
+  frames.shift()?.(16);
+  await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
+  expect(xterm.terminal).toMatchObject({ rows: 38, cols: 132 });
+  surface.dispose();
+});
+
 test("hidden or collapsing layouts cannot resize the canonical terminal", () => {
   let observed: (() => void) | undefined;
   vi.stubGlobal(
