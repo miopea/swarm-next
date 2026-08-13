@@ -151,9 +151,10 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
       <section className="settings-card shortcuts-card" aria-labelledby="shortcuts-heading">
         <div><p className="eyebrow">Keyboard</p><h3 id="shortcuts-heading">Move without losing focus</h3></div>
         <dl className="shortcut-list">
-          <div><dt>Tasks</dt><dd><kbd>Alt</kbd><kbd>1</kbd></dd></div>
-          <div><dt>Workers</dt><dd><kbd>Alt</kbd><kbd>2</kbd></dd></div>
-          <div><dt>Settings</dt><dd><kbd>Alt</kbd><kbd>3</kbd></dd></div>
+          <div><dt>Needs you</dt><dd><kbd>Alt</kbd><kbd>1</kbd></dd></div>
+          <div><dt>Tasks</dt><dd><kbd>Alt</kbd><kbd>2</kbd></dd></div>
+          <div><dt>Workers</dt><dd><kbd>Alt</kbd><kbd>3</kbd></dd></div>
+          <div><dt>Settings</dt><dd><kbd>Alt</kbd><kbd>4</kbd></dd></div>
           <div><dt>Previous / next worker</dt><dd><kbd>Alt</kbd><kbd>↑</kbd> / <kbd>Alt</kbd><kbd>↓</kbd></dd></div>
         </dl>
         <p>Shortcuts pause while you type in a terminal, field, or menu.</p>

@@ -168,3 +168,26 @@ unsubmitted at Queen's prompt.
   that same assignment once; the worker moved Ready to Active to Review; Queen
   received the guarded outcome and approved Completed. A subsequent API restart
   preserved the completed task, both worker session IDs, and terminal-host PID.
+
+## Device-owned engagement and complete live handoff (2026-08-13)
+
+Release `0.1.0-0927bbfb5f32` was exercised through the authenticated production
+browser against an isolated Git repository and a newly configured durable
+worker:
+
+- Creating and starting `Dogfood Clover` opened the expected provider trust
+  flow, then retained the worker as a named repository-owned profile.
+- A high-priority draft selected the worker by name, moved through Ready and
+  Active, and remained queued while the operator was engaged.
+- Selecting Queen immediately removed `With you` from Clover without claiming
+  Queen. The queued briefing then appeared once at Clover's prompt.
+- Clover verified the authoritative assignment, performed the requested
+  read-only inspection, moved the task to Review with a concise handoff, and
+  Queen received that outcome once after the operator switched away.
+- The rendered task card exposed `Worker briefed` and `Queen notified` before
+  the operator completed the task. No manual Refresh was needed.
+- Claude's first use of each scoped Swarm MCP command still requires the
+  provider's own repository permission confirmation. This is intentional under
+  ADR 0003; Swarm does not silently override provider permissions.
+- The same pass found and corrected stale Settings shortcut labels so the
+  displayed Alt+1 through Alt+4 mapping matches the running application.

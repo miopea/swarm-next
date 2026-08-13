@@ -79,6 +79,10 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(terminalHost.parentElement).toHaveTextContent("Terminal hostHealthy · 0.1.0");
   expect((await screen.findByText("API memory")).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
   expect(screen.getByText("Terminal memory").parentElement).toHaveTextContent("Terminal memoryNormal · 9.0 MiB");
+  expect(screen.getByText("Needs you").parentElement).toHaveTextContent("Needs youAlt1");
+  expect(screen.getByText("Tasks").parentElement).toHaveTextContent("TasksAlt2");
+  expect(screen.getByText("Workers").parentElement).toHaveTextContent("WorkersAlt3");
+  expect(screen.getByText("Settings").parentElement).toHaveTextContent("SettingsAlt4");
 
   fireEvent.click(screen.getByRole("button", { name: "Preview report" }));
   const preview = screen.getByLabelText("Sanitized diagnostic report");
