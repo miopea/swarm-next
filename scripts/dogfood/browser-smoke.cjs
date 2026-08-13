@@ -300,6 +300,11 @@ async function checkSurface(browser, surface) {
     });
     const jiraRegion = page.getByRole("region", { name: "Bring Jira into your Hive" });
     await jiraRegion.waitFor();
+    await page.waitForFunction(() => {
+      const status = document.querySelector("#settings-integrations .integration-status")?.textContent || "";
+      return /Jira (?:not connected|connected|credentials need attention|access was denied|is temporarily unavailable)/i.test(status)
+        || /Connected as /i.test(status);
+    }, undefined, { timeout: 15_000 });
     const jiraReadiness = await jiraRegion.locator(".integration-status").innerText();
     if (!/Jira (?:not connected|connected|credentials need attention|access was denied|is temporarily unavailable)/i.test(jiraReadiness)
       && !/Connected as /i.test(jiraReadiness)) {
