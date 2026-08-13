@@ -92,7 +92,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
             aria-current={activeSettingsSection === id ? "location" : undefined}
             onClick={() => {
               setActiveSettingsSection(id);
-              document.getElementById(id)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+              document.getElementById(id)?.scrollIntoView?.({ behavior: "auto", block: "start" });
             }}
           >{label}</button>
         ))}
