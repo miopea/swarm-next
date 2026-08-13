@@ -80,3 +80,27 @@ test("mobile devices never request desktop lock-detection permission", async () 
   await expect(controller.enableLockDetection()).resolves.toBe(false);
   controller.stop();
 });
+
+test("granted desktop lock detection becomes enabled and reports locked presence", async () => {
+  class FakeIdleDetector extends EventTarget {
+    static requestPermission = vi.fn().mockResolvedValue("granted");
+    screenState: "locked" | "unlocked" = "locked";
+    userState: "active" | "idle" = "active";
+    start = vi.fn().mockResolvedValue(undefined);
+  }
+  vi.stubGlobal("IdleDetector", FakeIdleDetector);
+  const observe = vi.fn().mockResolvedValue({ mode: "away", manual_mode: null, source: "screen_locked" });
+  const states: string[] = [];
+  const controller = new PresenceController(observe);
+  controller.start("secret", vi.fn(), (state) => states.push(state));
+  await vi.runAllTicks();
+
+  await expect(controller.enableLockDetection()).resolves.toBe(true);
+  await vi.runAllTicks();
+
+  expect(FakeIdleDetector.requestPermission).toHaveBeenCalledOnce();
+  expect(states).toContain("enabling");
+  expect(states.at(-1)).toBe("enabled");
+  expect(observe.mock.calls.some((call) => call[3] === "locked")).toBe(true);
+  controller.stop();
+});

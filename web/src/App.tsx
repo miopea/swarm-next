@@ -230,20 +230,14 @@ export function App() {
   }
 
   async function enableLockDetection() {
-    await perform(async () => {
-      const enabled = await presenceController.enableLockDetection();
-      if (!enabled) throw new Error("Computer lock detection did not start. Presence still uses activity, visibility, and expiry.");
-    });
+    await perform(async () => { await presenceController.enableLockDetection(); });
   }
   async function changeNotificationPolicy(policy: NotificationPolicy) {
     await perform(() => notificationController.changePolicy(policy));
   }
 
   async function enableNotifications() {
-    await perform(async () => {
-      const enabled = await notificationController.enable();
-      if (!enabled) throw new Error("This browser did not enable notifications. Check its site permission and try again.");
-    });
+    await perform(async () => { await notificationController.enable(); });
   }
 
   async function disableNotifications() {

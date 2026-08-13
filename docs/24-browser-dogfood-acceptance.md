@@ -202,3 +202,10 @@ worker:
   a slash command without losing its controls. Completed assignments are now
   removed from the live roster so shipped work cannot masquerade as a worker's
   current task.
+- Night Watch persisted through a production reload, Automatic returned the
+  Hive to its active-device state, and notification policy moved to Every
+  decision and back without a stale selection. The current browser honestly
+  reports its blocked notification permission. Permission refusal is now
+  expressed only by the inline lock/notification capability state, avoiding a
+  contradictory global failure banner when the browser already completed or
+  reconciled the operation.
