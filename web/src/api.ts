@@ -559,6 +559,18 @@ export async function fetchJiraReadiness(operatorToken: string): Promise<JiraRea
   return response.json() as Promise<JiraReadiness>;
 }
 
+export async function beginJiraAuthorization(operatorToken: string): Promise<string> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/auth/start", {
+    method: "POST",
+  });
+  const result = await response.json() as { authorization_url: string };
+  return result.authorization_url;
+}
+
+export async function disconnectJira(operatorToken: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/auth", { method: "DELETE" });
+}
+
 export async function fetchJiraProjects(operatorToken: string, query = ""): Promise<JiraProject[]> {
   const params = new URLSearchParams();
   if (query.trim()) params.set("query", query.trim());

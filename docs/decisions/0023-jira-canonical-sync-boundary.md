@@ -19,8 +19,9 @@ explicit states rather than retries hidden in the Queen prompt.
 
 Jira is an adapter-private integration behind typed application commands.
 
-- The API process owns the Jira client. Credentials are supplied by the local
-  host, never persisted in Swarm, returned to the browser, or exposed to agents.
+- The API process owns the Jira client. The browser starts Atlassian OAuth but
+  never receives tokens. Rotating refresh tokens are stored in a private,
+  host-owned secrets file excluded from Hive backups and never exposed to agents.
 - Project discovery is read-only, bounded, paginated, and restricted to projects
   visible to the operator's Jira identity.
 - A durable project binding records Jira's immutable project id and current key

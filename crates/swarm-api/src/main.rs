@@ -34,18 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_workspace_roots(workspace_roots)
         .with_task_store(store)
         .with_notifications(vapid_subject_from_env())?;
-    let jira_values = (
-        env::var("SWARM_JIRA_BASE_URL").ok(),
-        env::var("SWARM_JIRA_EMAIL").ok(),
-        env::var("SWARM_JIRA_API_TOKEN").ok(),
-    );
-    match jira_values {
-        (None, None, None) => {}
-        (Some(base_url), Some(email), Some(api_token)) => {
-            state = state.with_jira_configuration(&base_url, email, api_token)?;
-        }
-        _ => return Err("Jira configuration requires SWARM_JIRA_BASE_URL, SWARM_JIRA_EMAIL, and SWARM_JIRA_API_TOKEN together".into()),
-    }
+    state = configure_jira(state, &database_path)?;
     state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
     let recovered = state.recover_decision_deliveries()?;
     if recovered > 0 {
@@ -165,6 +154,53 @@ fn attachment_root_from_database(database_path: &std::path::Path) -> PathBuf {
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("attachments")
+}
+
+fn configure_jira(
+    mut state: AppState,
+    database_path: &std::path::Path,
+) -> Result<AppState, Box<dyn std::error::Error>> {
+    let api_token = (
+        env::var("SWARM_JIRA_BASE_URL").ok(),
+        env::var("SWARM_JIRA_EMAIL").ok(),
+        env::var("SWARM_JIRA_API_TOKEN").ok(),
+    );
+    let oauth = (
+        env::var("SWARM_JIRA_OAUTH_CLIENT_ID").ok(),
+        env::var("SWARM_JIRA_OAUTH_CLIENT_SECRET").ok(),
+        env::var("SWARM_PUBLIC_BASE_URL").ok(),
+    );
+    match (api_token, oauth) {
+        ((None, None, None), (None, None, None)) => {}
+        ((None, None, None), (Some(client_id), Some(client_secret), Some(public_url))) => {
+            state = state.with_jira_oauth(
+                client_id,
+                client_secret,
+                &public_url,
+                jira_token_path(database_path),
+            )?;
+        }
+        ((Some(base_url), Some(email), Some(api_token)), (None, None, None)) => {
+            state = state.with_jira_configuration(&base_url, email, api_token)?;
+        }
+        ((Some(_), Some(_), Some(_)), (Some(_), Some(_), Some(_))) => {
+            return Err(
+                "configure either Jira OAuth or Jira API-token authentication, not both".into(),
+            );
+        }
+        ((None, None, None), _) => return Err("Jira OAuth settings are incomplete".into()),
+        (_, (None, None, None)) => return Err("Jira API-token settings are incomplete".into()),
+        _ => return Err("Jira authentication settings are incomplete".into()),
+    }
+    Ok(state)
+}
+
+fn jira_token_path(database_path: &std::path::Path) -> PathBuf {
+    database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("secrets")
+        .join("jira-oauth.json")
 }
 
 fn maintenance_request_path_from_env(database_path: &std::path::Path) -> PathBuf {

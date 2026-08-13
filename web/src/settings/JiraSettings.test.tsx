@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import JiraSettings from "./JiraSettings";
@@ -61,6 +61,32 @@ test("discovers a project, maps its workflow, and binds it to a repository worke
     { jira_status_id: "3", jira_status_name: "In Progress", task_state: "active" },
     { jira_status_id: "5", jira_status_name: "Done", task_state: "completed" },
   ]);
+});
+
+test("offers an operator-facing Atlassian connection instead of host-setting instructions", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/bindings")) return ok([]);
+    if (url.endsWith("/auth/start") && init?.method === "POST") {
+      return ok({ authorization_url: "https://auth.atlassian.test/authorize" });
+    }
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
+  }));
+  const assign = vi.fn();
+
+  render(
+    <JiraSettings
+      operatorToken="operator-token"
+      readiness={{ configured: true, connection: "not_connected", account_name: null }}
+      unavailable={false}
+      workers={[]}
+      onNavigate={assign}
+    />,
+  );
+
+  expect(screen.getByText("Connect your Atlassian account to choose projects.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Connect with Atlassian" }));
+  await waitFor(() => expect(assign).toHaveBeenCalledWith("https://auth.atlassian.test/authorize"));
 });
 
 function ok(body: unknown) {

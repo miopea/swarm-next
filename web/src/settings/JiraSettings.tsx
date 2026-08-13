@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  beginJiraAuthorization,
   createJiraBinding,
+  disconnectJira,
   fetchJiraBindings,
   fetchJiraProjects,
   fetchJiraProjectStatuses,
@@ -21,6 +23,7 @@ type Props = {
   readiness: JiraReadiness | undefined;
   unavailable: boolean;
   workers: Worker[];
+  onNavigate?: (url: string) => void;
 };
 
 const taskStates: { value: TaskState; label: string }[] = [
@@ -32,7 +35,7 @@ const taskStates: { value: TaskState; label: string }[] = [
   { value: "completed", label: "Done" },
 ];
 
-export default function JiraSettings({ operatorToken, readiness, unavailable, workers }: Props) {
+export default function JiraSettings({ operatorToken, readiness, unavailable, workers, onNavigate = (url) => window.location.assign(url) }: Props) {
   const repositoryWorkers = useMemo(() => workers.filter((worker) => worker.role === "worker"), [workers]);
   const [bindings, setBindings] = useState<JiraProjectBinding[]>([]);
   const [query, setQuery] = useState("");
@@ -120,6 +123,30 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, wo
     }
   }
 
+  async function connectJira() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const authorizationUrl = await beginJiraAuthorization(operatorToken);
+      onNavigate(authorizationUrl);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Atlassian authorization could not start.");
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await disconnectJira(operatorToken);
+      window.location.reload();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Jira could not be disconnected.");
+      setBusy(false);
+    }
+  }
+
   return (
     <section id="settings-integrations" className="settings-card integration-settings" aria-labelledby="integration-heading">
       <div><p className="eyebrow">Integrations</p><h3 id="integration-heading">Bring Jira into your Hive</h3></div>
@@ -128,6 +155,19 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, wo
         <span className={`presence ${readiness?.connection === "ready" ? "online" : unavailable || readiness?.connection === "credentials_invalid" || readiness?.connection === "permission_denied" ? "offline" : "waiting"}`} />
         <span><strong>{jiraReadinessLabel(readiness, unavailable)}</strong><small>{jiraReadinessDetail(readiness, unavailable)}</small></span>
       </div>
+
+      {readiness?.connection === "ready" ? (
+        <button className="secondary-button jira-auth-action" type="button" disabled={busy} onClick={() => void disconnect()}>
+          Disconnect Jira
+        </button>
+      ) : (
+        <div className="jira-connect-panel">
+          <button className="primary-action jira-auth-action" type="button" disabled={busy || unavailable || readiness?.configured === false} onClick={() => void connectJira()}>
+            {busy ? "Opening Atlassian…" : readiness?.configured === false ? "Atlassian app setup required" : readiness?.connection === "credentials_invalid" ? "Reconnect with Atlassian" : "Connect with Atlassian"}
+          </button>
+          <small className="privacy-note">A browser consent page opens, then returns you here. Swarm stores the rotating token privately on this host.</small>
+        </div>
+      )}
 
       {bindings.length > 0 ? (
         <div className="jira-binding-list" aria-label="Connected Jira projects">
@@ -216,7 +256,7 @@ function jiraReadinessDetail(readiness: JiraReadiness | undefined, unavailable: 
     case "credentials_invalid": return "Update the local Jira credential adapter.";
     case "permission_denied": return "This identity cannot access the requested Jira resource.";
     case "network_unavailable": return "Owned work stays available; new shared claims wait.";
-    case "not_connected": return "Add the three Jira host settings to enable project discovery.";
+    case "not_connected": return readiness?.configured ? "Connect your Atlassian account to choose projects." : "This host needs its one-time Atlassian app configuration.";
     default: return "Credentials never enter Queen or the browser.";
   }
 }

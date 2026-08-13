@@ -2,6 +2,7 @@ mod agent;
 mod attach;
 mod attachments;
 mod jira;
+mod jira_oauth;
 mod notifications;
 mod terminal_socket;
 
@@ -18,7 +19,7 @@ use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{delete, get, patch, post, put},
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
@@ -124,6 +125,32 @@ impl AppState {
         api_token: impl Into<Arc<str>>,
     ) -> Result<Self, String> {
         self.jira_readiness = jira::JiraReadinessProbe::configured(base_url, email, api_token)?;
+        Ok(self)
+    }
+
+    /// Enables operator-driven Atlassian OAuth with host-owned durable tokens.
+    ///
+    /// # Errors
+    /// Rejects invalid public callback URLs or unreadable token storage.
+    pub fn with_jira_oauth(
+        mut self,
+        client_id: impl Into<Arc<str>>,
+        client_secret: impl Into<Arc<str>>,
+        public_base_url: &str,
+        token_path: PathBuf,
+    ) -> Result<Self, String> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|error| format!("Jira OAuth client could not start: {error}"))?;
+        let oauth = jira_oauth::JiraOAuthClient::new(
+            client,
+            client_id,
+            client_secret,
+            public_base_url,
+            token_path,
+        )?;
+        self.jira_readiness = jira::JiraReadinessProbe::oauth(oauth);
         Ok(self)
     }
 
@@ -1142,6 +1169,12 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/workers", get(list_workers).post(create_worker))
         .route("/api/v1/providers", get(list_provider_capabilities))
         .route("/api/v1/integrations/jira/readiness", get(jira_readiness))
+        .route(
+            "/api/v1/integrations/jira/auth/start",
+            post(jira_auth_start),
+        )
+        .route("/api/v1/integrations/jira/auth", delete(jira_disconnect))
+        .route("/auth/jira/callback", get(jira_auth_callback))
         .route("/api/v1/integrations/jira/projects", get(jira_projects))
         .route(
             "/api/v1/integrations/jira/projects/{project_id_or_key}/statuses",
@@ -2156,6 +2189,78 @@ async fn jira_readiness(
         .into_response())
 }
 
+#[derive(Serialize)]
+struct JiraAuthorizationStart {
+    authorization_url: String,
+}
+
+#[derive(Deserialize)]
+struct JiraAuthorizationCallback {
+    state: Option<String>,
+    code: Option<String>,
+    error: Option<String>,
+}
+
+async fn jira_auth_start(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let oauth = state.jira_readiness.oauth_client().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "jira_oauth_unavailable",
+            "Atlassian OAuth is not configured on this Swarm host",
+        )
+    })?;
+    let url = oauth.authorization_url().await.map_err(jira_oauth_error)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(JiraAuthorizationStart {
+            authorization_url: url.to_string(),
+        }),
+    )
+        .into_response())
+}
+
+async fn jira_auth_callback(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<JiraAuthorizationCallback>,
+) -> Response {
+    let Some(oauth) = state.jira_readiness.oauth_client() else {
+        return Redirect::to("/?jira=unavailable#settings-integrations").into_response();
+    };
+    if query.error.is_some() {
+        return Redirect::to("/?jira=denied#settings-integrations").into_response();
+    }
+    let result = match (query.state.as_deref(), query.code.as_deref()) {
+        (Some(auth_state), Some(code)) => oauth.exchange_code(auth_state, code).await,
+        _ => Err(jira_oauth::OAuthError::InvalidState),
+    };
+    let location = if result.is_ok() {
+        "/?jira=connected#settings-integrations"
+    } else {
+        "/?jira=failed#settings-integrations"
+    };
+    Redirect::to(location).into_response()
+}
+
+async fn jira_disconnect(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let oauth = state.jira_readiness.oauth_client().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "jira_oauth_unavailable",
+            "Atlassian OAuth is not configured on this Swarm host",
+        )
+    })?;
+    oauth.disconnect().await.map_err(jira_oauth_error)?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 async fn jira_projects(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -3164,6 +3269,41 @@ fn jira_adapter_error(error: jira::JiraAdapterError) -> ApiError {
             StatusCode::BAD_GATEWAY,
             "jira_response_limit_exceeded",
             "Jira returned more data than this bounded operation permits",
+        ),
+    }
+}
+
+fn jira_oauth_error(error: jira_oauth::OAuthError) -> ApiError {
+    match error {
+        jira_oauth::OAuthError::NotConnected => ApiError::new(
+            StatusCode::CONFLICT,
+            "jira_not_connected",
+            "connect Jira before continuing",
+        ),
+        jira_oauth::OAuthError::CredentialsInvalid => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "jira_oauth_invalid",
+            "Atlassian authorization needs to be renewed",
+        ),
+        jira_oauth::OAuthError::PermissionDenied => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "jira_oauth_denied",
+            "Atlassian did not grant the required Jira access",
+        ),
+        jira_oauth::OAuthError::NetworkUnavailable => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "jira_oauth_unavailable",
+            "Atlassian authorization is temporarily unavailable",
+        ),
+        jira_oauth::OAuthError::InvalidState => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "jira_oauth_state_invalid",
+            "This Jira connection attempt expired or was already used",
+        ),
+        jira_oauth::OAuthError::InvalidResponse | jira_oauth::OAuthError::Storage => ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "jira_oauth_failed",
+            "Jira authorization could not be stored safely",
         ),
     }
 }

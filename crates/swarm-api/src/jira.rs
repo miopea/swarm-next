@@ -4,6 +4,8 @@ use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use swarm_domain::{JiraConnectionState, TaskState};
 
+use crate::jira_oauth::{JiraOAuthClient, OAuthError};
+
 const PAGE_SIZE: usize = 50;
 const MAX_PROJECTS: usize = 500;
 const MAX_PROJECT_STATUSES: usize = 128;
@@ -16,10 +18,26 @@ pub(crate) enum JiraReadinessProbe {
     Configured {
         client: Box<Client>,
         base_url: Url,
-        myself_url: Box<Url>,
         email: Arc<str>,
         api_token: Arc<str>,
     },
+    OAuth(JiraOAuthClient),
+}
+
+#[derive(Clone)]
+struct JiraAccess {
+    client: Client,
+    base_url: Url,
+    authorization: JiraAuthorization,
+}
+
+#[derive(Clone)]
+enum JiraAuthorization {
+    Basic {
+        email: Arc<str>,
+        api_token: Arc<str>,
+    },
+    Bearer(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -153,6 +171,18 @@ struct JiraIssueAssignee {
 }
 
 impl JiraReadinessProbe {
+    pub(crate) fn oauth(client: JiraOAuthClient) -> Self {
+        Self::OAuth(client)
+    }
+
+    pub(crate) fn oauth_client(&self) -> Option<&JiraOAuthClient> {
+        if let Self::OAuth(client) = self {
+            Some(client)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn configured(
         base_url: &str,
         email: impl Into<Arc<str>>,
@@ -170,11 +200,6 @@ impl JiraReadinessProbe {
                 "SWARM_JIRA_BASE_URL must use HTTPS and must not contain credentials".to_owned(),
             );
         }
-        let myself_url = Url::parse(&format!(
-            "{}/rest/api/3/myself",
-            base_url.as_str().trim_end_matches('/')
-        ))
-        .map_err(|_| "SWARM_JIRA_BASE_URL could not form the Jira API URL")?;
         let client = Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
@@ -182,30 +207,48 @@ impl JiraReadinessProbe {
         Ok(Self::Configured {
             client: Box::new(client),
             base_url,
-            myself_url: Box::new(myself_url),
             email: email.into(),
             api_token: api_token.into(),
         })
     }
 
     pub(crate) async fn readiness(&self) -> JiraReadiness {
-        let Self::Configured {
-            client,
-            base_url: _,
-            myself_url,
-            email,
-            api_token,
-        } = self
-        else {
+        if matches!(self, Self::NotConfigured) {
             return JiraReadiness {
                 configured: false,
                 connection: JiraConnectionState::NotConnected,
                 account_name: None,
             };
+        }
+        let access = match self.access().await {
+            Ok(access) => access,
+            Err(JiraAdapterError::NotConfigured) => {
+                return JiraReadiness {
+                    configured: true,
+                    connection: JiraConnectionState::NotConnected,
+                    account_name: None,
+                };
+            }
+            Err(JiraAdapterError::CredentialsInvalid) => {
+                return JiraReadiness {
+                    configured: true,
+                    connection: JiraConnectionState::CredentialsInvalid,
+                    account_name: None,
+                };
+            }
+            Err(JiraAdapterError::PermissionDenied) => {
+                return JiraReadiness {
+                    configured: true,
+                    connection: JiraConnectionState::PermissionDenied,
+                    account_name: None,
+                };
+            }
+            Err(_) => return unavailable(),
         };
-        let response = client
-            .get(myself_url.as_ref().clone())
-            .basic_auth(email.as_ref(), Some(api_token.as_ref()))
+        let Ok(myself_url) = endpoint(&access.base_url, "/rest/api/3/myself") else {
+            return unavailable();
+        };
+        let response = authorize(access.client.get(myself_url), &access.authorization)
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await;
@@ -245,19 +288,10 @@ impl JiraReadinessProbe {
         &self,
         query: Option<&str>,
     ) -> Result<Vec<JiraProject>, JiraAdapterError> {
-        let Self::Configured {
-            client,
-            base_url,
-            email,
-            api_token,
-            ..
-        } = self
-        else {
-            return Err(JiraAdapterError::NotConfigured);
-        };
+        let access = self.access().await?;
         let mut projects = Vec::new();
         for start_at in (0..MAX_PROJECTS).step_by(PAGE_SIZE) {
-            let mut url = endpoint(base_url, "/rest/api/3/project/search")?;
+            let mut url = endpoint(&access.base_url, "/rest/api/3/project/search")?;
             {
                 let mut pairs = url.query_pairs_mut();
                 pairs.append_pair("startAt", &start_at.to_string());
@@ -266,9 +300,7 @@ impl JiraReadinessProbe {
                     pairs.append_pair("query", query);
                 }
             }
-            let response = client
-                .get(url)
-                .basic_auth(email.as_ref(), Some(api_token.as_ref()))
+            let response = authorize(access.client.get(url), &access.authorization)
                 .header(reqwest::header::ACCEPT, "application/json")
                 .send()
                 .await
@@ -302,29 +334,18 @@ impl JiraReadinessProbe {
         &self,
         project_id_or_key: &str,
     ) -> Result<Vec<JiraProjectStatus>, JiraAdapterError> {
-        let Self::Configured {
-            client,
-            base_url,
-            email,
-            api_token,
-            ..
-        } = self
-        else {
-            return Err(JiraAdapterError::NotConfigured);
-        };
+        let access = self.access().await?;
         let project = project_id_or_key.trim();
         if project.is_empty() || project.len() > 128 || project.chars().any(char::is_control) {
             return Err(JiraAdapterError::InvalidResponse);
         }
-        let mut url = endpoint(base_url, "/rest/api/3/project/")?;
+        let mut url = endpoint(&access.base_url, "/rest/api/3/project/")?;
         url.path_segments_mut()
             .map_err(|()| JiraAdapterError::InvalidResponse)?
             .pop_if_empty()
             .push(project)
             .push("statuses");
-        let response = client
-            .get(url)
-            .basic_auth(email.as_ref(), Some(api_token.as_ref()))
+        let response = authorize(access.client.get(url), &access.authorization)
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
@@ -362,16 +383,7 @@ impl JiraReadinessProbe {
         &self,
         project_id: &str,
     ) -> Result<Vec<JiraIssue>, JiraAdapterError> {
-        let Self::Configured {
-            client,
-            base_url,
-            email,
-            api_token,
-            ..
-        } = self
-        else {
-            return Err(JiraAdapterError::NotConfigured);
-        };
+        let access = self.access().await?;
         let project_id = project_id.trim();
         if project_id.is_empty()
             || project_id.len() > 128
@@ -394,7 +406,7 @@ impl JiraReadinessProbe {
         let mut issues = Vec::new();
         let mut next_page_token: Option<String> = None;
         for _ in 0..(MAX_ISSUES / PAGE_SIZE) {
-            let mut url = endpoint(base_url, "/rest/api/3/search/jql")?;
+            let mut url = endpoint(&access.base_url, "/rest/api/3/search/jql")?;
             {
                 let mut pairs = url.query_pairs_mut();
                 pairs.append_pair("jql", &jql);
@@ -404,9 +416,7 @@ impl JiraReadinessProbe {
                     pairs.append_pair("nextPageToken", token);
                 }
             }
-            let response = client
-                .get(url)
-                .basic_auth(email.as_ref(), Some(api_token.as_ref()))
+            let response = authorize(access.client.get(url), &access.authorization)
                 .header(reqwest::header::ACCEPT, "application/json")
                 .send()
                 .await
@@ -431,6 +441,58 @@ impl JiraReadinessProbe {
             next_page_token = page.next_page_token;
         }
         Err(JiraAdapterError::ResponseLimitExceeded)
+    }
+
+    async fn access(&self) -> Result<JiraAccess, JiraAdapterError> {
+        match self {
+            Self::NotConfigured => Err(JiraAdapterError::NotConfigured),
+            Self::Configured {
+                client,
+                base_url,
+                email,
+                api_token,
+                ..
+            } => Ok(JiraAccess {
+                client: client.as_ref().clone(),
+                base_url: base_url.clone(),
+                authorization: JiraAuthorization::Basic {
+                    email: email.clone(),
+                    api_token: api_token.clone(),
+                },
+            }),
+            Self::OAuth(oauth) => {
+                let access = oauth.access().await.map_err(oauth_error)?;
+                Ok(JiraAccess {
+                    client: access.client,
+                    base_url: access.base_url,
+                    authorization: JiraAuthorization::Bearer(access.access_token),
+                })
+            }
+        }
+    }
+}
+
+fn authorize(
+    request: reqwest::RequestBuilder,
+    authorization: &JiraAuthorization,
+) -> reqwest::RequestBuilder {
+    match authorization {
+        JiraAuthorization::Basic { email, api_token } => {
+            request.basic_auth(email.as_ref(), Some(api_token.as_ref()))
+        }
+        JiraAuthorization::Bearer(token) => request.bearer_auth(token),
+    }
+}
+
+fn oauth_error(error: OAuthError) -> JiraAdapterError {
+    match error {
+        OAuthError::NotConnected => JiraAdapterError::NotConfigured,
+        OAuthError::CredentialsInvalid => JiraAdapterError::CredentialsInvalid,
+        OAuthError::PermissionDenied => JiraAdapterError::PermissionDenied,
+        OAuthError::NetworkUnavailable => JiraAdapterError::NetworkUnavailable,
+        OAuthError::InvalidResponse | OAuthError::InvalidState | OAuthError::Storage => {
+            JiraAdapterError::InvalidResponse
+        }
     }
 }
 

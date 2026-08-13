@@ -48,7 +48,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
-  const [activeSettingsSection, setActiveSettingsSection] = useState("settings-crew");
+  const [activeSettingsSection, setActiveSettingsSection] = useState(() => window.location.hash === "#settings-integrations" ? "settings-integrations" : "settings-crew");
   useEffect(() => {
     let cancelled = false;
     void fetchTerminalHostStatus(operatorToken)
