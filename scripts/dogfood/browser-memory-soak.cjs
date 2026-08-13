@@ -132,7 +132,10 @@ async function main() {
 async function exerciseReadOnlySurface(page) {
   for (const surface of [/Workers/, /Tasks/, /Settings/]) {
     await page.getByRole("button", { name: surface }).click();
-    if (surface.source === "Workers") await page.locator(".terminal-panel").waitFor();
+    if (surface.source === "Workers") {
+      await page.locator(".terminal-panel").waitFor();
+      await page.getByText("connected", { exact: true }).waitFor();
+    }
     if (surface.source === "Tasks") await page.getByRole("heading", { name: "Task board" }).waitFor();
     if (surface.source === "Settings") await page.getByRole("heading", { name: "Settings" }).waitFor();
   }
