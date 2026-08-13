@@ -79,8 +79,11 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
   fireEvent.click(screen.getByRole("button", { name: "Review issues" }));
   const openIssue = await screen.findByRole("checkbox", { name: /WEB-42/ });
   const doneIssue = screen.getByRole("checkbox", { name: /WEB-43/ });
-  expect(openIssue).toBeChecked();
+  expect(openIssue).not.toBeChecked();
   expect(doneIssue).not.toBeChecked();
+  expect(screen.getByText(/Nothing is selected or imported/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Add 0 to this Hive" })).toBeDisabled();
+  fireEvent.click(openIssue);
   fireEvent.click(screen.getByRole("button", { name: "Add 1 to this Hive" }));
   expect(await screen.findByText("1 Jira issue added or refreshed from Website Services.")).toBeInTheDocument();
   const sync = requests.find((request) => request.url.includes("/sync") && request.method === "POST");

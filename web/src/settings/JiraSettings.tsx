@@ -6,7 +6,6 @@ import {
   disconnectJira,
   fetchJiraBindingIssues,
   fetchJiraBindings,
-  fetchJiraMappings,
   fetchJiraProjects,
   fetchJiraProjectStatuses,
   replaceJiraMappings,
@@ -118,15 +117,10 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
     setBusy(true);
     setMessage("");
     try {
-      const [issues, mappings] = await Promise.all([
-        fetchJiraBindingIssues(operatorToken, binding.id),
-        fetchJiraMappings(operatorToken, binding.id),
-      ]);
-      const completedStatuses = new Set(mappings.filter((mapping) => mapping.task_state === "completed").map((mapping) => mapping.jira_status_id));
-      const openIssueIds = issues.filter((issue) => !completedStatuses.has(issue.status_id)).slice(0, 100).map((issue) => issue.id);
+      const issues = await fetchJiraBindingIssues(operatorToken, binding.id);
       setIntakeBinding(binding);
       setIntakeIssues(issues);
-      setSelectedIssueIds(new Set(openIssueIds));
+      setSelectedIssueIds(new Set());
       setMessage(issues.length ? "Review the Jira issues below before adding them to this Hive." : `${binding.project_name} has no visible issues.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Jira issues could not be previewed.");
@@ -216,7 +210,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
             <span><strong>Choose work for this Hive</strong><small>{intakeBinding.project_key} · latest {intakeIssues.length} visible</small></span>
             <button className="text-button" type="button" onClick={() => { setIntakeBinding(undefined); setIntakeIssues([]); setSelectedIssueIds(new Set()); }}>Close</button>
           </div>
-          <p className="privacy-note">Open work is selected by default, up to 100 issues. Nothing is imported until you confirm.</p>
+          <p className="privacy-note">Choose only the work this Hive should own. Nothing is selected or imported until you explicitly act.</p>
           <div className="jira-intake-actions">
             <button className="text-button" type="button" onClick={() => setSelectedIssueIds(new Set(intakeIssues.slice(0, 100).map((issue) => issue.id)))}>Select first 100</button>
             <button className="text-button" type="button" onClick={() => setSelectedIssueIds(new Set())}>Clear</button>
