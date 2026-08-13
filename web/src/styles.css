@@ -214,6 +214,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-state { display: inline-flex; align-items: center; gap: 6px; color: var(--state); font-size: .69rem; font-weight: 500; letter-spacing: .055em; text-transform: uppercase; }
 .task-state::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; content: ""; }
 .task-card h4 { margin: 16px 0 18px; color: var(--text); font-size: 1rem; line-height: 1.42; }
+.task-jira-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 9px; margin-top: 12px; color: var(--quiet); font-size: .72rem; }
+.task-jira-origin strong { padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent-soft) 70%, var(--panel)); color: var(--text); letter-spacing: .03em; }
+.task-jira-origin span + span::before { margin-right: 9px; color: var(--line-strong); content: "·"; }
 .task-priority { padding: 3px 7px; border: 1px solid currentColor; border-radius: 999px; font-size: .63rem; font-weight: 500; letter-spacing: .035em; text-transform: uppercase; }
 .priority-low { color: var(--quiet); }
 .priority-normal { color: var(--good); }

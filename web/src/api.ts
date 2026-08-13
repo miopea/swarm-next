@@ -110,6 +110,20 @@ export type JiraIssue = {
   assignee_name: string | null;
   updated_at: string;
 };
+export type JiraTaskLink = {
+  issue_id: string;
+  issue_key: string;
+  binding_id: string;
+  project_key: string;
+  project_name: string;
+  task_id: string;
+  jira_status_id: string;
+  jira_status_name: string;
+  jira_assignee_account_id: string | null;
+  jira_assignee_name: string | null;
+  remote_updated_at: string;
+  last_synced_at: number;
+};
 
 export type Worker = {
   id: string;
@@ -599,6 +613,12 @@ export async function fetchJiraProjectStatuses(operatorToken: string, projectIdO
 export async function fetchJiraBindings(operatorToken: string): Promise<JiraProjectBinding[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/bindings");
   return response.json() as Promise<JiraProjectBinding[]>;
+}
+
+export async function fetchJiraTaskLinks(operatorToken: string): Promise<JiraTaskLink[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/task-links");
+  const links = await response.json() as unknown;
+  return Array.isArray(links) ? links as JiraTaskLink[] : [];
 }
 
 export async function createJiraBinding(

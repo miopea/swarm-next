@@ -980,6 +980,22 @@ struct SyncJiraBindingRequest {
     issue_ids: Option<Vec<String>>,
 }
 
+#[derive(Debug, Serialize)]
+struct JiraTaskLinkView {
+    issue_id: String,
+    issue_key: String,
+    binding_id: JiraProjectBindingId,
+    project_key: String,
+    project_name: String,
+    task_id: TaskId,
+    jira_status_id: String,
+    jira_status_name: String,
+    jira_assignee_account_id: Option<String>,
+    jira_assignee_name: Option<String>,
+    remote_updated_at: String,
+    last_synced_at: i64,
+}
+
 #[derive(Debug, Deserialize)]
 struct HistoryQuery {
     segment: Option<u64>,
@@ -1191,6 +1207,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/integrations/jira/bindings",
             get(jira_bindings).post(create_jira_binding),
         )
+        .route("/api/v1/integrations/jira/task-links", get(jira_task_links))
         .route(
             "/api/v1/integrations/jira/bindings/{binding_id}/mappings",
             get(jira_mappings).put(replace_jira_mappings),
@@ -2305,6 +2322,42 @@ async fn jira_bindings(
         .list_jira_project_bindings()
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(bindings)).into_response())
+}
+
+async fn jira_task_links(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let store = task_store(&state)?;
+    let bindings = store
+        .list_jira_project_bindings()
+        .map_err(|error| task_store_error(&error))?;
+    let mut links = Vec::new();
+    for binding in bindings {
+        links.extend(
+            store
+                .list_jira_issue_links(binding.id)
+                .map_err(|error| task_store_error(&error))?
+                .into_iter()
+                .map(|link| JiraTaskLinkView {
+                    issue_id: link.issue_id,
+                    issue_key: link.issue_key,
+                    binding_id: link.binding_id,
+                    project_key: binding.project_key.clone(),
+                    project_name: binding.project_name.clone(),
+                    task_id: link.task_id,
+                    jira_status_id: link.jira_status_id,
+                    jira_status_name: link.jira_status_name,
+                    jira_assignee_account_id: link.jira_assignee_account_id,
+                    jira_assignee_name: link.jira_assignee_name,
+                    remote_updated_at: link.remote_updated_at,
+                    last_synced_at: link.last_synced_at,
+                }),
+        );
+    }
+    links.sort_by(|left, right| left.issue_key.cmp(&right.issue_key));
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(links)).into_response())
 }
 
 async fn create_jira_binding(
@@ -4082,10 +4135,18 @@ mod tests {
                 expected_count
             );
         }
-        let tasks = response_json(authorized_get(app, "/api/v1/tasks").await).await;
+        let tasks = response_json(authorized_get(app.clone(), "/api/v1/tasks").await).await;
         assert_eq!(tasks.as_array().unwrap().len(), 1);
         assert_eq!(tasks[0]["title"], "Polish the launch page");
         assert_eq!(tasks[0]["state"], "active");
+        let links =
+            response_json(authorized_get(app, "/api/v1/integrations/jira/task-links").await).await;
+        assert_eq!(links.as_array().unwrap().len(), 1);
+        assert_eq!(links[0]["issue_key"], "WEB-42");
+        assert_eq!(links[0]["project_name"], "Website Services");
+        assert_eq!(links[0]["jira_status_name"], "In Progress");
+        assert_eq!(links[0]["jira_assignee_name"], "Bea");
+        assert_eq!(links[0]["task_id"], tasks[0]["id"]);
     }
 
     #[tokio::test]

@@ -10,6 +10,7 @@ import {
   createWorker,
   fetchHive,
   fetchHealth,
+  fetchJiraTaskLinks,
   fetchNotificationSettings,
   fetchQueenAutonomyPolicy,
   fetchPresence,
@@ -40,6 +41,7 @@ import {
   type DecisionRequest,
   type Health,
   type HiveIdentity,
+  type JiraTaskLink,
   type NotificationPolicy,
   type NotificationSettings,
   type OperatorPresence,
@@ -88,6 +90,7 @@ export function App() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceChoice[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [jiraTaskLinks, setJiraTaskLinks] = useState<JiraTaskLink[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [decisions, setDecisions] = useState<DecisionRequest[]>([]);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -197,7 +200,7 @@ export function App() {
       await validateBrowserSession();
       return loadControlRoom(BROWSER_SESSION_AUTH);
     })
-      .then(({ hive, sessions: nextSessions, workers: nextWorkers, workspaces: nextWorkspaces, tasks: nextTasks, decisions: nextDecisions }) => {
+      .then(({ hive, sessions: nextSessions, workers: nextWorkers, workspaces: nextWorkspaces, tasks: nextTasks, jiraTaskLinks: nextJiraTaskLinks, decisions: nextDecisions }) => {
         if (cancelled) return;
         terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
         setOperatorToken(BROWSER_SESSION_AUTH);
@@ -206,6 +209,7 @@ export function App() {
         setWorkers(nextWorkers);
         setWorkspaces(nextWorkspaces);
         setTasks(nextTasks);
+        setJiraTaskLinks(nextJiraTaskLinks);
         setActiveSessionId(restoredSessionId(nextWorkers, nextSessions));
         setDecisions(nextDecisions);
       })
@@ -254,6 +258,7 @@ export function App() {
         setWorkers(controlRoom.workers);
         setWorkspaces(controlRoom.workspaces);
         setTasks(controlRoom.tasks);
+        setJiraTaskLinks(controlRoom.jiraTaskLinks);
         setDecisions(controlRoom.decisions);
         if (refreshedPresence) setPresence(refreshedPresence);
         if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
@@ -296,6 +301,7 @@ export function App() {
       setWorkers(controlRoom.workers);
       setWorkspaces(controlRoom.workspaces);
       setTasks(controlRoom.tasks);
+      setJiraTaskLinks(controlRoom.jiraTaskLinks);
       setActiveSessionId((current) => current ?? preferredSessionId(controlRoom.workers, controlRoom.sessions));
       setDecisions(controlRoom.decisions);
       setTokenDraft("");
@@ -364,6 +370,7 @@ export function App() {
       setWorkers(controlRoom.workers);
       setWorkspaces(controlRoom.workspaces);
       setTasks(controlRoom.tasks);
+      setJiraTaskLinks(controlRoom.jiraTaskLinks);
       setDecisions(controlRoom.decisions);
       setActiveSessionId((current) =>
         current && controlRoom.sessions.some((session) => session.session_id === current)
@@ -419,6 +426,7 @@ export function App() {
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
+      setJiraTaskLinks(controlRoom.jiraTaskLinks);
       releaseEngagementWhenSwitching(activeSessionId, sessionId);
       setActiveSessionId(sessionId);
       setSurface("workers");
@@ -439,6 +447,7 @@ export function App() {
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
+      setJiraTaskLinks(controlRoom.jiraTaskLinks);
       setActiveSessionId((current) => current === sessionId ? preferredSessionId(controlRoom.workers, controlRoom.sessions) : current);
     });
   }
@@ -454,6 +463,7 @@ export function App() {
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
+      setJiraTaskLinks(controlRoom.jiraTaskLinks);
       releaseEngagementWhenSwitching(activeSessionId, sessionId);
       setActiveSessionId(sessionId);
       setSurface("workers");
@@ -584,6 +594,7 @@ export function App() {
       setWorkers(controlRoom.workers);
       setWorkspaces(controlRoom.workspaces);
       setTasks(controlRoom.tasks);
+      setJiraTaskLinks(controlRoom.jiraTaskLinks);
       setDecisions(controlRoom.decisions);
       setProviders(nextProviders);
       setActiveSessionId(preferredSessionId(controlRoom.workers, controlRoom.sessions));
@@ -818,7 +829,7 @@ export function App() {
         ) : surface === "decisions" ? (
           <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
+          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             busy={busy}
@@ -866,15 +877,16 @@ export function App() {
 }
 
 async function loadControlRoom(operatorToken: string) {
-  const [hive, sessions, workers, workspaces, tasks, decisions] = await Promise.all([
+  const [hive, sessions, workers, workspaces, tasks, decisions, jiraTaskLinks] = await Promise.all([
     fetchHive(operatorToken),
     fetchSessions(operatorToken),
     fetchWorkers(operatorToken),
     fetchWorkspaces(operatorToken),
     fetchTasks(operatorToken),
     fetchDecisions(operatorToken),
+    fetchJiraTaskLinks(operatorToken).catch(() => []),
   ]);
-  return { hive, sessions, workers, workspaces, tasks, decisions };
+  return { hive, sessions, workers, workspaces, tasks, jiraTaskLinks, decisions };
 }
 
 function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): string | undefined {

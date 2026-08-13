@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 
-import type { SessionSummary, Task, TaskActivity, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput, Worker } from "../api";
+import type { JiraTaskLink, SessionSummary, Task, TaskActivity, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 
 type Props = {
   tasks: Task[];
+  jiraTaskLinks: JiraTaskLink[];
   focusTaskId?: string;
   focusRequest?: number;
   composeRequest?: number;
@@ -65,6 +66,7 @@ const validTargets: Record<TaskState, TaskState[]> = {
 
 export default function TaskBoard({
   tasks,
+  jiraTaskLinks,
   focusTaskId,
   focusRequest,
   composeRequest,
@@ -235,6 +237,7 @@ export default function TaskBoard({
               <TaskCard
                 key={task.id}
                 task={task}
+                jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
                 sessions={sessions}
                 workers={workers}
                 busy={busy}
@@ -286,6 +289,7 @@ export default function TaskBoard({
               <TaskCard
                 key={task.id}
                 task={task}
+                jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
                 sessions={sessions}
                 workers={workers}
                 busy={busy}
@@ -315,7 +319,7 @@ function initialComposerOpen(): boolean {
   return typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 680px)").matches;
 }
 
-function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
   const targetWorker = assignableWorkers.find((worker) => worker.id === task.assigned_worker_id)
@@ -386,6 +390,14 @@ function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAss
           <button type="button" className="task-owner task-owner-link" onClick={() => onOpenWorker(targetWorker.active_session_id!)}>{targetWorker.name} · {repositoryName(task.workspace)}</button>
         ) : <span className="task-owner">{targetWorker?.name ?? "Choose worker"} · {repositoryName(task.workspace)}</span>}
       </div>
+      {jiraLink && (
+        <div className="task-jira-origin" aria-label={`Jira issue ${jiraLink.issue_key}`}>
+          <strong>{jiraLink.issue_key}</strong>
+          <span>{jiraLink.project_name}</span>
+          <span>{jiraLink.jira_status_name}</span>
+          {jiraLink.jira_assignee_name && <span>Jira: {jiraLink.jira_assignee_name}</span>}
+        </div>
+      )}
       <h4>{task.title}</h4>
       {task.description && !editing && <p className="task-description">{task.description}</p>}
       {editing ? (

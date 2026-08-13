@@ -397,6 +397,7 @@ test("creates a persisted task draft from the task board", async () => {
     ok([{ name: "workspace", path: task.workspace, kind: "repository", configured_worker_id: worker.id }]),
     ok([]),
     ok([]),
+    ok([]),
     ok(task),
     ok({ ...task, assigned_worker_id: worker.id }),
   ];
