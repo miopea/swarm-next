@@ -1,10 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-afterEach(cleanup);
-
 import type { Task, Worker } from "../api";
 import TaskBoard from "./TaskBoard";
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const task: Task = {
   id: "task-1",
@@ -27,6 +30,18 @@ function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> 
   render(<TaskBoard {...props} />);
   return props;
 }
+
+test("keeps active work above the fold on phones until task creation is requested", () => {
+  vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
+  renderBoard({ tasks: [] });
+
+  expect(screen.queryByLabelText("Task title")).not.toBeInTheDocument();
+  const toggle = screen.getByRole("button", { name: "Create a task" });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(toggle);
+  expect(screen.getByLabelText("Task title")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Hide task form" })).toHaveAttribute("aria-expanded", "true");
+});
 
 test("dragging a task exposes only legal workflow targets and performs the drop", () => {
   const onTransition = vi.fn().mockResolvedValue(undefined);

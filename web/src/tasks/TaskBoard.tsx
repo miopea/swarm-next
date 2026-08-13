@@ -73,6 +73,7 @@ export default function TaskBoard({
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
   const [workerId, setWorkerId] = useState("");
   const [draggedTaskId, setDraggedTaskId] = useState<string>();
+  const [composeOpen, setComposeOpen] = useState(initialComposerOpen);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -112,13 +113,22 @@ export default function TaskBoard({
 
   return (
     <div className="task-board">
-      <section className="task-compose" aria-labelledby="new-task-heading">
+      <section className={`task-compose${composeOpen ? " compose-open" : " compose-collapsed"}`} aria-labelledby="new-task-heading">
         <div>
           <p className="eyebrow">New work</p>
           <h3 id="new-task-heading">Give the next worker a clear outcome</h3>
           <p>Choose the worker. Swarm already knows which repository she owns.</p>
+          <button
+            type="button"
+            className="secondary-button task-compose-toggle"
+            aria-expanded={composeOpen}
+            aria-controls="new-task-form"
+            onClick={() => setComposeOpen((current) => !current)}
+          >
+            {composeOpen ? "Hide task form" : "Create a task"}
+          </button>
         </div>
-        <form onSubmit={(event) => void submit(event)}>
+        {composeOpen && <form id="new-task-form" onSubmit={(event) => void submit(event)}>
           <div className="field-stack task-title-field">
             <label htmlFor="task-title">Task title</label>
             <input
@@ -156,7 +166,7 @@ export default function TaskBoard({
             </select>
           </div>
           <button disabled={busy || !title.trim() || !workerId}>Create draft</button>
-        </form>
+        </form>}
       </section>
 
       <section className="task-section" aria-labelledby="active-work-heading">
@@ -244,6 +254,10 @@ export default function TaskBoard({
       )}
     </div>
   );
+}
+
+function initialComposerOpen(): boolean {
+  return typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 680px)").matches;
 }
 
 function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
