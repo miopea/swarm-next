@@ -80,6 +80,7 @@ async function checkSurface(browser, surface) {
     pageErrors.length = 0;
 
     const surfaceResults = [];
+    let accessibleControlCount = 0;
     let workerSelections = [];
     let completedTaskCount = 0;
     let completedTaskTitle;
@@ -130,6 +131,7 @@ async function checkSurface(browser, surface) {
       if (dimensions.scrollWidth > dimensions.clientWidth + 1) {
         throw new Error(`${surface.name}/${target.name}: horizontal overflow ${dimensions.scrollWidth}px > ${dimensions.clientWidth}px`);
       }
+      accessibleControlCount += await verifyAccessibleControls(page, `${surface.name}/${target.name}`);
       await page.screenshot({
         path: path.join(outputRoot, `${surface.name}-${target.name}.png`),
         fullPage: true,
@@ -285,10 +287,49 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: /Settings/ }).click();
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
+    accessibleControlCount += await verifyAccessibleControls(page, `${surface.name}/settings-detail`);
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }
+}
+
+async function verifyAccessibleControls(page, surfaceName) {
+  const result = await page.locator("button, input, select, textarea, a[href]").evaluateAll((controls) => {
+    const visible = controls.filter((control) => {
+      if (control instanceof HTMLInputElement && control.type === "hidden") return false;
+      const style = getComputedStyle(control);
+      const bounds = control.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0 && bounds.width > 0 && bounds.height > 0;
+    });
+    const name = (control) => {
+      const labelledBy = control.getAttribute("aria-labelledby")?.split(/\s+/)
+        .map((id) => document.getElementById(id)?.textContent?.trim() || "")
+        .filter(Boolean)
+        .join(" ");
+      const labels = "labels" in control && control.labels
+        ? [...control.labels].map((label) => label.textContent?.trim() || "").filter(Boolean).join(" ")
+        : "";
+      return control.getAttribute("aria-label")?.trim()
+        || labelledBy
+        || labels
+        || control.textContent?.trim()
+        || control.getAttribute("title")?.trim()
+        || "";
+    };
+    return {
+      count: visible.length,
+      unlabeled: visible.filter((control) => !name(control)).map((control) => ({
+        tag: control.tagName.toLowerCase(),
+        type: control.getAttribute("type"),
+        className: control.className,
+      })),
+    };
+  });
+  if (result.unlabeled.length) {
+    throw new Error(`${surfaceName}: visible controls without accessible names: ${JSON.stringify(result.unlabeled)}`);
+  }
+  return result.count;
 }
 
 async function verifyRunningWorkerSelection(page, surfaceName) {
