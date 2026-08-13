@@ -38,6 +38,7 @@ import {
   type NotificationSettings,
   type OperatorPresence,
   type PresenceMode,
+  type ProviderKind,
   type QueenAutonomyPolicy,
   type SessionSummary,
   type Task,
@@ -290,10 +291,10 @@ export function App() {
     });
   }
 
-  async function configureWorker(name: string, workspace: string) {
+  async function configureWorker(name: string, workspace: string, provider: ProviderKind) {
     if (!operatorToken) return;
     await perform(async () => {
-      await createWorker(operatorToken, { name, workspace });
+      await createWorker(operatorToken, { name, workspace, provider });
       const controlRoom = await loadControlRoom(operatorToken);
       setWorkers(controlRoom.workers);
       setWorkspaces(controlRoom.workspaces);

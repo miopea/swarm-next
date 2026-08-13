@@ -1,4 +1,4 @@
-import { downloadDatabaseBackup, type ControlRoomEvent, type Health, type HiveIdentity, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type Worker, type WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, type ControlRoomEvent, type Health, type HiveIdentity, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type Worker, type WorkspaceChoice } from "../api";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
@@ -31,7 +31,7 @@ type Props = {
   onEnableNotifications: () => Promise<void>;
   onDisableNotifications: () => Promise<void>;
   onTestNotification: () => Promise<void>;
-  onCreateWorker: (name: string, workspace: string) => Promise<void>;
+  onCreateWorker: (name: string, workspace: string, provider: ProviderKind) => Promise<void>;
   onUpdateWorker: (workerId: string, name: string, autostart: boolean) => Promise<void>;
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
 };

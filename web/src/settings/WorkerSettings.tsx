@@ -1,13 +1,13 @@
 import { useState, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
 
-import type { Worker, WorkspaceChoice } from "../api";
+import type { ProviderKind, Worker, WorkspaceChoice } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 
 type Props = {
   workers: Worker[];
   workspaces: WorkspaceChoice[];
   busy: boolean;
-  onCreate: (name: string, workspace: string) => Promise<void>;
+  onCreate: (name: string, workspace: string, provider: ProviderKind) => Promise<void>;
   onUpdate: (workerId: string, name: string, autostart: boolean) => Promise<void>;
   onReorder: (workerIds: string[]) => Promise<void>;
 };
@@ -17,6 +17,7 @@ export default function WorkerSettings({ workers, workspaces, busy, onCreate, on
   const available = workspaces.filter((workspace) => !workspace.configured_worker_id);
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [provider, setProvider] = useState<ProviderKind>("claude_code");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [highlightedWorkspace, setHighlightedWorkspace] = useState(0);
   const [draggedWorkerId, setDraggedWorkerId] = useState<string>();
@@ -25,7 +26,7 @@ export default function WorkerSettings({ workers, workspaces, busy, onCreate, on
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!name.trim() || !workspace) return;
-    await onCreate(name, workspace);
+    await onCreate(name, workspace, provider);
     setName("");
     setWorkspace("");
     setWorkspaceOpen(false);
@@ -74,7 +75,7 @@ export default function WorkerSettings({ workers, workspaces, busy, onCreate, on
   return (
     <section className="settings-card worker-settings" aria-labelledby="worker-settings-heading">
       <div><p className="eyebrow">Worker roster</p><h3 id="worker-settings-heading">Your familiar crew</h3></div>
-      <p>Workers remember their repository and Claude conversation across stops, updates, and reboots. Reorder them to match how you work.</p>
+      <p>Workers remember their repository and provider conversation across stops, updates, and reboots. Reorder them to match how you work.</p>
       <div className="configured-workers">
         {workers.find((worker) => worker.role === "queen") && (
           <div className="configured-worker queen-worker">
@@ -103,6 +104,13 @@ export default function WorkerSettings({ workers, workspaces, busy, onCreate, on
         <div className="field-stack">
           <label htmlFor="configured-worker-name">Worker name</label>
           <input id="configured-worker-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Daisy" maxLength={80} />
+        </div>
+        <div className="field-stack provider-field">
+          <label htmlFor="configured-worker-provider">Coding provider</label>
+          <select id="configured-worker-provider" value={provider} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
+            <option value="claude_code">Claude Code</option>
+            <option value="codex">Codex</option>
+          </select>
         </div>
         <div className="field-stack">
           <label htmlFor="configured-worker-repository">Repository path</label>
@@ -211,7 +219,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, onMove, onUp
         </form>
       ) : (
         <>
-          <span className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {worker.running ? "Buzzing" : "Sleeping"}{worker.autostart ? " · always active" : ""}</small></span>
+          <span className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {worker.running ? "Buzzing" : "Sleeping"}{worker.autostart ? " · always active" : ""}</small></span>
           <button type="button" className="worker-edit-button secondary-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
           <span className="worker-order-actions">
             <button type="button" className="secondary-button" aria-label={`Move ${worker.name} earlier`} disabled={busy || first} onClick={() => onMove(-1)}>↑</button>
@@ -225,6 +233,10 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, onMove, onUp
 
 function repositoryName(workspace: string): string {
   return workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace;
+}
+
+function providerLabel(provider: ProviderKind): string {
+  return provider === "codex" ? "Codex" : "Claude";
 }
 
 function workspaceMatches(choices: WorkspaceChoice[], query: string): WorkspaceChoice[] {

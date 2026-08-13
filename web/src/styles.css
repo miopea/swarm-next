@@ -325,7 +325,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .worker-settings-bee svg { width: 100%; height: 100%; }
 .worker-order-actions { display: flex; gap: 5px; }
 .worker-order-actions button { width: 34px; min-height: 34px; padding: 4px; }
-.configure-worker-form { display: grid; grid-template-columns: minmax(150px, .6fr) minmax(220px, 1fr) auto; align-items: start; gap: 9px; padding-top: 14px; border-top: 1px solid var(--line); }
+.configure-worker-form { display: grid; grid-template-columns: minmax(130px, .5fr) minmax(130px, .35fr) minmax(220px, 1fr) auto; align-items: start; gap: 9px; padding-top: 14px; border-top: 1px solid var(--line); }
 .configure-worker-form .field-stack { min-width: 0; }
 .configure-worker-form .field-stack > small { color: var(--text-muted); font-size: .68rem; line-height: 1.35; }
 .configure-worker-form > button { align-self: start; margin-top: 23px; }
