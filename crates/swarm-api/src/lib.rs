@@ -1058,6 +1058,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/feedback/attachments",
             post(upload_dogfood_attachment).layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES)),
         )
+        .route(
+            "/api/v1/feedback/attachments/{name}",
+            get(download_dogfood_attachment),
+        )
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
         .route("/api/v1/decisions", get(list_decisions))
         .route(
@@ -1308,6 +1312,49 @@ async fn upload_dogfood_attachment(
         Json(DogfoodAttachmentResponse { name: name.into() }),
     )
         .into_response())
+}
+
+async fn download_dogfood_attachment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let referenced = task_store(&state)?
+        .dogfood_attachment_is_referenced(&name)
+        .map_err(|error| task_store_error(&error))?;
+    if !referenced {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "feedback_attachment_not_found",
+            "the private report attachment was not found",
+        ));
+    }
+    let store = state.attachment_store.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "attachment_store_unconfigured",
+            "private attachment storage is not configured",
+        )
+    })?;
+    let (bytes, media_type) = store.read(&name).await.map_err(attachment_error)?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response_headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(media_type)
+            .map_err(|_| attachment_error(AttachmentError::Unavailable))?,
+    );
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename={name}"))
+            .map_err(|_| attachment_error(AttachmentError::Unavailable))?,
+    );
+    Ok((response_headers, bytes).into_response())
 }
 
 async fn operator_presence(
@@ -2749,6 +2796,11 @@ fn attachment_error(error: AttachmentError) -> ApiError {
             "attachment_store_unavailable",
             error.to_string(),
         ),
+        AttachmentError::NotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "feedback_attachment_not_found",
+            error.to_string(),
+        ),
     }
 }
 
@@ -3452,6 +3504,9 @@ mod tests {
         let attachment_name = attachment["name"].as_str().unwrap();
         assert!(!attachment_name.contains("private"));
 
+        let unreferenced = feedback_attachment_get(app.clone(), attachment_name, true).await;
+        assert_eq!(unreferenced.status(), StatusCode::NOT_FOUND);
+
         let saved = app
             .clone()
             .oneshot(
@@ -3475,12 +3530,34 @@ mod tests {
             .unwrap();
         assert_eq!(saved.status(), StatusCode::CREATED);
 
-        let reports = authorized_get(app, "/api/v1/feedback/reports?limit=1").await;
+        let reports = authorized_get(app.clone(), "/api/v1/feedback/reports?limit=1").await;
         assert_eq!(reports.status(), StatusCode::OK);
         assert_eq!(reports.headers()[header::CACHE_CONTROL], "no-store");
         let reports = response_json(reports).await;
         assert_eq!(reports[0]["observation"], "It stayed blank");
         assert_eq!(reports[0]["attachment_name"], attachment_name);
+
+        let unauthorized_attachment =
+            feedback_attachment_get(app.clone(), attachment_name, false).await;
+        assert_eq!(unauthorized_attachment.status(), StatusCode::UNAUTHORIZED);
+        let downloaded = feedback_attachment_get(app.clone(), attachment_name, true).await;
+        assert_eq!(downloaded.status(), StatusCode::OK);
+        assert_eq!(downloaded.headers()[header::CONTENT_TYPE], "image/png");
+        assert_eq!(downloaded.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            downloaded.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+        assert!(
+            downloaded.headers()[header::CONTENT_DISPOSITION]
+                .to_str()
+                .unwrap()
+                .contains(attachment_name)
+        );
+        let downloaded = axum::body::to_bytes(downloaded.into_body(), MAX_ATTACHMENT_BYTES)
+            .await
+            .unwrap();
+        assert_eq!(downloaded.as_ref(), b"\x89PNG\r\n\x1a\nprivate-screen");
         assert_eq!(
             std::fs::read_dir(runtime.path().join("attachments"))
                 .unwrap()
@@ -5204,6 +5281,16 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    async fn feedback_attachment_get(app: Router, name: &str, authorized: bool) -> Response {
+        let mut request = Request::builder().uri(format!("/api/v1/feedback/attachments/{name}"));
+        if authorized {
+            request = request.header("authorization", "Bearer secret");
+        }
+        app.oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
     }
 
     #[tokio::test]

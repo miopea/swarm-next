@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import {
+  downloadDogfoodScreenshot,
   fetchHistoryDiagnostics,
   fetchDogfoodReports,
   fetchRuntimeResources,
@@ -35,6 +36,8 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
   const [savedReports, setSavedReports] = useState<DogfoodReport[]>();
   const [savedReportsUnavailable, setSavedReportsUnavailable] = useState(false);
   const [copiedReportId, setCopiedReportId] = useState<string>();
+  const [downloadingReportId, setDownloadingReportId] = useState<string>();
+  const [unavailableAttachmentId, setUnavailableAttachmentId] = useState<string>();
 
   useEffect(() => {
     let cancelled = false;
@@ -98,6 +101,25 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
     }
   }
 
+  async function downloadScreenshot(report: DogfoodReport) {
+    if (!report.attachment_name) return;
+    setDownloadingReportId(report.id);
+    setUnavailableAttachmentId(undefined);
+    try {
+      const blob = await downloadDogfoodScreenshot(operatorToken, report.attachment_name);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = report.attachment_name;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setUnavailableAttachmentId(report.id);
+    } finally {
+      setDownloadingReportId(undefined);
+    }
+  }
+
   return (
     <section className="settings-card diagnostics-card" aria-labelledby="diagnostics-heading">
       <div><p className="eyebrow">Diagnostics</p><h3 id="diagnostics-heading">Know which layer needs attention</h3></div>
@@ -130,7 +152,11 @@ export default function DiagnosticsWorkspace({ operatorToken, health, hiveIdenti
                   <div><dt>Observed</dt><dd>{report.observation || "Not provided"}</dd></div>
                   <div><dt>Screenshot</dt><dd>{report.attachment_name ? "Attached privately" : "None"}</dd></div>
                 </dl>
-                <button type="button" className="secondary-button" onClick={() => void copySavedReport(report)}>{copiedReportId === report.id ? "Copied report" : "Copy report for developer"}</button>
+                <div className="saved-feedback-actions">
+                  <button type="button" className="secondary-button" onClick={() => void copySavedReport(report)}>{copiedReportId === report.id ? "Copied report" : "Copy report for developer"}</button>
+                  {report.attachment_name ? <button type="button" className="secondary-button" disabled={downloadingReportId === report.id} onClick={() => void downloadScreenshot(report)}>{downloadingReportId === report.id ? "Downloading…" : "Download screenshot"}</button> : null}
+                </div>
+                {unavailableAttachmentId === report.id ? <p role="status" className="saved-feedback-error">Screenshot is no longer available.</p> : null}
               </details>
             ))}
           </div>

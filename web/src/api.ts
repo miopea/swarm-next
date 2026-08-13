@@ -518,6 +518,17 @@ export async function fetchDogfoodReports(
   return response.json() as Promise<DogfoodReport[]>;
 }
 
+export async function downloadDogfoodScreenshot(
+  operatorToken: string,
+  attachmentName: string,
+): Promise<Blob> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/feedback/attachments/${encodeURIComponent(attachmentName)}`,
+  );
+  return response.blob();
+}
+
 export async function fetchJiraReadiness(operatorToken: string): Promise<JiraReadiness> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/readiness");
   return response.json() as Promise<JiraReadiness>;

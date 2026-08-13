@@ -40,6 +40,13 @@ Settings also shows the newest reports as collapsed summaries and copies the
 already-reviewed bundle on demand; diagnostic payloads are not expanded by
 default.
 
+A trusted operator can download a retained screenshot from its saved report.
+The authenticated endpoint serves only opaque attachment names that are still
+referenced by a retained report, uses `no-store` and `nosniff`, and forces a
+download rather than rendering untrusted image content inline. Screenshot files
+expire after seven days even when the report remains; Settings then explains
+that the screenshot is no longer available instead of silently failing.
+
 ## Boundary
 
 This is private local retention, not an outbound submission transport. GitHub,

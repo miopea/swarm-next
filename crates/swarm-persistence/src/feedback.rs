@@ -77,6 +77,21 @@ impl TaskStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
+
+    /// Confirms an opaque attachment belongs to one retained dogfood report.
+    ///
+    /// # Errors
+    /// Returns database failures.
+    pub fn dogfood_attachment_is_referenced(&self, name: &str) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM dogfood_reports WHERE attachment_name = ?1)",
+                [name],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
 }
 
 fn validate_report(

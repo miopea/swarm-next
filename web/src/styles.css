@@ -368,7 +368,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .saved-feedback-list dl div { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; }
 .saved-feedback-list dt { color: var(--muted); font-size: .76rem; }
 .saved-feedback-list dd { margin: 0; overflow-wrap: anywhere; }
-.saved-feedback-list button { margin: 0 12px 12px; }
+.saved-feedback-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 12px 12px; }
+.saved-feedback-actions button { margin: 0; }
+.saved-feedback-error { margin: -4px 12px 12px !important; color: var(--danger); }
 .feedback-backdrop { position: fixed; z-index: 40; inset: 0; display: grid; padding: 24px; place-items: center; background: color-mix(in srgb, var(--terminal-frame) 62%, transparent); backdrop-filter: blur(3px); }
 .feedback-dialog { display: grid; width: min(860px, 100%); max-height: min(820px, calc(100dvh - 48px)); gap: 16px; padding: 24px; overflow: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); color: var(--text); background: var(--panel-raised); box-shadow: 0 20px 60px color-mix(in srgb, var(--terminal-frame) 42%, transparent); }
 .feedback-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }

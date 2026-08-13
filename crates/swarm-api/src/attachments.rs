@@ -31,6 +31,8 @@ pub enum AttachmentError {
     Capacity,
     #[error("private attachment storage is unavailable")]
     Unavailable,
+    #[error("private attachment was not found")]
+    NotFound,
 }
 
 impl AttachmentStore {
@@ -70,6 +72,43 @@ impl AttachmentStore {
         }
         write_private(&path, bytes).await?;
         Ok(path)
+    }
+
+    pub async fn read(&self, name: &str) -> Result<(Vec<u8>, &'static str), AttachmentError> {
+        let media_type = media_type_for_name(name).ok_or(AttachmentError::NotFound)?;
+        let path = self.root.join(name);
+        let metadata = tokio::fs::symlink_metadata(&path).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                AttachmentError::NotFound
+            } else {
+                AttachmentError::Unavailable
+            }
+        })?;
+        if !metadata.file_type().is_file()
+            || metadata.len() == 0
+            || metadata.len() > MAX_ATTACHMENT_BYTES as u64
+        {
+            return Err(AttachmentError::NotFound);
+        }
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|_| AttachmentError::Unavailable)?;
+        validated_extension(media_type, &bytes).map_err(|_| AttachmentError::NotFound)?;
+        Ok((bytes, media_type))
+    }
+}
+
+fn media_type_for_name(name: &str) -> Option<&'static str> {
+    let (digest, extension) = name.split_once('.')?;
+    if digest.len() != 20 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    match extension {
+        "png" => Some("image/png"),
+        "jpg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        "gif" => Some("image/gif"),
+        _ => None,
     }
 }
 
@@ -230,6 +269,31 @@ mod tests {
                 .save("image/png", &vec![0; MAX_ATTACHMENT_BYTES + 1])
                 .await,
             Err(AttachmentError::InvalidSize)
+        ));
+    }
+
+    #[tokio::test]
+    async fn reads_only_valid_content_named_images() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = AttachmentStore::new(directory.path().join("attachments"));
+        let path = store.save("image/png", PNG).await.unwrap();
+        let name = path.file_name().unwrap().to_string_lossy();
+
+        let (bytes, media_type) = store.read(&name).await.unwrap();
+
+        assert_eq!(bytes, PNG);
+        assert_eq!(media_type, "image/png");
+        assert!(matches!(
+            store.read("../private.png").await,
+            Err(AttachmentError::NotFound)
+        ));
+        assert!(matches!(
+            store.read("00000000000000000000.exe").await,
+            Err(AttachmentError::NotFound)
+        ));
+        assert!(matches!(
+            store.read("00000000000000000000.png").await,
+            Err(AttachmentError::NotFound)
         ));
     }
 }

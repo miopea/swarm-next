@@ -11,6 +11,10 @@ afterEach(() => {
 });
 
 test("shows subsystem diagnostics, previews a sanitized report, and changes the selected theme", async () => {
+  const createObjectURL = vi.fn().mockReturnValue("blob:dogfood-screenshot");
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
   const onThemeChange = vi.fn();
   const onPresenceChange = vi.fn().mockResolvedValue(undefined);
   const onEnableLockDetection = vi.fn().mockResolvedValue(undefined);
@@ -22,6 +26,9 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   const onUpdateWorkerEngine = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("feedback/attachments/screen-123.png")) {
+      return new Response(new Uint8Array([137, 80, 78, 71]), { status: 200, headers: { "Content-Type": "image/png" } });
+    }
     if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
     if (url.includes("feedback/reports")) return ok([{
       id: "report-1",
@@ -117,6 +124,10 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   fireEvent.click(savedReportSummary);
   expect(screen.getByText("Worker remains readable")).toBeInTheDocument();
   expect(screen.getByText("Attached privately")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Download screenshot" }));
+  await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
+  expect(click).toHaveBeenCalledOnce();
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:dogfood-screenshot");
 
   fireEvent.click(screen.getByRole("button", { name: "Preview report" }));
   const preview = screen.getByLabelText("Sanitized diagnostic report");
