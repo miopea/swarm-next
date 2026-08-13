@@ -26,6 +26,7 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
   const [, refreshAttention] = useState(0);
   const rowRef = useRef<HTMLDivElement>(null);
   const primaryAction = worker.running ? onOpen : onStart;
+  const primaryActionLabel = worker.running ? "Open terminal" : worker.runtime_error ? "Retry worker" : "Start worker";
   const engagementExpired = worker.attention_state === "with_operator"
     && worker.engagement_expires_at !== undefined
     && worker.engagement_expires_at * 1000 <= Date.now();
@@ -91,7 +92,7 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
       {menuOpen && (
         <div className="worker-menu" role="menu" aria-label={`${worker.name} actions`}>
           <button role="menuitem" onClick={() => run(primaryAction)}>
-            {worker.running ? "Open terminal" : "Start worker"}
+            {primaryActionLabel}
           </button>
           {worker.running && worker.role !== "queen" && (
             <button className="danger-text" role="menuitem" onClick={() => run(onStop)}>Stop worker</button>

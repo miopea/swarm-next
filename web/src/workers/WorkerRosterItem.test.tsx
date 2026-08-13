@@ -1,5 +1,5 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { expect, test, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 
 import type { Worker } from "../api";
 import WorkerRosterItem from "./WorkerRosterItem";
@@ -8,6 +8,8 @@ const queen: Worker = {
   id: "queen", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code", workspace: "/workspace/queen",
   autostart: true, position: 0, active_session_id: "queen-session", running: true, attention_state: "buzzing", created_at: 1, updated_at: 1,
 };
+
+afterEach(cleanup);
 
 test("right click opens the same accessible action menu and protects Queen", () => {
   const onOpen = vi.fn();
@@ -48,6 +50,17 @@ test("shows a durable operator decision as awaiting you", () => {
 
   expect(screen.getByText("Awaiting you")).toBeInTheDocument();
   expect(screen.getByTitle("Awaiting you")).toHaveClass("waiting");
+});
+
+test("offers an explicit retry after a worker launch failure", () => {
+  const onStart = vi.fn();
+  render(<WorkerRosterItem worker={{ ...queen, active_session_id: null, running: false, attention_state: "blocked", runtime_error: "Worker exited again before recovery was stable. Retry when ready." }} selected={false} detail="Worker exited again before recovery was stable. Retry when ready." busy={false} onOpen={vi.fn()} onStart={onStart} onStop={vi.fn()} />);
+
+  expect(screen.getByText("Blocked")).toBeInTheDocument();
+  expect(screen.getByText(/Retry when ready/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Queen" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Retry worker" }));
+  expect(onStart).toHaveBeenCalledOnce();
 });
 
 test("returns to buzzing when the operator engagement lease expires", () => {
