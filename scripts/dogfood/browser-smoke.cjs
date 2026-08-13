@@ -38,43 +38,50 @@ async function main() {
 }
 
 async function verifyBrowserRestartPersistence() {
-  const profileDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "swarm-next-browser-smoke-"));
-  const launchOptions = {
-    headless: true,
-    viewport: surfaces[0].viewport,
-    ...(browserExecutable ? { executablePath: browserExecutable } : {}),
-  };
+  const results = [];
+  for (const surface of surfaces) {
+    const profileDirectory = await fs.mkdtemp(path.join(os.tmpdir(), `swarm-next-${surface.name}-smoke-`));
+    const launchOptions = {
+      headless: true,
+      viewport: surface.viewport,
+      isMobile: surface.mobile,
+      hasTouch: surface.mobile,
+      ...(surface.mobile ? { userAgent: "Mozilla/5.0 (Linux; Android 15; Swarm Dogfood) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36" } : {}),
+      ...(browserExecutable ? { executablePath: browserExecutable } : {}),
+    };
 
-  try {
-    let context = await chromium.launchPersistentContext(profileDirectory, launchOptions);
     try {
-      const page = context.pages()[0] || await context.newPage();
-      await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-      const tokenInput = page.getByLabel("Operator token");
-      if (await tokenInput.isVisible().catch(() => false)) {
-        await tokenInput.fill(operatorToken);
-        await page.getByRole("button", { name: "Unlock Swarm" }).click();
+      let context = await chromium.launchPersistentContext(profileDirectory, launchOptions);
+      try {
+        const page = context.pages()[0] || await context.newPage();
+        await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+        const tokenInput = page.getByLabel("Operator token");
+        if (await tokenInput.isVisible().catch(() => false)) {
+          await tokenInput.fill(operatorToken);
+          await page.getByRole("button", { name: "Unlock Swarm" }).click();
+        }
+        await page.getByRole("button", { name: /Workers/ }).waitFor();
+      } finally {
+        await context.close();
       }
-      await page.getByRole("button", { name: /Workers/ }).waitFor();
-    } finally {
-      await context.close();
-    }
 
-    context = await chromium.launchPersistentContext(profileDirectory, launchOptions);
-    try {
-      const page = context.pages()[0] || await context.newPage();
-      await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-      await page.getByRole("button", { name: /Workers/ }).waitFor();
-      if (await page.getByLabel("Operator token").isVisible().catch(() => false)) {
-        throw new Error("desktop: browser session did not survive a complete browser restart");
+      context = await chromium.launchPersistentContext(profileDirectory, launchOptions);
+      try {
+        const page = context.pages()[0] || await context.newPage();
+        await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+        await page.getByRole("button", { name: /Workers/ }).waitFor();
+        if (await page.getByLabel("Operator token").isVisible().catch(() => false)) {
+          throw new Error(`${surface.name}: browser session did not survive a complete browser restart`);
+        }
+        results.push({ surface: surface.name, preservedAcrossBrowserRestart: true, status: "passed" });
+      } finally {
+        await context.close();
       }
-      return { surface: "desktop", preservedAcrossBrowserRestart: true, status: "passed" };
     } finally {
-      await context.close();
+      await fs.rm(profileDirectory, { recursive: true, force: true });
     }
-  } finally {
-    await fs.rm(profileDirectory, { recursive: true, force: true });
   }
+  return results;
 }
 
 async function checkSurface(browser, surface) {
