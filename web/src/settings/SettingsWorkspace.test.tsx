@@ -87,6 +87,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Tasks").parentElement).toHaveTextContent("TasksAlt2");
   expect(screen.getByText("Workers").parentElement).toHaveTextContent("WorkersAlt3");
   expect(screen.getByText("Settings").parentElement).toHaveTextContent("SettingsAlt4");
+  expect(screen.getByText("Quick navigation").parentElement).toHaveTextContent("Quick navigationAltK");
 
   fireEvent.click(screen.getByRole("button", { name: "Preview report" }));
   const preview = screen.getByLabelText("Sanitized diagnostic report");

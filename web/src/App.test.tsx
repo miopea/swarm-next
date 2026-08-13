@@ -304,6 +304,13 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
   taskTitle.focus();
   fireEvent.keyDown(taskTitle, { key: "4", altKey: true });
   expect(screen.getByRole("heading", { name: "Task board" })).toBeInTheDocument();
+  fireEvent.keyDown(taskTitle, { key: "k", altKey: true });
+  expect(screen.queryByRole("dialog", { name: "Where would you like to go?" })).not.toBeInTheDocument();
+
+  fireEvent.keyDown(screen.getByRole("button", { name: "Tasks 0" }), { key: "k", altKey: true });
+  expect(screen.getByRole("dialog", { name: "Where would you like to go?" })).toBeInTheDocument();
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "Where would you like to go?" })).not.toBeInTheDocument();
 
   fireEvent.keyDown(screen.getByRole("button", { name: "Tasks 0" }), { key: "4", altKey: true });
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();

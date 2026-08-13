@@ -47,6 +47,7 @@ import {
 import BeeMascot from "./brand/BeeMascot";
 import DecisionInbox from "./decisions/DecisionInbox";
 import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
+import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
@@ -77,6 +78,7 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [decisions, setDecisions] = useState<DecisionRequest[]>([]);
   const [showFeedback, setShowFeedback] = useState(false);
+  const [showCommands, setShowCommands] = useState(false);
   const [surface, setSurface] = useState<Surface>(readSavedSurface);
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -433,6 +435,11 @@ export function App() {
 
   function handleShortcut(event: ReactKeyboardEvent<HTMLElement>) {
     if (!operatorToken || !event.altKey || event.ctrlKey || event.metaKey || isTypingTarget(event.target)) return;
+    if (event.key.toLocaleLowerCase() === "k") {
+      event.preventDefault();
+      setShowCommands(true);
+      return;
+    }
     if (["1", "2", "3", "4"].includes(event.key)) {
       event.preventDefault();
       setSurface(event.key === "1" ? "decisions" : event.key === "2" ? "tasks" : event.key === "3" ? "workers" : "settings");
@@ -513,6 +520,16 @@ export function App() {
     [tasks],
   );
   const activeTask = activeSession ? tasksBySession.get(activeSession.session_id) : undefined;
+  const commandChoices = useMemo<CommandChoice[]>(() => [
+    { id: "decisions", label: "Needs you", detail: `${pendingDecisionCount} pending`, group: "Go to", run: () => setSurface("decisions") },
+    { id: "tasks", label: "Tasks", detail: `${openTaskCount} open`, group: "Go to", run: () => setSurface("tasks") },
+    { id: "workers", label: "Workers", detail: `${workers.filter((worker) => worker.running).length} running`, group: "Go to", run: () => setSurface("workers") },
+    { id: "settings", label: "Settings", detail: "Preferences and diagnostics", group: "Go to", run: () => setSurface("settings") },
+    ...workers.filter((worker) => worker.running && worker.active_session_id).map((worker) => ({
+      id: `worker-${worker.id}`, label: worker.name, detail: "Open worker terminal", group: "Workers" as const,
+      run: () => { if (worker.active_session_id) openWorker(worker.active_session_id); },
+    })),
+  ], [openTaskCount, pendingDecisionCount, workers, activeSessionId, operatorToken]);
 
   useEffect(() => {
     if (surface !== "workers" || !activeSessionId) return;
@@ -610,12 +627,14 @@ export function App() {
             {busy && <span className="saving-state">Saving…</span>}
             {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
+            {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
             <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => setColorTheme((current) => current === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" onClick={() => void refreshControlRoom()} disabled={busy}><RefreshIcon /></button>}
             {operatorToken && <button className="secondary-button" onClick={() => void logout()} disabled={busy}>Lock</button>}
           </div>
         </header>
         {operationError && <div className="operation-error" role="alert">{operationError}</div>}
+        {operatorToken && showCommands ? <CommandPalette choices={commandChoices} onClose={() => setShowCommands(false)} /> : null}
         {operatorToken && showFeedback ? (
           <DogfoodFeedbackDialog
             activeSessionId={activeSessionId}
@@ -725,6 +744,7 @@ function saveActiveSessionId(sessionId: string) {
 
 function DecisionIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a7 7 0 0 0-7 7v3l-2 3h18l-2-3v-3a7 7 0 0 0-7-7ZM9 20h6"/></svg>; }
 function FeedbackIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4V5Z"/><path d="M12 8v4M12 14h.01"/></svg>; }
+function CommandIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4M8 11h6M11 8v6"/></svg>; }
 function requireActiveSession(worker: Worker): string {
   if (!worker.active_session_id) throw new Error(`${worker.name} did not receive a terminal session`);
   return worker.active_session_id;
