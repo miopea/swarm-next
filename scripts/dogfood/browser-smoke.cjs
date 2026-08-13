@@ -89,6 +89,14 @@ async function checkSurface(browser, surface) {
     ]) {
       await page.getByRole("button", { name: target.nav }).click();
       await target.ready().first().waitFor();
+      if (target.name === "tasks") {
+        const taskTitleVisible = await page.getByLabel("Task title").isVisible().catch(() => false);
+        if (surface.mobile && taskTitleVisible) throw new Error(`${surface.name}: task composer obscures active work by default`);
+        if (!surface.mobile && !taskTitleVisible) throw new Error(`${surface.name}: desktop task composer is unexpectedly collapsed`);
+        if (surface.mobile) {
+          await page.getByRole("heading", { name: "Active work" }).waitFor();
+        }
+      }
       if (target.name === "workers") {
         workerSelections = await verifyRunningWorkerSelection(page, surface.name);
         if (surface.mobile && !await page.getByRole("button", { name: "Add image" }).isVisible()) {
@@ -108,6 +116,19 @@ async function checkSurface(browser, surface) {
         fullPage: true,
       });
       surfaceResults.push({ surface: target.name, ...dimensions });
+    }
+
+    if (surface.mobile) {
+      await page.getByRole("button", { name: /Tasks/ }).click();
+      const createTask = page.getByRole("button", { name: "Create a task" });
+      await createTask.click();
+      await page.getByLabel("Task title").waitFor();
+      if (await page.getByRole("button", { name: "Hide task form" }).getAttribute("aria-expanded") !== "true") {
+        throw new Error(`${surface.name}: task composer did not expose its expanded state`);
+      }
+      await page.screenshot({ path: path.join(outputRoot, `${surface.name}-tasks-compose.png`), fullPage: true });
+      await page.getByRole("button", { name: /Settings/ }).click();
+      await page.getByRole("heading", { name: "Settings" }).waitFor();
     }
 
     await page.getByRole("heading", { name: "Your familiar crew" }).waitFor();
