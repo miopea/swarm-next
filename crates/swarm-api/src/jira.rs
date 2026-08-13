@@ -112,10 +112,12 @@ impl std::fmt::Display for JiraAdapterError {
     }
 }
 
-#[derive(Deserialize)]
-struct JiraAccount {
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct JiraAccount {
+    #[serde(rename = "accountId")]
+    pub account_id: String,
     #[serde(rename = "displayName")]
-    display_name: Option<String>,
+    pub display_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -323,25 +325,11 @@ impl JiraReadinessProbe {
 
         // Project discovery is the capability Swarm requires. Profile access is
         // cosmetic and older otherwise-valid grants may not include read:jira-user.
-        let account_name = if let Ok(myself_url) = endpoint(&access.base_url, "/rest/api/3/myself")
-        {
-            match authorize(access.client.get(myself_url), &access.authorization)
-                .header(reqwest::header::ACCEPT, "application/json")
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => response
-                    .bytes()
-                    .await
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<JiraAccount>(&bytes).ok())
-                    .and_then(|account| account.display_name)
-                    .filter(|name| !name.trim().is_empty()),
-                _ => None,
-            }
-        } else {
-            None
-        };
+        let account_name = account(&access)
+            .await
+            .ok()
+            .and_then(|account| account.display_name)
+            .filter(|name| !name.trim().is_empty());
         JiraReadiness {
             configured: true,
             connection: JiraConnectionState::Ready,
@@ -487,7 +475,7 @@ impl JiraReadinessProbe {
         let jql = match scope {
             JiraIssueScope::All => format!("project = {jql_project} ORDER BY updated DESC"),
             JiraIssueScope::HiveIntake => format!(
-                "project = {jql_project} AND assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+                "project = {jql_project} AND (assignee = currentUser() OR assignee IS EMPTY) AND statusCategory != Done ORDER BY updated DESC"
             ),
         };
         let mut issues = Vec::new();
@@ -528,6 +516,65 @@ impl JiraReadinessProbe {
             next_page_token = page.next_page_token;
         }
         Ok(issues)
+    }
+
+    pub(crate) async fn current_account(&self) -> Result<JiraAccount, JiraAdapterError> {
+        let access = self.access().await?;
+        account(&access).await
+    }
+
+    pub(crate) async fn assign_issue(
+        &self,
+        issue_id_or_key: &str,
+        account_id: &str,
+    ) -> Result<(), JiraAdapterError> {
+        let issue = issue_id_or_key.trim();
+        let account_id = account_id.trim();
+        if issue.is_empty()
+            || issue.len() > 128
+            || issue.chars().any(char::is_control)
+            || account_id.is_empty()
+            || account_id.len() > 128
+            || account_id.chars().any(char::is_control)
+        {
+            return Err(JiraAdapterError::InvalidResponse);
+        }
+        let access = self.access().await?;
+        let mut url = endpoint(&access.base_url, "/rest/api/3/issue/")?;
+        url.path_segments_mut()
+            .map_err(|()| JiraAdapterError::InvalidResponse)?
+            .pop_if_empty()
+            .push(issue)
+            .push("assignee");
+        let response = authorize(access.client.put(url), &access.authorization)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(&serde_json::json!({ "accountId": account_id }))
+            .send()
+            .await
+            .map_err(|_| JiraAdapterError::NetworkUnavailable)?;
+        ensure_success(response.status())
+    }
+
+    pub(crate) async fn claim_unassigned_issues(
+        &self,
+        issues: &mut [JiraIssue],
+    ) -> Result<(), JiraAdapterError> {
+        if !issues
+            .iter()
+            .any(|issue| issue.assignee_account_id.is_none())
+        {
+            return Ok(());
+        }
+        let account = self.current_account().await?;
+        for issue in issues
+            .iter_mut()
+            .filter(|issue| issue.assignee_account_id.is_none())
+        {
+            self.assign_issue(&issue.id, &account.account_id).await?;
+            issue.assignee_account_id = Some(account.account_id.clone());
+            issue.assignee_name = account.display_name.clone();
+        }
+        Ok(())
     }
 
     pub(crate) async fn transition_issue(
@@ -662,6 +709,29 @@ fn authorize(
     }
 }
 
+async fn account(access: &JiraAccess) -> Result<JiraAccount, JiraAdapterError> {
+    let url = endpoint(&access.base_url, "/rest/api/3/myself")?;
+    let response = authorize(access.client.get(url), &access.authorization)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|_| JiraAdapterError::NetworkUnavailable)?;
+    ensure_success(response.status())?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| JiraAdapterError::InvalidResponse)?;
+    let account = serde_json::from_slice::<JiraAccount>(&bytes)
+        .map_err(|_| JiraAdapterError::InvalidResponse)?;
+    if account.account_id.trim().is_empty()
+        || account.account_id.len() > 128
+        || account.account_id.chars().any(char::is_control)
+    {
+        return Err(JiraAdapterError::InvalidResponse);
+    }
+    Ok(account)
+}
+
 fn oauth_error(error: OAuthError) -> JiraAdapterError {
     match error {
         OAuthError::NotConnected => JiraAdapterError::NotConfigured,
@@ -769,7 +839,12 @@ mod tests {
             )
             .route(
                 "/rest/api/3/myself",
-                get(move || async move { (profile_status, Json(json!({ "displayName": "Bea" }))) }),
+                get(move || async move {
+                    (
+                        profile_status,
+                        Json(json!({ "accountId": "account-1", "displayName": "Bea" })),
+                    )
+                }),
             );
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         JiraReadinessProbe::configured(
@@ -937,7 +1012,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hive_intake_requests_only_current_users_open_work() {
+    async fn hive_intake_requests_current_users_and_unassigned_open_work() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let app = Router::new().route(
@@ -946,6 +1021,7 @@ mod tests {
                 let jql = query.get("jql").map(String::as_str).unwrap_or_default();
                 assert!(jql.contains("project = 10001"));
                 assert!(jql.contains("assignee = currentUser()"));
+                assert!(jql.contains("assignee IS EMPTY"));
                 assert!(jql.contains("statusCategory != Done"));
                 Json(json!({ "isLast": true, "issues": [] }))
             }),
@@ -965,5 +1041,44 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn assigns_an_issue_to_the_explicit_connected_account() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let written = writes.clone();
+        let app = Router::new()
+            .route(
+                "/rest/api/3/myself",
+                get(|| async { Json(json!({ "accountId": "account-1", "displayName": "Bea" })) }),
+            )
+            .route(
+                "/rest/api/3/issue/WEB-42/assignee",
+                axum::routing::put(move |Json(body): Json<serde_json::Value>| {
+                    let written = written.clone();
+                    async move {
+                        assert_eq!(body["accountId"], "account-1");
+                        written.fetch_add(1, Ordering::SeqCst);
+                        AxumStatus::NO_CONTENT
+                    }
+                }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let adapter = JiraReadinessProbe::configured(
+            &format!("http://{address}"),
+            "operator@example.test",
+            "token",
+        )
+        .unwrap();
+
+        let account = adapter.current_account().await.unwrap();
+        assert_eq!(account.account_id, "account-1");
+        adapter
+            .assign_issue("WEB-42", &account.account_id)
+            .await
+            .unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
     }
 }

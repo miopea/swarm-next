@@ -55,7 +55,7 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
       setIssues(next);
       setQuery("");
       setSelectedIds(new Set());
-      setMessage(next.length ? "Choose the work you want to bring into this Hive." : `No assigned open work is waiting in ${binding.project_name}.`);
+      setMessage(next.length ? "Choose assigned or available work to bring into this Hive." : `No open work assigned to you or available to claim is waiting in ${binding.project_name}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Jira work could not be loaded.");
     } finally {
@@ -91,8 +91,8 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
   return (
     <section className="jira-task-source" aria-labelledby="jira-work-heading">
       <div className="jira-task-source-heading">
-        <div><p className="eyebrow">Jira work</p><h3 id="jira-work-heading">Bring assigned work onto this board</h3></div>
-        {!activeBinding ? <span>Open issues assigned to {readiness.account_name ?? "you"}</span> : null}
+        <div><p className="eyebrow">Jira work</p><h3 id="jira-work-heading">Bring your Jira work onto this board</h3></div>
+        {!activeBinding ? <span>Assigned to {readiness.account_name ?? "you"} or unassigned · open only</span> : null}
       </div>
 
       {!activeBinding ? (
@@ -106,10 +106,10 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
       ) : (
         <section className="jira-intake" aria-label={`Choose ${activeBinding.project_name} work`}>
           <div className="jira-intake-heading">
-            <span><strong>{activeBinding.project_key} · {activeBinding.project_name}</strong><small>Assigned to {readiness.account_name ?? "you"} · open only</small></span>
+            <span><strong>{activeBinding.project_key} · {activeBinding.project_name}</strong><small>Assigned to {readiness.account_name ?? "you"} or unassigned · open only</small></span>
             <button className="text-button" type="button" onClick={close}>Close</button>
           </div>
-          <p className="privacy-note">Nothing is selected or imported until you explicitly act. Worker assignment happens after the issue reaches the board.</p>
+          <p className="privacy-note">Assigned issues begin two-way synchronization when added. Unassigned issues are first claimed for you in Jira, then added. Worker assignment happens on the board.</p>
           <label className="jira-intake-filter">
             <span>Find an issue</span>
             <input value={query} placeholder="Key, title, or status" autoComplete="off" onChange={(event) => setQuery(event.target.value)} />
@@ -132,10 +132,10 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
                     return next;
                   })}
                 />
-                <span><strong>{issue.key} · {issue.summary}</strong><small>{issue.status_name}</small></span>
+                <span><strong>{issue.key} · {issue.summary}</strong><small>{issue.status_name} · {issue.assignee_name ?? "Available to claim"}</small></span>
               </label>
             ))}
-            {visibleIssues.length === 0 ? <p className="jira-intake-empty">No assigned open Jira issues match this view.</p> : null}
+            {visibleIssues.length === 0 ? <p className="jira-intake-empty">No assigned or unassigned open Jira issues match this view.</p> : null}
           </div>
           <button className="primary-action" type="button" disabled={busy || selectedIds.size === 0} onClick={() => void importSelected()}>
             {busy ? "Adding work…" : `Add ${selectedIds.size} to this board`}

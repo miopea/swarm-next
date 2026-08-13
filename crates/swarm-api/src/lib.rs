@@ -2661,8 +2661,8 @@ async fn sync_jira_binding(
             "choose between 1 and 100 Jira issues to import",
         ));
     }
-    let selected_issues = issues
-        .iter()
+    let mut selected_issues = issues
+        .into_iter()
         .filter(|issue| selected_ids.contains(&issue.id))
         .collect::<Vec<_>>();
     if selected_ids.len() != selected_issues.len() {
@@ -2672,8 +2672,13 @@ async fn sync_jira_binding(
             "one or more selected Jira issues are no longer available",
         ));
     }
+    state
+        .jira_readiness
+        .claim_unassigned_issues(&mut selected_issues)
+        .await
+        .map_err(jira_adapter_error)?;
     let snapshots = selected_issues
-        .into_iter()
+        .iter()
         .map(jira_issue_snapshot)
         .collect::<Vec<_>>();
     let tasks = store
@@ -3948,7 +3953,15 @@ fn require_valid_size(rows: u16, columns: u16) -> Result<(), ApiError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, path::PathBuf, time::Duration};
+    use std::{
+        env,
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use axum::{body::Body, http::Request};
     use futures_util::{SinkExt, StreamExt};
@@ -4252,7 +4265,18 @@ mod tests {
     async fn jira_sync_composes_remote_search_mapping_and_idempotent_task_intake() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let assignment_writes = Arc::new(AtomicUsize::new(0));
+        let written = assignment_writes.clone();
         let jira_server = axum::Router::new()
+            .route(
+                "/rest/api/3/myself",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "accountId": "account-1",
+                        "displayName": "Bea"
+                    }))
+                }),
+            )
             .route(
                 "/rest/api/3/search/jql",
                 get(|| async {
@@ -4278,6 +4302,17 @@ mod tests {
                             }
                         }]
                     }))
+                }),
+            )
+            .route(
+                "/rest/api/3/issue/20002/assignee",
+                axum::routing::put(move |Json(body): Json<serde_json::Value>| {
+                    let written = written.clone();
+                    async move {
+                        assert_eq!(body["accountId"], "account-1");
+                        written.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
                 }),
             )
             .route(
@@ -4352,15 +4387,33 @@ mod tests {
                 expected_count
             );
         }
+        let claimed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/integrations/jira/bindings/{}/sync",
+                        binding.id
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"issue_ids":["20002"]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.status(), StatusCode::OK);
+        assert_eq!(assignment_writes.load(Ordering::SeqCst), 1);
         let tasks = response_json(authorized_get(app.clone(), "/api/v1/tasks").await).await;
-        assert_eq!(tasks.as_array().unwrap().len(), 1);
+        assert_eq!(tasks.as_array().unwrap().len(), 2);
         assert_eq!(tasks[0]["title"], "Polish the launch page");
         assert_eq!(tasks[0]["state"], "active");
         let links = response_json(
             authorized_get(app.clone(), "/api/v1/integrations/jira/task-links").await,
         )
         .await;
-        assert_eq!(links.as_array().unwrap().len(), 1);
+        assert_eq!(links.as_array().unwrap().len(), 2);
         assert_eq!(links[0]["issue_key"], "WEB-42");
         assert_eq!(
             links[0]["issue_url"],
@@ -4370,6 +4423,8 @@ mod tests {
         assert_eq!(links[0]["jira_status_name"], "In Progress");
         assert_eq!(links[0]["jira_assignee_name"], "Bea");
         assert_eq!(links[0]["task_id"], tasks[0]["id"]);
+        assert_eq!(links[1]["issue_key"], "WEB-43");
+        assert_eq!(links[1]["jira_assignee_name"], "Bea");
 
         let transitioned = app
             .clone()
@@ -4489,6 +4544,95 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].jira_assignee_name.as_deref(), Some("Fern"));
         assert_eq!(links[0].jira_status_id, "4");
+    }
+
+    #[tokio::test]
+    async fn jira_unassigned_intake_fails_closed_when_remote_claim_is_denied() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let jira_server = axum::Router::new()
+            .route(
+                "/rest/api/3/myself",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "accountId": "account-1",
+                        "displayName": "Bea"
+                    }))
+                }),
+            )
+            .route(
+                "/rest/api/3/search/jql",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "isLast": true,
+                        "issues": [{
+                            "id": "20002",
+                            "key": "WEB-43",
+                            "fields": {
+                                "summary": "Do not import without ownership",
+                                "status": { "id": "3", "name": "In Progress" },
+                                "assignee": null,
+                                "updated": "2026-08-13T13:01:00.000+0000"
+                            }
+                        }]
+                    }))
+                }),
+            )
+            .route(
+                "/rest/api/3/issue/20002/assignee",
+                axum::routing::put(|| async { StatusCode::FORBIDDEN }),
+            );
+        tokio::spawn(async move { axum::serve(listener, jira_server).await.unwrap() });
+
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "3".into(),
+                    jira_status_name: "In Progress".into(),
+                    task_state: TaskState::Active,
+                }],
+            )
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone())
+                .with_jira_configuration(
+                    &format!("http://{address}"),
+                    "operator@example.test",
+                    "api-token",
+                )
+                .unwrap(),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/integrations/jira/bindings/{}/sync",
+                        binding.id
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"issue_ids":["20002"]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(store.list_tasks().unwrap().is_empty());
+        assert!(store.list_jira_issue_links(binding.id).unwrap().is_empty());
     }
 
     #[tokio::test]

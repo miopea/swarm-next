@@ -362,7 +362,7 @@ impl AgentMcp {
         let binding = store.get_jira_project_binding(binding_id)?;
         let issues = self
             .jira
-            .issues(&binding.project_id)
+            .hive_intake_issues(&binding.project_id)
             .await
             .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
         let imported_issue_ids = store
@@ -391,7 +391,7 @@ impl AgentMcp {
         let binding = store.get_jira_project_binding(binding_id)?;
         let issues = self
             .jira
-            .issues(&binding.project_id)
+            .hive_intake_issues(&binding.project_id)
             .await
             .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
         let selected_ids = input
@@ -409,8 +409,8 @@ impl AgentMcp {
                 "choose between 1 and 100 Jira issue ids from the preview".to_owned(),
             ));
         }
-        let selected_issues = issues
-            .iter()
+        let mut selected_issues = issues
+            .into_iter()
             .filter(|issue| selected_ids.contains(&issue.id))
             .collect::<Vec<_>>();
         if selected_issues.len() != selected_ids.len() {
@@ -418,8 +418,12 @@ impl AgentMcp {
                 "one or more selected Jira issues are no longer available".to_owned(),
             ));
         }
+        self.jira
+            .claim_unassigned_issues(&mut selected_issues)
+            .await
+            .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
         let snapshots = selected_issues
-            .into_iter()
+            .iter()
             .map(|issue| JiraIssueSnapshot {
                 issue_id: &issue.id,
                 issue_key: &issue.key,

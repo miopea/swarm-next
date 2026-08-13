@@ -9,7 +9,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("brings explicitly selected assigned open Jira work onto the task board", async () => {
+test("brings explicitly selected assigned or unassigned open Jira work onto the task board", async () => {
   const requests: { url: string; method: string; body?: string }[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -22,7 +22,7 @@ test("brings explicitly selected assigned open Jira work onto the task board", a
     }]);
     if (url.endsWith("/bindings/binding-1/issues")) return ok([
       { id: "20001", key: "WWD-42", summary: "Polish launch", status_id: "1", status_name: "To Do", assignee_account_id: "a1", assignee_name: "Bradford", updated_at: "now" },
-      { id: "20002", key: "WWD-43", summary: "Review mobile", status_id: "3", status_name: "In Progress", assignee_account_id: "a1", assignee_name: "Bradford", updated_at: "now" },
+      { id: "20002", key: "WWD-43", summary: "Review mobile", status_id: "3", status_name: "In Progress", assignee_account_id: null, assignee_name: null, updated_at: "now" },
     ]);
     if (url.endsWith("/bindings/binding-1/sync") && method === "POST") return ok([{ id: "task-1" }]);
     throw new Error(`Unexpected request: ${method} ${url}`);
@@ -31,14 +31,16 @@ test("brings explicitly selected assigned open Jira work onto the task board", a
 
   render(<JiraTaskIntake operatorToken="operator-token" onImported={onImported} />);
 
-  expect(await screen.findByText("Open issues assigned to Bradford")).toBeInTheDocument();
+  expect(await screen.findByText("Assigned to Bradford or unassigned · open only")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "WWD Choose work" }));
-  expect(await screen.findByText("Assigned to Bradford · open only")).toBeInTheDocument();
-  expect(screen.getByText(/Nothing is selected or imported/)).toBeInTheDocument();
+  expect(await screen.findByRole("region", { name: "Choose Website Development work" })).toBeInTheDocument();
+  expect(screen.getByText("Assigned to Bradford or unassigned · open only")).toBeInTheDocument();
+  expect(screen.getByText(/Unassigned issues are first claimed for you in Jira/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Add 0 to this board" })).toBeDisabled();
 
   fireEvent.change(screen.getByLabelText("Find an issue"), { target: { value: "mobile" } });
   expect(screen.getByText("1 shown · 0 selected")).toBeInTheDocument();
+  expect(screen.getByText("In Progress · Available to claim")).toBeInTheDocument();
   expect(screen.queryByRole("checkbox", { name: /WWD-42/ })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("checkbox", { name: /WWD-43/ }));
   fireEvent.click(screen.getByRole("button", { name: "Add 1 to this board" }));

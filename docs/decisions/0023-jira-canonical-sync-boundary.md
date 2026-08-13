@@ -34,10 +34,12 @@ Jira is an adapter-private integration behind typed application commands.
   issue selection belongs on the task board, where imported work is assigned,
   ordered, and executed.
 - Personal Hive intake is a deliberately narrow Jira view: non-terminal issues
-  assigned to the connected operator. The API enforces that scope in Jira JQL
-  both when previewing and when revalidating an explicit selection. Apiary-owned
-  projects will use a separate governed shared-pool policy rather than silently
-  inheriting the personal-Hive filter.
+  assigned to the connected operator plus non-terminal unassigned issues. The
+  API enforces that scope in Jira JQL both when previewing and when revalidating
+  an explicit selection. Selecting unassigned work must first assign it to the
+  connected operator in Jira; Swarm creates the local link only after Jira
+  acknowledges that claim. Apiary-owned projects will use a separate governed
+  shared-pool policy rather than silently inheriting the personal-Hive filter.
 - Imported issues retain Jira's immutable issue id and current issue key. The
   issue id is the idempotency key, so repeated synchronization updates one
   linked task rather than creating duplicates.
@@ -45,6 +47,10 @@ Jira is an adapter-private integration behind typed application commands.
   stores the last observed values and maps workflow state through the confirmed
   project mapping. Swarm-owned worker assignment, execution evidence, local
   notes, and terminal history are never overwritten by an import.
+- Adding an issue establishes an ongoing synchronization relationship, not a
+  snapshot import. Jira changes continue inbound; mapped Swarm state changes,
+  operator/worker comments, completion evidence, and closure flow outbound
+  through explicit durable capabilities.
 - Reads and writes are separate capabilities. Discovery, binding, mapping, and
   bounded intake remain read paths. Jira mutations use a durable outbox with
   bounded claims and attempts, crash-uncertain recovery, explicit conflict
