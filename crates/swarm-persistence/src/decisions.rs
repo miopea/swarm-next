@@ -48,6 +48,27 @@ pub struct NewDecisionRequest<'a> {
 }
 
 impl TaskStore {
+    /// Returns the workers with an unresolved explicit operator decision.
+    ///
+    /// # Errors
+    /// Returns database or persisted-identity failures.
+    pub fn workers_awaiting_operator(&self) -> Result<HashSet<WorkerId>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT d.requesting_worker_id
+             FROM decision_requests d
+             JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
+             WHERE d.state = 'pending'",
+        )?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .map(|result| -> Result<WorkerId, TaskStoreError> {
+                let id = result?;
+                Ok(parse_id(&id)?)
+            })
+            .collect()
+    }
+
     /// Creates one validated, local-Hive request and emits an inbox event atomically.
     ///
     /// # Errors
@@ -508,6 +529,25 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn awaiting_operator_workers_follow_only_pending_decisions() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let actions = vec!["continue".into(), "stop".into()];
+        let decision = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+        assert_eq!(
+            store.workers_awaiting_operator().unwrap(),
+            HashSet::from([queen.id])
+        );
+
+        store
+            .resolve_decision_request(decision.id, "continue", "")
+            .unwrap();
+        assert!(store.workers_awaiting_operator().unwrap().is_empty());
     }
 
     #[test]

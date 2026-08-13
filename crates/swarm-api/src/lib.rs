@@ -789,7 +789,12 @@ struct WorkspaceView {
     configured_worker_id: Option<WorkerId>,
 }
 
-fn worker_view(profile: WorkerProfile, running: bool, runtime_error: Option<String>) -> WorkerView {
+fn worker_view(
+    profile: WorkerProfile,
+    running: bool,
+    awaiting_operator: bool,
+    runtime_error: Option<String>,
+) -> WorkerView {
     let engagement_expires_at = profile.engagement_expires_at;
     let attention_state = if runtime_error.is_some() {
         WorkerAttentionState::Blocked
@@ -797,6 +802,8 @@ fn worker_view(profile: WorkerProfile, running: bool, runtime_error: Option<Stri
         WorkerAttentionState::Sleeping
     } else if engagement_expires_at.is_some() {
         WorkerAttentionState::WithOperator
+    } else if awaiting_operator {
+        WorkerAttentionState::AwaitingOperator
     } else {
         WorkerAttentionState::Buzzing
     };
@@ -1966,6 +1973,9 @@ async fn list_workers(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let live = reconcile_worker_bindings(&state).await?;
+    let awaiting_operator = task_store(&state)?
+        .workers_awaiting_operator()
+        .map_err(|error| task_store_error(&error))?;
     let errors = state.worker_errors.read().await;
     let workers = task_store(&state)?
         .list_worker_profiles()
@@ -1976,7 +1986,8 @@ async fn list_workers(
                 .active_session_id
                 .is_some_and(|session_id| live.contains(&session_id));
             let runtime_error = errors.get(&profile.id).cloned();
-            worker_view(profile, running, runtime_error)
+            let needs_operator = awaiting_operator.contains(&profile.id);
+            worker_view(profile, running, needs_operator, runtime_error)
         })
         .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(workers)).into_response())
@@ -2175,7 +2186,11 @@ async fn create_worker(
         )
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
-    Ok((StatusCode::CREATED, Json(worker_view(profile, false, None))).into_response())
+    Ok((
+        StatusCode::CREATED,
+        Json(worker_view(profile, false, false, None)),
+    )
+        .into_response())
 }
 
 async fn reorder_workers(
@@ -2207,7 +2222,7 @@ async fn update_worker(
         .map_err(|error| task_store_error(&error))?;
     let running = profile.active_session_id.is_some();
     state.control_room_notify.notify_waiters();
-    Ok(Json(worker_view(profile, running, None)).into_response())
+    Ok(Json(worker_view(profile, running, false, None)).into_response())
 }
 
 async fn start_worker(
@@ -2252,7 +2267,7 @@ async fn stop_worker(
     let profile = task_store(&state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
-    Ok(Json(worker_view(profile, false, None)).into_response())
+    Ok(Json(worker_view(profile, false, false, None)).into_response())
 }
 
 async fn list_sessions(
@@ -2425,7 +2440,7 @@ async fn start_worker_process(
     if let Some(session_id) = profile.active_session_id
         && live.contains(&session_id)
     {
-        return Ok(worker_view(profile, true, None));
+        return Ok(worker_view(profile, true, false, None));
     }
     let mcp_config = if profile.provider == ProviderKind::ClaudeCode {
         state
@@ -2491,7 +2506,7 @@ async fn start_worker_process(
     let profile = task_store(state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
-    Ok(worker_view(profile, true, None))
+    Ok(worker_view(profile, true, false, None))
 }
 
 async fn reconcile_worker_bindings(state: &AppState) -> Result<HashSet<WorkerSessionId>, ApiError> {
@@ -3305,6 +3320,22 @@ mod tests {
         let json = response_json(response).await;
         assert_eq!(json["claude_code"], true);
         assert_eq!(json["codex"], false);
+    }
+
+    #[test]
+    fn explicit_decisions_drive_attention_without_overriding_operator_engagement() {
+        let store = TaskStore::in_memory().unwrap();
+        let profile = store.ensure_queen("/workspace/queen").unwrap();
+        assert_eq!(
+            worker_view(profile.clone(), true, true, None).attention_state,
+            WorkerAttentionState::AwaitingOperator
+        );
+        let mut engaged = profile;
+        engaged.engagement_expires_at = Some(400);
+        assert_eq!(
+            worker_view(engaged, true, true, None).attention_state,
+            WorkerAttentionState::WithOperator
+        );
     }
 
     #[tokio::test]

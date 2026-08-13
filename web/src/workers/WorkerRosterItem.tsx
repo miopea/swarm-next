@@ -7,6 +7,7 @@ const attentionPresentation = {
   sleeping: { label: "Sleeping", expression: "sleeping", presence: "offline" },
   buzzing: { label: "Buzzing", expression: "thinking", presence: "online" },
   with_operator: { label: "With you", expression: "focused", presence: "engaged" },
+  awaiting_operator: { label: "Awaiting you", expression: "available", presence: "waiting" },
   blocked: { label: "Blocked", expression: "blocked", presence: "blocked" },
 } as const;
 

@@ -15,7 +15,7 @@ export type PresentationPreferences = {
   terminal_keys_visible: boolean;
   configured: boolean;
 };
-export type WorkerAttentionState = "sleeping" | "buzzing" | "with_operator" | "blocked";
+export type WorkerAttentionState = "sleeping" | "buzzing" | "with_operator" | "awaiting_operator" | "blocked";
 export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed" | "decisions_changed" | "presence_changed" | "notifications_changed";
 export type PresenceMode = "at_hive" | "away" | "night_watch";
 export type PresenceSource = "manual" | "active_device" | "screen_locked" | "inactive_device" | "timed_out";

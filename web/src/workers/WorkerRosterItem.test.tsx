@@ -43,6 +43,13 @@ test("shows operator engagement as a distinct scannable state", () => {
   expect(screen.getByTitle("With you")).toHaveClass("engaged");
 });
 
+test("shows a durable operator decision as awaiting you", () => {
+  render(<WorkerRosterItem worker={{ ...queen, attention_state: "awaiting_operator" }} selected={false} detail="Decision requested" busy={false} onOpen={vi.fn()} onStart={vi.fn()} onStop={vi.fn()} />);
+
+  expect(screen.getByText("Awaiting you")).toBeInTheDocument();
+  expect(screen.getByTitle("Awaiting you")).toHaveClass("waiting");
+});
+
 test("returns to buzzing when the operator engagement lease expires", () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date(100_000));

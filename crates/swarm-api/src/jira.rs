@@ -4,8 +4,9 @@ use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use swarm_domain::JiraConnectionState;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) enum JiraReadinessProbe {
+    #[default]
     NotConfigured,
     Configured {
         client: Client,
@@ -26,12 +27,6 @@ pub(crate) struct JiraReadiness {
 struct JiraAccount {
     #[serde(rename = "displayName")]
     display_name: Option<String>,
-}
-
-impl Default for JiraReadinessProbe {
-    fn default() -> Self {
-        Self::NotConfigured
-    }
 }
 
 impl JiraReadinessProbe {

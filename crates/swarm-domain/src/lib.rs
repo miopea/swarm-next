@@ -611,6 +611,7 @@ pub enum WorkerAttentionState {
     Sleeping,
     Buzzing,
     WithOperator,
+    AwaitingOperator,
     Blocked,
 }
 
