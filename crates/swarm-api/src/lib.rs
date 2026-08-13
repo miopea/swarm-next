@@ -17,7 +17,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, State, WebSocketUpgrade},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
 };
@@ -1030,6 +1030,18 @@ fn router_with_optional_asset_root(
         .layer(SetResponseHeaderLayer::overriding(
             header::REFERRER_POLICY,
             HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(
+                "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'",
+            ),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static(
+                "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+            ),
         ))
 }
 
@@ -3888,6 +3900,14 @@ mod tests {
         assert_eq!(index.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(index.headers()[header::X_FRAME_OPTIONS], "DENY");
         assert_eq!(index.headers()[header::REFERRER_POLICY], "no-referrer");
+        assert_eq!(
+            index.headers()["content-security-policy"],
+            "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; manifest-src 'self'"
+        );
+        assert_eq!(
+            index.headers()["permissions-policy"],
+            "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
+        );
 
         let asset = app
             .clone()
