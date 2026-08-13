@@ -161,7 +161,11 @@ async function checkSurface(browser, surface) {
     if (settingsNavigationSize.clientHeight < 40) {
       throw new Error(`${surface.name}: Settings section navigation collapsed: ${JSON.stringify(settingsNavigationSize)}`);
     }
-    await settingsNavigation.getByRole("button", { name: "Diagnostics", exact: true }).click();
+    const diagnosticsJump = settingsNavigation.getByRole("button", { name: "Diagnostics", exact: true });
+    await diagnosticsJump.click();
+    if (await diagnosticsJump.getAttribute("aria-current") !== "location") {
+      throw new Error(`${surface.name}: Settings section selection is not exposed`);
+    }
     const diagnosticsHeading = page.getByRole("heading", { name: "Know which layer needs attention" });
     await diagnosticsHeading.waitFor();
     await page.waitForTimeout(400);
