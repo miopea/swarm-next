@@ -141,6 +141,28 @@ test("restores tasks and workers after a refresh", async () => {
   expect(screen.queryByRole("button", { name: "Settings 3" })).not.toBeInTheDocument();
 });
 
+test("restores the saved session after a rolling API interruption", async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(ok({ status: "ok", version: "0.1.0" }))
+    .mockResolvedValueOnce(badGateway())
+    .mockResolvedValueOnce(ok({}))
+    .mockResolvedValueOnce(ok(hiveIdentity()))
+    .mockResolvedValueOnce(ok({ type: "sessions", sessions: [] }))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValueOnce(ok([]))
+    .mockResolvedValue(ok({}));
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+
+  await waitFor(() => expect(screen.queryByLabelText("Operator token")).not.toBeInTheDocument());
+  expect(screen.getByRole("heading", { name: "Task board" })).toBeInTheDocument();
+  expect(fetch.mock.calls.filter(([url]) => url === "/api/v1/auth/session")).toHaveLength(2);
+});
+
 test("restores the worker surface after a refresh", async () => {
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   const fetch = vi
@@ -453,4 +475,8 @@ function ok(payload: unknown) {
 
 function unauthorized() {
   return { ok: false, status: 401, json: async () => ({ message: "not unlocked" }) };
+}
+
+function badGateway() {
+  return { ok: false, status: 502, json: async () => ({}) };
 }

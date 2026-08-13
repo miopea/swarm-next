@@ -21,6 +21,7 @@ import {
   fetchWorkspaces,
   reorderTasks,
   reorderWorkers,
+  recoverTransientRuntime,
   releaseWorkerEngagement,
   revokeBrowserSession,
   setManualPresence,
@@ -195,8 +196,10 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void validateBrowserSession()
-      .then(() => loadControlRoom(BROWSER_SESSION_AUTH))
+    void recoverTransientRuntime(async () => {
+      await validateBrowserSession();
+      return loadControlRoom(BROWSER_SESSION_AUTH);
+    })
       .then(({ hive, sessions: nextSessions, workers: nextWorkers, workspaces: nextWorkspaces, tasks: nextTasks, decisions: nextDecisions }) => {
         if (cancelled) return;
         terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);

@@ -1,5 +1,6 @@
 export type Health = { status: "ok"; version: string };
 export const BROWSER_SESSION_AUTH = "browser-session-cookie";
+const TRANSIENT_RUNTIME_STATUSES = new Set([502, 503, 504]);
 export type SessionSummary = { session_id: string; running: boolean };
 export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
@@ -646,7 +647,27 @@ export async function authenticatedFetch(
     } catch {
       // Some infrastructure failures return an empty or non-JSON response.
     }
-    throw new Error(`Runtime request returned ${response.status}${detail}`);
+    throw new RuntimeRequestError(response.status, `Runtime request returned ${response.status}${detail}`);
   }
   return response;
+}
+
+export class RuntimeRequestError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "RuntimeRequestError";
+  }
+}
+
+export async function recoverTransientRuntime<T>(operation: () => Promise<T>, delays = [250, 500, 1_000, 2_000, 4_000, 8_000]): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const retryable = error instanceof TypeError
+        || (error instanceof RuntimeRequestError && TRANSIENT_RUNTIME_STATUSES.has(error.status));
+      if (!retryable || attempt >= delays.length) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, delays[attempt]));
+    }
+  }
 }
