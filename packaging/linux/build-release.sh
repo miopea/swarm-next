@@ -17,7 +17,7 @@ bundle="$output/swarm-next-$version-linux-x86_64"
 rm -rf -- "$bundle"
 mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 
-(cd "$repo_root" && cargo build --release --locked --workspace)
+(cd "$repo_root" && SWARM_BUILD_VERSION="$version" cargo build --release --locked --workspace)
 if [ "${SWARM_SKIP_WEB_BUILD:-0}" != "1" ]; then
   (cd "$repo_root" && "${SWARM_PNPM_BIN:-pnpm}" --dir web build)
 fi

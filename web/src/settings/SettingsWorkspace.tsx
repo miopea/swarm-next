@@ -1,4 +1,6 @@
-import { downloadDatabaseBackup, type ControlRoomEvent, type Health, type HiveIdentity, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type Worker, type WorkspaceChoice } from "../api";
+import { useEffect, useState } from "react";
+
+import { downloadDatabaseBackup, fetchTerminalHostStatus, type ControlRoomEvent, type Health, type HiveIdentity, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
@@ -39,6 +41,14 @@ type Props = {
 
 export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers }: Props) {
   const mobile = deviceClass() === "mobile";
+  const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
+  useEffect(() => {
+    let cancelled = false;
+    void fetchTerminalHostStatus(operatorToken)
+      .then((status) => { if (!cancelled) setTerminalHostStatus(status); })
+      .catch(() => { if (!cancelled) setTerminalHostStatus(undefined); });
+    return () => { cancelled = true; };
+  }, [operatorToken, providers]);
   async function downloadBackup() {
     const blob = await downloadDatabaseBackup(operatorToken);
     const url = URL.createObjectURL(blob);
@@ -172,6 +182,7 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
         <div><p className="eyebrow">Runtime</p><h3 id="runtime-heading">Local system</h3></div>
         <dl className="diagnostic-list">
           <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
+          <div><dt>Worker engine</dt><dd>{workerEngineLabel(health, terminalHostStatus)}</dd></div>
           <div><dt>Live updates</dt><dd>{liveFeedLabel(liveFeedState)}</dd></div>
           <div><dt>Running workers</dt><dd>{workers.filter((worker) => worker.running).length}</dd></div>
           <div><dt>Retained sessions</dt><dd>{sessions.length}</dd></div>
@@ -219,6 +230,14 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
       </section>
     </div>
   );
+}
+
+function workerEngineLabel(health: Health | undefined, host: TerminalHostStatus | undefined) {
+  if (!host) return "Unavailable";
+  if (health && health.version !== host.host_version) {
+    return `Update waiting · ${host.running_sessions} active`;
+  }
+  return `Current · ${host.running_sessions} active`;
 }
 
 

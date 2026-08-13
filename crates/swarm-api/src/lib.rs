@@ -1063,8 +1063,12 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
-        version: env!("CARGO_PKG_VERSION"),
+        version: build_version(),
     })
+}
+
+fn build_version() -> &'static str {
+    option_env!("SWARM_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
 async fn get_browser_session(
@@ -2935,7 +2939,7 @@ mod tests {
         assert!(response.status().is_success());
         let json = response_json(response).await;
         assert_eq!(json["status"], "ok");
-        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(json["version"], build_version());
     }
 
     #[test]

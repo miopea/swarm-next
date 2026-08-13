@@ -2,6 +2,7 @@
 set -eu
 
 bundle=${1:?usage: test-release-runtime.sh RELEASE_DIR}
+version=$(cat "$bundle/VERSION")
 test_root=$(mktemp -d)
 host_pid=
 api_pid=
@@ -47,6 +48,10 @@ until curl --fail --silent --show-error --max-time 1 http://127.0.0.1:18766/heal
   sleep 0.1
 done
 grep -q '"status":"ok"' "$test_root/health.json"
+grep -q "\"version\":\"$version\"" "$test_root/health.json"
+curl --fail --silent --show-error \
+  -H 'Authorization: Bearer 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' \
+  http://127.0.0.1:18766/api/v1/runtime/terminal-host | grep -q "\"host_version\":\"$version\""
 curl --fail --silent --show-error http://127.0.0.1:18766/ | grep -q '<div id="root"></div>'
 [ "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18766/api/v1/not-a-route)" = "404" ]
 

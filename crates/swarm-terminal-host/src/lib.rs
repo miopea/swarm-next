@@ -362,12 +362,16 @@ fn terminal_host_status(
 ) -> Result<TerminalHostStatus, swarm_terminal::SessionRegistryError> {
     Ok(TerminalHostStatus {
         protocol_version: PROTOCOL_VERSION,
-        host_version: env!("CARGO_PKG_VERSION").into(),
+        host_version: build_version().into(),
         draining: registry.is_draining(),
         running_sessions: registry.running_session_count()?,
         retained_sessions: registry.len()?,
         resources: Some(swarm_terminal::sample_current_process()),
     })
+}
+
+fn build_version() -> &'static str {
+    option_env!("SWARM_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
 fn error_response(code: &str, message: &str) -> HostResponse {

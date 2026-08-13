@@ -21,7 +21,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   const onTestNotification = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 5, host_version: "0.1.0", draining: false, running_sessions: 1, retained_sessions: 3 } });
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 5, host_version: "0.1.0-host", draining: false, running_sessions: 1, retained_sessions: 3 } });
     if (url.includes("runtime/resources")) return ok({
       sampled_at: 1,
       policy: {
@@ -87,8 +87,9 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Live updates").parentElement).toHaveTextContent("Live updatesConnected");
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
+  expect((await screen.findByText("Worker engine")).parentElement).toHaveTextContent("Worker engineUpdate waiting · 1 active");
   const terminalHost = await screen.findByText("Terminal host");
-  expect(terminalHost.parentElement).toHaveTextContent("Terminal hostHealthy · 0.1.0");
+  expect(terminalHost.parentElement).toHaveTextContent("Terminal hostHealthy · 0.1.0-host");
   expect((await screen.findByText("API memory")).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
   expect(screen.getByText("Terminal memory").parentElement).toHaveTextContent("Terminal memoryNormal · 9.0 MiB");
   expect(screen.getByText("Needs you").parentElement).toHaveTextContent("Needs youAlt1");
