@@ -44,7 +44,10 @@ The Queen is a singleton profile with role `queen`, stable name `Queen`, and
 autostart enabled. The API supervisor reconciles her profile against the
 terminal host after startup and after an exit. API restart must attach to the
 existing Queen session rather than create a duplicate. A failed launch is a
-visible unhealthy state with Retry; it is never hidden in a restart loop.
+visible unhealthy state with Retry; it is never hidden in a restart loop. One
+automatic recovery is allowed after an unexpected exit. If that recovered
+process exits again before five stable minutes, the worker becomes visibly
+Blocked and waits for an operator Retry; a stable run resets the circuit.
 
 ### B. Terminal correctness and switching
 

@@ -63,6 +63,7 @@ const RESOURCE_ADVISORY_BYTES: u64 = 256 * 1024 * 1024;
 const RESOURCE_CRITICAL_BYTES: u64 = 512 * 1024 * 1024;
 const OPERATOR_SESSION_COOKIE: &str = "swarm_next_operator_session";
 const OPERATOR_SESSION_MAX_AGE_SECONDS: u64 = 30 * 24 * 60 * 60;
+const WORKER_RECOVERY_STABILITY_SECONDS: i64 = 5 * 60;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -76,6 +77,7 @@ pub struct AppState {
     worker_lifecycle: Arc<Mutex<()>>,
     coordination_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
+    worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
     control_room_notify: Arc<Notify>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
@@ -99,6 +101,7 @@ impl AppState {
             worker_lifecycle: Arc::new(Mutex::new(())),
             coordination_delivery: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
+            worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             control_room_notify: Arc::new(Notify::new()),
             notification_sender: None,
             attachment_store: None,
@@ -226,10 +229,39 @@ impl AppState {
             tracing::warn!("worker supervisor could not load the durable roster");
             return;
         };
+        let now = unix_timestamp();
+        {
+            let mut attempts = self.worker_recovery_attempts.write().await;
+            attempts.retain(|worker_id, attempted_at| {
+                !profiles.iter().any(|profile| {
+                    profile.id == *worker_id
+                        && profile.active_session_id.is_some()
+                        && now.saturating_sub(*attempted_at) >= WORKER_RECOVERY_STABILITY_SECONDS
+                })
+            });
+        }
         for profile in profiles
             .into_iter()
             .filter(|profile| profile.autostart && profile.active_session_id.is_none())
         {
+            if self.worker_errors.read().await.contains_key(&profile.id) {
+                continue;
+            }
+            let attempted_recovery = self
+                .worker_recovery_attempts
+                .write()
+                .await
+                .insert(profile.id, now)
+                .is_some();
+            if attempted_recovery {
+                self.worker_errors.write().await.insert(
+                    profile.id,
+                    "Worker exited again before recovery was stable. Retry when ready.".to_owned(),
+                );
+                self.control_room_notify.notify_waiters();
+                tracing::warn!(worker_id = %profile.id, worker_name = %profile.name, "autostart worker recovery circuit opened");
+                continue;
+            }
             if let Err(error) =
                 start_worker_process(self, profile.id, TerminalSize::default()).await
             {
@@ -2260,13 +2292,18 @@ async fn update_worker(
     Json(request): Json<UpdateWorkerRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let worker_id = parse_worker_id(&worker_id)?;
     let profile = task_store(&state)?
-        .update_worker_profile(
-            parse_worker_id(&worker_id)?,
-            request.name.as_deref(),
-            request.autostart,
-        )
+        .update_worker_profile(worker_id, request.name.as_deref(), request.autostart)
         .map_err(|error| task_store_error(&error))?;
+    if request.autostart.is_some() {
+        state.worker_errors.write().await.remove(&worker_id);
+        state
+            .worker_recovery_attempts
+            .write()
+            .await
+            .remove(&worker_id);
+    }
     let running = profile.active_session_id.is_some();
     state.control_room_notify.notify_waiters();
     Ok(Json(worker_view(profile, running, false, None)).into_response())
@@ -2280,9 +2317,16 @@ async fn start_worker(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     require_valid_size(request.rows, request.columns)?;
+    let worker_id = parse_worker_id(&worker_id)?;
+    state.worker_errors.write().await.remove(&worker_id);
+    state
+        .worker_recovery_attempts
+        .write()
+        .await
+        .remove(&worker_id);
     let worker = start_worker_process(
         &state,
-        parse_worker_id(&worker_id)?,
+        worker_id,
         TerminalSize::new(request.rows, request.columns),
     )
     .await?;
@@ -2310,6 +2354,11 @@ async fn stop_worker(
             .map_err(|error| task_store_error(&error))?;
     }
     state.worker_errors.write().await.remove(&worker_id);
+    state
+        .worker_recovery_attempts
+        .write()
+        .await
+        .remove(&worker_id);
     state.control_room_notify.notify_waiters();
     let profile = task_store(&state)?
         .get_worker_profile(worker_id)
@@ -4788,6 +4837,92 @@ mod tests {
             session.id().to_string()
         );
 
+        session.stop().unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn repeated_queen_recovery_opens_a_visible_circuit_instead_of_respawning() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry.clone()).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store
+            .ensure_queen(workspace.to_string_lossy().as_ref())
+            .unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store);
+        state
+            .worker_recovery_attempts
+            .write()
+            .await
+            .insert(queen.id, unix_timestamp());
+
+        state.supervise_workers().await;
+        state.supervise_workers().await;
+
+        let response = HostClient::new(&socket)
+            .request(&HostRequest::ListSessions)
+            .await
+            .unwrap();
+        let HostResponse::Sessions { sessions } = response else {
+            panic!("terminal host should return its sessions");
+        };
+        assert!(sessions.is_empty());
+        let workers = response_json(authorized_get(router(state), "/api/v1/workers").await).await;
+        assert_eq!(workers[0]["attention_state"], "blocked");
+        assert_eq!(
+            workers[0]["runtime_error"],
+            "Worker exited again before recovery was stable. Retry when ready."
+        );
+
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn a_stable_queen_resets_the_recovery_circuit() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let session = registry
+            .spawn(
+                &ProviderCommand {
+                    executable: PathBuf::from("/bin/sh"),
+                    arguments: vec!["-lc".into(), "sleep 5".into()],
+                    working_directory: workspace.clone(),
+                },
+                TerminalSize::default(),
+            )
+            .unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store
+            .ensure_queen(workspace.to_string_lossy().as_ref())
+            .unwrap();
+        store.bind_worker_session(queen.id, session.id()).unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store);
+        state.worker_recovery_attempts.write().await.insert(
+            queen.id,
+            unix_timestamp() - WORKER_RECOVERY_STABILITY_SECONDS,
+        );
+
+        state.supervise_workers().await;
+
+        assert!(state.worker_recovery_attempts.read().await.is_empty());
         session.stop().unwrap();
         server_task.abort();
         let _ = server_task.await;
