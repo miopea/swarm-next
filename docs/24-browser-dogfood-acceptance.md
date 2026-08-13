@@ -266,3 +266,9 @@ the independently updated terminal host through the API to worker settings:
   server integration test independently reopens the backup and runs SQLite
   integrity verification, so browser delivery and database validity are both
   covered without retaining private dogfood data.
+- The reusable gate now navigates Needs you, Tasks, Workers, and Settings at
+  both 1440 by 900 and an authentic Android 412 by 915 context. Every surface
+  must remain inside the viewport, the worker check waits for a real mounted
+  terminal rather than accepting its loading fallback, and each surface is
+  captured for visual review. The deployed pass rendered all eight views with
+  no authenticated-page console or runtime errors.

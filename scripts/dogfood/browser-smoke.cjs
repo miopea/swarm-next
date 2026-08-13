@@ -68,7 +68,30 @@ async function checkSurface(browser, surface) {
     consoleErrors.length = 0;
     pageErrors.length = 0;
 
-    await page.getByRole("button", { name: /Settings/ }).click();
+    const surfaceResults = [];
+    for (const target of [
+      { name: "needs-you", nav: /Needs you/, ready: () => page.getByRole("heading", { name: "Needs you" }) },
+      { name: "tasks", nav: /Tasks/, ready: () => page.getByRole("heading", { name: "Task board" }) },
+      { name: "workers", nav: /Workers/, ready: () => page.locator(".terminal-panel") },
+      { name: "settings", nav: /Settings/, ready: () => page.getByRole("heading", { name: "Settings" }) },
+    ]) {
+      await page.getByRole("button", { name: target.nav }).click();
+      await target.ready().first().waitFor();
+      await page.waitForTimeout(250);
+      const dimensions = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+      if (dimensions.scrollWidth > dimensions.clientWidth + 1) {
+        throw new Error(`${surface.name}/${target.name}: horizontal overflow ${dimensions.scrollWidth}px > ${dimensions.clientWidth}px`);
+      }
+      await page.screenshot({
+        path: path.join(outputRoot, `${surface.name}-${target.name}.png`),
+        fullPage: true,
+      });
+      surfaceResults.push({ surface: target.name, ...dimensions });
+    }
+
     await page.getByRole("heading", { name: "Your familiar crew" }).waitFor();
     const provider = page.getByLabel("Coding provider");
     const codexDisabled = await provider.locator('option[value="codex"]').isDisabled();
@@ -77,22 +100,11 @@ async function checkSurface(browser, surface) {
     if (!/Current|Update waiting/.test(workerEngineText)) {
       throw new Error(`${surface.name}: worker-engine maintenance state is unclear`);
     }
-    const dimensions = await page.evaluate(() => ({
-      scrollWidth: document.documentElement.scrollWidth,
-      clientWidth: document.documentElement.clientWidth,
-    }));
-    if (dimensions.scrollWidth > dimensions.clientWidth + 1) {
-      throw new Error(`${surface.name}: horizontal overflow ${dimensions.scrollWidth}px > ${dimensions.clientWidth}px`);
-    }
     if (consoleErrors.length || pageErrors.length) {
       throw new Error(`${surface.name}: browser errors: ${[...consoleErrors, ...pageErrors].join(" | ")}`);
     }
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    await page.screenshot({
-      path: path.join(outputRoot, `${surface.name}-settings.png`),
-      fullPage: true,
-    });
-    return { surface: surface.name, ...dimensions, codexDisabled, workerEngineText, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, codexDisabled, workerEngineText, backup, status: "passed" };
   } finally {
     await context.close();
   }
