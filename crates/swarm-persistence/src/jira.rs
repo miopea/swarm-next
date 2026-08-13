@@ -390,21 +390,30 @@ impl TaskStore {
              FROM jira_issue_links WHERE binding_id = ?1 ORDER BY issue_key",
         )?;
         statement
-            .query_map([binding_id.to_string()], |row| {
-                Ok(JiraIssueLink {
-                    issue_id: row.get(0)?,
-                    issue_key: row.get(1)?,
-                    binding_id: parse_domain_id(&row.get::<_, String>(2)?)?,
-                    task_id: parse_domain_id(&row.get::<_, String>(3)?)?,
-                    jira_status_id: row.get(4)?,
-                    jira_status_name: row.get(5)?,
-                    jira_assignee_account_id: row.get(6)?,
-                    jira_assignee_name: row.get(7)?,
-                    remote_updated_at: row.get(8)?,
-                    last_synced_at: row.get(9)?,
-                })
-            })?
+            .query_map([binding_id.to_string()], jira_issue_link_from_row)?
             .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Finds the durable Jira identity attached to one local task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when persistence cannot be read.
+    pub fn jira_issue_link_for_task(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<JiraIssueLink>, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT issue_id, issue_key, binding_id, task_id, jira_status_id, jira_status_name,
+                        jira_assignee_account_id, jira_assignee_name, remote_updated_at, last_synced_at
+                 FROM jira_issue_links WHERE task_id = ?1",
+                [task_id.to_string()],
+                jira_issue_link_from_row,
+            )
+            .optional()
             .map_err(Into::into)
     }
 
@@ -440,6 +449,21 @@ impl TaskStore {
         }
         Ok(())
     }
+}
+
+fn jira_issue_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JiraIssueLink> {
+    Ok(JiraIssueLink {
+        issue_id: row.get(0)?,
+        issue_key: row.get(1)?,
+        binding_id: parse_domain_id(&row.get::<_, String>(2)?)?,
+        task_id: parse_domain_id(&row.get::<_, String>(3)?)?,
+        jira_status_id: row.get(4)?,
+        jira_status_name: row.get(5)?,
+        jira_assignee_account_id: row.get(6)?,
+        jira_assignee_name: row.get(7)?,
+        remote_updated_at: row.get(8)?,
+        last_synced_at: row.get(9)?,
+    })
 }
 
 fn jira_binding_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JiraProjectBinding> {

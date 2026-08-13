@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use swarm_application::{ApplicationError, TaskService};
 use swarm_domain::{
-    ControlRoomEventKind, DecisionRequestId, JiraIssueLink, JiraProjectBindingId, JiraProjectScope,
+    ControlRoomEventKind, DecisionRequestId, JiraProjectBindingId, JiraProjectScope,
     JiraStatusMapping, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
     PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
     QueenAutonomyPolicy, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState,
@@ -2148,7 +2148,10 @@ async fn transition_task(
     if request.note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
         return Err(task_store_error(&TaskStoreError::InvalidTaskActivityNote));
     }
-    let jira_transition = if let Some(link) = jira_link_for_task(store, task_id)? {
+    let jira_transition = if let Some(link) = store
+        .jira_issue_link_for_task(task_id)
+        .map_err(|error| task_store_error(&error))?
+    {
         let target_statuses = store
             .list_jira_status_mappings(link.binding_id)
             .map_err(|error| task_store_error(&error))?
@@ -2195,26 +2198,6 @@ async fn transition_task(
     }
     state.control_room_notify.notify_waiters();
     Ok(Json(task).into_response())
-}
-
-fn jira_link_for_task(
-    store: &TaskStore,
-    task_id: TaskId,
-) -> Result<Option<JiraIssueLink>, ApiError> {
-    for binding in store
-        .list_jira_project_bindings()
-        .map_err(|error| task_store_error(&error))?
-    {
-        if let Some(link) = store
-            .list_jira_issue_links(binding.id)
-            .map_err(|error| task_store_error(&error))?
-            .into_iter()
-            .find(|link| link.task_id == task_id)
-        {
-            return Ok(Some(link));
-        }
-    }
-    Ok(None)
 }
 
 async fn assign_task(

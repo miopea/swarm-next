@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fmt::Write as _,
     fs::OpenOptions,
     io::Write,
@@ -31,7 +32,9 @@ use swarm_domain::{
     DecisionRequestKind, DecisionUrgency, JiraProjectBindingId, TaskId, TaskPriority, TaskState,
     WorkerId, WorkerRole,
 };
-use swarm_persistence::{JiraIssueSnapshot, TaskStore, TaskStoreError};
+use swarm_persistence::{
+    JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, TaskStore, TaskStoreError,
+};
 use tokio::sync::Notify;
 use tower::ServiceExt;
 
@@ -198,6 +201,7 @@ impl ServerHandler for AgentMcp {
                 create_task_tool(),
                 assign_task_tool(),
                 list_jira_projects_tool(),
+                preview_jira_project_tool(),
                 sync_jira_project_tool(),
             ]);
         }
@@ -216,17 +220,7 @@ impl ServerHandler for AgentMcp {
                 .tasks
                 .list_visible_tasks(self.principal)
                 .and_then(|tasks| structured(json!({ "tasks": tasks }))),
-            "swarm_transition_task" => parse::<TransitionTaskInput>(arguments).and_then(|input| {
-                self.tasks
-                    .transition_task(
-                        self.principal,
-                        TaskId::from_str(&input.task_id)
-                            .map_err(|_| ApplicationError::NotAuthorized)?,
-                        input.state,
-                        &input.note,
-                    )
-                    .and_then(structured)
-            }),
+            "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_list_workers" => self
                 .tasks
                 .list_workers(self.principal)
@@ -262,6 +256,7 @@ impl ServerHandler for AgentMcp {
                     Err(ApplicationError::NotAuthorized)
                 }
             }
+            "swarm_preview_jira_project" => self.preview_jira_project(arguments).await,
             "swarm_sync_jira_project" => self.sync_jira_project(arguments).await,
             "swarm_list_decisions" => self
                 .tasks
@@ -314,6 +309,108 @@ impl ServerHandler for AgentMcp {
 }
 
 impl AgentMcp {
+    async fn transition_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<TransitionTaskInput>(arguments)?;
+        let task_id =
+            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        if self.principal.role != WorkerRole::Queen
+            && !matches!(
+                input.state,
+                TaskState::Active | TaskState::Blocked | TaskState::Review
+            )
+        {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        let current = self
+            .tasks
+            .list_visible_tasks(self.principal)?
+            .into_iter()
+            .find(|task| task.id == task_id)
+            .ok_or(ApplicationError::NotAuthorized)?;
+        if !current.state.can_transition_to(input.state) {
+            return Err(ApplicationError::Store(TaskStoreError::InvalidTransition {
+                from: current.state,
+                to: input.state,
+            }));
+        }
+        if input.note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
+            return Err(ApplicationError::Store(
+                TaskStoreError::InvalidTaskActivityNote,
+            ));
+        }
+        let store = self.tasks.store();
+        let jira_transition = if let Some(link) = store.jira_issue_link_for_task(task_id)? {
+            let target_statuses = store
+                .list_jira_status_mappings(link.binding_id)?
+                .into_iter()
+                .filter(|mapping| mapping.task_state == input.state)
+                .collect::<Vec<_>>();
+            if target_statuses.is_empty() {
+                return Err(ApplicationError::IntegrationUnavailable(
+                    "map a Jira status to this Swarm state before moving the issue".to_owned(),
+                ));
+            }
+            if let Some(current_target) = target_statuses
+                .iter()
+                .find(|mapping| mapping.jira_status_id == link.jira_status_id)
+            {
+                Some((
+                    current_target.jira_status_id.clone(),
+                    current_target.jira_status_name.clone(),
+                ))
+            } else {
+                let status_ids = target_statuses
+                    .iter()
+                    .map(|mapping| mapping.jira_status_id.clone())
+                    .collect::<Vec<_>>();
+                let transitioned = self
+                    .jira
+                    .transition_issue(&link.issue_key, &status_ids)
+                    .await
+                    .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
+                Some((transitioned.status_id, transitioned.status_name))
+            }
+        } else {
+            None
+        };
+        let task = self
+            .tasks
+            .transition_task(self.principal, task_id, input.state, &input.note)?;
+        if let Some((status_id, status_name)) = jira_transition {
+            store.update_jira_issue_link_status(task_id, &status_id, &status_name)?;
+        }
+        structured(task)
+    }
+
+    async fn preview_jira_project(
+        &self,
+        arguments: Value,
+    ) -> Result<CallToolResult, ApplicationError> {
+        if self.principal.role != WorkerRole::Queen {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        let input = parse::<PreviewJiraProjectInput>(arguments)?;
+        let binding_id = JiraProjectBindingId::from_str(&input.binding_id)
+            .map_err(|_| ApplicationError::NotAuthorized)?;
+        let store = self.tasks.store();
+        let binding = store.get_jira_project_binding(binding_id)?;
+        let issues = self
+            .jira
+            .issues(&binding.project_id)
+            .await
+            .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
+        let imported_issue_ids = store
+            .list_jira_issue_links(binding_id)?
+            .into_iter()
+            .map(|link| link.issue_id)
+            .collect::<Vec<_>>();
+        structured(json!({
+            "project": binding,
+            "issues": issues,
+            "imported_issue_ids": imported_issue_ids,
+        }))
+    }
+
     async fn sync_jira_project(
         &self,
         arguments: Value,
@@ -331,8 +428,32 @@ impl AgentMcp {
             .issues(&binding.project_id)
             .await
             .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
-        let snapshots = issues
+        let selected_ids = input
+            .issue_ids
             .iter()
+            .map(|id| id.trim().to_owned())
+            .collect::<HashSet<_>>();
+        if selected_ids.is_empty()
+            || selected_ids.len() > 100
+            || selected_ids
+                .iter()
+                .any(|id| id.is_empty() || id.len() > 128 || id.chars().any(char::is_control))
+        {
+            return Err(ApplicationError::IntegrationUnavailable(
+                "choose between 1 and 100 Jira issue ids from the preview".to_owned(),
+            ));
+        }
+        let selected_issues = issues
+            .iter()
+            .filter(|issue| selected_ids.contains(&issue.id))
+            .collect::<Vec<_>>();
+        if selected_issues.len() != selected_ids.len() {
+            return Err(ApplicationError::IntegrationUnavailable(
+                "one or more selected Jira issues are no longer available".to_owned(),
+            ));
+        }
+        let snapshots = selected_issues
+            .into_iter()
             .map(|issue| JiraIssueSnapshot {
                 issue_id: &issue.id,
                 issue_key: &issue.key,
@@ -379,6 +500,12 @@ struct AssignTaskInput {
 
 #[derive(Deserialize)]
 struct SyncJiraProjectInput {
+    binding_id: String,
+    issue_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct PreviewJiraProjectInput {
     binding_id: String,
 }
 
@@ -496,8 +623,24 @@ fn assign_task_tool() -> Tool {
 fn list_jira_projects_tool() -> Tool {
     tool(
         "swarm_list_jira_projects",
-        "Queen only: list Jira projects connected to this Hive, their repository worker, and workflow readiness before planning Jira work.",
+        "Queen only: list Jira projects connected as shared Hive work pools and inspect workflow readiness before planning Jira work.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        true,
+    )
+}
+
+fn preview_jira_project_tool() -> Tool {
+    tool(
+        "swarm_preview_jira_project",
+        "Queen only: review the latest bounded Jira issues and which issue ids are already in this Hive before choosing work to import.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "binding_id": { "type": "string", "format": "uuid" }
+            },
+            "required": ["binding_id"],
+            "additionalProperties": false
+        }),
         true,
     )
 }
@@ -505,13 +648,14 @@ fn list_jira_projects_tool() -> Tool {
 fn sync_jira_project_tool() -> Tool {
     tool(
         "swarm_sync_jira_project",
-        "Queen only: refresh one connected Jira project into the Hive task queue. Jira owns issue identity and mapped workflow; Swarm preserves worker assignment and local execution notes.",
+        "Queen only: import 1 to 100 explicitly selected Jira issues from a prior preview. Jira owns issue identity and mapped workflow; Swarm preserves worker assignment and local execution notes.",
         &json!({
             "type": "object",
             "properties": {
-                "binding_id": { "type": "string", "format": "uuid" }
+                "binding_id": { "type": "string", "format": "uuid" },
+                "issue_ids": { "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } }
             },
-            "required": ["binding_id"],
+            "required": ["binding_id", "issue_ids"],
             "additionalProperties": false
         }),
         false,
@@ -616,7 +760,10 @@ pub enum AgentBridgeError {
 mod tests {
     use super::*;
     use axum::body::to_bytes;
-    use swarm_domain::ProviderKind;
+    use axum::{Json, Router, routing::get};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use swarm_domain::{JiraProjectScope, JiraStatusMapping, ProviderKind};
+    use swarm_persistence::JiraProjectBindingInput;
     use tempfile::tempdir;
 
     fn setup() -> (
@@ -733,7 +880,9 @@ mod tests {
         assert!(queen_names.contains(&"swarm_create_task"));
         assert!(queen_names.contains(&"swarm_assign_task"));
         assert!(queen_names.contains(&"swarm_list_jira_projects"));
+        assert!(queen_names.contains(&"swarm_preview_jira_project"));
         assert!(queen_names.contains(&"swarm_sync_jira_project"));
+        assert!(!worker_names.contains(&"swarm_preview_jira_project"));
         assert!(!worker_names.contains(&"swarm_sync_jira_project"));
         assert_eq!(
             worker_names,
@@ -809,6 +958,181 @@ mod tests {
         .await;
         assert_eq!(worker["result"]["isError"], true);
         assert_eq!(store.list_tasks().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn queen_previews_selectively_imports_and_transitions_jira_work() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let written = writes.clone();
+        let jira = Router::new()
+            .route(
+                "/rest/api/3/search/jql",
+                get(|| async {
+                    Json(json!({
+                        "isLast": true,
+                        "issues": [{
+                            "id": "20001",
+                            "key": "WEB-42",
+                            "fields": {
+                                "summary": "Polish the launch page",
+                                "status": { "id": "3", "name": "In Progress" },
+                                "assignee": { "accountId": "account-1", "displayName": "Bea" },
+                                "updated": "2026-08-13T13:00:00.000+0000"
+                            }
+                        }, {
+                            "id": "20002",
+                            "key": "WEB-43",
+                            "fields": {
+                                "summary": "Keep this issue in Jira",
+                                "status": { "id": "3", "name": "In Progress" },
+                                "assignee": null,
+                                "updated": "2026-08-13T13:01:00.000+0000"
+                            }
+                        }]
+                    }))
+                }),
+            )
+            .route(
+                "/rest/api/3/issue/WEB-42/transitions",
+                get(|| async {
+                    Json(json!({ "transitions": [
+                        { "id": "41", "to": { "id": "4", "name": "In Review" } }
+                    ] }))
+                })
+                .post(move |Json(body): Json<Value>| {
+                    let written = written.clone();
+                    async move {
+                        assert_eq!(body["transition"]["id"], "41");
+                        written.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            );
+        tokio::spawn(async move { axum::serve(listener, jira).await.unwrap() });
+
+        let (bridge, store, queen_id, _, _) = setup();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "3".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "4".into(),
+                        jira_status_name: "In Review".into(),
+                        task_state: TaskState::Review,
+                    },
+                ],
+            )
+            .unwrap();
+        let bridge = bridge.with_jira(
+            crate::jira::JiraReadinessProbe::configured(
+                &format!("http://{address}"),
+                "operator@example.test",
+                "token",
+            )
+            .unwrap(),
+        );
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let preview = response_json(
+            handle(
+                bridge.clone(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_preview_jira_project",
+                        "arguments": { "binding_id": binding.id.to_string() }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(preview["result"]["isError"], false);
+        assert_eq!(
+            preview["result"]["structuredContent"]["issues"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            preview["result"]["structuredContent"]["imported_issue_ids"],
+            json!([])
+        );
+
+        let imported = response_json(
+            handle(
+                bridge.clone(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_sync_jira_project",
+                        "arguments": {
+                            "binding_id": binding.id.to_string(),
+                            "issue_ids": ["20001"]
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(imported["result"]["isError"], false);
+        let task_id = imported["result"]["structuredContent"]["tasks"][0]["id"]
+            .as_str()
+            .unwrap();
+        assert_eq!(store.list_tasks().unwrap().len(), 1);
+
+        let transitioned = response_json(
+            handle(
+                bridge,
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_transition_task",
+                        "arguments": {
+                            "task_id": task_id,
+                            "state": "review",
+                            "note": "Ready for operator review"
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(transitioned["result"]["isError"], false);
+        assert_eq!(
+            transitioned["result"]["structuredContent"]["state"],
+            "review"
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        let link = store
+            .jira_issue_link_for_task(TaskId::from_str(task_id).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(link.jira_status_id, "4");
+        assert_eq!(link.jira_status_name, "In Review");
     }
 
     #[tokio::test]
