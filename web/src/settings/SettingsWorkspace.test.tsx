@@ -189,6 +189,9 @@ test("downloads a consistent Hive database snapshot", async () => {
   await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
   expect(click).toHaveBeenCalledOnce();
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:hive-backup");
+  fireEvent.click(screen.getByText("How to restore this backup"));
+  expect(screen.getByText(/swarm-next-package restore/)).toBeInTheDocument();
+  expect(screen.getByText(/creates a rollback snapshot/)).toBeInTheDocument();
 });
 
 function minimalProps() {

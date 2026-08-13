@@ -264,7 +264,16 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         <div className="settings-actions">
           <button className="primary-action" disabled={busy} onClick={() => void downloadBackup()}>Download Hive backup</button>
         </div>
-        <small className="privacy-note">This file contains private operational data. Store it like a credential. Verified restore is available through the package manager; host credentials and repository contents remain intentionally separate.</small>
+        <details className="restore-guide">
+          <summary>How to restore this backup</summary>
+          <ol>
+            <li>Move the downloaded file to the Swarm host under your home folder.</li>
+            <li>Run <code>swarm-next-package restore /home/you/path/to/swarm-next-backup.sqlite3</code>.</li>
+            <li>Reopen Swarm. The API restarts, but running worker terminals and repositories stay in place.</li>
+          </ol>
+          <p>Restore verifies the backup first and creates a rollback snapshot before changing the Hive database.</p>
+        </details>
+        <small className="privacy-note">This file contains private operational data. Store it like a credential. Host credentials and repository contents remain intentionally separate.</small>
       </section>
 
 <DiagnosticsWorkspace feedbackRevision={feedbackRevision} operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} />
