@@ -36,6 +36,12 @@ export type TerminalHostStatus = {
   retained_sessions: number;
   resources?: { resident_memory_bytes: number | null } | null;
 };
+export type WorkerEngineMaintenanceResult = {
+  previous_version: string;
+  current_version: string;
+  stopped_sessions: number;
+  restarted_workers: number;
+};
 export type ResourcePressure = "normal" | "advisory" | "critical" | "unavailable";
 export type RuntimeResources = {
   sampled_at: number;
@@ -473,6 +479,15 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
     `/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}`,
     { method: "DELETE" },
   );
+}
+
+export async function updateWorkerEngine(operatorToken: string): Promise<WorkerEngineMaintenanceResult> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    "/api/v1/runtime/terminal-host/maintenance",
+    { method: "POST" },
+  );
+  return response.json() as Promise<WorkerEngineMaintenanceResult>;
 }
 
 export async function fetchProviderCapabilities(operatorToken: string): Promise<ProviderCapabilities> {

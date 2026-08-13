@@ -1,6 +1,6 @@
 [Unit]
 Description=Swarm Next
-Wants=swarm-next-terminal-host.service swarm-next-api.service swarm-next-host-reconcile.timer
+Wants=swarm-next-terminal-host.service swarm-next-api.service swarm-next-host-reconcile.path swarm-next-host-reconcile.timer
 
 [Install]
 WantedBy=default.target

@@ -31,6 +31,7 @@ import {
   stopWorker,
   transitionTask,
   updateWorker,
+  updateWorkerEngine,
   updateTask,
   validateBrowserSession,
   type ControlRoomEvent,
@@ -225,7 +226,7 @@ export function App() {
       operatorToken,
       async (page) => {
         const runtimeChanged = page.events.some((event) => event.kind === "runtime_changed");
-        const [controlRoom, refreshedPresence, refreshedNotifications, refreshedQueenPolicy, refreshedPresentation] = await Promise.all([
+        const [controlRoom, refreshedPresence, refreshedNotifications, refreshedQueenPolicy, refreshedPresentation, refreshedProviders] = await Promise.all([
           loadControlRoom(operatorToken),
           page.events.some((event) => event.kind === "presence_changed")
             ? fetchPresence(operatorToken)
@@ -239,6 +240,9 @@ export function App() {
           runtimeChanged
             ? fetchPresentationPreferences(operatorToken, presentationDevice)
             : Promise.resolve(undefined),
+          runtimeChanged
+            ? fetchProviderCapabilities(operatorToken)
+            : Promise.resolve(undefined),
         ]);
         if (cancelled) return;
         setHiveIdentity(controlRoom.hive);
@@ -250,6 +254,7 @@ export function App() {
         if (refreshedPresence) setPresence(refreshedPresence);
         if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
         if (refreshedQueenPolicy) setQueenPolicy(refreshedQueenPolicy);
+        if (refreshedProviders) setProviders(refreshedProviders);
         if (refreshedPresentation?.configured) {
           setColorTheme(refreshedPresentation.color_theme);
           setMobileKeysVisible(refreshedPresentation.terminal_keys_visible);
@@ -560,6 +565,27 @@ export function App() {
     terminalWorkspace.focusSession(sessionId, shouldFocusTerminalInput());
   }
 
+  async function maintainWorkerEngine() {
+    if (!operatorToken) return;
+    const previousSessionIds = sessions.map((session) => session.session_id);
+    await perform(async () => {
+      await updateWorkerEngine(operatorToken);
+      previousSessionIds.forEach((sessionId) => terminalWorkspace.closeSession(sessionId));
+      const [controlRoom, nextProviders] = await Promise.all([
+        loadControlRoom(operatorToken),
+        fetchProviderCapabilities(operatorToken),
+      ]);
+      setHiveIdentity(controlRoom.hive);
+      setSessions(controlRoom.sessions);
+      setWorkers(controlRoom.workers);
+      setWorkspaces(controlRoom.workspaces);
+      setTasks(controlRoom.tasks);
+      setDecisions(controlRoom.decisions);
+      setProviders(nextProviders);
+      setActiveSessionId(preferredSessionId(controlRoom.workers, controlRoom.sessions));
+    });
+  }
+
   function releaseEngagementWhenSwitching(
     currentSessionId: string | undefined,
     nextSessionId: string,
@@ -789,6 +815,7 @@ export function App() {
             onCreateWorker={configureWorker}
             onUpdateWorker={maintainWorkerProfile}
             onReorderWorkers={reorderWorkerProfiles}
+            onUpdateWorkerEngine={maintainWorkerEngine}
           />
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}`}>

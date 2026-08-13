@@ -197,7 +197,7 @@ activate_host_link() {
 
 install_units() {
   unit_release=$1
-  for name in swarm-next-terminal-host.service swarm-next-api.service swarm-next-host-reconcile.service swarm-next-host-reconcile.timer swarm-next.target; do
+  for name in swarm-next-terminal-host.service swarm-next-api.service swarm-next-host-reconcile.service swarm-next-host-reconcile.path swarm-next-host-reconcile.timer swarm-next.target; do
     render_unit "$unit_release/systemd-user/$name.in" "$unit_root/$name"
   done
   run_systemctl daemon-reload
@@ -254,7 +254,9 @@ install_or_update() {
     activate_link "$new_release"
     activate_host_link "$new_release"
     install_units "$new_release"
-    if run_systemctl enable --now swarm-next.target && wait_for_health && wait_for_host "$new_release"; then
+    if run_systemctl enable --now swarm-next.target \
+      && run_systemctl enable --now swarm-next-host-reconcile.path swarm-next-host-reconcile.timer \
+      && wait_for_health && wait_for_host "$new_release"; then
       printf 'Swarm Next %s is healthy at %s\n' "$version" "$health_url"
       return
     fi
@@ -266,7 +268,9 @@ install_or_update() {
   activate_link "$new_release"
   install_units "$new_release"
   rollback_release=$old_release
-  if run_systemctl enable --now swarm-next.target && run_systemctl restart swarm-next-api.service && wait_for_health; then
+  if run_systemctl enable --now swarm-next.target \
+    && run_systemctl enable --now swarm-next-host-reconcile.path swarm-next-host-reconcile.timer \
+    && run_systemctl restart swarm-next-api.service && wait_for_health; then
     rollback_release=
     printf 'Swarm Next API %s is healthy at %s; terminal host %s was preserved\n' \
       "$version" "$health_url" "$(basename "$host_release")"
@@ -384,7 +388,7 @@ migrate_protocol() {
 uninstall_product() {
   run_systemctl disable --now swarm-next.target 2>/dev/null || true
   rm -f "$unit_root/swarm-next-terminal-host.service" "$unit_root/swarm-next-api.service" \
-    "$unit_root/swarm-next-host-reconcile.service" "$unit_root/swarm-next-host-reconcile.timer" \
+    "$unit_root/swarm-next-host-reconcile.service" "$unit_root/swarm-next-host-reconcile.path" "$unit_root/swarm-next-host-reconcile.timer" \
     "$unit_root/swarm-next.target"
   run_systemctl daemon-reload
   [ ! -L "$bin_root/swarmctl" ] || rm -f "$bin_root/swarmctl"

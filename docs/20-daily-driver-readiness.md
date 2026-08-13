@@ -16,7 +16,7 @@ mostly product operability rather than process survival.
 | Daily outcome | Legacy Swarm | Swarm Next now | Decision |
 |---|---|---|---|
 | Resume after reload | Feature-rich but observed redraw and reconnect failures | Canonical recovery verified with three live workers in an actual browser | Complete baseline; continue multi-day soak |
-| Update during work | Sidecar separation existed | Live proof preserves the same host PID, session, and interactive PTY | Complete |
+| Update during work | Sidecar separation existed | Live proof preserves the same host PID, session, and interactive PTY; a separately confirmed maintenance action can safely restart and recover an always-active crew | Complete |
 | Know who is working | Configured names, roles, groups, status labels | Durable profiles report Sleeping, Buzzing, With you, or Blocked with matching visual treatment | Complete dogfood baseline; add Awaiting you only from a trustworthy provider signal |
 | Coordinate with Queen | Interactive Queen PTY plus separate headless automation | One durable, always-active Queen survives API/browser updates; deterministic At Hive/Away/Night Watch autonomy ceilings are persisted and exposed | Complete interactive baseline and policy foundation; conductor execution remains gated by repository/environment policy |
 | Move between workers | Keyboard switching and cached terminals, but redraw was flaky | Repeated Queen/worker switching preserves exact session identity on desktop and mobile | Complete baseline; continue fast-output soak |

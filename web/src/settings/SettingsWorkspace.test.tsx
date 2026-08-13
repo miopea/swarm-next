@@ -19,6 +19,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   const onEnableNotifications = vi.fn().mockResolvedValue(undefined);
   const onDisableNotifications = vi.fn().mockResolvedValue(undefined);
   const onTestNotification = vi.fn().mockResolvedValue(undefined);
+  const onUpdateWorkerEngine = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 5, host_version: "0.1.0-host", draining: false, running_sessions: 1, retained_sessions: 3 } });
@@ -63,6 +64,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       onCreateWorker={vi.fn().mockResolvedValue(undefined)}
       onUpdateWorker={vi.fn().mockResolvedValue(undefined)}
       onReorderWorkers={vi.fn().mockResolvedValue(undefined)}
+      onUpdateWorkerEngine={onUpdateWorkerEngine}
     />,
   );
 
@@ -88,6 +90,10 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
   expect((await screen.findByText("Worker engine")).parentElement).toHaveTextContent("Worker engineUpdate waiting · 1 active");
+  fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
+  expect(screen.getByRole("group", { name: "Confirm worker engine update" })).toHaveTextContent("Restart 1 active worker now?");
+  fireEvent.click(screen.getByRole("button", { name: "Restart and update" }));
+  expect(onUpdateWorkerEngine).toHaveBeenCalledOnce();
   const terminalHost = await screen.findByText("Terminal host");
   expect(terminalHost.parentElement).toHaveTextContent("Terminal hostHealthy · 0.1.0-host");
   expect((await screen.findByText("API memory")).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
@@ -158,7 +164,7 @@ function minimalProps() {
     recentEvents: [], sessions: [], workers: [], workspaces: [], providers: { claude_code: true, codex: false }, health: { status: "ok" as const, version: "0.1.0" },
     hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
     onThemeChange: vi.fn(), onPresenceChange: vi.fn(), onEnableLockDetection: vi.fn(), onNotificationPolicyChange: vi.fn(),
-    onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(),
+    onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(), onUpdateWorkerEngine: vi.fn(),
   };
 }
 function ok(body: unknown) {

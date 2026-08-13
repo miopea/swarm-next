@@ -37,11 +37,13 @@ type Props = {
   onCreateWorker: (name: string, workspace: string, provider: ProviderKind) => Promise<void>;
   onUpdateWorker: (workerId: string, name: string, autostart: boolean) => Promise<void>;
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
+  onUpdateWorkerEngine: () => Promise<void>;
 };
 
-export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers }: Props) {
+export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers, onUpdateWorkerEngine }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
+  const [confirmMaintenance, setConfirmMaintenance] = useState(false);
   useEffect(() => {
     let cancelled = false;
     void fetchTerminalHostStatus(operatorToken)
@@ -188,6 +190,23 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
           <div><dt>Retained sessions</dt><dd>{sessions.length}</dd></div>
           <div><dt>Worker updates</dt><dd>Preserved during API releases</dd></div>
         </dl>
+        {health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? (
+          <div className="maintenance-action">
+            <p>The new worker engine is ready. Applying it briefly closes every terminal, then revives Queen and your configured always-active workers with their saved provider conversations and task ownership.</p>
+            {!confirmMaintenance ? (
+              <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(true)}>Prepare worker engine update</button>
+            ) : (
+              <div className="maintenance-confirmation" role="group" aria-label="Confirm worker engine update">
+                <strong>Restart {terminalHostStatus.running_sessions} active worker{terminalHostStatus.running_sessions === 1 ? "" : "s"} now?</strong>
+                <span>Open terminal processes will close. Durable workers and tasks will remain.</span>
+                <div className="settings-actions">
+                  <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(false)}>Not now</button>
+                  <button className="primary-action" disabled={busy} onClick={() => { setConfirmMaintenance(false); void onUpdateWorkerEngine(); }}>Restart and update</button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
       </section>
 
       <section className="settings-card integration-settings" aria-labelledby="integration-heading">

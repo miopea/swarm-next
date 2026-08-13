@@ -100,11 +100,30 @@ async function checkSurface(browser, surface) {
     if (!/Current|Update waiting/.test(workerEngineText)) {
       throw new Error(`${surface.name}: worker-engine maintenance state is unclear`);
     }
+    let maintenanceConfirmation = false;
+    if (workerEngineText.includes("Update waiting")) {
+      await page.getByRole("button", { name: "Prepare worker engine update" }).click();
+      const confirmation = page.getByRole("group", { name: "Confirm worker engine update" });
+      await confirmation.waitFor();
+      const dimensions = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+      if (dimensions.scrollWidth > dimensions.clientWidth + 1) {
+        throw new Error(`${surface.name}/maintenance: horizontal overflow ${dimensions.scrollWidth}px > ${dimensions.clientWidth}px`);
+      }
+      await page.screenshot({
+        path: path.join(outputRoot, `${surface.name}-settings-maintenance.png`),
+        fullPage: true,
+      });
+      await page.getByRole("button", { name: "Not now" }).click();
+      maintenanceConfirmation = true;
+    }
     if (consoleErrors.length || pageErrors.length) {
       throw new Error(`${surface.name}: browser errors: ${[...consoleErrors, ...pageErrors].join(" | ")}`);
     }
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, codexDisabled, workerEngineText, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, codexDisabled, workerEngineText, maintenanceConfirmation, backup, status: "passed" };
   } finally {
     await context.close();
   }

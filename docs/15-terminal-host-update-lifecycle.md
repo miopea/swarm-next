@@ -18,13 +18,13 @@ provides an atomic drain boundary before the host binary itself is replaced.
 - Exited sessions do not block replacement; their output remains in durable
   history.
 
-No update path silently kills workers. A security update that cannot wait for
-drain requires a separate explicit controlled-restart action that communicates
-impact before stopping anything.
+No update path silently kills workers. Settings now offers a separate,
+operator-confirmed controlled restart when an always-active Queen means the
+automatic idle boundary will never arrive.
 
 ## Same-user lifecycle contract
 
-IPC protocol version 5 adds:
+The host IPC contract includes:
 
 - `host_status`
 - `begin_drain`
@@ -43,8 +43,9 @@ authenticated HTTP read surface is:
 
 `GET /api/v1/runtime/terminal-host`
 
-Drain mutations remain same-user IPC operations for the packaged updater; they
-are not browser/API mutations.
+Drain mutations remain same-user IPC operations for the packaged updater. The
+browser can request one managed maintenance transaction, but cannot issue raw
+drain, service, path, or package commands.
 
 ## Atomicity
 
@@ -83,6 +84,27 @@ zero, the pending compatible host release is activated and health-checked.
 Operators therefore do not need to remember a maintenance command after the
 last worker naturally stops.
 
+## Operator-confirmed restart
+
+When the API and host releases differ, Settings can prepare a worker-engine
+update. A second explicit confirmation names the number of active workers and
+states that their terminal processes will close. The authenticated API then:
+
+1. serializes the operation against every ordinary worker start/stop;
+2. stops each live process and detaches only its process bindings;
+3. retains stable worker ownership, provider conversation IDs, tasks, and
+   autostart policy;
+4. writes one bounded request marker in the private Hive state directory;
+5. lets a systemd path unit run the already constrained package reconciler;
+6. waits for the exact API release identity from the replacement host;
+7. removes the request marker and revives Queen plus configured autostart
+   workers through their normal recovery path.
+
+If the trigger or replacement fails, the lifecycle lock is released and the
+same supervisor revives configured workers on the available host. The API has
+no generic command execution surface, and the browser supplies no filesystem
+path or service name.
+
 The terminal-host executable now handles graceful interrupt by dropping its
 listener, which removes its owned socket path. Abrupt process death is still a
 distinct failure-recovery case for the service manager; it must verify process
@@ -106,3 +128,7 @@ ownership before removing a stale socket.
   restart the host with an active session, host reconciliation refuses that
   session, and later reconciliation advances the independent host pointer at
   zero sessions.
+- An API integration test starts an explicitly old host with a live real PTY,
+  submits managed maintenance, observes the process stop, replaces the host at
+  the request marker, verifies the exact current version, and confirms marker
+  cleanup.

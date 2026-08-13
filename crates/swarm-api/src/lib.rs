@@ -46,7 +46,7 @@ use swarm_terminal::{
 };
 use tokio::{
     sync::{Mutex, Notify, RwLock, Semaphore},
-    time::timeout,
+    time::{sleep, timeout},
 };
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
@@ -79,6 +79,8 @@ pub struct AppState {
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     workspace_roots: Arc<Vec<PathBuf>>,
+    maintenance_request_path: Option<Arc<PathBuf>>,
+    maintenance_timeout: Duration,
 }
 
 impl AppState {
@@ -99,6 +101,8 @@ impl AppState {
             notification_sender: None,
             attachment_store: None,
             workspace_roots: Arc::new(Vec::new()),
+            maintenance_request_path: None,
+            maintenance_timeout: Duration::from_secs(45),
         }
     }
 
@@ -117,6 +121,19 @@ impl AppState {
     #[must_use]
     pub fn with_workspace_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.workspace_roots = Arc::new(roots);
+        self
+    }
+
+    #[must_use]
+    pub fn with_maintenance_request_path(mut self, path: PathBuf) -> Self {
+        self.maintenance_request_path = Some(Arc::new(path));
+        self
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    fn with_maintenance_timeout(mut self, timeout: Duration) -> Self {
+        self.maintenance_timeout = timeout;
         self
     }
 
@@ -613,6 +630,14 @@ struct TerminalRuntimeLimits {
 }
 
 #[derive(Debug, Serialize)]
+struct WorkerEngineMaintenanceResponse {
+    previous_version: String,
+    current_version: String,
+    stopped_sessions: usize,
+    restarted_workers: usize,
+}
+
+#[derive(Debug, Serialize)]
 struct RuntimeResourcesResponse {
     sampled_at: i64,
     policy: ResourcePolicyResponse,
@@ -983,6 +1008,10 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/resources", get(runtime_resources))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
+        .route(
+            "/api/v1/runtime/terminal-host/maintenance",
+            post(maintain_terminal_host),
+        )
         .route("/api/v1/backups/database", get(download_database_backup))
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
         .route("/api/v1/decisions", get(list_decisions))
@@ -1490,6 +1519,148 @@ async fn terminal_host_status(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorized_no_store_request(&state, &headers, HostRequest::HostStatus).await
+}
+
+async fn maintain_terminal_host(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let guard = state.worker_lifecycle.lock().await;
+    let result = maintain_terminal_host_locked(&state).await;
+    if let Ok(maintenance) = &result
+        && maintenance.previous_version != maintenance.current_version
+    {
+        if let Err(error) = task_store(&state).and_then(|store| {
+            store
+                .record_control_room_event(ControlRoomEventKind::RuntimeChanged)
+                .map(|_| ())
+                .map_err(|error| task_store_error(&error))
+        }) {
+            tracing::warn!(message = %error.message, "worker-engine update could not publish its runtime event");
+        }
+        state.control_room_notify.notify_waiters();
+    }
+    drop(guard);
+
+    // This runs on both success and failure. A failed package trigger therefore
+    // revives autostart workers on the still-current host instead of leaving a
+    // partially stopped Hive behind.
+    state.supervise_workers().await;
+    let mut response = result?;
+    response.restarted_workers = task_store(&state)?
+        .list_worker_profiles()
+        .map_err(|error| task_store_error(&error))?
+        .into_iter()
+        .filter(|worker| worker.active_session_id.is_some())
+        .count();
+    Ok(Json(response).into_response())
+}
+
+async fn maintain_terminal_host_locked(
+    state: &AppState,
+) -> Result<WorkerEngineMaintenanceResponse, ApiError> {
+    let request_path = state.maintenance_request_path.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "worker_engine_maintenance_unavailable",
+            "this installation does not expose managed worker-engine maintenance",
+        )
+    })?;
+    let previous = host_status_snapshot(state).await?;
+    if previous.host_version == build_version() {
+        return Ok(WorkerEngineMaintenanceResponse {
+            previous_version: previous.host_version.clone(),
+            current_version: previous.host_version,
+            stopped_sessions: 0,
+            restarted_workers: 0,
+        });
+    }
+    let HostResponse::Sessions { sessions } =
+        request_host(state, HostRequest::ListSessions).await?
+    else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected session response",
+        ));
+    };
+    let running = sessions
+        .into_iter()
+        .filter(|session| session.running)
+        .collect::<Vec<_>>();
+    for session in &running {
+        request_host(
+            state,
+            HostRequest::Stop {
+                session_id: session.session_id,
+            },
+        )
+        .await?;
+        task_store(state)?
+            .release_worker_session(session.session_id)
+            .map_err(|error| task_store_error(&error))?;
+        task_store(state)?
+            .release_session_assignments(session.session_id)
+            .map_err(|error| task_store_error(&error))?;
+    }
+    state.control_room_notify.notify_waiters();
+    std::fs::write(
+        request_path.as_ref(),
+        format!(
+            "requested_at={}\ntarget_version={}\n",
+            unix_timestamp(),
+            build_version()
+        ),
+    )
+    .map_err(|error| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "worker_engine_maintenance_unavailable",
+            format!("the managed maintenance request could not be recorded: {error}"),
+        )
+    })?;
+
+    let updated = timeout(state.maintenance_timeout, async {
+        loop {
+            sleep(Duration::from_millis(200)).await;
+            if let Ok(status) = host_status_snapshot(state).await
+                && status.host_version == build_version()
+                && !status.draining
+            {
+                return status;
+            }
+        }
+    })
+    .await;
+    let _ = std::fs::remove_file(request_path.as_ref());
+    let current = updated.map_err(|_| {
+        ApiError::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "worker_engine_maintenance_timed_out",
+            "the worker engine did not report the expected release; configured workers were revived on the available host",
+        )
+    })?;
+    Ok(WorkerEngineMaintenanceResponse {
+        previous_version: previous.host_version,
+        current_version: current.host_version,
+        stopped_sessions: running.len(),
+        restarted_workers: 0,
+    })
+}
+
+async fn host_status_snapshot(
+    state: &AppState,
+) -> Result<swarm_terminal::TerminalHostStatus, ApiError> {
+    let HostResponse::HostStatus { status } = request_host(state, HostRequest::HostStatus).await?
+    else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected status response",
+        ));
+    };
+    Ok(status)
 }
 
 async fn runtime_resources(
@@ -4042,6 +4213,89 @@ mod tests {
 
         server_task.abort();
         let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    async fn managed_maintenance_stops_sessions_updates_the_host_and_cleans_its_request() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let session = registry
+            .spawn(
+                &ProviderCommand {
+                    executable: PathBuf::from("/bin/sh"),
+                    arguments: vec!["-lc".into(), "sleep 10".into()],
+                    working_directory: workspace,
+                },
+                TerminalSize::default(),
+            )
+            .unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server =
+            HostServer::bind_with_version(&socket, Arc::clone(&registry), "old-host").unwrap();
+        let old_server_task = tokio::spawn(server.run());
+        let maintenance_request = runtime.path().join("worker-engine-maintenance.request");
+        let watched_request = maintenance_request.clone();
+        let replacement_socket = socket.clone();
+        let replacement_registry = Arc::clone(&registry);
+        let (replacement_sender, replacement_receiver) = tokio::sync::oneshot::channel();
+        let watcher = tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            while !watched_request.exists() {
+                assert!(tokio::time::Instant::now() < deadline);
+                sleep(Duration::from_millis(10)).await;
+            }
+            old_server_task.abort();
+            let _ = old_server_task.await;
+            let replacement = HostServer::bind_with_version(
+                replacement_socket,
+                replacement_registry,
+                build_version(),
+            )
+            .unwrap();
+            let replacement_task = tokio::spawn(replacement.run());
+            let _ = replacement_sender.send(replacement_task);
+        });
+        let store = TaskStore::in_memory().unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone())
+            .with_maintenance_request_path(maintenance_request.clone())
+            .with_maintenance_timeout(Duration::from_secs(3));
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/runtime/terminal-host/maintenance")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = response_json(response).await;
+        assert_eq!(response["previous_version"], "old-host");
+        assert_eq!(response["current_version"], build_version());
+        assert_eq!(response["stopped_sessions"], 1);
+        assert!(!maintenance_request.exists());
+        assert!(!session.is_running().unwrap());
+        assert!(
+            store
+                .list_control_room_events(0)
+                .unwrap()
+                .events
+                .iter()
+                .any(|event| event.kind == ControlRoomEventKind::RuntimeChanged)
+        );
+
+        watcher.await.unwrap();
+        let replacement_task = replacement_receiver.await.unwrap();
+        replacement_task.abort();
+        let _ = replacement_task.await;
     }
 
     #[tokio::test]

@@ -569,3 +569,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .notification-status small, .privacy-note { color: var(--text-muted); font-weight: 500; line-height: 1.45; }
 .settings-actions { display: flex; flex-wrap: wrap; gap: .55rem; }
 .settings-actions button { flex: 1 1 150px; }
+.maintenance-action { display: grid; gap: .75rem; padding: .9rem; border: 1px solid color-mix(in srgb, var(--honey) 55%, var(--line)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--honey-soft) 55%, var(--panel)); }
+.maintenance-action > p { margin: 0; color: var(--muted); font-size: .79rem; line-height: 1.5; }
+.maintenance-confirmation { display: grid; gap: .35rem; }
+.maintenance-confirmation > strong { font-size: .86rem; }
+.maintenance-confirmation > span { color: var(--muted); font-size: .75rem; line-height: 1.45; }

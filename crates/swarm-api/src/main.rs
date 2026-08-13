@@ -30,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
         )
         .with_attachment_store(attachment_root_from_database(&database_path))
+        .with_maintenance_request_path(maintenance_request_path_from_env(&database_path))
         .with_workspace_roots(workspace_roots)
         .with_task_store(store)
         .with_notifications(vapid_subject_from_env())?
@@ -152,6 +153,18 @@ fn attachment_root_from_database(database_path: &std::path::Path) -> PathBuf {
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("attachments")
+}
+
+fn maintenance_request_path_from_env(database_path: &std::path::Path) -> PathBuf {
+    env::var_os("SWARM_MAINTENANCE_REQUEST_PATH").map_or_else(
+        || {
+            database_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("worker-engine-maintenance.request")
+        },
+        PathBuf::from,
+    )
 }
 
 fn mcp_url_from_env(address: SocketAddr) -> String {
