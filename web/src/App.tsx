@@ -684,7 +684,7 @@ export function App() {
                 <span><TerminalIcon /> Workers</span><small>{workers.filter((worker) => worker.running).length + orphanSessions.filter((session) => session.running).length}</small>
               </button>
               <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => setSurface("settings")}>
-                <span><SettingsIcon /> Settings</span><small aria-hidden="true">3</small>
+                <span><SettingsIcon /> Settings</span>
               </button>
             </nav>
 

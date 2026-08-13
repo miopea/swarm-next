@@ -137,6 +137,8 @@ test("restores tasks and workers after a refresh", async () => {
   expect(fetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ credentials: "same-origin" }));
 
   expect(screen.getByRole("button", { name: "Workers 1" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Settings 3" })).not.toBeInTheDocument();
 });
 
 test("restores the worker surface after a refresh", async () => {
