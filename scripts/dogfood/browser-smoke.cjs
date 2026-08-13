@@ -150,7 +150,17 @@ async function checkSurface(browser, surface) {
     const settingsNavigationSize = await settingsNavigation.evaluate((navigation) => ({
       scrollWidth: navigation.scrollWidth,
       clientWidth: navigation.clientWidth,
+      clientHeight: navigation.clientHeight,
+      button: navigation.firstElementChild ? {
+        height: navigation.firstElementChild.getBoundingClientRect().height,
+        display: getComputedStyle(navigation.firstElementChild).display,
+        minHeight: getComputedStyle(navigation.firstElementChild).minHeight,
+        visibility: getComputedStyle(navigation.firstElementChild).visibility,
+      } : null,
     }));
+    if (settingsNavigationSize.clientHeight < 40) {
+      throw new Error(`${surface.name}: Settings section navigation collapsed: ${JSON.stringify(settingsNavigationSize)}`);
+    }
     await settingsNavigation.getByRole("button", { name: "Diagnostics", exact: true }).click();
     const diagnosticsHeading = page.getByRole("heading", { name: "Know which layer needs attention" });
     await diagnosticsHeading.waitFor();
