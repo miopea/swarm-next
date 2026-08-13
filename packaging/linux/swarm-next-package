@@ -134,6 +134,7 @@ render_unit() {
     -e "s|@INSTALL_ROOT@|$install_root|g" \
     -e "s|@CONFIG_ROOT@|$config_root|g" \
     -e "s|@STATE_ROOT@|$state_root|g" \
+    -e "s|@UNIT_ROOT@|$unit_root|g" \
     -e "s|@WORKSPACE_ROOT@|$workspace_root|g" \
     "$source_file" > "$destination.tmp"
   mv -f "$destination.tmp" "$destination"
@@ -196,7 +197,7 @@ activate_host_link() {
 
 install_units() {
   unit_release=$1
-  for name in swarm-next-terminal-host.service swarm-next-api.service swarm-next.target; do
+  for name in swarm-next-terminal-host.service swarm-next-api.service swarm-next-host-reconcile.service swarm-next-host-reconcile.timer swarm-next.target; do
     render_unit "$unit_release/systemd-user/$name.in" "$unit_root/$name"
   done
   run_systemctl daemon-reload
@@ -302,6 +303,7 @@ rollback() {
 }
 
 reconcile_host() {
+  reconcile_mode=${1:-required}
   current=$(release_from_link "$install_root/current")
   host_release=$(release_from_link "$install_root/host-current")
   [ -n "$current" ] || die "no current release is installed"
@@ -314,7 +316,16 @@ reconcile_host() {
   status=$(SWARM_TERMINAL_SOCKET=$(terminal_socket) "$host_release/bin/swarmctl" status)
   running=$(printf '%s\n' "$status" | sed -n 's/.*"running_sessions":[[:space:]]*\([0-9][0-9]*\).*/\1/p')
   case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
-  [ "$running" -eq 0 ] || die "terminal host update deferred; $running sessions remain"
+  if [ "$running" -ne 0 ]; then
+    if [ "$reconcile_mode" = "if-idle" ]; then
+      SWARM_TERMINAL_SOCKET=$(terminal_socket) \
+        "$host_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
+      drain_release=
+      printf 'Terminal host update remains deferred; %s sessions are active\n' "$running"
+      return
+    fi
+    die "terminal host update deferred; $running sessions remain"
+  fi
 
   activate_host_link "$current"
   install_units "$current"
@@ -372,7 +383,9 @@ migrate_protocol() {
 
 uninstall_product() {
   run_systemctl disable --now swarm-next.target 2>/dev/null || true
-  rm -f "$unit_root/swarm-next-terminal-host.service" "$unit_root/swarm-next-api.service" "$unit_root/swarm-next.target"
+  rm -f "$unit_root/swarm-next-terminal-host.service" "$unit_root/swarm-next-api.service" \
+    "$unit_root/swarm-next-host-reconcile.service" "$unit_root/swarm-next-host-reconcile.timer" \
+    "$unit_root/swarm-next.target"
   run_systemctl daemon-reload
   [ ! -L "$bin_root/swarmctl" ] || rm -f "$bin_root/swarmctl"
   rm -rf "$install_root"
@@ -384,8 +397,9 @@ case "$action" in
   install|update) install_or_update;;
   rollback) rollback;;
   reconcile-host) reconcile_host;;
+  reconcile-host-if-idle) reconcile_host if-idle;;
   migrate-protocol) migrate_protocol;;
   uninstall) uninstall_product;;
   restore) restore_database;;
-  *) die "usage: swarm-next-package <install|update|migrate-protocol> RELEASE_DIR | restore DATABASE | rollback | reconcile-host | uninstall";;
+  *) die "usage: swarm-next-package <install|update|migrate-protocol> RELEASE_DIR | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | uninstall";;
 esac

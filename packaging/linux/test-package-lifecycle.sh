@@ -91,6 +91,9 @@ grep -q '127.0.0.1:8766' "$SWARM_CONFIG_ROOT/swarm-next.env"
 grep -q "SWARM_WORKSPACE_ROOTS=$SWARM_WORKSPACE_ROOT" "$SWARM_CONFIG_ROOT/swarm-next.env"
 grep -q "$SWARM_INSTALL_ROOT/current/bin/swarm-api" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "$SWARM_INSTALL_ROOT/host-current/bin/swarm-terminal-host" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
+grep -q "$SWARM_INSTALL_ROOT/current/swarm-next-package reconcile-host-if-idle" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.service"
+grep -q '^OnUnitActiveSec=2min$' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.timer"
+grep -q 'swarm-next-host-reconcile.timer' "$SWARM_SYSTEMD_USER_ROOT/swarm-next.target"
 grep -q "SWARM_ASSET_ROOT=$SWARM_INSTALL_ROOT/assets" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "SWARM_DATABASE_PATH=$SWARM_STATE_ROOT/swarm-next.sqlite3" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 [ -f "$SWARM_INSTALL_ROOT/assets/app-1.0.0.js" ]
@@ -109,6 +112,8 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   systemd-analyze --user verify \
     "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service" \
     "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service" \
+    "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.service" \
+    "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.timer" \
     "$SWARM_SYSTEMD_USER_ROOT/swarm-next.target"
 fi
 
@@ -150,6 +155,13 @@ if "$package" reconcile-host; then
   exit 1
 fi
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
+grep -q '^cancel-drain$' "$HOME/swarmctl.log"
+# The timer path treats active work as a healthy deferred state and leaves new
+# session admission open after its atomic drain/status check.
+: > "$HOME/swarmctl.log"
+"$package" reconcile-host-if-idle
+[ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
+grep -q '^drain$' "$HOME/swarmctl.log"
 grep -q '^cancel-drain$' "$HOME/swarmctl.log"
 printf '0\n' > "$HOME/running-sessions"
 : > "$HOME/systemctl.log"

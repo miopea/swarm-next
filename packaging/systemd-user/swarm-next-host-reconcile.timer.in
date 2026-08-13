@@ -1,0 +1,14 @@
+[Unit]
+Description=Check for a safely applicable Swarm Next worker engine update
+PartOf=swarm-next.target
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=15s
+Persistent=true
+Unit=swarm-next-host-reconcile.service
+
+[Install]
+WantedBy=swarm-next.target
+

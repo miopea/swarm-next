@@ -1,0 +1,15 @@
+[Unit]
+Description=Apply a deferred Swarm Next worker engine update when idle
+After=swarm-next-terminal-host.service swarm-next-api.service
+Requires=swarm-next-terminal-host.service
+
+[Service]
+Type=oneshot
+ExecStart=@INSTALL_ROOT@/current/swarm-next-package reconcile-host-if-idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@INSTALL_ROOT@
+ReadWritePaths=@UNIT_ROOT@
+

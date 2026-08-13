@@ -76,6 +76,13 @@ The explicit `reconcile-host` action:
 5. verifies the replacement host through same-user IPC;
 6. restores and verifies the retained host release if replacement fails.
 
+The package also installs a bounded user timer. Every two minutes it performs
+the same atomic drain-and-status check. Active sessions make that check a
+successful no-op and admission is reopened immediately; once the count reaches
+zero, the pending compatible host release is activated and health-checked.
+Operators therefore do not need to remember a maintenance command after the
+last worker naturally stops.
+
 The terminal-host executable now handles graceful interrupt by dropping its
 listener, which removes its owned socket path. Abrupt process death is still a
 distinct failure-recovery case for the service manager; it must verify process
