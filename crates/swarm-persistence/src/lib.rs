@@ -10,7 +10,7 @@ use swarm_domain::{
     ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
     HiveIdentity, Operator, OperatorId, Task, TaskActivity, TaskActivityKind, TaskActivityPage,
     TaskDetailsUpdate, TaskDispatchState, TaskId, TaskOutcomeDeliveryState, TaskPriority,
-    TaskState, WorkerSessionId,
+    TaskState, WorkerId, WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -36,7 +36,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 18;
+const CURRENT_SCHEMA_VERSION: i64 = 19;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -159,7 +159,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=17 => {
+            0..=18 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -312,7 +312,8 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "
-            SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
+            SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state,
+                   t.assigned_worker_id, a.worker_session_id,
                    (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
                    (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
                     AND outcome.target_state = t.state
@@ -341,7 +342,8 @@ impl TaskStore {
         connection
             .query_row(
                 "
-                SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state, a.worker_session_id,
+                SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state,
+                       t.assigned_worker_id, a.worker_session_id,
                    (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
                    (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
                     AND outcome.target_state = t.state
@@ -660,7 +662,7 @@ impl TaskStore {
         drop(connection);
         self.get_task(id)
     }
-    /// Replaces the current assignment with a running immutable worker-session identity.
+    /// Replaces the current durable worker owner and binds its active session when available.
     ///
     /// # Errors
     /// Returns an error for an unknown or completed task or unavailable persistence.
@@ -668,6 +670,36 @@ impl TaskStore {
         &self,
         id: TaskId,
         session_id: WorkerSessionId,
+    ) -> Result<Task, TaskStoreError> {
+        let connection = self.connection()?;
+        let worker_id = connection
+            .query_row(
+                "SELECT worker_id FROM worker_sessions
+                 WHERE session_id = ?1 AND ended_at IS NULL",
+                [session_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|value| WorkerId::from_str(&value))
+            .transpose()
+            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?
+            .ok_or(TaskStoreError::WorkerSessionNotActive)?;
+        drop(connection);
+        self.assign_task_to_worker(id, worker_id)
+    }
+
+    /// Assigns a task to a stable worker profile, including while she is sleeping.
+    ///
+    /// A running incarnation receives one queued briefing. A sleeping worker is
+    /// bound and briefed atomically the next time her profile starts.
+    ///
+    /// # Errors
+    /// Returns an error for unknown workers, completed tasks, exhausted queue
+    /// capacity, invalid persisted identities, or unavailable storage.
+    pub fn assign_task_to_worker(
+        &self,
+        id: TaskId,
+        worker_id: WorkerId,
     ) -> Result<Task, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -682,6 +714,18 @@ impl TaskStore {
         if state == TaskState::Completed.to_string() {
             return Err(TaskStoreError::CompletedTask);
         }
+        let worker: Option<Option<String>> = transaction
+            .query_row(
+                "SELECT session.session_id
+                 FROM worker_profiles profile
+                 LEFT JOIN worker_sessions session
+                   ON session.worker_id = profile.id AND session.ended_at IS NULL
+                 WHERE profile.id = ?1 AND profile.role != 'queen'",
+                [worker_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let session_id = worker.ok_or(TaskStoreError::WorkerNotFound)?;
         transaction.execute(
             "DELETE FROM task_outcome_deliveries WHERE task_id = ?1 AND state = 'queued'",
             [id.to_string()],
@@ -697,29 +741,30 @@ impl TaskStore {
              WHERE task_id = ?1 AND released_at IS NULL",
             [id.to_string()],
         )?;
-        let queued: i64 = transaction.query_row(
-            "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
-            [],
-            |row| row.get(0),
-        )?;
-        if queued >= 256 {
-            return Err(TaskStoreError::TaskDispatchQueueFull);
-        }
-        let assignment_id = Uuid::now_v7().to_string();
         transaction.execute(
-            "INSERT INTO task_assignments (id, task_id, worker_session_id)
-             VALUES (?1, ?2, ?3)",
-            params![assignment_id, id.to_string(), session_id.to_string()],
+            "UPDATE tasks SET assigned_worker_id = ?2, updated_at = unixepoch() WHERE id = ?1",
+            params![id.to_string(), worker_id.to_string()],
         )?;
-        let dispatch_inserted = transaction.execute(
-            "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
-             SELECT ?1, ?2, ws.worker_id, 'queued'
-             FROM worker_sessions ws
-             WHERE ws.session_id = ?3 AND ws.ended_at IS NULL",
-            params![assignment_id, id.to_string(), session_id.to_string()],
-        )?;
-        if dispatch_inserted != 1 {
-            return Err(TaskStoreError::WorkerSessionNotActive);
+        if let Some(session_id) = session_id {
+            let queued: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
+                [],
+                |row| row.get(0),
+            )?;
+            if queued >= 256 {
+                return Err(TaskStoreError::TaskDispatchQueueFull);
+            }
+            let assignment_id = Uuid::now_v7().to_string();
+            transaction.execute(
+                "INSERT INTO task_assignments (id, task_id, worker_session_id)
+                 VALUES (?1, ?2, ?3)",
+                params![assignment_id, id.to_string(), session_id],
+            )?;
+            transaction.execute(
+                "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
+                 VALUES (?1, ?2, ?3, 'queued')",
+                params![assignment_id, id.to_string(), worker_id.to_string()],
+            )?;
         }
         transaction.execute(
             "DELETE FROM task_dispatches WHERE assignment_id IN (
@@ -728,10 +773,6 @@ impl TaskStore {
                  ORDER BY updated_at DESC, assignment_id DESC LIMIT -1 OFFSET 1024
              )",
             [],
-        )?;
-        transaction.execute(
-            "UPDATE tasks SET updated_at = unixepoch() WHERE id = ?1",
-            [id.to_string()],
         )?;
         transaction.execute(
             "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'assigned')",
@@ -743,7 +784,9 @@ impl TaskStore {
         self.get_task(id)
     }
 
-    /// Ends every active assignment owned by one stopped worker session.
+    /// Detaches every process binding owned by one stopped worker session.
+    ///
+    /// Stable worker ownership remains on the task and is rebound on restart.
     ///
     /// # Errors
     /// Returns an error when the assignment history cannot be updated atomically.
@@ -778,10 +821,6 @@ impl TaskStore {
             )?;
             transaction.execute(
                 "UPDATE tasks SET updated_at = unixepoch() WHERE id = ?1",
-                [task_id],
-            )?;
-            transaction.execute(
-                "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'unassigned')",
                 [task_id],
             )?;
         }
@@ -965,7 +1004,48 @@ fn migrate_schema(
     if schema_version < 18 {
         migrate_presentation_preferences(transaction)?;
     }
+    if schema_version < 19 {
+        migrate_durable_task_ownership(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_durable_task_ownership(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let has_owner = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'assigned_worker_id')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !has_owner {
+        transaction.execute(
+            "ALTER TABLE tasks ADD COLUMN assigned_worker_id TEXT REFERENCES worker_profiles(id)",
+            [],
+        )?;
+    }
+    let has_assignments = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_assignments')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if has_assignments {
+        transaction.execute_batch(
+            "UPDATE tasks
+             SET assigned_worker_id = (
+                 SELECT session.worker_id
+                 FROM task_assignments assignment
+                 JOIN worker_sessions session ON session.session_id = assignment.worker_session_id
+                 WHERE assignment.task_id = tasks.id AND assignment.released_at IS NULL
+                 LIMIT 1
+             )
+             WHERE assigned_worker_id IS NULL;",
+        )?;
+    }
+    transaction.execute_batch(
+        "CREATE INDEX IF NOT EXISTS task_owner_queue
+             ON tasks(assigned_worker_id, state)
+             WHERE assigned_worker_id IS NOT NULL AND state != 'completed';
+         PRAGMA user_version = 19;",
+    )
 }
 
 fn migrate_queen_autonomy(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -1482,9 +1562,10 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     let hive_id: String = row.get(1)?;
     let priority: String = row.get(4)?;
     let state: String = row.get(6)?;
-    let assigned_session_id: Option<String> = row.get(7)?;
-    let dispatch_state: Option<String> = row.get(8)?;
-    let outcome_delivery_state: Option<String> = row.get(9)?;
+    let assigned_worker_id: Option<String> = row.get(7)?;
+    let assigned_session_id: Option<String> = row.get(8)?;
+    let dispatch_state: Option<String> = row.get(9)?;
+    let outcome_delivery_state: Option<String> = row.get(10)?;
     Ok(Task {
         id: TaskId::from_str(&id).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -1511,12 +1592,22 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
                 Box::new(error),
             )
         })?,
+        assigned_worker_id: assigned_worker_id
+            .map(|value| WorkerId::from_str(&value))
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    7,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
         assigned_session_id: assigned_session_id
             .map(|value| WorkerSessionId::from_str(&value))
             .transpose()
             .map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    7,
+                    8,
                     rusqlite::types::Type::Text,
                     Box::new(error),
                 )
@@ -1526,7 +1617,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             .transpose()
             .map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    8,
+                    9,
                     rusqlite::types::Type::Text,
                     Box::new(error),
                 )
@@ -1536,14 +1627,14 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
             .transpose()
             .map_err(|error| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    9,
+                    10,
                     rusqlite::types::Type::Text,
                     Box::new(error),
                 )
             })?,
-        position: row.get(10)?,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
+        position: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -1587,10 +1678,19 @@ mod tests {
         assert_eq!(created.state, TaskState::Draft);
 
         let ready = store.transition_task(created.id, TaskState::Ready).unwrap();
-        let queen = store.ensure_queen("/workspace").unwrap();
+        let worker = store
+            .create_worker(
+                "Daisy",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
         let session_id = WorkerSessionId::new();
-        store.bind_worker_session(queen.id, session_id).unwrap();
+        store.bind_worker_session(worker.id, session_id).unwrap();
         let assigned = store.assign_task(ready.id, session_id).unwrap();
+        assert_eq!(assigned.assigned_worker_id, Some(worker.id));
         assert_eq!(assigned.assigned_session_id, Some(session_id));
         assert_eq!(store.list_tasks().unwrap().len(), 1);
 
@@ -1601,7 +1701,7 @@ mod tests {
             .unwrap();
         assert_eq!(completed.state, TaskState::Completed);
         assert!(matches!(
-            store.assign_task(ready.id, WorkerSessionId::new()),
+            store.assign_task_to_worker(ready.id, worker.id),
             Err(TaskStoreError::CompletedTask)
         ));
 
@@ -1613,6 +1713,66 @@ mod tests {
         assert_eq!(activity.events[1].to_state, Some(TaskState::Ready));
         assert_eq!(activity.events[2].kind, TaskActivityKind::Assigned);
         assert_eq!(activity.events[5].to_state, Some(TaskState::Completed));
+    }
+
+    #[test]
+    fn sleeping_worker_owns_task_and_rebinds_it_after_restart() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Clover",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace/clover",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store
+            .create_task("Resume durable work", "/workspace/clover")
+            .unwrap();
+
+        let sleeping = store.assign_task_to_worker(task.id, worker.id).unwrap();
+        assert_eq!(sleeping.assigned_worker_id, Some(worker.id));
+        assert_eq!(sleeping.assigned_session_id, None);
+        assert_eq!(sleeping.dispatch_state, None);
+
+        let first = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, first).unwrap();
+        let started = store.get_task(task.id).unwrap();
+        assert_eq!(started.assigned_worker_id, Some(worker.id));
+        assert_eq!(started.assigned_session_id, Some(first));
+        assert_eq!(started.dispatch_state, Some(TaskDispatchState::Queued));
+
+        store.release_worker_session(first).unwrap();
+        store.release_session_assignments(first).unwrap();
+        let stopped = store.get_task(task.id).unwrap();
+        assert_eq!(stopped.assigned_worker_id, Some(worker.id));
+        assert_eq!(stopped.assigned_session_id, None);
+
+        let second = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, second).unwrap();
+        let resumed = store.get_task(task.id).unwrap();
+        assert_eq!(resumed.assigned_worker_id, Some(worker.id));
+        assert_eq!(resumed.assigned_session_id, Some(second));
+        assert_eq!(resumed.dispatch_state, Some(TaskDispatchState::Queued));
+
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE task_dispatches
+                 SET state = 'delivered', delivered_at = unixepoch(), updated_at = unixepoch()
+                 WHERE task_id = ?1 AND state = 'queued'",
+                [task.id.to_string()],
+            )
+            .unwrap();
+        store.release_worker_session(second).unwrap();
+        store.release_session_assignments(second).unwrap();
+        let third = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, third).unwrap();
+        let continued = store.get_task(task.id).unwrap();
+        assert_eq!(continued.assigned_session_id, Some(third));
+        assert_eq!(continued.dispatch_state, None);
     }
 
     #[test]
@@ -1741,13 +1901,23 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let task = store.create_task("Assigned work", "/workspace").unwrap();
         store.transition_task(task.id, TaskState::Ready).unwrap();
-        let queen = store.ensure_queen("/workspace").unwrap();
+        let worker = store
+            .create_worker(
+                "Poppy",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
         let session_id = WorkerSessionId::new();
-        store.bind_worker_session(queen.id, session_id).unwrap();
+        store.bind_worker_session(worker.id, session_id).unwrap();
         store.assign_task(task.id, session_id).unwrap();
 
         assert_eq!(store.release_session_assignments(session_id).unwrap(), 1);
-        assert_eq!(store.get_task(task.id).unwrap().assigned_session_id, None);
+        let stopped = store.get_task(task.id).unwrap();
+        assert_eq!(stopped.assigned_worker_id, Some(worker.id));
+        assert_eq!(stopped.assigned_session_id, None);
         assert_eq!(store.release_session_assignments(session_id).unwrap(), 0);
     }
 

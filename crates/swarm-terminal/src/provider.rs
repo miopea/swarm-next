@@ -104,6 +104,8 @@ impl CodexAdapter {
     /// Builds the interactive Codex CLI command for a repository-owned worker.
     /// Codex owns its thread identifier; recovery therefore uses its cwd-scoped
     /// `resume --last` contract instead of manufacturing an external UUID.
+    /// # Errors
+    /// Returns an error when the workspace is not an allowed absolute path.
     pub fn command_for(
         &self,
         workspace: &Path,

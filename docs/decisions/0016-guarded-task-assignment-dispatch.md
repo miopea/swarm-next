@@ -9,20 +9,28 @@ is briefed. Ad hoc terminal injection would recreate the context-breaking
 broadcast behavior Swarm Next is replacing. It would also lose work across API
 replacement or duplicate a brief after a crash-ambiguous terminal write.
 
-Task state, assignment, and briefing delivery are separate facts. The durable
-task remains authoritative even when terminal delivery is delayed or uncertain.
+Task state, stable worker ownership, process binding, and briefing delivery are
+separate facts. The durable task remains authoritative even when its worker is
+sleeping or terminal delivery is delayed or uncertain.
 
 ## Decision
 
-Creating an assignment atomically creates one bounded task-dispatch outbox row.
+Assigning a task records the stable worker immediately. If she is running, the
+same transaction creates one bounded task-dispatch outbox row. If she is
+sleeping, her next session binding creates the first dispatch atomically.
 
-- The assignment targets an active immutable worker session and records the
-  stable worker identity owning that session.
+- Durable ownership targets a worker profile and survives process stop, crash,
+  reboot, and provider conversation recovery.
+- Delivery targets the current immutable worker session. A stopped session is
+  detached without clearing worker ownership; restart rebinds the new process.
+- A worker already briefed before restart is not briefed a second time. Her
+  provider conversation recovery carries the context; uncertain delivery still
+  requires operator review.
 - A live operator engagement lease leaves the brief Queued. Merely viewing or
   resizing the terminal does not block delivery.
 - Reassigning or stopping a session cancels its still-Queued brief in the same
-  transaction that releases the assignment. A claimed brief is never silently
-  retargeted.
+  transaction that releases the process binding. A claimed brief is never
+  silently retargeted, and only explicit reassignment changes stable ownership.
 - The API claims at most 16 briefs per pass, with no more than 256 active queue
   rows and 1,024 retained final rows. It serializes task and decision delivery
   within one API instance.
@@ -58,9 +66,12 @@ operator approves completion.
 
 ## Validation
 
-- Persistence tests cover engagement deferral, active-session targeting,
-  acknowledged completion, queued cancellation on reassignment and stop, and
-  crash recovery to Uncertain.
+- Persistence tests cover sleeping-worker ownership, restart rebinding,
+  engagement deferral, active-session targeting, acknowledged completion,
+  queued cancellation on reassignment and stop, and crash recovery to
+  Uncertain.
+- Schema 19 backfills stable ownership from each active legacy session
+  assignment without changing task history.
 - A v11-to-v12 migration test proves existing databases gain the outbox.
 - API integration assigns through HTTP and observes the brief in a real
   host-owned PTY.

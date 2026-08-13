@@ -114,17 +114,17 @@ impl TaskService {
             .update_task_details(task_id, update)
             .map_err(Into::into)
     }
-    /// Assigns a local task to a running session already verified by the calling adapter.
+    /// Assigns a local task to a stable worker profile.
     ///
     /// # Errors
     /// Propagates task lifecycle and persistence failures.
     pub fn assign_operator_task(
         &self,
         task_id: TaskId,
-        session_id: WorkerSessionId,
+        worker_id: WorkerId,
     ) -> Result<Task, ApplicationError> {
         self.store
-            .assign_task(task_id, session_id)
+            .assign_task_to_worker(task_id, worker_id)
             .map_err(Into::into)
     }
 
@@ -173,7 +173,10 @@ impl TaskService {
             .map_or_else(Vec::new, |session_id| {
                 tasks
                     .into_iter()
-                    .filter(|task| task.assigned_session_id == Some(session_id))
+                    .filter(|task| {
+                        task.assigned_worker_id == Some(principal.worker_id)
+                            && task.assigned_session_id == Some(session_id)
+                    })
                     .collect()
             }))
     }
@@ -206,10 +209,10 @@ impl TaskService {
         self.create_operator_task(title, description, priority, workspace)
     }
 
-    /// Assigns a task to the active process incarnation of a stable worker.
+    /// Assigns a task to a stable worker, whether running or sleeping.
     ///
     /// # Errors
-    /// Denies worker callers, sleeping targets, and invalid persistence changes.
+    /// Denies worker callers and invalid persistence changes.
     pub fn assign_task(
         &self,
         principal: AgentPrincipal,
@@ -217,11 +220,8 @@ impl TaskService {
         worker_id: WorkerId,
     ) -> Result<Task, ApplicationError> {
         require_queen(principal)?;
-        let worker = self.store.get_worker_profile(worker_id)?;
-        let session_id = worker
-            .active_session_id
-            .ok_or(ApplicationError::WorkerNotRunning)?;
-        self.assign_operator_task(task_id, session_id)
+        self.store.get_worker_profile(worker_id)?;
+        self.assign_operator_task(task_id, worker_id)
     }
 
     /// Applies a domain-valid state transition within the caller's authority.
@@ -243,7 +243,9 @@ impl TaskService {
                 .active_session_id
                 .ok_or(ApplicationError::WorkerNotRunning)?;
             let task = self.store.get_task(task_id)?;
-            if task.assigned_session_id != Some(session_id) {
+            if task.assigned_worker_id != Some(principal.worker_id)
+                || task.assigned_session_id != Some(session_id)
+            {
                 return Err(ApplicationError::NotAuthorized);
             }
             if !matches!(
@@ -296,7 +298,10 @@ impl TaskService {
             let session_id = principal
                 .active_session_id
                 .ok_or(ApplicationError::WorkerNotRunning)?;
-            if self.store.get_task(task_id)?.assigned_session_id != Some(session_id) {
+            let task = self.store.get_task(task_id)?;
+            if task.assigned_worker_id != Some(principal.worker_id)
+                || task.assigned_session_id != Some(session_id)
+            {
                 return Err(ApplicationError::NotAuthorized);
             }
         }

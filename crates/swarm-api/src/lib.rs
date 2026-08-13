@@ -815,7 +815,7 @@ struct ResolveDecisionRequest {
 
 #[derive(Debug, Deserialize)]
 struct AssignTaskRequest {
-    session_id: WorkerSessionId,
+    worker_id: WorkerId,
 }
 
 #[derive(Debug, Deserialize)]
@@ -939,6 +939,7 @@ fn router_with_optional_asset_root(
         ))
 }
 
+#[allow(clippy::too_many_lines)]
 fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/mcp", post(mcp))
@@ -1665,30 +1666,8 @@ async fn assign_task(
     Json(request): Json<AssignTaskRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let client = terminal_client(&state)?;
-    let sessions = client
-        .request(&HostRequest::ListSessions)
-        .await
-        .map_err(|error| host_unavailable(&error))?;
-    let HostResponse::Sessions { sessions } = sessions else {
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "unexpected_host_response",
-            "terminal host returned an unexpected response",
-        ));
-    };
-    if !sessions
-        .iter()
-        .any(|session| session.session_id == request.session_id && session.running)
-    {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "worker_session_unavailable",
-            "task assignment requires a running worker session",
-        ));
-    }
     let task = task_service(&state)?
-        .assign_operator_task(parse_task_id(&task_id)?, request.session_id)
+        .assign_operator_task(parse_task_id(&task_id)?, request.worker_id)
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     state.deliver_coordination().await;
@@ -4306,7 +4285,46 @@ mod tests {
 
     #[allow(clippy::too_many_lines)]
     #[tokio::test]
-    async fn task_assignment_requires_and_releases_a_real_worker_session() {
+    async fn task_assignment_accepts_a_sleeping_durable_worker() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Sleeping Clover",
+                ProviderKind::ClaudeCode,
+                "/workspace/clover",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store
+            .create_task("Wait for Clover", "/workspace/clover")
+            .unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/missing/terminal.sock"), "secret")
+            .with_task_store(store);
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/api/v1/tasks/{}/assignment", task.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"worker_id":"{}"}}"#, worker.id)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let assigned = response_json(response).await;
+        assert_eq!(assigned["assigned_worker_id"], worker.id.to_string());
+        assert!(assigned["assigned_session_id"].is_null());
+        assert!(assigned["dispatch_state"].is_null());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn task_assignment_binds_a_running_worker_and_retains_durable_ownership() {
         let runtime = TempDir::new().unwrap();
         let workspace = env::temp_dir().canonicalize().unwrap();
         let registry = Arc::new(
@@ -4352,10 +4370,7 @@ mod tests {
                     .uri(format!("/api/v1/tasks/{}/assignment", task.id))
                     .header("authorization", "Bearer secret")
                     .header("content-type", "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"session_id":"{}"}}"#,
-                        session.id()
-                    )))
+                    .body(Body::from(format!(r#"{{"worker_id":"{}"}}"#, worker.id)))
                     .unwrap(),
             )
             .await
@@ -4414,7 +4429,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stopped.status(), StatusCode::OK);
-        assert_eq!(store.get_task(task.id).unwrap().assigned_session_id, None);
+        let stopped_task = store.get_task(task.id).unwrap();
+        assert_eq!(stopped_task.assigned_worker_id, Some(worker.id));
+        assert_eq!(stopped_task.assigned_session_id, None);
 
         server_task.abort();
         let _ = server_task.await;

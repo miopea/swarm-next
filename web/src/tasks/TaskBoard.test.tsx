@@ -10,7 +10,7 @@ const task: Task = {
   id: "task-1",
   hive_id: "hive-1", title: "Make reload stable", workspace: "/workspace/swarm", state: "draft",
   description: "Keep terminal history attached", priority: "high",
-  assigned_session_id: null, position: 0, created_at: 1, updated_at: 1,
+  assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 1,
 };
 const worker: Worker = {
   id: "worker-1", hive_id: "hive-1", name: "Daisy", role: "worker", provider: "claude_code",
@@ -60,6 +60,18 @@ test("creates a task with useful context and priority", () => {
     priority: "urgent",
     worker_id: worker.id,
   });
+});
+
+test("keeps worker ownership visible while the assigned worker is sleeping", () => {
+  const sameWorkspace = { ...worker, id: "worker-2", name: "Poppy" };
+  renderBoard({
+    tasks: [{ ...task, assigned_worker_id: worker.id }],
+    workers: [sameWorkspace, worker],
+  });
+
+  const card = screen.getByRole("article", { name: task.title });
+  expect(within(card).getByText("Daisy · swarm")).toBeInTheDocument();
+  expect(within(card).getByLabelText("Worker")).toHaveValue(worker.id);
 });
 
 test("edits task details and retains a failed form for retry", async () => {

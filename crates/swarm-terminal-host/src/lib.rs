@@ -232,6 +232,7 @@ async fn dispatch_wait(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn dispatch_blocking(registry: &SessionRegistry, request: HostRequest) -> HostResponse {
     let result = match request {
         HostRequest::Ping => {

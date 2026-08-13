@@ -335,7 +335,7 @@ test("quietly returns to unlock when the server has no trusted cookie", async ()
 });
 
 test("creates a persisted task draft from the task board", async () => {
-  const task = { id: "task-1", title: "Prove two workers", workspace: "/workspace", state: "draft", assigned_session_id: null, created_at: 1, updated_at: 1 };
+  const task = { id: "task-1", title: "Prove two workers", workspace: "/workspace", state: "draft", assigned_worker_id: null, assigned_session_id: null, created_at: 1, updated_at: 1 };
   const worker = {
     id: "worker-1", name: "Budget Bee", role: "worker", provider: "claude_code", workspace: task.workspace,
     autostart: false, position: 1, active_session_id: null, running: false, created_at: 1, updated_at: 1,
@@ -351,6 +351,7 @@ test("creates a persisted task draft from the task board", async () => {
     ok([]),
     ok([]),
     ok(task),
+    ok({ ...task, assigned_worker_id: worker.id }),
   ];
   const fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
     if (String(url).includes("/api/v1/control-room/events")) {
@@ -384,9 +385,13 @@ test("creates a persisted task draft from the task board", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
 
   expect(await screen.findByRole("heading", { name: task.title })).toBeInTheDocument();
-  expect(fetch).toHaveBeenLastCalledWith(
+  expect(fetch).toHaveBeenCalledWith(
     "/api/v1/tasks",
     expect.objectContaining({ method: "POST", body: JSON.stringify({ title: task.title, description: "", priority: "normal", workspace: task.workspace }) }),
+  );
+  expect(fetch).toHaveBeenLastCalledWith(
+    `/api/v1/tasks/${task.id}/assignment`,
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ worker_id: worker.id }) }),
   );
 });
 

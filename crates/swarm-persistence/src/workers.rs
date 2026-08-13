@@ -5,6 +5,7 @@ use swarm_domain::{
     ControlRoomEventKind, HiveId, PresenceDeviceId, ProviderConversationId, ProviderKind, WorkerId,
     WorkerProfile, WorkerRole, WorkerSessionId,
 };
+use uuid::Uuid;
 
 use super::{MAX_WORKSPACE_BYTES, TaskStore, TaskStoreError, insert_control_room_event};
 
@@ -253,12 +254,62 @@ impl TaskStore {
             "INSERT INTO worker_sessions (session_id, worker_id) VALUES (?1, ?2)",
             params![session_id.to_string(), worker_id.to_string()],
         )?;
+        let owned_tasks = {
+            let mut statement = transaction.prepare(
+                "SELECT task.id
+                 FROM tasks task
+                 WHERE task.assigned_worker_id = ?1 AND task.state != 'completed'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_assignments assignment
+                       WHERE assignment.task_id = task.id AND assignment.released_at IS NULL
+                   )
+                 ORDER BY task.position, task.id",
+            )?;
+            statement
+                .query_map([worker_id.to_string()], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for task_id in &owned_tasks {
+            let assignment_id = Uuid::now_v7().to_string();
+            transaction.execute(
+                "INSERT INTO task_assignments (id, task_id, worker_session_id)
+                 VALUES (?1, ?2, ?3)",
+                params![assignment_id, task_id, session_id.to_string()],
+            )?;
+            let previously_briefed: bool = transaction.query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM task_dispatches
+                     WHERE task_id = ?1 AND worker_id = ?2
+                       AND state IN ('dispatching','delivered','uncertain')
+                 )",
+                params![task_id, worker_id.to_string()],
+                |row| row.get(0),
+            )?;
+            if !previously_briefed {
+                let queued: i64 = transaction.query_row(
+                    "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if queued >= 256 {
+                    return Err(TaskStoreError::TaskDispatchQueueFull);
+                }
+                transaction.execute(
+                    "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
+                     VALUES (?1, ?2, ?3, 'queued')",
+                    params![assignment_id, task_id, worker_id.to_string()],
+                )?;
+            }
+        }
         transaction.execute(
             "UPDATE worker_profiles SET updated_at = unixepoch() WHERE id = ?1",
             [worker_id.to_string()],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
         insert_control_room_event(&transaction, ControlRoomEventKind::SessionsChanged)?;
+        if !owned_tasks.is_empty() {
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
         transaction.commit()?;
         Ok(())
     }

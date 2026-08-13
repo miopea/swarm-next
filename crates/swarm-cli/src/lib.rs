@@ -186,6 +186,10 @@ pub struct LegacyTableReport {
 
 /// Opens a legacy Swarm snapshot read-only and reports migration eligibility.
 /// It never attaches the database to the Next store and never changes either file.
+///
+/// # Errors
+/// Returns an error when the snapshot cannot be opened read-only, fails its
+/// integrity check, or contains unreadable supported tables.
 pub fn inspect_legacy_database(
     path: impl AsRef<std::path::Path>,
 ) -> Result<LegacyInspectionReport, CliError> {
@@ -274,7 +278,10 @@ fn inspect_table(
     })
 }
 
-/// Opens an exported Hive database and verifies its schema and SQLite integrity.
+/// Opens an exported Hive database and verifies its schema and `SQLite` integrity.
+///
+/// # Errors
+/// Returns an error when the database cannot be opened, migrated, or verified.
 pub fn verify_database(path: impl AsRef<std::path::Path>) -> Result<(), CliError> {
     let store = swarm_persistence::TaskStore::open(path)
         .map_err(|error| CliError::Database(error.to_string()))?;

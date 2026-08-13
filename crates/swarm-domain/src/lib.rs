@@ -945,6 +945,7 @@ pub struct Task {
     pub priority: TaskPriority,
     pub workspace: String,
     pub state: TaskState,
+    pub assigned_worker_id: Option<WorkerId>,
     pub assigned_session_id: Option<WorkerSessionId>,
     pub dispatch_state: Option<TaskDispatchState>,
     pub outcome_delivery_state: Option<TaskOutcomeDeliveryState>,

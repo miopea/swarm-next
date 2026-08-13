@@ -83,6 +83,8 @@ impl PresentationPreferences {
 
 impl TaskStore {
     /// Returns one desktop or mobile presentation profile.
+    /// # Errors
+    /// Returns an error when preferences cannot be read from durable storage.
     pub fn presentation_preferences(
         &self,
         device_class: PresentationDeviceClass,
@@ -92,6 +94,8 @@ impl TaskStore {
     }
 
     /// Replaces one presentation profile atomically.
+    /// # Errors
+    /// Returns an error for invalid preferences or an unavailable transaction.
     pub fn set_presentation_preferences(
         &self,
         preferences: PresentationPreferences,

@@ -90,6 +90,7 @@ export type Task = {
   priority: TaskPriority;
   workspace: string;
   state: TaskState;
+  assigned_worker_id: string | null;
   assigned_session_id: string | null;
   dispatch_state?: "queued" | "dispatching" | "delivered" | "uncertain" | null;
   outcome_delivery_state?: "queued" | "dispatching" | "delivered" | "uncertain" | null;
@@ -378,7 +379,7 @@ export async function transitionTask(
 export async function assignTask(
   operatorToken: string,
   taskId: string,
-  sessionId: string,
+  workerId: string,
 ): Promise<Task> {
   const response = await authenticatedFetch(
     operatorToken,
@@ -386,7 +387,7 @@ export async function assignTask(
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId }),
+      body: JSON.stringify({ worker_id: workerId }),
     },
   );
   return response.json() as Promise<Task>;

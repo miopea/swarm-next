@@ -464,7 +464,7 @@ export function App() {
         priority: input.priority,
         workspace: worker.workspace,
       });
-      if (worker.active_session_id) task = await assignTask(operatorToken, task.id, worker.active_session_id);
+      task = await assignTask(operatorToken, task.id, worker.id);
       setTasks((current) => [task, ...current]);
     });
   }
@@ -497,7 +497,7 @@ export function App() {
       const worker = workers.find((candidate) => candidate.id === workerId && candidate.role !== "queen");
       if (!worker) throw new Error("That worker is no longer configured.");
       let updated = await updateTask(operatorToken, task.id, { workspace: worker.workspace });
-      if (worker.active_session_id) updated = await assignTask(operatorToken, task.id, worker.active_session_id);
+      updated = await assignTask(operatorToken, task.id, worker.id);
       replaceTask(updated);
     });
   }

@@ -20,7 +20,7 @@ mostly product operability rather than process survival.
 | Know who is working | Configured names, roles, groups, status labels | Durable profiles report Sleeping, Buzzing, With you, or Blocked with matching visual treatment | Complete dogfood baseline; add Awaiting you only from a trustworthy provider signal |
 | Coordinate with Queen | Interactive Queen PTY plus separate headless automation | One durable, always-active Queen survives API/browser updates; deterministic At Hive/Away/Night Watch autonomy ceilings are persisted and exposed | Complete interactive baseline and policy foundation; conductor execution remains gated by repository/environment policy |
 | Move between workers | Keyboard switching and cached terminals, but redraw was flaky | Repeated Queen/worker switching preserves exact session identity on desktop and mobile | Complete baseline; continue fast-output soak |
-| Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Explicit lifecycle, editing, priority, durable ordering, focused state drops, bounded activity history, and guarded assignment briefs to quiet workers, and guarded Blocked/Review handoffs back to Queen | Complete dogfood baseline; defer broad integrations |
+| Plan and dispatch work | Rich task modal, priorities, dependencies, imports, proposals | Explicit lifecycle, editing, priority, durable worker ownership across stop/restart, durable ordering, focused state drops, bounded activity history, guarded assignment briefs to quiet workers, and guarded Blocked/Review handoffs back to Queen | Complete dogfood baseline; defer broad integrations |
 | See changes without refreshing | Broad WebSocket event stream | Typed, authenticated, resumable control-room invalidation feed | Complete; keep Refresh as recovery |
 | Manage workers quickly | Launch, kill, revive, groups, bulk actions | Durable profiles start, stop, recover Claude context, support safe rename and always-active policy changes, provide progressive repository-path completion, and retain desktop drag plus touch/keyboard ordering | Complete dogfood baseline; defer groups until measured |
 | Use direct interactions | Shortcuts, command palette, drag/drop imports | Keyboard switching, durable task ordering, focused state drops, accessible worker/task action menus with right-click parity, and a touch-friendly quick worker/view palette | Complete dogfood baseline; add commands only where dogfood proves value |
@@ -66,6 +66,11 @@ worker outcome notes and Queen routing, durable ordering, activity history, and
 focused state drag/drop are implemented without
 weakening explicit state transitions. Email, Jira, WYSIWYG, pipelines, and
 broad automation wait for dogfood evidence.
+
+Task ownership belongs to the stable worker profile, not one terminal process.
+An operator or Queen may assign work while that worker is sleeping. Starting or
+recovering her binds the current process and sends the first briefing; stopping
+or rebooting detaches only that process and never silently unassigns her work.
 
 ### E. Operator controls
 

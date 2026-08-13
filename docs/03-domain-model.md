@@ -68,9 +68,12 @@ one home Hive. Cross-Hive work is a handoff or linked contribution.
 
 ### Assignment
 
-The time-bounded relationship between a task and worker session. Modeling it
-separately preserves history and avoids contradictory fields on tasks and
-workers.
+The durable ownership relationship between a task and stable worker profile.
+It survives sleep, process replacement, reboot, and provider conversation
+recovery. A separate time-bounded session binding identifies the current
+process incarnation that may act on and receive delivery for that assignment.
+Modeling both facts explicitly preserves history and avoids contradictory
+fields on tasks, workers, and terminal sessions.
 
 ### Task dispatch
 
