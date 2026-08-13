@@ -220,6 +220,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-jira-origin a:hover strong, .task-jira-origin a:focus-visible strong { border-color: var(--accent); background: var(--accent-soft); }
 .task-jira-origin a:focus-visible { border-radius: 999px; outline: 2px solid color-mix(in srgb, var(--accent) 34%, transparent); outline-offset: 2px; }
 .task-jira-origin span + span::before { margin-right: 9px; color: var(--line-strong); content: "·"; }
+.task-jira-origin .jira-sync-state { color: var(--accent-strong); font-weight: 650; }
+.task-jira-origin .jira-sync-state.conflict, .task-jira-origin .jira-sync-state.uncertain { color: var(--danger); }
+.task-jira-origin .jira-sync-retry { min-height: 28px; margin-left: auto; padding: 3px 7px; }
 .task-priority { padding: 3px 7px; border: 1px solid currentColor; border-radius: 999px; font-size: .63rem; font-weight: 500; letter-spacing: .035em; text-transform: uppercase; }
 .priority-low { color: var(--quiet); }
 .priority-normal { color: var(--good); }

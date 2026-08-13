@@ -11,6 +11,7 @@ import {
   fetchHive,
   fetchHealth,
   fetchJiraTaskLinks,
+  retryJiraTaskLink,
   fetchNotificationSettings,
   fetchQueenAutonomyPolicy,
   fetchPresence,
@@ -579,6 +580,14 @@ export function App() {
     focusTerminalAfterRender(sessionId);
   }
 
+  async function retryTaskJira(task: Task) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await retryJiraTaskLink(operatorToken, task.id);
+      setJiraTaskLinks(await fetchJiraTaskLinks(operatorToken));
+    });
+  }
+
   async function maintainWorkerEngine() {
     if (!operatorToken) return;
     const previousSessionIds = sessions.map((session) => session.session_id);
@@ -829,7 +838,7 @@ export function App() {
         ) : surface === "decisions" ? (
           <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
+          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onRetryJira={retryTaskJira} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             busy={busy}

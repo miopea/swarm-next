@@ -19,6 +19,7 @@ type Props = {
   onStartWorker: (task: Task) => Promise<void>;
   onOpenWorker: (sessionId: string) => void;
   onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
+  onRetryJira: (task: Task) => Promise<void>;
   onReorder: (taskIds: string[]) => Promise<void>;
 };
 
@@ -80,6 +81,7 @@ export default function TaskBoard({
   onStartWorker,
   onOpenWorker,
   onFetchActivity,
+  onRetryJira,
   onReorder,
 }: Props) {
   const [title, setTitle] = useState("");
@@ -247,6 +249,7 @@ export default function TaskBoard({
                 onStartWorker={onStartWorker}
                 onOpenWorker={onOpenWorker}
                 onFetchActivity={onFetchActivity}
+                onRetryJira={onRetryJira}
                 canMoveEarlier={index > 0}
                 canMoveLater={index < openTasks.length - 1}
                 onMoveEarlier={() => moveTaskAt(index, -1)}
@@ -299,6 +302,7 @@ export default function TaskBoard({
                 onStartWorker={onStartWorker}
                 onOpenWorker={onOpenWorker}
                 onFetchActivity={onFetchActivity}
+                onRetryJira={onRetryJira}
                 canMoveEarlier={false}
                 canMoveLater={false}
                 onMoveEarlier={() => undefined}
@@ -319,7 +323,7 @@ function initialComposerOpen(): boolean {
   return typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 680px)").matches;
 }
 
-function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
   const targetWorker = assignableWorkers.find((worker) => worker.id === task.assigned_worker_id)
@@ -400,6 +404,18 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
           <span>{jiraLink.project_name}</span>
           <span>{jiraLink.jira_status_name}</span>
           {jiraLink.jira_assignee_name && <span>Jira: {jiraLink.jira_assignee_name}</span>}
+          {jiraLink.outbound_state && (
+            <span className={`jira-sync-state ${jiraLink.outbound_state}`}>
+              {jiraLink.outbound_state === "queued" || jiraLink.outbound_state === "dispatching"
+                ? "Updating Jira…"
+                : "Jira update needs attention"}
+            </span>
+          )}
+          {(jiraLink.outbound_state === "conflict" || jiraLink.outbound_state === "uncertain") && (
+            <button className="text-button jira-sync-retry" type="button" disabled={busy} onClick={() => void onRetryJira(task)}>
+              Retry Jira
+            </button>
+          )}
         </div>
       )}
       <h4>{task.title}</h4>

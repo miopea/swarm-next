@@ -36,10 +36,10 @@ use swarm_domain::{
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
-    MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_NOTE_BYTES, MAX_TASK_ACTIVITY_PAGE,
-    NotificationSettings, PresentationColorTheme, PresentationDeviceClass, PresentationPreferences,
-    PushSubscriptionInput, TaskDispatch, TaskDispatchFailure, TaskOutcomeDispatch,
-    TaskOutcomeFailure, TaskStore, TaskStoreError,
+    JiraTransitionFailure, MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_NOTE_BYTES,
+    MAX_TASK_ACTIVITY_PAGE, NotificationSettings, PresentationColorTheme, PresentationDeviceClass,
+    PresentationPreferences, PushSubscriptionInput, TaskDispatch, TaskDispatchFailure,
+    TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
@@ -79,6 +79,7 @@ pub struct AppState {
     agent_bridge: Option<agent::AgentBridge>,
     worker_lifecycle: Arc<Mutex<()>>,
     coordination_delivery: Arc<Mutex<()>>,
+    jira_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
     control_room_notify: Arc<Notify>,
@@ -103,6 +104,7 @@ impl AppState {
             agent_bridge: None,
             worker_lifecycle: Arc::new(Mutex::new(())),
             coordination_delivery: Arc::new(Mutex::new(())),
+            jira_delivery: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             control_room_notify: Arc::new(Notify::new()),
@@ -242,6 +244,7 @@ impl AppState {
     /// New Jira work always requires explicit operator or Queen intake. A failed
     /// project refresh is isolated so local work and other connected projects continue.
     pub async fn reconcile_jira(&self) {
+        self.deliver_jira_transitions().await;
         let Some(store) = self.task_store.as_ref() else {
             return;
         };
@@ -287,6 +290,30 @@ impl AppState {
                 }
             }
         }
+    }
+
+    /// Delivers one bounded batch of durable Jira workflow updates.
+    pub async fn deliver_jira_transitions(&self) {
+        let _guard = self.jira_delivery.lock().await;
+        let Some(store) = self.task_store.as_ref() else {
+            return;
+        };
+        deliver_jira_transition_batch(
+            store,
+            &self.jira_readiness,
+            self.control_room_notify.as_ref(),
+        )
+        .await;
+    }
+
+    /// Recovers a crash-interrupted Jira write as explicit uncertainty.
+    ///
+    /// # Errors
+    /// Returns persistence failures.
+    pub fn recover_jira_transition_deliveries(&self) -> Result<usize, TaskStoreError> {
+        self.task_store
+            .as_ref()
+            .map_or(Ok(0), TaskStore::recover_inflight_jira_transitions)
     }
     #[must_use]
     pub fn with_terminal_host(
@@ -731,6 +758,78 @@ fn unix_timestamp() -> i64 {
             i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
         })
 }
+pub(crate) async fn deliver_jira_transition_batch(
+    store: &TaskStore,
+    jira: &jira::JiraReadinessProbe,
+    control_room_notify: &Notify,
+) {
+    let deliveries = match store.claim_jira_transitions(unix_timestamp()) {
+        Ok(deliveries) => deliveries,
+        Err(error) => {
+            tracing::warn!(%error, "Jira transition queue could not be claimed");
+            return;
+        }
+    };
+    for delivery in deliveries {
+        let outcome = match jira
+            .transition_issue(&delivery.issue_key, &delivery.target_status_ids)
+            .await
+        {
+            Ok(transitioned) => store.complete_jira_transition(
+                &delivery.id,
+                &transitioned.status_id,
+                &transitioned.status_name,
+                unix_timestamp(),
+            ),
+            Err(error) => {
+                let failure = if error == jira::JiraAdapterError::NetworkUnavailable {
+                    JiraTransitionFailure::Retryable
+                } else {
+                    JiraTransitionFailure::Conflict
+                };
+                tracing::warn!(
+                    task_id = %delivery.task_id,
+                    issue = %delivery.issue_key,
+                    %error,
+                    "durable Jira transition was not acknowledged"
+                );
+                store.fail_jira_transition(
+                    &delivery.id,
+                    unix_timestamp(),
+                    failure,
+                    jira_adapter_error_code(error),
+                )
+            }
+        };
+        match outcome {
+            Ok(true) => control_room_notify.notify_waiters(),
+            Ok(false) => tracing::warn!(
+                task_id = %delivery.task_id,
+                issue = %delivery.issue_key,
+                "Jira transition claim was no longer active"
+            ),
+            Err(error) => tracing::warn!(
+                task_id = %delivery.task_id,
+                issue = %delivery.issue_key,
+                %error,
+                "Jira transition outcome could not be persisted"
+            ),
+        }
+    }
+}
+
+fn jira_adapter_error_code(error: jira::JiraAdapterError) -> &'static str {
+    match error {
+        jira::JiraAdapterError::NotConfigured => "not_configured",
+        jira::JiraAdapterError::CredentialsInvalid => "credentials_invalid",
+        jira::JiraAdapterError::PermissionDenied => "permission_denied",
+        jira::JiraAdapterError::NetworkUnavailable => "network_unavailable",
+        jira::JiraAdapterError::InvalidResponse => "invalid_response",
+        jira::JiraAdapterError::ResponseLimitExceeded => "response_limit_exceeded",
+        jira::JiraAdapterError::TransitionUnavailable => "transition_unavailable",
+    }
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self::new(JournalLimits::default())
@@ -1048,6 +1147,7 @@ struct JiraTaskLinkView {
     jira_assignee_name: Option<String>,
     remote_updated_at: String,
     last_synced_at: i64,
+    outbound_state: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1262,6 +1362,10 @@ fn api_router(state: AppState) -> Router {
             get(jira_bindings).post(create_jira_binding),
         )
         .route("/api/v1/integrations/jira/task-links", get(jira_task_links))
+        .route(
+            "/api/v1/integrations/jira/task-links/{task_id}/retry",
+            post(retry_jira_task_link),
+        )
         .route(
             "/api/v1/integrations/jira/bindings/{binding_id}/mappings",
             get(jira_mappings).put(replace_jira_mappings),
@@ -2201,55 +2305,11 @@ async fn transition_task(
     if request.note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
         return Err(task_store_error(&TaskStoreError::InvalidTaskActivityNote));
     }
-    let jira_transition = if let Some(link) = store
-        .jira_issue_link_for_task(task_id)
-        .map_err(|error| task_store_error(&error))?
-    {
-        let target_statuses = store
-            .list_jira_status_mappings(link.binding_id)
-            .map_err(|error| task_store_error(&error))?
-            .into_iter()
-            .filter(|mapping| mapping.task_state == request.state)
-            .collect::<Vec<_>>();
-        if target_statuses.is_empty() {
-            return Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "jira_transition_unmapped",
-                "Map a Jira status to this Swarm task state before moving the issue",
-            ));
-        }
-        if let Some(current_target) = target_statuses
-            .iter()
-            .find(|mapping| mapping.jira_status_id == link.jira_status_id)
-        {
-            Some((
-                current_target.jira_status_id.clone(),
-                current_target.jira_status_name.clone(),
-            ))
-        } else {
-            let status_ids = target_statuses
-                .iter()
-                .map(|mapping| mapping.jira_status_id.clone())
-                .collect::<Vec<_>>();
-            let transitioned = state
-                .jira_readiness
-                .transition_issue(&link.issue_key, &status_ids)
-                .await
-                .map_err(jira_adapter_error)?;
-            Some((transitioned.status_id, transitioned.status_name))
-        }
-    } else {
-        None
-    };
     let task = task_service(&state)?
         .transition_operator_task_with_note(task_id, request.state, &request.note)
         .map_err(application_error)?;
-    if let Some((status_id, status_name)) = jira_transition {
-        store
-            .update_jira_issue_link_status(task_id, &status_id, &status_name)
-            .map_err(|error| task_store_error(&error))?;
-    }
     state.control_room_notify.notify_waiters();
+    state.deliver_jira_transitions().await;
     Ok(Json(task).into_response())
 }
 
@@ -2453,6 +2513,9 @@ async fn jira_task_links(
             .list_jira_issue_links(binding.id)
             .map_err(|error| task_store_error(&error))?
         {
+            let outbound_state = store
+                .jira_transition_state_for_task(link.task_id)
+                .map_err(|error| task_store_error(&error))?;
             let issue_url = browser_base_url
                 .as_ref()
                 .and_then(|base_url| jira::issue_url(base_url, &link.issue_key));
@@ -2470,11 +2533,34 @@ async fn jira_task_links(
                 jira_assignee_name: link.jira_assignee_name,
                 remote_updated_at: link.remote_updated_at,
                 last_synced_at: link.last_synced_at,
+                outbound_state,
             });
         }
     }
     links.sort_by(|left, right| left.issue_key.cmp(&right.issue_key));
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(links)).into_response())
+}
+
+async fn retry_jira_task_link(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    let retried = task_store(&state)?
+        .retry_jira_transition(task_id)
+        .map_err(|error| task_store_error(&error))?;
+    if !retried {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "jira_transition_not_retryable",
+            "This Jira task does not have a conflicting or uncertain update to retry",
+        ));
+    }
+    state.control_room_notify.notify_waiters();
+    state.deliver_jira_transitions().await;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 async fn create_jira_binding(
@@ -3598,6 +3684,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "jira_project_binding_not_found",
             error.to_string(),
         ),
+        TaskStoreError::JiraTransitionPending => ApiError::new(
+            StatusCode::CONFLICT,
+            "jira_transition_pending",
+            error.to_string(),
+        ),
+        TaskStoreError::JiraTransitionQueueFull => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "jira_transition_queue_full",
+            error.to_string(),
+        ),
         TaskStoreError::WorkerNotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "worker_not_found", error.to_string())
         }
@@ -4393,6 +4489,88 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].jira_assignee_name.as_deref(), Some("Fern"));
         assert_eq!(links[0].jira_status_id, "4");
+    }
+
+    #[tokio::test]
+    async fn jira_outage_keeps_the_local_transition_and_queues_remote_delivery() {
+        let unavailable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = unavailable.local_addr().unwrap();
+        drop(unavailable);
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "1".into(),
+                        jira_status_name: "To Do".into(),
+                        task_state: TaskState::Ready,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "3".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                ],
+            )
+            .unwrap();
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "20001",
+                    issue_key: "WEB-42",
+                    summary: "Polish the launch page",
+                    status_id: "1",
+                    status_name: "To Do",
+                    assignee_account_id: None,
+                    assignee_name: None,
+                    remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                }],
+            )
+            .unwrap()
+            .remove(0);
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone())
+                .with_jira_configuration(
+                    &format!("http://{address}"),
+                    "operator@example.test",
+                    "api-token",
+                )
+                .unwrap(),
+        );
+
+        let transitioned = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/tasks/{}/state", task.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"state":"active"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(transitioned.status(), StatusCode::OK);
+        assert_eq!(response_json(transitioned).await["state"], "active");
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Active);
+        let links =
+            response_json(authorized_get(app, "/api/v1/integrations/jira/task-links").await).await;
+        assert_eq!(links[0]["jira_status_name"], "To Do");
+        assert_eq!(links[0]["outbound_state"], "queued");
     }
 
     #[tokio::test]

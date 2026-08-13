@@ -64,6 +64,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "crash-interrupted Queen handoffs require operator review"
         );
     }
+    let recovered_jira_transitions = state.recover_jira_transition_deliveries()?;
+    if recovered_jira_transitions > 0 {
+        tracing::warn!(
+            recovered_jira_transitions,
+            "crash-interrupted Jira updates require reconciliation"
+        );
+    }
     state.supervise_workers().await;
     let supervisor = state.clone();
     tokio::spawn(async move {

@@ -124,6 +124,7 @@ export type JiraTaskLink = {
   jira_assignee_name: string | null;
   remote_updated_at: string;
   last_synced_at: number;
+  outbound_state: "queued" | "dispatching" | "conflict" | "uncertain" | null;
 };
 
 export type Worker = {
@@ -620,6 +621,12 @@ export async function fetchJiraTaskLinks(operatorToken: string): Promise<JiraTas
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/task-links");
   const links = await response.json() as unknown;
   return Array.isArray(links) ? links as JiraTaskLink[] : [];
+}
+
+export async function retryJiraTaskLink(operatorToken: string, taskId: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/task-links/${encodeURIComponent(taskId)}/retry`, {
+    method: "POST",
+  });
 }
 
 export async function createJiraBinding(

@@ -24,7 +24,7 @@ const worker: Worker = {
 function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> = {}) {
   const props: React.ComponentProps<typeof TaskBoard> = {
     tasks: [task], jiraTaskLinks: [], sessions: [], workers: [worker], busy: false,
-    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onReorder: vi.fn(),
+    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onRetryJira: vi.fn(), onReorder: vi.fn(),
     ...overrides,
   };
   return { props, ...render(<TaskBoard {...props} />) };
@@ -126,6 +126,7 @@ test("distinguishes assigned work from work that has started", () => {
 });
 
 test("keeps Jira identity and remote status visible while routing work", () => {
+  const onRetryJira = vi.fn();
   renderBoard({
     tasks: [{ ...task, state: "ready", assigned_worker_id: worker.id }],
     jiraTaskLinks: [{
@@ -133,14 +134,18 @@ test("keeps Jira identity and remote status visible while routing work", () => {
       project_key: "WEB", project_name: "Website Services", task_id: task.id,
       jira_status_id: "1", jira_status_name: "To Do",
       jira_assignee_account_id: "account-1", jira_assignee_name: "Bradford",
-      remote_updated_at: "2026-08-13T13:00:00Z", last_synced_at: 1,
+      remote_updated_at: "2026-08-13T13:00:00Z", last_synced_at: 1, outbound_state: "conflict",
     }],
+    onRetryJira,
   });
 
   const card = screen.getByRole("article", { name: task.title });
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Website Services");
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("To Do");
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Jira: Bradford");
+  expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Jira update needs attention");
+  fireEvent.click(within(card).getByRole("button", { name: "Retry Jira" }));
+  expect(onRetryJira).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
   expect(within(card).getByRole("link", { name: /WEB-42/ })).toHaveAttribute("href", "https://jira.example.test/browse/WEB-42");
   expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
 });

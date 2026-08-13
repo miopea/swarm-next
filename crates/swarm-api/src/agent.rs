@@ -341,46 +341,10 @@ impl AgentMcp {
             ));
         }
         let store = self.tasks.store();
-        let jira_transition = if let Some(link) = store.jira_issue_link_for_task(task_id)? {
-            let target_statuses = store
-                .list_jira_status_mappings(link.binding_id)?
-                .into_iter()
-                .filter(|mapping| mapping.task_state == input.state)
-                .collect::<Vec<_>>();
-            if target_statuses.is_empty() {
-                return Err(ApplicationError::IntegrationUnavailable(
-                    "map a Jira status to this Swarm state before moving the issue".to_owned(),
-                ));
-            }
-            if let Some(current_target) = target_statuses
-                .iter()
-                .find(|mapping| mapping.jira_status_id == link.jira_status_id)
-            {
-                Some((
-                    current_target.jira_status_id.clone(),
-                    current_target.jira_status_name.clone(),
-                ))
-            } else {
-                let status_ids = target_statuses
-                    .iter()
-                    .map(|mapping| mapping.jira_status_id.clone())
-                    .collect::<Vec<_>>();
-                let transitioned = self
-                    .jira
-                    .transition_issue(&link.issue_key, &status_ids)
-                    .await
-                    .map_err(|error| ApplicationError::IntegrationUnavailable(error.to_string()))?;
-                Some((transitioned.status_id, transitioned.status_name))
-            }
-        } else {
-            None
-        };
         let task = self
             .tasks
             .transition_task(self.principal, task_id, input.state, &input.note)?;
-        if let Some((status_id, status_name)) = jira_transition {
-            store.update_jira_issue_link_status(task_id, &status_id, &status_name)?;
-        }
+        crate::deliver_jira_transition_batch(store, &self.jira, self.changed.as_ref()).await;
         structured(task)
     }
 

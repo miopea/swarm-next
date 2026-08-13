@@ -707,6 +707,31 @@ impl TaskStore {
         Ok(changed)
     }
 
+    /// Requeues one explicitly conflicting or uncertain Jira update for operator retry.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn retry_jira_transition(&self, task_id: TaskId) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE jira_transition_deliveries
+             SET state = 'queued', attempts = 0, available_at = unixepoch(),
+                 attempted_at = NULL, last_error = NULL, updated_at = unixepoch()
+             WHERE id = (
+                 SELECT id FROM jira_transition_deliveries
+                 WHERE task_id = ?1 AND state IN ('conflict','uncertain')
+                 ORDER BY updated_at DESC, id DESC LIMIT 1
+             )",
+            [task_id.to_string()],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
     /// Returns the latest unresolved outbound Jira state for one task.
     ///
     /// # Errors
@@ -1102,6 +1127,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn local_jira_transition_is_durable_bounded_and_acknowledged() {
         let store = TaskStore::in_memory().unwrap();
         let binding = store
@@ -1267,6 +1293,21 @@ mod tests {
             Some("uncertain")
         );
         assert!(store.claim_jira_transitions(1_000).unwrap().is_empty());
+        assert!(store.retry_jira_transition(task.id).unwrap());
+        let retried = store
+            .claim_jira_transitions(2_000_000_000)
+            .unwrap()
+            .remove(0);
+        assert!(
+            store
+                .fail_jira_transition(
+                    &retried.id,
+                    2_000_000_001,
+                    JiraTransitionFailure::Uncertain,
+                    "response_unknown",
+                )
+                .unwrap()
+        );
         let acknowledged = store
             .sync_jira_issues(
                 binding.id,
