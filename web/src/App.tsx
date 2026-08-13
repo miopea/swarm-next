@@ -649,9 +649,15 @@ export function App() {
     { id: "tasks", label: "Tasks", detail: `${openTaskCount} open`, group: "Go to", run: () => setSurface("tasks") },
     { id: "workers", label: "Workers", detail: `${workers.filter((worker) => worker.running).length} running`, group: "Go to", run: () => setSurface("workers") },
     { id: "settings", label: "Settings", detail: "Preferences and diagnostics", group: "Go to", run: () => setSurface("settings") },
-    ...workers.filter((worker) => worker.running && worker.active_session_id).map((worker) => ({
-      id: `worker-${worker.id}`, label: worker.name, detail: "Open worker terminal", group: "Workers" as const,
-      run: () => { if (worker.active_session_id) openWorker(worker.active_session_id); },
+    ...workers.map((worker) => ({
+      id: `worker-${worker.id}`,
+      label: worker.name,
+      detail: worker.running && worker.active_session_id ? "Open worker terminal" : "Wake sleeping worker",
+      group: "Workers" as const,
+      run: () => {
+        if (worker.active_session_id) openWorker(worker.active_session_id);
+        else void startExistingWorker(worker);
+      },
     })),
   ], [openTaskCount, pendingDecisionCount, workers, activeSessionId, operatorToken]);
 

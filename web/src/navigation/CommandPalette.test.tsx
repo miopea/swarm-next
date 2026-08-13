@@ -24,3 +24,12 @@ test("offers a visible close action for touch users", () => {
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(close).toHaveBeenCalledOnce();
 });
+
+test("makes the wake action explicit for sleeping workers", () => {
+  const wake = vi.fn();
+  render(<CommandPalette onClose={vi.fn()} choices={[
+    { id: "daisy", label: "Daisy", detail: "Wake sleeping worker", group: "Workers", run: wake },
+  ]} />);
+  expect(screen.getByRole("button", { name: /Daisy Wake sleeping worker/ })).toBeInTheDocument();
+  expect(screen.getByText(/Sleeping workers wake when selected/)).toBeInTheDocument();
+});

@@ -27,7 +27,7 @@ export default function CommandPalette({ choices, onClose }: { choices: CommandC
         </button>)}
         {filtered.length === 0 ? <p>No matching view or worker.</p> : null}
       </div>
-      <small className="privacy-note">Tip: press Alt+K anywhere outside a terminal or text field.</small>
+      <small className="privacy-note">Tip: press Alt+K anywhere outside a terminal or text field. Sleeping workers wake when selected.</small>
     </section>
   </div>;
 }

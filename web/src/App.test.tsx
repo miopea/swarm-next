@@ -431,6 +431,9 @@ test("waking a task worker assigns the stable worker rather than its new session
   vi.stubGlobal("fetch", fetch);
 
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Open quick navigation" }));
+  expect(screen.getByRole("button", { name: /Daisy Wake sleeping worker/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
   fireEvent.click(await screen.findByRole("button", { name: "Wake Daisy" }));
 
   await waitFor(() => expect(fetch).toHaveBeenCalledWith(
