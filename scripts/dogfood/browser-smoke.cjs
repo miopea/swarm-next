@@ -91,6 +91,9 @@ async function checkSurface(browser, surface) {
       await target.ready().first().waitFor();
       if (target.name === "workers") {
         workerSelections = await verifyRunningWorkerSelection(page, surface.name);
+        if (surface.mobile && !await page.getByRole("button", { name: "Add image" }).isVisible()) {
+          throw new Error(`${surface.name}: terminal image picker is unavailable`);
+        }
       }
       await page.waitForTimeout(250);
       const dimensions = await page.evaluate(() => ({
