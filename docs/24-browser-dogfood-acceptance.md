@@ -209,3 +209,10 @@ worker:
   expressed only by the inline lock/notification capability state, avoiding a
   contradictory global failure banner when the browser already completed or
   reconciled the operation.
+- A live API-only restart replaced PID `658477` with `721890` while the
+  terminal-host PID remained `400662`. Queen, Swarm Next, and Dogfood Clover
+  reconnected under the same three session IDs before and after a browser
+  reload. Eight samples over 105 seconds kept API memory between 3.2 and 3.8
+  MiB and the host cgroup, including all three Claude processes, between 937.5
+  and 938.1 MiB. This bounded sample rules out rapid growth; it does not replace
+  the documented 24-hour promotion soak.
