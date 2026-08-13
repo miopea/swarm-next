@@ -27,7 +27,7 @@ type Props = {
 const taskStates: { value: TaskState; label: string }[] = [
   { value: "draft", label: "Inbox" },
   { value: "ready", label: "Ready" },
-  { value: "active", label: "Active" },
+  { value: "active", label: "In progress" },
   { value: "blocked", label: "Blocked" },
   { value: "review", label: "Review" },
   { value: "completed", label: "Done" },
@@ -202,6 +202,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
           {selectedProject ? (
             <div className="jira-workflow-setup">
               <p className="privacy-note">Issues arrive unassigned. Assign or claim each one when its repository and worker are known.</p>
+              <p className="privacy-note"><strong>Assignment is tracked separately from workflow.</strong> A Ready issue becomes Assigned when routed to a worker; In progress means work has actually begun.</p>
               <div className="jira-status-map" aria-label="Jira workflow mapping">
                 {statuses.map((status) => (
                   <label key={status.id}>

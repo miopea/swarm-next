@@ -30,6 +30,11 @@ const stateLabels: Record<TaskState, string> = {
   completed: "Completed",
 };
 
+function taskStateLabel(task: Task): string {
+  if (task.state === "ready" && task.assigned_worker_id) return "Assigned";
+  return stateLabels[task.state];
+}
+
 const priorityLabels: Record<TaskPriority, string> = {
   low: "Low",
   normal: "Normal",
@@ -374,7 +379,7 @@ function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAss
     >
       <div className="task-card-topline">
         <div className="task-signals">
-          <span className={`task-state state-${task.state}`}>{stateLabels[task.state]}</span>
+          <span className={`task-state state-${task.state}`}>{taskStateLabel(task)}</span>
           <span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span>
         </div>
         {targetWorker?.active_session_id ? (

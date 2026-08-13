@@ -105,13 +105,24 @@ test("creates a task with useful context and priority", () => {
 test("keeps worker ownership visible while the assigned worker is sleeping", () => {
   const sameWorkspace = { ...worker, id: "worker-2", name: "Poppy" };
   renderBoard({
-    tasks: [{ ...task, assigned_worker_id: worker.id }],
+    tasks: [{ ...task, state: "ready", assigned_worker_id: worker.id }],
     workers: [sameWorkspace, worker],
   });
 
   const card = screen.getByRole("article", { name: task.title });
+  expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
+  expect(within(card).queryByText("In progress", { selector: ".task-state" })).not.toBeInTheDocument();
   expect(within(card).getByText("Daisy · swarm")).toBeInTheDocument();
   expect(within(card).getByLabelText("Worker")).toHaveValue(worker.id);
+});
+
+test("distinguishes assigned work from work that has started", () => {
+  const assignedReady = { ...task, state: "ready" as const, assigned_worker_id: worker.id };
+  const active = { ...assignedReady, id: "task-2", title: "Actively implement reload", state: "active" as const };
+  renderBoard({ tasks: [assignedReady, active] });
+
+  expect(within(screen.getByRole("article", { name: assignedReady.title })).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
+  expect(within(screen.getByRole("article", { name: active.title })).getByText("In progress", { selector: ".task-state" })).toBeInTheDocument();
 });
 
 test("opens the assigned running worker directly from her task", () => {

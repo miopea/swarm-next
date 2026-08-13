@@ -50,6 +50,8 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
   fireEvent.click(await screen.findByRole("option", { name: "WEB Website Services" }));
   expect(await screen.findByText("In Progress")).toBeInTheDocument();
   expect(screen.getByText("Issues arrive unassigned. Assign or claim each one when its repository and worker are known.")).toBeInTheDocument();
+  expect(screen.getByText(/Assignment is tracked separately from workflow/)).toBeInTheDocument();
+  expect(screen.getAllByRole("option", { name: "In progress" }).length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name: "Connect project" }));
 
   expect(await screen.findByText("Website Services is ready for this Hive.")).toBeInTheDocument();

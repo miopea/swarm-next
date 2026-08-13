@@ -667,7 +667,7 @@ export function App() {
     ...tasks.map((task) => ({
       id: `task-${task.id}`,
       label: task.title,
-      detail: `${taskStateLabel(task.state)} · ${workers.find((worker) => worker.id === task.assigned_worker_id)?.name ?? "Unassigned"}`,
+      detail: `${taskStateLabel(task)} · ${workers.find((worker) => worker.id === task.assigned_worker_id)?.name ?? "Unassigned"}`,
       group: "Work" as const,
       run: () => {
         setTaskFocus((current) => ({ id: task.id, request: (current?.request ?? 0) + 1 }));
@@ -915,9 +915,10 @@ function repositoryName(workspace: string): string {
   return workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace;
 }
 
-function taskStateLabel(state: Task["state"]): string {
-  if (state === "active") return "In progress";
-  return state[0].toUpperCase() + state.slice(1);
+function taskStateLabel(task: Task): string {
+  if (task.state === "ready" && task.assigned_worker_id) return "Assigned";
+  if (task.state === "active") return "In progress";
+  return task.state[0].toUpperCase() + task.state.slice(1);
 }
 
 function presenceModeLabel(mode: PresenceMode) {
