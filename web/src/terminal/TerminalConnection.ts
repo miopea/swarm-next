@@ -1,4 +1,5 @@
 import { BROWSER_SESSION_AUTH } from "../api";
+import { presenceDeviceId } from "../presence/PresenceController";
 
 export type TerminalConnectionState =
   | "connecting"
@@ -40,6 +41,7 @@ export interface TerminalConnectionOptions {
   locationOrigin?: string;
   retryDelaysMs?: readonly number[];
   confirmationTimeoutMs?: number;
+  deviceId?: string;
 }
 
 const GRANT_PROTOCOL_PREFIX = "swarm-grant.";
@@ -58,6 +60,7 @@ export class TerminalConnection {
   readonly #locationOrigin: string;
   readonly #retryDelaysMs: readonly number[];
   readonly #confirmationTimeoutMs: number;
+  readonly #deviceId: string;
   #handlers: TerminalConnectionHandlers | undefined;
   #socket: WebSocket | undefined;
   #retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -86,6 +89,7 @@ export class TerminalConnection {
     this.#locationOrigin = options.locationOrigin ?? window.location.origin;
     this.#retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
     this.#confirmationTimeoutMs = options.confirmationTimeoutMs ?? DEFAULT_CONFIRMATION_TIMEOUT_MS;
+    this.#deviceId = options.deviceId ?? presenceDeviceId();
   }
 
   start(handlers: TerminalConnectionHandlers): void {
@@ -185,6 +189,7 @@ export class TerminalConnection {
         after_sequence: this.#hasCanonicalState ? this.#sequence : null,
         rows: size.rows,
         columns: size.columns,
+        device_id: this.#deviceId,
       }),
     );
   }

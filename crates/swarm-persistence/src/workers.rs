@@ -2,8 +2,8 @@ use std::{collections::HashSet, str::FromStr};
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    ControlRoomEventKind, HiveId, ProviderConversationId, ProviderKind, WorkerId, WorkerProfile,
-    WorkerRole, WorkerSessionId,
+    ControlRoomEventKind, HiveId, PresenceDeviceId, ProviderConversationId, ProviderKind, WorkerId,
+    WorkerProfile, WorkerRole, WorkerSessionId,
 };
 
 use super::{MAX_WORKSPACE_BYTES, TaskStore, TaskStoreError, insert_control_room_event};
@@ -306,6 +306,7 @@ impl TaskStore {
     pub fn renew_worker_engagement(
         &self,
         session_id: WorkerSessionId,
+        owner_device_id: Option<PresenceDeviceId>,
         now: i64,
         lease_seconds: i64,
     ) -> Result<bool, TaskStoreError> {
@@ -320,31 +321,65 @@ impl TaskStore {
             )
             .optional()?
             .ok_or(TaskStoreError::WorkerSessionNotActive)?;
-        let current_expiry = transaction
+        let current = transaction
             .query_row(
-                "SELECT expires_at FROM worker_engagements WHERE worker_id = ?1",
+                "SELECT expires_at, owner_device_id FROM worker_engagements WHERE worker_id = ?1",
                 [&worker_id],
-                |row| row.get::<_, i64>(0),
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
             )
             .optional()?;
         let renewal_threshold = now.saturating_add(lease_seconds / 2);
-        if current_expiry.is_some_and(|expiry| expiry >= renewal_threshold) {
+        let owner_device_id = owner_device_id.map(|device_id| device_id.to_string());
+        if current.is_some_and(|(expiry, current_owner)| {
+            expiry >= renewal_threshold && current_owner == owner_device_id
+        }) {
             return Ok(false);
         }
         let expires_at = now.saturating_add(lease_seconds);
         transaction.execute(
             "INSERT INTO worker_engagements
-             (worker_id, session_id, engaged_at, renewed_at, expires_at)
-             VALUES (?1, ?2, ?3, ?3, ?4)
+             (worker_id, session_id, engaged_at, renewed_at, expires_at, owner_device_id)
+             VALUES (?1, ?2, ?3, ?3, ?4, ?5)
              ON CONFLICT(worker_id) DO UPDATE SET
                  session_id = excluded.session_id,
                  renewed_at = excluded.renewed_at,
-                 expires_at = excluded.expires_at",
-            params![worker_id, session_id.to_string(), now, expires_at],
+                 expires_at = excluded.expires_at,
+                 owner_device_id = excluded.owner_device_id",
+            params![
+                worker_id,
+                session_id.to_string(),
+                now,
+                expires_at,
+                owner_device_id
+            ],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
         transaction.commit()?;
         Ok(true)
+    }
+
+    /// Releases an operator engagement only when the requesting device still owns it.
+    /// Returns whether an engagement was released.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn release_worker_engagement(
+        &self,
+        session_id: WorkerSessionId,
+        owner_device_id: PresenceDeviceId,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let released = transaction.execute(
+            "DELETE FROM worker_engagements
+             WHERE session_id = ?1 AND owner_device_id = ?2",
+            params![session_id.to_string(), owner_device_id.to_string()],
+        )? == 1;
+        if released {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(released)
     }
 
     /// Returns whether coordination may inject into a worker at this instant.
@@ -870,19 +905,60 @@ mod tests {
         store.bind_worker_session(worker.id, session).unwrap();
         assert!(store.worker_accepts_injection(worker.id, 100).unwrap());
 
-        assert!(store.renew_worker_engagement(session, 100, 300).unwrap());
+        let desktop = PresenceDeviceId::new();
+        assert!(
+            store
+                .renew_worker_engagement(session, Some(desktop), 100, 300)
+                .unwrap()
+        );
         assert!(!store.worker_accepts_injection(worker.id, 101).unwrap());
-        assert!(!store.renew_worker_engagement(session, 101, 300).unwrap());
-        assert!(store.renew_worker_engagement(session, 260, 300).unwrap());
+        assert!(
+            !store
+                .renew_worker_engagement(session, Some(desktop), 101, 300)
+                .unwrap()
+        );
+        assert!(
+            store
+                .renew_worker_engagement(session, Some(desktop), 260, 300)
+                .unwrap()
+        );
         assert!(!store.worker_accepts_injection(worker.id, 559).unwrap());
         assert!(store.worker_accepts_injection(worker.id, 561).unwrap());
 
         store.release_worker_session(session).unwrap();
         assert!(store.worker_accepts_injection(worker.id, 261).unwrap());
         assert!(matches!(
-            store.renew_worker_engagement(session, 262, 300),
+            store.renew_worker_engagement(session, Some(desktop), 262, 300),
             Err(TaskStoreError::WorkerSessionNotActive)
         ));
+    }
+
+    #[test]
+    fn engagement_release_is_owned_by_the_device_that_last_typed() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Clover", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        let desktop = PresenceDeviceId::new();
+        let phone = PresenceDeviceId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        store
+            .renew_worker_engagement(session, Some(desktop), 100, 300)
+            .unwrap();
+        assert!(!store.release_worker_engagement(session, phone).unwrap());
+        assert!(!store.worker_accepts_injection(worker.id, 101).unwrap());
+
+        assert!(
+            store
+                .renew_worker_engagement(session, Some(phone), 102, 300)
+                .unwrap()
+        );
+        assert!(!store.release_worker_engagement(session, desktop).unwrap());
+        assert!(!store.worker_accepts_injection(worker.id, 103).unwrap());
+        assert!(store.release_worker_engagement(session, phone).unwrap());
+        assert!(store.worker_accepts_injection(worker.id, 103).unwrap());
     }
 
     #[test]

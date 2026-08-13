@@ -457,7 +457,7 @@ fn parse_id<T: FromStr>(value: &str) -> rusqlite::Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::{ProviderKind, TaskPriority};
+    use swarm_domain::{PresenceDeviceId, ProviderKind, TaskPriority};
 
     fn request(worker_id: WorkerId, actions: &[String]) -> NewDecisionRequest<'_> {
         NewDecisionRequest {
@@ -569,7 +569,9 @@ mod tests {
             .unwrap();
         assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
 
-        store.renew_worker_engagement(session, 100, 300).unwrap();
+        store
+            .renew_worker_engagement(session, Some(PresenceDeviceId::new()), 100, 300)
+            .unwrap();
         assert!(store.claim_decision_deliveries(101).unwrap().is_empty());
         let deliveries = store.claim_decision_deliveries(401).unwrap();
         assert_eq!(deliveries.len(), 1);

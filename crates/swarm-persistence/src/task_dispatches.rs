@@ -188,7 +188,7 @@ impl TaskStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::{ProviderKind, TaskDispatchState};
+    use swarm_domain::{PresenceDeviceId, ProviderKind, TaskDispatchState};
 
     fn assigned_task() -> (TaskStore, TaskId, WorkerSessionId) {
         let store = TaskStore::in_memory().unwrap();
@@ -223,7 +223,9 @@ mod tests {
             store.get_task(task_id).unwrap().dispatch_state,
             Some(TaskDispatchState::Queued)
         );
-        store.renew_worker_engagement(session, 100, 300).unwrap();
+        store
+            .renew_worker_engagement(session, Some(PresenceDeviceId::new()), 100, 300)
+            .unwrap();
         assert!(store.claim_task_dispatches(101).unwrap().is_empty());
 
         let dispatches = store.claim_task_dispatches(401).unwrap();

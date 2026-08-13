@@ -187,7 +187,7 @@ fn parse_id<T: FromStr>(value: &str) -> rusqlite::Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::{ProviderKind, TaskOutcomeDeliveryState, TaskPriority};
+    use swarm_domain::{PresenceDeviceId, ProviderKind, TaskOutcomeDeliveryState, TaskPriority};
 
     struct Fixture {
         store: TaskStore,
@@ -238,7 +238,12 @@ mod tests {
         let fixture = active_assignment();
         fixture
             .store
-            .renew_worker_engagement(fixture.queen_session, 100, 300)
+            .renew_worker_engagement(
+                fixture.queen_session,
+                Some(PresenceDeviceId::new()),
+                100,
+                300,
+            )
             .unwrap();
         let task = fixture
             .store

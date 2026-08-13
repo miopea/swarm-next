@@ -5,7 +5,7 @@ use std::{
 
 use futures_util::{SinkExt, StreamExt, stream::SplitStream};
 use serde::{Deserialize, Serialize};
-use swarm_domain::WorkerSessionId;
+use swarm_domain::{PresenceDeviceId, WorkerSessionId};
 use swarm_persistence::TaskStore;
 use swarm_terminal::{
     HostClient, HostRequest, HostResponse, MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, Resume,
@@ -30,6 +30,8 @@ enum ClientTerminalMessage {
         after_sequence: Option<u64>,
         rows: u16,
         columns: u16,
+        #[serde(default)]
+        device_id: Option<PresenceDeviceId>,
     },
     Input {
         text: String,
@@ -54,7 +56,7 @@ pub async fn serve_terminal_socket(
     task_store: TaskStore,
     control_room_notify: Arc<Notify>,
 ) {
-    let Some(after_sequence) =
+    let Some((after_sequence, owner_device_id)) =
         complete_initial_handshake(&mut socket, &terminal_host, session_id).await
     else {
         return;
@@ -83,6 +85,7 @@ pub async fn serve_terminal_socket(
         task_store,
         control_room_notify,
         outbound_sender.clone(),
+        owner_device_id,
     ));
 
     let (input_completed, output_completed) = tokio::select! {
@@ -105,17 +108,18 @@ async fn complete_initial_handshake(
     socket: &mut WebSocket,
     terminal_host: &HostClient,
     session_id: WorkerSessionId,
-) -> Option<Option<u64>> {
+) -> Option<(Option<u64>, Option<PresenceDeviceId>)> {
     let initial = tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv()).await;
-    let (after_sequence, initial_size) = match initial {
+    let (after_sequence, initial_size, owner_device_id) = match initial {
         Ok(Some(Ok(Message::Text(text)))) => {
             match serde_json::from_str::<ClientTerminalMessage>(&text) {
                 Ok(ClientTerminalMessage::Resume {
                     after_sequence,
                     rows,
                     columns,
+                    device_id,
                 }) if rows >= MIN_TERMINAL_ROWS && columns >= MIN_TERMINAL_COLUMNS => {
-                    (after_sequence, TerminalSize::new(rows, columns))
+                    (after_sequence, TerminalSize::new(rows, columns), device_id)
                 }
                 Ok(_) => {
                     send_direct_error(
@@ -179,7 +183,7 @@ async fn complete_initial_handshake(
             return None;
         }
     }
-    Some(after_sequence)
+    Some((after_sequence, owner_device_id))
 }
 
 async fn stream_output(
@@ -356,6 +360,7 @@ async fn handle_input(
     task_store: TaskStore,
     control_room_notify: Arc<Notify>,
     outbound: mpsc::Sender<Message>,
+    owner_device_id: Option<PresenceDeviceId>,
 ) {
     while let Some(message) = socket_receiver.next().await {
         let message = match message {
@@ -379,8 +384,14 @@ async fn handle_input(
             }
         };
         if is_operator_input
-            && !record_operator_engagement(&task_store, session_id, &control_room_notify, &outbound)
-                .await
+            && !record_operator_engagement(
+                &task_store,
+                session_id,
+                owner_device_id,
+                &control_room_notify,
+                &outbound,
+            )
+            .await
         {
             continue;
         }
@@ -473,6 +484,7 @@ fn client_request(
 async fn record_operator_engagement(
     task_store: &TaskStore,
     session_id: WorkerSessionId,
+    owner_device_id: Option<PresenceDeviceId>,
     control_room_notify: &Notify,
     outbound: &mpsc::Sender<Message>,
 ) -> bool {
@@ -481,9 +493,12 @@ async fn record_operator_engagement(
         .map_or(0, |duration| {
             i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
         });
-    if let Ok(changed) =
-        task_store.renew_worker_engagement(session_id, now, OPERATOR_ENGAGEMENT_LEASE_SECONDS)
-    {
+    if let Ok(changed) = task_store.renew_worker_engagement(
+        session_id,
+        owner_device_id,
+        now,
+        OPERATOR_ENGAGEMENT_LEASE_SECONDS,
+    ) {
         if changed {
             control_room_notify.notify_waiters();
         }

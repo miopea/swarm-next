@@ -18,6 +18,7 @@ import {
   fetchWorkspaces,
   reorderTasks,
   reorderWorkers,
+  releaseWorkerEngagement,
   revokeBrowserSession,
   setManualPresence,
   startWorker,
@@ -49,7 +50,7 @@ import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
-import { PresenceController, type LockDetectionState } from "./presence/PresenceController";
+import { PresenceController, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
@@ -312,6 +313,7 @@ export function App() {
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
+      releaseEngagementWhenSwitching(activeSessionId, sessionId);
       setActiveSessionId(sessionId);
       setSurface("workers");
       startedSessionId = sessionId;
@@ -346,6 +348,7 @@ export function App() {
       setSessions(controlRoom.sessions);
       setWorkers(controlRoom.workers);
       setTasks(controlRoom.tasks);
+      releaseEngagementWhenSwitching(activeSessionId, sessionId);
       setActiveSessionId(sessionId);
       setSurface("workers");
       startedSessionId = sessionId;
@@ -449,9 +452,22 @@ export function App() {
   }
 
   function openWorker(sessionId: string) {
+    releaseEngagementWhenSwitching(activeSessionId, sessionId);
     setActiveSessionId(sessionId);
     setSurface("workers");
     terminalWorkspace.focusSession(sessionId, shouldFocusTerminalInput());
+  }
+
+  function releaseEngagementWhenSwitching(
+    currentSessionId: string | undefined,
+    nextSessionId: string,
+  ) {
+    if (!operatorToken || !currentSessionId || currentSessionId === nextSessionId) return;
+    void releaseWorkerEngagement(operatorToken, currentSessionId, presenceDeviceId()).catch(
+      (error: unknown) => setOperationError(
+        error instanceof Error ? error.message : "The previous worker engagement could not be released",
+      ),
+    );
   }
 
   function focusTerminalAfterRender(sessionId: string) {

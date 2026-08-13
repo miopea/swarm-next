@@ -1000,6 +1000,10 @@ fn api_router(state: AppState) -> Router {
             post(write_input),
         )
         .route(
+            "/api/v1/terminal/sessions/{session_id}/engagements/{device_id}",
+            delete(release_terminal_engagement),
+        )
+        .route(
             "/api/v1/terminal/sessions/{session_id}/attachments",
             post(upload_terminal_attachment).layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES)),
         )
@@ -2193,6 +2197,30 @@ async fn attach_terminal(
             let _permit = permit;
             serve_terminal_socket(socket, client, session_id, store, control_room_notify).await;
         }))
+}
+
+async fn release_terminal_engagement(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((session_id, device_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    authorize(&state, &headers)?;
+    let session_id = parse_session_id(&session_id)?;
+    let device_id = PresenceDeviceId::from_str(&device_id).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_presence_device_id",
+            "device_id must be a UUID",
+        )
+    })?;
+    let released = task_store(&state)?
+        .release_worker_engagement(session_id, device_id)
+        .map_err(|error| task_store_error(&error))?;
+    if released {
+        state.control_room_notify.notify_waiters();
+        state.deliver_coordination().await;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]
@@ -4108,6 +4136,7 @@ mod tests {
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let release_app = app.clone();
         let api_task = tokio::spawn(async move { axum::serve(listener, app).await });
         let websocket_url = format!(
             "ws://{address}/api/v1/terminal/sessions/{}/attach",
@@ -4169,6 +4198,23 @@ mod tests {
         let (after_input, _, _) = terminal_output_until(&mut websocket, "socket:hello").await;
         assert!(String::from_utf8_lossy(&after_input).contains("socket:hello"));
         assert!(!store.worker_accepts_injection(worker.id, i64::MIN).unwrap());
+
+        let released = release_app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!(
+                        "/api/v1/terminal/sessions/{}/engagements/019fedfc-1c30-70e1-a5e2-9a3c94268093",
+                        session.id()
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(released.status(), StatusCode::NO_CONTENT);
+        assert!(store.worker_accepts_injection(worker.id, i64::MIN).unwrap());
 
         let mut reused_request = websocket_url.into_client_request().unwrap();
         reused_request.headers_mut().insert(
@@ -4235,7 +4281,7 @@ mod tests {
         websocket
             .send(ClientMessage::Text(
                 format!(
-                    r#"{{"type":"resume","after_sequence":{},"rows":{rows},"columns":{columns}}}"#,
+                    r#"{{"type":"resume","after_sequence":{},"rows":{rows},"columns":{columns},"device_id":"019fedfc-1c30-70e1-a5e2-9a3c94268093"}}"#,
                     after_sequence
                         .map_or_else(|| "null".to_owned(), |sequence| sequence.to_string())
                 )

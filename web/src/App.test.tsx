@@ -2,8 +2,10 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, test, vi } from "vitest";
 
 vi.mock("./terminal/XtermSurface", () => ({ XtermSurface: class {} }));
+vi.mock("./terminal/TerminalView", () => ({ default: () => <div>Terminal ready</div> }));
 vi.mock("./presence/PresenceController", () => ({
   deviceClass: () => "desktop",
+  presenceDeviceId: () => "019fedfc-1c30-70e1-a5e2-9a3c94268093",
   PresenceController: class {
     start() {}
     stop() {}
@@ -157,6 +159,54 @@ test("restores the worker surface after a refresh", async () => {
   expect(screen.getByRole("button", { name: "Workers 0" })).toHaveAttribute("aria-current", "page");
   expect(screen.queryByRole("heading", { name: "Task board" })).not.toBeInTheDocument();
   expect(window.sessionStorage.getItem("swarm-next.surface.v1")).toBe("workers");
+});
+
+test("switching workers releases only the previously selected engagement", async () => {
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  const queenSession = "019fedfc-1c30-70e1-a5e2-9a3c94268091";
+  const workerSession = "019fedfc-1c30-70e1-a5e2-9a3c94268092";
+  const workers = [
+    {
+      id: "worker-queen", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code",
+      workspace: "/workspace/queen", autostart: true, position: 0, active_session_id: queenSession,
+      running: true, attention_state: "with_operator", engagement_expires_at: Math.floor(Date.now() / 1000) + 300, created_at: 1, updated_at: 1,
+    },
+    {
+      id: "worker-daisy", hive_id: "hive-1", name: "Daisy", role: "worker", provider: "claude_code",
+      workspace: "/workspace/daisy", autostart: false, position: 1, active_session_id: workerSession,
+      running: true, attention_state: "buzzing", created_at: 1, updated_at: 1,
+    },
+  ];
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [
+      { session_id: queenSession, running: true }, { session_id: workerSession, running: true },
+    ] }));
+    if (url === "/api/v1/workers") return Promise.resolve(ok(workers));
+    if (url === "/api/v1/workspaces" || url === "/api/v1/tasks" || url === "/api/v1/decisions") return Promise.resolve(ok([]));
+    if (url.includes("/api/v1/control-room/events")) {
+      return new Promise((_, reject) => init?.signal?.addEventListener(
+        "abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true },
+      ));
+    }
+    if (url.includes(`/api/v1/terminal/sessions/${queenSession}/engagements/`)) {
+      return Promise.resolve(ok({}));
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Daisy/ }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+    `/api/v1/terminal/sessions/${queenSession}/engagements/019fedfc-1c30-70e1-a5e2-9a3c94268093`,
+    expect.objectContaining({ method: "DELETE", credentials: "same-origin" }),
+  ));
+  expect(screen.getByRole("button", { name: /^Daisy/ })).toHaveAttribute("aria-current", "page");
 });
 
 test("notification navigation overrides a previously saved surface", async () => {

@@ -464,6 +464,18 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
   );
 }
 
+export async function releaseWorkerEngagement(
+  operatorToken: string,
+  sessionId: string,
+  deviceId: string,
+): Promise<void> {
+  await authenticatedFetch(
+    operatorToken,
+    `/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}/engagements/${encodeURIComponent(deviceId)}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function createBrowserSession(operatorToken: string): Promise<void> {
   await authenticatedFetch(operatorToken, "/api/v1/auth/session", { method: "POST" });
 }

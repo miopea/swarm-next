@@ -33,7 +33,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 15;
+const CURRENT_SCHEMA_VERSION: i64 = 16;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -156,7 +156,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=14 => {
+            0..=15 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -953,6 +953,9 @@ fn migrate_schema(
     if schema_version < 15 {
         migrate_notifications(transaction)?;
     }
+    if schema_version < 16 {
+        migrate_engagement_ownership(transaction)?;
+    }
     Ok(())
 }
 
@@ -1165,6 +1168,22 @@ fn migrate_worker_engagements(transaction: &rusqlite::Transaction<'_>) -> rusqli
          );
          PRAGMA user_version = 8;",
     )
+}
+
+fn migrate_engagement_ownership(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let already_owned = {
+        let mut statement = transaction.prepare("PRAGMA table_info(worker_engagements)")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .any(|column| column == "owner_device_id")
+    };
+    if !already_owned {
+        transaction
+            .execute_batch("ALTER TABLE worker_engagements ADD COLUMN owner_device_id TEXT;")?;
+    }
+    transaction.pragma_update(None, "user_version", 16)
 }
 
 fn migrate_agent_credentials(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -2295,6 +2314,39 @@ mod tests {
         );
         drop(connection);
         migrated.verify_integrity().unwrap();
+    }
+    #[test]
+    fn migrates_schema_v15_to_device_owned_engagements() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "ALTER TABLE worker_engagements DROP COLUMN owner_device_id;
+                     PRAGMA user_version = 15;",
+                )
+                .unwrap();
+        }
+
+        let migrated = TaskStore::open(path).unwrap();
+        let connection = migrated.connection().unwrap();
+        let columns = connection
+            .prepare("PRAGMA table_info(worker_engagements)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(columns.iter().any(|column| column == "owner_device_id"));
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
     }
     #[test]
     fn fresh_store_owns_tasks_and_workers_in_one_durable_hive() {
