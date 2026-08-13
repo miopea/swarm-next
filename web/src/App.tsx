@@ -566,7 +566,7 @@ export function App() {
     releaseEngagementWhenSwitching(activeSessionId, sessionId);
     setActiveSessionId(sessionId);
     setSurface("workers");
-    terminalWorkspace.focusSession(sessionId, shouldFocusTerminalInput());
+    focusTerminalAfterRender(sessionId);
   }
 
   async function maintainWorkerEngine() {
