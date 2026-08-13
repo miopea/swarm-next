@@ -301,3 +301,9 @@ the independently updated terminal host through the API to worker settings:
   that state without blocking local work, overflow, or browser errors, and the
   expanded gate verified it alongside every prior surface. Deployment retained
   terminal-host PID `400662` and all three active sessions.
+- Release `0.1.0-6980cd5996b2` added the scannable `Awaiting you` worker state,
+  derived only from unresolved durable decision requests while preserving
+  `With you` during active operator engagement. Unit and persistence tests
+  exercise both transitions; the deployed regression gate kept every desktop
+  and Android surface bounded and error-free. Terminal-host PID `400662` and
+  all three active sessions were again preserved.
