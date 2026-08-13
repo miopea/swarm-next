@@ -231,6 +231,21 @@ async function checkSurface(browser, surface) {
     if (!addWorkerShortcutVisible) throw new Error(`${surface.name}: worker creation is not discoverable from quick navigation`);
     const commandSearch = page.getByRole("combobox", { name: "Find work, decisions, or workers" });
     await commandSearch.fill("Create task");
+    const commandBounds = await page.locator(".command-palette").evaluate((palette) => {
+      const bounds = palette.getBoundingClientRect();
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        top: bounds.top,
+        bottom: bounds.bottom,
+        scrollWidth: palette.scrollWidth,
+        clientWidth: palette.clientWidth,
+      };
+    });
+    if (commandBounds.left < 0 || commandBounds.right > surface.viewport.width || commandBounds.top < 0 || commandBounds.bottom > surface.viewport.height || commandBounds.scrollWidth > commandBounds.clientWidth + 1) {
+      throw new Error(`${surface.name}: quick navigation exceeds the viewport`);
+    }
+    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-quick-navigation.png`), fullPage: true });
     await commandSearch.press("Enter");
     await page.getByRole("heading", { name: "Task board" }).waitFor();
     const taskTitle = page.getByLabel("Task title");
@@ -240,7 +255,7 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: /Settings/ }).click();
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, repositoryPicker: "name-first", addWorkerShortcutVisible, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, savedFeedbackVisible, jiraReadinessVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }
