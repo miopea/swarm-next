@@ -77,7 +77,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
           ["settings-crew", "Crew"],
           ["settings-presence", "Presence"],
           ["settings-queen", "Queen"],
-          ["settings-appearance", "Appearance"],
+          ["settings-notifications", "Alerts"],
           ["settings-runtime", "System"],
           ["settings-integrations", "Integrations"],
           ["settings-backup", "Backup"],
@@ -135,7 +135,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         </div>
         <small className="privacy-note">Pushes, deployments, messages, purchases, and other external effects still require a separately recorded approval. Repository and environment overrides come before unattended execution is enabled.</small>
       </section>
-      <section className="settings-card notification-settings" aria-labelledby="notification-heading">
+      <section id="settings-notifications" className="settings-card notification-settings" aria-labelledby="notification-heading">
         <div><p className="eyebrow">Mobile attention</p><h3 id="notification-heading">Let urgent work find you</h3></div>
         <p>Notifications are quiet while you are At the Hive. Away and Night Watch can deliver generic, private prompts when a worker needs a decision.</p>
         {!mobile ? <label htmlFor="notification-policy"><span>Notify me</span>
