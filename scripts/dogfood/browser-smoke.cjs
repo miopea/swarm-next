@@ -82,6 +82,7 @@ async function checkSurface(browser, surface) {
     const surfaceResults = [];
     let workerSelections = [];
     let completedTaskCount = 0;
+    let completedTaskTitle;
     for (const target of [
       { name: "needs-you", nav: /Needs you/, ready: () => page.getByRole("heading", { name: "Needs you" }) },
       { name: "tasks", nav: /Tasks/, ready: () => page.getByRole("heading", { name: "Task board" }) },
@@ -101,6 +102,7 @@ async function checkSurface(browser, surface) {
         if (await completedTasks.count()) {
           await completedTasks.locator("summary").click();
           completedTaskCount = await completedTasks.locator(".task-card").count();
+          completedTaskTitle = await completedTasks.locator(".task-card h4").first().innerText();
           const overflowingCompletedCards = await completedTasks.locator(".task-card").evaluateAll((cards) => cards.filter((card) => card.scrollWidth > card.clientWidth + 1).length);
           const overlappingCompletedCopy = await completedTasks.locator(".task-card").evaluateAll((cards) => cards.filter((card) => {
             const title = card.querySelector("h4");
@@ -246,7 +248,17 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: "Open quick navigation" }).click();
     const addWorkerShortcutVisible = await page.getByRole("option", { name: /Add worker Configure a repository worker/ }).isVisible();
     if (!addWorkerShortcutVisible) throw new Error(`${surface.name}: worker creation is not discoverable from quick navigation`);
-    const commandSearch = page.getByRole("combobox", { name: "Find work, decisions, or workers" });
+    let commandSearch = page.getByRole("combobox", { name: "Find work, decisions, or workers" });
+    if (completedTaskTitle) {
+      await commandSearch.fill(completedTaskTitle);
+      await commandSearch.press("Enter");
+      const completedCard = page.locator(".completed-tasks .task-card", { has: page.getByRole("heading", { name: completedTaskTitle, exact: true }) });
+      await completedCard.waitFor();
+      const completedTaskFocused = await completedCard.evaluate((card) => card === document.activeElement && card.closest("details")?.open === true);
+      if (!completedTaskFocused) throw new Error(`${surface.name}: completed-task search did not reveal and focus the result`);
+      await page.getByRole("button", { name: "Open quick navigation" }).click();
+      commandSearch = page.getByRole("combobox", { name: "Find work, decisions, or workers" });
+    }
     await commandSearch.fill("Create task");
     const commandBounds = await page.locator(".command-palette").evaluate((palette) => {
       const bounds = palette.getBoundingClientRect();
