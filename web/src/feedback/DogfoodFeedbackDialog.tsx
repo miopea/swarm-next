@@ -42,6 +42,12 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   const [imageError, setImageError] = useState<string>();
   const fileInput = useRef<HTMLInputElement>(null);
 
+  function markChanged() {
+    setPreview(undefined);
+    setCopyState("idle");
+    setSaveState("idle");
+  }
+
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", closeOnEscape);
@@ -82,7 +88,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
     setScreenshot(file);
     setScreenshotUrl(URL.createObjectURL(file));
     setImageError(undefined);
-    setPreview(undefined);
+    markChanged();
   }
 
   function pastedImage(event: ClipboardEvent<HTMLElement>) {
@@ -108,7 +114,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
       sessions,
       workers,
     });
-    const attachmentNote = screenshot ? `\n\nUser screenshot\n- file: ${screenshot.name}\n- media type: ${screenshot.type}\n- bytes: ${screenshot.size}\n- image content is attached separately and was not inspected or uploaded by Swarm` : "";
+    const attachmentNote = screenshot ? `\n\nUser screenshot\n- file: ${screenshot.name}\n- media type: ${screenshot.type}\n- bytes: ${screenshot.size}\n- image content is never inspected by Swarm and stays on this device unless the operator explicitly saves this report to the Hive` : "";
     const bundle = `${report}${attachmentNote}`;
     setPreview(bundle);
     setCopyState("idle");
@@ -164,27 +170,27 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
         <p>Describe the outcome in your words. Swarm adds content-free runtime evidence, then shows the complete bundle before anything is copied.</p>
         <div className="feedback-fields">
           <label htmlFor="feedback-expectation">What did you expect?
-            <textarea id="feedback-expectation" value={expectation} onChange={(event) => { setExpectation(event.target.value); setPreview(undefined); }} placeholder="The worker should have stayed visible after reload." />
+            <textarea id="feedback-expectation" value={expectation} onChange={(event) => { setExpectation(event.target.value); markChanged(); }} placeholder="The worker should have stayed visible after reload." />
           </label>
           <label htmlFor="feedback-observation">What happened instead?
-            <textarea id="feedback-observation" value={observation} onChange={(event) => { setObservation(event.target.value); setPreview(undefined); }} placeholder="The terminal area became blank until I refreshed again." />
+            <textarea id="feedback-observation" value={observation} onChange={(event) => { setObservation(event.target.value); markChanged(); }} placeholder="The terminal area became blank until I refreshed again." />
           </label>
         </div>
         <div className="feedback-attachment">
           <div><strong>Screenshot</strong><small>Paste, drop, or choose one image up to 5 MiB. Swarm keeps it local and never captures the terminal automatically.</small></div>
           <input ref={fileInput} type="file" accept="image/*" hidden onChange={(event) => attachScreenshot(event.target.files?.[0])} />
           <button type="button" className="secondary-button" onClick={() => fileInput.current?.click()}>{screenshot ? "Replace screenshot" : "Choose screenshot"}</button>
-          {screenshotUrl && screenshot ? <div className="feedback-screenshot-preview"><img src={screenshotUrl} alt="Attached dogfood screenshot" /><span><strong>{screenshot.name}</strong><small>{formatBytes(screenshot.size)} · kept on this device</small></span><button type="button" onClick={saveScreenshot}>Save image</button><button type="button" className="danger-text" onClick={() => { URL.revokeObjectURL(screenshotUrl); setScreenshot(undefined); setScreenshotUrl(undefined); setPreview(undefined); }}>Remove</button></div> : null}
+          {screenshotUrl && screenshot ? <div className="feedback-screenshot-preview"><img src={screenshotUrl} alt="Attached dogfood screenshot" /><span><strong>{screenshot.name}</strong><small>{formatBytes(screenshot.size)} · kept on this device</small></span><button type="button" onClick={saveScreenshot}>Save image</button><button type="button" className="danger-text" onClick={() => { URL.revokeObjectURL(screenshotUrl); setScreenshot(undefined); setScreenshotUrl(undefined); markChanged(); }}>Remove</button></div> : null}
           {imageError ? <p role="alert">{imageError}</p> : null}
         </div>
         <small className="privacy-note">Your note is included exactly as entered. Automatic evidence never includes terminal output, task text, paths, credentials, worker names, or raw errors.</small>
         <div className="diagnostic-actions">
           <button type="button" disabled={!runtime.loaded} onClick={buildPreview}>{runtime.loaded ? "Preview bundle" : "Gathering evidence…"}</button>
           <button type="button" className="primary-action" disabled={!runtime.loaded} onClick={() => void copyBundle()}>{copyState === "copied" ? "Copied" : "Copy notes & diagnostics"}</button>
-          <button type="button" className="primary-action" disabled={!runtime.loaded || (!expectation.trim() && !observation.trim()) || saveState === "saving"} onClick={() => void saveToHive()}>{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved to Hive" : "Save to this Hive"}</button>
+          <button type="button" className="primary-action" disabled={!runtime.loaded || (!expectation.trim() && !observation.trim()) || saveState === "saving" || saveState === "saved"} onClick={() => void saveToHive()}>{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved to Hive" : "Save to this Hive"}</button>
         </div>
         {copyState === "unavailable" ? <p role="status">Clipboard access is unavailable. Select the preview and copy it manually.</p> : null}
-        {saveState === "saved" ? <p role="status">Saved privately. Tell your Swarm developer that a dogfood report is ready; they can read it through the authenticated API.</p> : null}
+        {saveState === "saved" ? <p role="status">Saved privately. Open Settings, then Saved dogfood reports, to review the bundle or download its screenshot.</p> : null}
         {saveState === "error" ? <p role="alert">The report was not saved. Your notes and screenshot remain in this dialog.</p> : null}
         {preview ? <pre className="diagnostic-preview feedback-preview" aria-label="Dogfood feedback bundle">{preview}</pre> : null}
       </section>

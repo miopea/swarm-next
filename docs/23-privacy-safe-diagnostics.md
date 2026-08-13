@@ -32,6 +32,8 @@ signature-checked, mode-0600 attachment boundary used by terminal image paste;
 the report records only that opaque filename. Reports are authenticated,
 `no-store`, included in the Hive database backup, and capped at the newest 50.
 The UI keeps notes and the image in place if either write fails.
+After a successful save, the action stays disabled until the operator visibly
+edits the notes or attachment, preventing accidental duplicate reports.
 
 This makes dogfooding asynchronous: the operator can save evidence at the
 moment of failure and a trusted developer can later read it through

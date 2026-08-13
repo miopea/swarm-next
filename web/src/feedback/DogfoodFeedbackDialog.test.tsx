@@ -71,7 +71,7 @@ test("attaches a pasted screenshot locally and records only safe metadata", asyn
   const preview = screen.getByLabelText("Dogfood feedback bundle");
   expect(preview).toHaveTextContent("terminal.png");
   expect(preview).toHaveTextContent("image/png");
-  expect(preview).toHaveTextContent("image content is attached separately");
+  expect(preview).toHaveTextContent("stays on this device unless the operator explicitly saves");
   expect(preview).not.toHaveTextContent("AQID");
 });
 
@@ -98,11 +98,14 @@ test("saves reviewed notes and an optional screenshot privately to the Hive", as
   fireEvent.click(screen.getByRole("button", { name: "Save to this Hive" }));
 
   expect(await screen.findByText(/Saved privately/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Saved to Hive" })).toBeDisabled();
   expect(fetch).toHaveBeenCalledWith("/api/v1/feedback/attachments", expect.objectContaining({ method: "POST", body: image }));
   expect(fetch).toHaveBeenCalledWith("/api/v1/feedback/reports", expect.objectContaining({
     method: "POST",
     body: expect.stringContaining('"attachment_name":"content-hash.png"'),
   }));
+  fireEvent.change(screen.getByLabelText("What happened instead?"), { target: { value: "Terminal stayed blank after reload" } });
+  expect(screen.getByRole("button", { name: "Save to this Hive" })).toBeEnabled();
 });
 
 function ok(body: unknown) {
