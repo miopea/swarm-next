@@ -7,6 +7,7 @@ type Props = {
   tasks: Task[];
   focusTaskId?: string;
   focusRequest?: number;
+  composeRequest?: number;
   sessions: SessionSummary[];
   workers: Worker[];
   busy: boolean;
@@ -60,6 +61,7 @@ export default function TaskBoard({
   tasks,
   focusTaskId,
   focusRequest,
+  composeRequest,
   sessions,
   workers,
   busy,
@@ -119,6 +121,13 @@ export default function TaskBoard({
     });
     return () => cancelAnimationFrame(frame);
   }, [focusTaskId, focusRequest, completedTasks]);
+
+  useEffect(() => {
+    if (!composeRequest) return;
+    setComposeOpen(true);
+    const frame = requestAnimationFrame(() => titleInput.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [composeRequest]);
 
   function reorderBefore(targetTaskId: string) {
     if (!draggedTaskId || draggedTaskId === targetTaskId) return;
@@ -292,7 +301,7 @@ function initialComposerOpen(): boolean {
   return typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 680px)").matches;
 }
 
-function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "focusTaskId" | "focusRequest" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
   const targetWorker = assignableWorkers.find((worker) => worker.id === task.assigned_worker_id)

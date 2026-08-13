@@ -45,6 +45,15 @@ test("keeps active work above the fold on phones until task creation is requeste
   expect(screen.getByRole("button", { name: "Hide task form" })).toHaveAttribute("aria-expanded", "true");
 });
 
+test("opens and focuses task creation when requested from global navigation", async () => {
+  vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+  renderBoard({ tasks: [], composeRequest: 1 });
+
+  const title = await screen.findByLabelText("Task title");
+  await waitFor(() => expect(title).toHaveFocus());
+  expect(screen.getByRole("button", { name: "Hide task form" })).toHaveAttribute("aria-expanded", "true");
+});
+
 test("reveals and focuses a completed task selected through global navigation", async () => {
   const completed = { ...task, state: "completed" as const };
   const scrollIntoView = vi.fn();

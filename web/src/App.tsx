@@ -93,6 +93,7 @@ export function App() {
   const [showCommands, setShowCommands] = useState(false);
   const [surface, setSurface] = useState<Surface>(readSavedSurface);
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
+  const [taskComposeRequest, setTaskComposeRequest] = useState(0);
   const [decisionFocus, setDecisionFocus] = useState<{ id: string; request: number }>();
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -649,6 +650,7 @@ export function App() {
   const commandChoices = useMemo<CommandChoice[]>(() => [
     { id: "decisions", label: "Needs you", detail: `${pendingDecisionCount} pending`, group: "Go to", run: () => setSurface("decisions") },
     { id: "tasks", label: "Tasks", detail: `${openTaskCount} open`, group: "Go to", run: () => setSurface("tasks") },
+    { id: "new-task", label: "Create task", detail: "Plan work for a worker", group: "Go to", run: () => { setTaskComposeRequest((current) => current + 1); setSurface("tasks"); } },
     { id: "workers", label: "Workers", detail: `${workers.filter((worker) => worker.running).length} running`, group: "Go to", run: () => setSurface("workers") },
     { id: "add-worker", label: "Add worker", detail: "Configure a repository worker", group: "Go to", run: () => setSurface("settings") },
     { id: "settings", label: "Settings", detail: "Preferences and diagnostics", group: "Go to", run: () => setSurface("settings") },
@@ -816,7 +818,7 @@ export function App() {
         ) : surface === "decisions" ? (
           <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
+          <TaskBoard tasks={tasks} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             busy={busy}
