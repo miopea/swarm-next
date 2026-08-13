@@ -1,10 +1,14 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import SettingsWorkspace from "./SettingsWorkspace";
 import { resourceLabel } from "./DiagnosticsWorkspace";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 test("shows subsystem diagnostics, previews a sanitized report, and changes the selected theme", async () => {
   const onThemeChange = vi.fn();
@@ -109,6 +113,44 @@ test("uses distinct readable labels for every resource pressure state", () => {
   expect(resourceLabel({ pressure: "unavailable", resident_memory_bytes: null })).toBe("Unavailable");
   expect(resourceLabel(undefined)).toBe("Unavailable");
 });
+
+test("downloads a consistent Hive database snapshot", async () => {
+  const createObjectURL = vi.fn().mockReturnValue("blob:hive-backup");
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/backups/database") {
+      return new Response(new Uint8Array([83, 81, 76]), { status: 200, headers: { "Content-Type": "application/vnd.sqlite3" } });
+    }
+    if (url.includes("runtime/resources")) return ok({
+      sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 268_435_456, critical_bytes: 536_870_912 },
+      api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" },
+    });
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 5, host_version: "0.1.0", draining: false, running_sessions: 0, retained_sessions: 0 } });
+    return ok({ type: "history_diagnostics", diagnostics: { retained_bytes: 0, session_count: 0, segment_count: 0, dropped_records: 0, dropped_bytes: 0, recovered_truncated_bytes: 0, recovered_corrupt_segments: 0 } });
+  }));
+
+  render(<SettingsWorkspace {...minimalProps()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Download Hive backup" }));
+
+  await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
+  expect(click).toHaveBeenCalledOnce();
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:hive-backup");
+});
+
+function minimalProps() {
+  return {
+    busy: false, colorTheme: "light" as const, liveFeedState: "connected" as const, operatorToken: "secret-token",
+    presence: { mode: "at_hive" as const, manual_mode: null, source: "active_device" as const }, lockDetectionState: "unsupported" as const,
+    notificationSettings: { policy: "important_only" as const, subscription_count: 0, vapid_public_key: "public-key" }, notificationState: "available" as const,
+    recentEvents: [], sessions: [], workers: [], workspaces: [], health: { status: "ok" as const, version: "0.1.0" },
+    hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
+    onThemeChange: vi.fn(), onPresenceChange: vi.fn(), onEnableLockDetection: vi.fn(), onNotificationPolicyChange: vi.fn(),
+    onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(),
+  };
+}
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }

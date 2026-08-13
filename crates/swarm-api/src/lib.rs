@@ -954,6 +954,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/resources", get(runtime_resources))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
+        .route("/api/v1/backups/database", get(download_database_backup))
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
         .route("/api/v1/decisions", get(list_decisions))
         .route(
@@ -1090,6 +1091,38 @@ async fn local_hive(
         .local_hive_identity()
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(identity)).into_response())
+}
+
+async fn download_database_backup(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let backup = tempfile::NamedTempFile::new().map_err(|error| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "backup_unavailable",
+            format!("a temporary backup could not be created: {error}"),
+        )
+    })?;
+    task_store(&state)?
+        .backup_to(backup.path())
+        .map_err(|error| task_store_error(&error))?;
+    let bytes = std::fs::read(backup.path()).map_err(|error| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "backup_unavailable",
+            format!("the completed backup could not be read: {error}"),
+        )
+    })?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/vnd.sqlite3"));
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=swarm-next-hive.sqlite3"),
+    );
+    Ok((response_headers, bytes).into_response())
 }
 
 async fn operator_presence(
@@ -2844,6 +2877,36 @@ mod tests {
         assert_eq!(json["hive"]["id"], expected.hive.id.to_string());
         assert_eq!(json["hive"]["name"], "My Hive");
         assert!(json["hive"]["apiary_id"].is_null());
+    }
+
+    #[tokio::test]
+    async fn database_backup_is_private_no_store_and_reopenable() {
+        let store = TaskStore::in_memory().unwrap();
+        let expected = store.local_hive_identity().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+        let unauthorized = app
+            .clone()
+            .oneshot(Request::builder().uri("/api/v1/backups/database").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/backups/database").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/vnd.sqlite3");
+        assert!(response.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().contains("attachment"));
+        let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024).await.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("restored.sqlite3");
+        std::fs::write(&path, bytes).unwrap();
+        let restored = TaskStore::open(path).unwrap();
+        restored.verify_integrity().unwrap();
+        assert_eq!(restored.local_hive_identity().unwrap().hive.id, expected.hive.id);
     }
 
     #[tokio::test]

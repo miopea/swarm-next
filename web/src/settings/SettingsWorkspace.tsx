@@ -1,4 +1,4 @@
-import type { ControlRoomEvent, Health, HiveIdentity, NotificationPolicy, NotificationSettings, OperatorPresence, PresenceMode, SessionSummary, Worker, WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, type ControlRoomEvent, type Health, type HiveIdentity, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type SessionSummary, type Worker, type WorkspaceChoice } from "../api";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
@@ -36,6 +36,15 @@ type Props = {
 
 export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdentity, liveFeedState, operatorToken, presence, lockDetectionState, notificationSettings, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers }: Props) {
   const mobile = deviceClass() === "mobile";
+  async function downloadBackup() {
+    const blob = await downloadDatabaseBackup(operatorToken);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `swarm-next-hive-${new Date().toISOString().slice(0, 10)}.sqlite3`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
   return (
     <div className="settings-workspace">
       <WorkerSettings workers={workers} workspaces={workspaces} busy={busy} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onReorder={onReorderWorkers} />
@@ -144,6 +153,15 @@ export default function SettingsWorkspace({ busy, colorTheme, health, hiveIdenti
           <div><dt>Retained sessions</dt><dd>{sessions.length}</dd></div>
           <div><dt>Worker updates</dt><dd>Preserved during API releases</dd></div>
         </dl>
+      </section>
+
+      <section className="settings-card" aria-labelledby="backup-heading">
+        <div><p className="eyebrow">Backup</p><h3 id="backup-heading">Carry your Hive safely</h3></div>
+        <p>Download a consistent snapshot of workers, tasks, conversations, policies, and Hive identity. Repository contents are intentionally excluded.</p>
+        <div className="settings-actions">
+          <button className="primary-action" disabled={busy} onClick={() => void downloadBackup()}>Download Hive backup</button>
+        </div>
+        <small className="privacy-note">This file contains private operational data. Store it like a credential. Verified restore and full environment configuration export are the next backup checkpoint.</small>
       </section>
 
 <DiagnosticsWorkspace operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} />

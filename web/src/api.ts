@@ -464,6 +464,11 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
   );
 }
 
+export async function downloadDatabaseBackup(operatorToken: string): Promise<Blob> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/backups/database");
+  return response.blob();
+}
+
 export async function releaseWorkerEngagement(
   operatorToken: string,
   sessionId: string,
