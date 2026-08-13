@@ -38,7 +38,7 @@ pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
-const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
+pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
 const CURRENT_SCHEMA_VERSION: i64 = 21;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;

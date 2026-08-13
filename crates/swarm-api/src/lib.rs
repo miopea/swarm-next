@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use swarm_application::{ApplicationError, TaskService};
 use swarm_domain::{
-    ControlRoomEventKind, DecisionRequestId, JiraProjectBindingId, JiraProjectScope,
+    ControlRoomEventKind, DecisionRequestId, JiraIssueLink, JiraProjectBindingId, JiraProjectScope,
     JiraStatusMapping, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
     PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
     QueenAutonomyPolicy, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState,
@@ -36,9 +36,10 @@ use swarm_domain::{
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
-    MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_PAGE, NotificationSettings, PresentationColorTheme,
-    PresentationDeviceClass, PresentationPreferences, PushSubscriptionInput, TaskDispatch,
-    TaskDispatchFailure, TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
+    MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_NOTE_BYTES, MAX_TASK_ACTIVITY_PAGE,
+    NotificationSettings, PresentationColorTheme, PresentationDeviceClass, PresentationPreferences,
+    PushSubscriptionInput, TaskDispatch, TaskDispatchFailure, TaskOutcomeDispatch,
+    TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
@@ -2133,11 +2134,87 @@ async fn transition_task(
     Json(request): Json<TransitionTaskRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    let store = task_store(&state)?;
+    let current = store
+        .get_task(task_id)
+        .map_err(|error| task_store_error(&error))?;
+    if !current.state.can_transition_to(request.state) {
+        return Err(task_store_error(&TaskStoreError::InvalidTransition {
+            from: current.state,
+            to: request.state,
+        }));
+    }
+    if request.note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
+        return Err(task_store_error(&TaskStoreError::InvalidTaskActivityNote));
+    }
+    let jira_transition = if let Some(link) = jira_link_for_task(store, task_id)? {
+        let target_statuses = store
+            .list_jira_status_mappings(link.binding_id)
+            .map_err(|error| task_store_error(&error))?
+            .into_iter()
+            .filter(|mapping| mapping.task_state == request.state)
+            .collect::<Vec<_>>();
+        if target_statuses.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "jira_transition_unmapped",
+                "Map a Jira status to this Swarm task state before moving the issue",
+            ));
+        }
+        if let Some(current_target) = target_statuses
+            .iter()
+            .find(|mapping| mapping.jira_status_id == link.jira_status_id)
+        {
+            Some((
+                current_target.jira_status_id.clone(),
+                current_target.jira_status_name.clone(),
+            ))
+        } else {
+            let status_ids = target_statuses
+                .iter()
+                .map(|mapping| mapping.jira_status_id.clone())
+                .collect::<Vec<_>>();
+            let transitioned = state
+                .jira_readiness
+                .transition_issue(&link.issue_key, &status_ids)
+                .await
+                .map_err(jira_adapter_error)?;
+            Some((transitioned.status_id, transitioned.status_name))
+        }
+    } else {
+        None
+    };
     let task = task_service(&state)?
-        .transition_operator_task_with_note(parse_task_id(&task_id)?, request.state, &request.note)
+        .transition_operator_task_with_note(task_id, request.state, &request.note)
         .map_err(application_error)?;
+    if let Some((status_id, status_name)) = jira_transition {
+        store
+            .update_jira_issue_link_status(task_id, &status_id, &status_name)
+            .map_err(|error| task_store_error(&error))?;
+    }
     state.control_room_notify.notify_waiters();
     Ok(Json(task).into_response())
+}
+
+fn jira_link_for_task(
+    store: &TaskStore,
+    task_id: TaskId,
+) -> Result<Option<JiraIssueLink>, ApiError> {
+    for binding in store
+        .list_jira_project_bindings()
+        .map_err(|error| task_store_error(&error))?
+    {
+        if let Some(link) = store
+            .list_jira_issue_links(binding.id)
+            .map_err(|error| task_store_error(&error))?
+            .into_iter()
+            .find(|link| link.task_id == task_id)
+        {
+            return Ok(Some(link));
+        }
+    }
+    Ok(None)
 }
 
 async fn assign_task(
@@ -3381,6 +3458,11 @@ fn jira_adapter_error(error: jira::JiraAdapterError) -> ApiError {
             "jira_response_limit_exceeded",
             "Jira returned more data than this bounded operation permits",
         ),
+        jira::JiraAdapterError::TransitionUnavailable => ApiError::new(
+            StatusCode::CONFLICT,
+            "jira_transition_unavailable",
+            "Jira does not offer a workflow transition mapped to that Swarm state",
+        ),
     }
 }
 
@@ -4049,36 +4131,47 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn jira_sync_composes_remote_search_mapping_and_idempotent_task_intake() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let jira_server = axum::Router::new().route(
-            "/rest/api/3/search/jql",
-            get(|| async {
-                Json(serde_json::json!({
-                    "isLast": true,
-                    "issues": [{
-                        "id": "20001",
-                        "key": "WEB-42",
-                        "fields": {
-                            "summary": "Polish the launch page",
-                            "status": { "id": "3", "name": "In Progress" },
-                            "assignee": { "accountId": "account-1", "displayName": "Bea" },
-                            "updated": "2026-08-13T13:00:00.000+0000"
-                        }
-                    }, {
-                        "id": "20002",
-                        "key": "WEB-43",
-                        "fields": {
-                            "summary": "Keep the unselected issue remote",
-                            "status": { "id": "3", "name": "In Progress" },
-                            "assignee": null,
-                            "updated": "2026-08-13T13:01:00.000+0000"
-                        }
-                    }]
-                }))
-            }),
-        );
+        let jira_server = axum::Router::new()
+            .route(
+                "/rest/api/3/search/jql",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "isLast": true,
+                        "issues": [{
+                            "id": "20001",
+                            "key": "WEB-42",
+                            "fields": {
+                                "summary": "Polish the launch page",
+                                "status": { "id": "3", "name": "In Progress" },
+                                "assignee": { "accountId": "account-1", "displayName": "Bea" },
+                                "updated": "2026-08-13T13:00:00.000+0000"
+                            }
+                        }, {
+                            "id": "20002",
+                            "key": "WEB-43",
+                            "fields": {
+                                "summary": "Keep the unselected issue remote",
+                                "status": { "id": "3", "name": "In Progress" },
+                                "assignee": null,
+                                "updated": "2026-08-13T13:01:00.000+0000"
+                            }
+                        }]
+                    }))
+                }),
+            )
+            .route(
+                "/rest/api/3/issue/WEB-42/transitions",
+                get(|| async {
+                    Json(serde_json::json!({ "transitions": [
+                        { "id": "41", "to": { "id": "4", "name": "In Review" } }
+                    ] }))
+                })
+                .post(|| async { StatusCode::NO_CONTENT }),
+            );
         tokio::spawn(async move { axum::serve(listener, jira_server).await.unwrap() });
 
         let store = TaskStore::in_memory().unwrap();
@@ -4094,11 +4187,18 @@ mod tests {
         store
             .replace_jira_status_mappings(
                 binding.id,
-                &[JiraStatusMapping {
-                    jira_status_id: "3".into(),
-                    jira_status_name: "In Progress".into(),
-                    task_state: TaskState::Active,
-                }],
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "3".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "4".into(),
+                        jira_status_name: "In Review".into(),
+                        task_state: TaskState::Review,
+                    },
+                ],
             )
             .unwrap();
         let app = router(
@@ -4139,14 +4239,39 @@ mod tests {
         assert_eq!(tasks.as_array().unwrap().len(), 1);
         assert_eq!(tasks[0]["title"], "Polish the launch page");
         assert_eq!(tasks[0]["state"], "active");
-        let links =
-            response_json(authorized_get(app, "/api/v1/integrations/jira/task-links").await).await;
+        let links = response_json(
+            authorized_get(app.clone(), "/api/v1/integrations/jira/task-links").await,
+        )
+        .await;
         assert_eq!(links.as_array().unwrap().len(), 1);
         assert_eq!(links[0]["issue_key"], "WEB-42");
         assert_eq!(links[0]["project_name"], "Website Services");
         assert_eq!(links[0]["jira_status_name"], "In Progress");
         assert_eq!(links[0]["jira_assignee_name"], "Bea");
         assert_eq!(links[0]["task_id"], tasks[0]["id"]);
+
+        let transitioned = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!(
+                        "/api/v1/tasks/{}/state",
+                        tasks[0]["id"].as_str().unwrap()
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"state":"review"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(transitioned.status(), StatusCode::OK);
+        assert_eq!(response_json(transitioned).await["state"], "review");
+        let transitioned_links =
+            response_json(authorized_get(app, "/api/v1/integrations/jira/task-links").await).await;
+        assert_eq!(transitioned_links[0]["jira_status_id"], "4");
+        assert_eq!(transitioned_links[0]["jira_status_name"], "In Review");
     }
 
     #[tokio::test]

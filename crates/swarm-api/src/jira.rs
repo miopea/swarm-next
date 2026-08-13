@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -10,6 +14,7 @@ const PAGE_SIZE: usize = 50;
 const MAX_PROJECTS: usize = 500;
 const MAX_PROJECT_STATUSES: usize = 128;
 const MAX_ISSUES: usize = 200;
+const MAX_TRANSITIONS: usize = 128;
 
 #[derive(Clone, Default)]
 pub(crate) enum JiraReadinessProbe {
@@ -74,6 +79,12 @@ pub(crate) struct JiraIssue {
     pub updated_at: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct JiraTransitionResult {
+    pub status_id: String,
+    pub status_name: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum JiraAdapterError {
     NotConfigured,
@@ -82,6 +93,7 @@ pub(crate) enum JiraAdapterError {
     NetworkUnavailable,
     InvalidResponse,
     ResponseLimitExceeded,
+    TransitionUnavailable,
 }
 
 impl std::fmt::Display for JiraAdapterError {
@@ -93,6 +105,9 @@ impl std::fmt::Display for JiraAdapterError {
             Self::NetworkUnavailable => "Jira is temporarily unavailable",
             Self::InvalidResponse => "Jira returned an invalid response",
             Self::ResponseLimitExceeded => "Jira response exceeded the bounded operation limit",
+            Self::TransitionUnavailable => {
+                "Jira does not offer a mapped transition for this task state"
+            }
         })
     }
 }
@@ -168,6 +183,24 @@ struct JiraIssueAssignee {
     account_id: Option<String>,
     #[serde(rename = "displayName")]
     display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct JiraTransitionsResponse {
+    #[serde(default)]
+    transitions: Vec<JiraTransitionResponse>,
+}
+
+#[derive(Deserialize)]
+struct JiraTransitionResponse {
+    id: String,
+    to: JiraTransitionStatus,
+}
+
+#[derive(Deserialize)]
+struct JiraTransitionStatus {
+    id: String,
+    name: String,
 }
 
 impl JiraReadinessProbe {
@@ -467,6 +500,71 @@ impl JiraReadinessProbe {
         Ok(issues)
     }
 
+    pub(crate) async fn transition_issue(
+        &self,
+        issue_id_or_key: &str,
+        target_status_ids: &[String],
+    ) -> Result<JiraTransitionResult, JiraAdapterError> {
+        let issue = issue_id_or_key.trim();
+        let targets = target_status_ids
+            .iter()
+            .map(|status| status.trim())
+            .filter(|status| !status.is_empty() && status.len() <= 128)
+            .collect::<HashSet<_>>();
+        if issue.is_empty()
+            || issue.len() > 128
+            || issue.chars().any(char::is_control)
+            || targets.is_empty()
+        {
+            return Err(JiraAdapterError::InvalidResponse);
+        }
+        let access = self.access().await?;
+        let mut url = endpoint(&access.base_url, "/rest/api/3/issue/")?;
+        url.path_segments_mut()
+            .map_err(|()| JiraAdapterError::InvalidResponse)?
+            .pop_if_empty()
+            .push(issue)
+            .push("transitions");
+        let response = authorize(access.client.get(url.clone()), &access.authorization)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|_| JiraAdapterError::NetworkUnavailable)?;
+        ensure_success(response.status())?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| JiraAdapterError::InvalidResponse)?;
+        let transitions = serde_json::from_slice::<JiraTransitionsResponse>(&bytes)
+            .map_err(|_| JiraAdapterError::InvalidResponse)?
+            .transitions;
+        if transitions.len() > MAX_TRANSITIONS {
+            return Err(JiraAdapterError::ResponseLimitExceeded);
+        }
+        let transition = transitions
+            .into_iter()
+            .find(|transition| targets.contains(transition.to.id.trim()))
+            .ok_or(JiraAdapterError::TransitionUnavailable)?;
+        if transition.id.trim().is_empty()
+            || transition.id.len() > 128
+            || transition.to.name.trim().is_empty()
+            || transition.to.name.len() > 240
+        {
+            return Err(JiraAdapterError::InvalidResponse);
+        }
+        let response = authorize(access.client.post(url), &access.authorization)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(&serde_json::json!({ "transition": { "id": transition.id } }))
+            .send()
+            .await
+            .map_err(|_| JiraAdapterError::NetworkUnavailable)?;
+        ensure_success(response.status())?;
+        Ok(JiraTransitionResult {
+            status_id: transition.to.id,
+            status_name: transition.to.name,
+        })
+    }
+
     async fn access(&self) -> Result<JiraAccess, JiraAdapterError> {
         match self {
             Self::NotConfigured => Err(JiraAdapterError::NotConfigured),
@@ -602,6 +700,7 @@ mod tests {
     use super::*;
     use axum::{Json, Router, http::StatusCode as AxumStatus, routing::get};
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     async fn probe(project_status: AxumStatus, profile_status: AxumStatus) -> JiraReadiness {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -656,6 +755,51 @@ mod tests {
     async fn rejects_insecure_remote_and_embedded_credentials() {
         assert!(JiraReadinessProbe::configured("http://jira.example.test", "a", "b").is_err());
         assert!(JiraReadinessProbe::configured("https://a:b@jira.example.test", "a", "b").is_err());
+    }
+
+    #[tokio::test]
+    async fn applies_only_an_available_mapped_issue_transition() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let written = writes.clone();
+        let app = Router::new().route(
+            "/rest/api/3/issue/WEB-42/transitions",
+            get(|| async {
+                Json(json!({ "transitions": [
+                    { "id": "21", "to": { "id": "2", "name": "In Progress" } },
+                    { "id": "31", "to": { "id": "3", "name": "Done" } }
+                ] }))
+            })
+            .post(move |Json(body): Json<serde_json::Value>| {
+                let written = written.clone();
+                async move {
+                    assert_eq!(body["transition"]["id"], "21");
+                    written.fetch_add(1, Ordering::SeqCst);
+                    AxumStatus::NO_CONTENT
+                }
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let probe = JiraReadinessProbe::configured(
+            &format!("http://{address}"),
+            "operator@example.test",
+            "token",
+        )
+        .unwrap();
+
+        let result = probe
+            .transition_issue("WEB-42", &["2".to_owned()])
+            .await
+            .unwrap();
+        assert_eq!(result.status_id, "2");
+        assert_eq!(result.status_name, "In Progress");
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            probe.transition_issue("WEB-42", &["99".to_owned()]).await,
+            Err(JiraAdapterError::TransitionUnavailable)
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
     }
 
     async fn configured_catalog() -> JiraReadinessProbe {

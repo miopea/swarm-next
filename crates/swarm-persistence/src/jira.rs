@@ -407,6 +407,39 @@ impl TaskStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
+
+    /// Records a Jira transition that completed successfully before the local task moved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the task is not linked to Jira or status metadata is invalid.
+    pub fn update_jira_issue_link_status(
+        &self,
+        task_id: TaskId,
+        status_id: &str,
+        status_name: &str,
+    ) -> Result<(), TaskStoreError> {
+        let status_id = status_id.trim();
+        let status_name = status_name.trim();
+        if status_id.is_empty()
+            || status_id.len() > MAX_STATUS_ID_BYTES
+            || status_name.is_empty()
+            || status_name.len() > MAX_STATUS_NAME_BYTES
+        {
+            return Err(TaskStoreError::InvalidJiraWorkflowMapping);
+        }
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE jira_issue_links
+             SET jira_status_id = ?2, jira_status_name = ?3, last_synced_at = unixepoch()
+             WHERE task_id = ?1",
+            params![task_id.to_string(), status_id, status_name],
+        )?;
+        if changed == 0 {
+            return Err(TaskStoreError::NotFound);
+        }
+        Ok(())
+    }
 }
 
 fn jira_binding_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JiraProjectBinding> {
@@ -664,6 +697,12 @@ mod tests {
         assert_eq!(refreshed.description, "Local execution notes");
         assert_eq!(refreshed.assigned_worker_id, Some(worker.id));
         assert_eq!(store.list_jira_issue_links(binding.id).unwrap().len(), 1);
+        store
+            .update_jira_issue_link_status(first.id, "4", "In Review")
+            .unwrap();
+        let transitioned_link = store.list_jira_issue_links(binding.id).unwrap().remove(0);
+        assert_eq!(transitioned_link.jira_status_id, "4");
+        assert_eq!(transitioned_link.jira_status_name, "In Review");
 
         let cursor = store
             .list_control_room_events(0)
