@@ -92,6 +92,7 @@ export function App() {
   const [feedbackRevision, setFeedbackRevision] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
   const [surface, setSurface] = useState<Surface>(readSavedSurface);
+  const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
@@ -660,12 +661,15 @@ export function App() {
         else void startExistingWorker(worker);
       },
     })),
-    ...tasks.filter((task) => task.state !== "completed").map((task) => ({
+    ...tasks.map((task) => ({
       id: `task-${task.id}`,
       label: task.title,
       detail: `${taskStateLabel(task.state)} · ${workers.find((worker) => worker.id === task.assigned_worker_id)?.name ?? "Unassigned"}`,
       group: "Work" as const,
-      run: () => setSurface("tasks"),
+      run: () => {
+        setTaskFocus((current) => ({ id: task.id, request: (current?.request ?? 0) + 1 }));
+        setSurface("tasks");
+      },
     })),
     ...decisions.filter((decision) => decision.state === "pending").map((decision) => ({
       id: `decision-${decision.id}`,
@@ -808,7 +812,7 @@ export function App() {
         ) : surface === "decisions" ? (
           <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
+          <TaskBoard tasks={tasks} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} sessions={sessions} workers={workers} busy={busy} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             busy={busy}

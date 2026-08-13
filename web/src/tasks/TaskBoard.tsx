@@ -5,6 +5,8 @@ import BeeMascot from "../brand/BeeMascot";
 
 type Props = {
   tasks: Task[];
+  focusTaskId?: string;
+  focusRequest?: number;
   sessions: SessionSummary[];
   workers: Worker[];
   busy: boolean;
@@ -56,6 +58,8 @@ const validTargets: Record<TaskState, TaskState[]> = {
 
 export default function TaskBoard({
   tasks,
+  focusTaskId,
+  focusRequest,
   sessions,
   workers,
   busy,
@@ -75,6 +79,7 @@ export default function TaskBoard({
   const [draggedTaskId, setDraggedTaskId] = useState<string>();
   const [composeOpen, setComposeOpen] = useState(initialComposerOpen);
   const titleInput = useRef<HTMLInputElement>(null);
+  const completedTasksPanel = useRef<HTMLDetailsElement>(null);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -103,6 +108,17 @@ export default function TaskBoard({
     .sort((left, right) => left.position - right.position);
   const completedTasks = tasks.filter((task) => task.state === "completed");
   const draggedTask = tasks.find((task) => task.id === draggedTaskId);
+
+  useEffect(() => {
+    if (!focusTaskId) return;
+    if (completedTasks.some((task) => task.id === focusTaskId)) completedTasksPanel.current?.setAttribute("open", "");
+    const frame = requestAnimationFrame(() => {
+      const card = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(focusTaskId)}"]`);
+      card?.scrollIntoView({ behavior: "smooth", block: "center" });
+      card?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusTaskId, focusRequest, completedTasks]);
 
   function reorderBefore(targetTaskId: string) {
     if (!draggedTaskId || draggedTaskId === targetTaskId) return;
@@ -241,7 +257,7 @@ export default function TaskBoard({
       </section>
 
       {completedTasks.length > 0 && (
-        <details className="completed-tasks">
+        <details ref={completedTasksPanel} className="completed-tasks">
           <summary><span>Completed work</span><small>{completedTasks.length}</small></summary>
           <div className="task-grid compact">
             {completedTasks.map((task) => (
@@ -276,7 +292,7 @@ function initialComposerOpen(): boolean {
   return typeof window.matchMedia !== "function" || !window.matchMedia("(max-width: 680px)").matches;
 }
 
-function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onFetchActivity, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, onDragStart, onDragEnd }: Omit<Props, "tasks" | "focusTaskId" | "focusRequest" | "onCreate" | "onReorder"> & { task: Task; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
   const targetWorker = assignableWorkers.find((worker) => worker.id === task.assigned_worker_id)
@@ -326,6 +342,8 @@ function TaskCard({ task, sessions, workers, busy, onUpdate, onTransition, onAss
   return (
     <article
       ref={cardRef}
+      data-task-id={task.id}
+      tabIndex={-1}
       className="task-card"
       aria-label={task.title}
       draggable={!busy && !editing && task.state !== "completed"}

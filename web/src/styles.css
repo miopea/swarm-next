@@ -202,6 +202,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-grid.compact { margin-top: 12px; opacity: .8; }
 .task-card { position: relative; display: flex; min-height: 190px; flex-direction: column; padding: 17px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 7%, transparent); }
 .task-card:hover { border-color: var(--line-strong); background: var(--panel-raised); }
+.task-card:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent); outline-offset: 2px; }
 .task-card-topline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .task-signals { display: flex; align-items: center; gap: 9px; }
 .task-card-topline code { overflow: hidden; color: var(--quiet); font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }

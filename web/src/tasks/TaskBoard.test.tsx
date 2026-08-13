@@ -45,6 +45,18 @@ test("keeps active work above the fold on phones until task creation is requeste
   expect(screen.getByRole("button", { name: "Hide task form" })).toHaveAttribute("aria-expanded", "true");
 });
 
+test("reveals and focuses a completed task selected through global navigation", async () => {
+  const completed = { ...task, state: "completed" as const };
+  const scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView = scrollIntoView;
+  renderBoard({ tasks: [completed], focusTaskId: completed.id, focusRequest: 1 });
+
+  const card = screen.getByRole("article", { name: completed.title });
+  await waitFor(() => expect(card).toHaveFocus());
+  expect(card.closest("details")).toHaveAttribute("open");
+  expect(scrollIntoView).toHaveBeenCalled();
+});
+
 test("dragging a task exposes only legal workflow targets and performs the drop", () => {
   const onTransition = vi.fn().mockResolvedValue(undefined);
   renderBoard({ onTransition });
