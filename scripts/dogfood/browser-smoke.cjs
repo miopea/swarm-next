@@ -122,8 +122,14 @@ async function checkSurface(browser, surface) {
     if (consoleErrors.length || pageErrors.length) {
       throw new Error(`${surface.name}: browser errors: ${[...consoleErrors, ...pageErrors].join(" | ")}`);
     }
+    await page.getByRole("button", { name: "Report a problem" }).click();
+    await page.getByRole("dialog", { name: "Capture what felt wrong" }).waitFor();
+    await page.getByLabel("What did you expect?").fill("Acceptance preview only");
+    const privateSaveVisible = await page.getByRole("button", { name: "Save to this Hive" }).isVisible();
+    if (!privateSaveVisible) throw new Error(`${surface.name}: private feedback save is unavailable`);
+    await page.getByRole("button", { name: "Close" }).click();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
-    return { surface: surface.name, surfaces: surfaceResults, codexDisabled, workerEngineText, maintenanceConfirmation, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, codexDisabled, workerEngineText, maintenanceConfirmation, privateSaveVisible, backup, status: "passed" };
   } finally {
     await context.close();
   }
