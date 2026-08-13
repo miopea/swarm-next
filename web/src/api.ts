@@ -62,6 +62,14 @@ export type HiveIdentity = {
   operator: { id: string; display_name: string };
   hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
 };
+export type DogfoodReport = {
+  id: string;
+  expectation: string;
+  observation: string;
+  diagnostic_bundle: string;
+  attachment_name: string | null;
+  created_at: number;
+};
 
 export type Worker = {
   id: string;
@@ -479,6 +487,27 @@ export async function stopClaudeSession(operatorToken: string, sessionId: string
     `/api/v1/terminal/sessions/${encodeURIComponent(sessionId)}`,
     { method: "DELETE" },
   );
+}
+
+export async function saveDogfoodReport(
+  operatorToken: string,
+  report: Omit<DogfoodReport, "id" | "created_at">,
+): Promise<DogfoodReport> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/feedback/reports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(report),
+  });
+  return response.json() as Promise<DogfoodReport>;
+}
+
+export async function uploadDogfoodScreenshot(operatorToken: string, image: File): Promise<string> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/feedback/attachments", {
+    method: "POST",
+    headers: { "Content-Type": image.type },
+    body: image,
+  });
+  return ((await response.json()) as { name: string }).name;
 }
 
 export async function updateWorkerEngine(operatorToken: string): Promise<WorkerEngineMaintenanceResult> {

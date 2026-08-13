@@ -4,6 +4,8 @@ import {
   fetchHistoryDiagnostics,
   fetchRuntimeResources,
   fetchTerminalHostStatus,
+  saveDogfoodReport,
+  uploadDogfoodScreenshot,
   type ControlRoomEvent,
   type Health,
   type HiveIdentity,
@@ -34,6 +36,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   const [runtime, setRuntime] = useState<RuntimeDiagnostics>({ loaded: false });
   const [preview, setPreview] = useState<string>();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "unavailable">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [screenshot, setScreenshot] = useState<File>();
   const [screenshotUrl, setScreenshotUrl] = useState<string>();
   const [imageError, setImageError] = useState<string>();
@@ -131,6 +134,26 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
     }
   }
 
+  async function saveToHive() {
+    if (!expectation.trim() && !observation.trim()) return;
+    setSaveState("saving");
+    try {
+      const report = preview ?? buildPreview();
+      const attachmentName = screenshot
+        ? await uploadDogfoodScreenshot(operatorToken, screenshot)
+        : null;
+      await saveDogfoodReport(operatorToken, {
+        expectation,
+        observation,
+        diagnostic_bundle: report,
+        attachment_name: attachmentName,
+      });
+      setSaveState("saved");
+    } catch {
+      setSaveState("error");
+    }
+  }
+
   return (
     <div className="feedback-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-heading" onPaste={pastedImage} onDragOver={(event) => event.preventDefault()} onDrop={droppedImage}>
@@ -158,8 +181,11 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
         <div className="diagnostic-actions">
           <button type="button" disabled={!runtime.loaded} onClick={buildPreview}>{runtime.loaded ? "Preview bundle" : "Gathering evidence…"}</button>
           <button type="button" className="primary-action" disabled={!runtime.loaded} onClick={() => void copyBundle()}>{copyState === "copied" ? "Copied" : "Copy notes & diagnostics"}</button>
+          <button type="button" className="primary-action" disabled={!runtime.loaded || (!expectation.trim() && !observation.trim()) || saveState === "saving"} onClick={() => void saveToHive()}>{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved to Hive" : "Save to this Hive"}</button>
         </div>
         {copyState === "unavailable" ? <p role="status">Clipboard access is unavailable. Select the preview and copy it manually.</p> : null}
+        {saveState === "saved" ? <p role="status">Saved privately. Tell your Swarm developer that a dogfood report is ready; they can read it through the authenticated API.</p> : null}
+        {saveState === "error" ? <p role="alert">The report was not saved. Your notes and screenshot remain in this dialog.</p> : null}
         {preview ? <pre className="diagnostic-preview feedback-preview" aria-label="Dogfood feedback bundle">{preview}</pre> : null}
       </section>
     </div>

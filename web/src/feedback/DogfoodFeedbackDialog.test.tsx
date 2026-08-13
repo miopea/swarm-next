@@ -75,6 +75,36 @@ test("attaches a pasted screenshot locally and records only safe metadata", asyn
   expect(preview).not.toHaveTextContent("AQID");
 });
 
+test("saves reviewed notes and an optional screenshot privately to the Hive", async () => {
+  vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn().mockReturnValue("blob:screenshot"), revokeObjectURL: vi.fn() });
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 7, host_version: "0.1.0", draining: false, running_sessions: 0, retained_sessions: 0 } });
+    if (url.includes("runtime/resources")) return ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 1, critical_bytes: 2 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" } });
+    if (url === "/api/v1/feedback/attachments") return ok({ name: "content-hash.png" });
+    if (url === "/api/v1/feedback/reports") {
+      const payload = JSON.parse(String(init?.body));
+      return ok({ id: "report-1", created_at: 1, ...payload });
+    }
+    return ok({ type: "history_diagnostics", diagnostics: null });
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<DogfoodFeedbackDialog activeSessionId={undefined} health={{ status: "ok", version: "0.1.0" }} hiveIdentity={undefined} liveFeedState="connected" onClose={vi.fn()} operatorToken="token" recentEvents={[]} sessions={[]} surface="workers" workers={[]} />);
+  fireEvent.change(screen.getByLabelText("What did you expect?"), { target: { value: "Worker should recover" } });
+  fireEvent.change(screen.getByLabelText("What happened instead?"), { target: { value: "Terminal stayed blank" } });
+  const image = new File([new Uint8Array([1, 2, 3])], "terminal.png", { type: "image/png" });
+  fireEvent.paste(screen.getByRole("dialog"), { clipboardData: { files: [image] } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save to this Hive" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Save to this Hive" }));
+
+  expect(await screen.findByText(/Saved privately/)).toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledWith("/api/v1/feedback/attachments", expect.objectContaining({ method: "POST", body: image }));
+  expect(fetch).toHaveBeenCalledWith("/api/v1/feedback/reports", expect.objectContaining({
+    method: "POST",
+    body: expect.stringContaining('"attachment_name":"content-hash.png"'),
+  }));
+});
+
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }

@@ -874,6 +874,19 @@ struct HistoryQuery {
     record: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct DogfoodReportsQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateDogfoodReportRequest {
+    expectation: String,
+    observation: String,
+    diagnostic_bundle: String,
+    attachment_name: Option<String>,
+}
+
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
@@ -1013,6 +1026,14 @@ fn api_router(state: AppState) -> Router {
             post(maintain_terminal_host),
         )
         .route("/api/v1/backups/database", get(download_database_backup))
+        .route(
+            "/api/v1/feedback/reports",
+            get(list_dogfood_reports).post(create_dogfood_report),
+        )
+        .route(
+            "/api/v1/feedback/attachments",
+            post(upload_dogfood_attachment).layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES)),
+        )
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
         .route("/api/v1/decisions", get(list_decisions))
         .route(
@@ -1189,6 +1210,79 @@ async fn download_database_backup(
         HeaderValue::from_static("attachment; filename=swarm-next-hive.sqlite3"),
     );
     Ok((response_headers, bytes).into_response())
+}
+
+async fn list_dogfood_reports(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<DogfoodReportsQuery>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let reports = task_store(&state)?
+        .list_dogfood_reports(query.limit.unwrap_or(20))
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(reports)).into_response())
+}
+
+async fn create_dogfood_report(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateDogfoodReportRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let report = task_store(&state)?
+        .create_dogfood_report(
+            &request.expectation,
+            &request.observation,
+            &request.diagnostic_bundle,
+            request.attachment_name.as_deref(),
+        )
+        .map_err(|error| task_store_error(&error))?;
+    Ok((StatusCode::CREATED, Json(report)).into_response())
+}
+
+#[derive(Serialize)]
+struct DogfoodAttachmentResponse {
+    name: String,
+}
+
+async fn upload_dogfood_attachment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let media_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let store = state.attachment_store.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "attachment_store_unconfigured",
+            "private attachment storage is not configured",
+        )
+    })?;
+    let path = store
+        .save(media_type, &body)
+        .await
+        .map_err(attachment_error)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "attachment_path_unavailable",
+                "private attachment name is not valid UTF-8",
+            )
+        })?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(DogfoodAttachmentResponse { name: name.into() }),
+    )
+        .into_response())
 }
 
 async fn operator_presence(
@@ -2749,6 +2843,13 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "task_order_conflict",
             error.to_string(),
         ),
+        TaskStoreError::InvalidDogfoodReport
+        | TaskStoreError::InvalidDogfoodAttachment
+        | TaskStoreError::InvalidDogfoodReportLimit => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_dogfood_report",
+            error.to_string(),
+        ),
         TaskStoreError::WorkerNotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "worker_not_found", error.to_string())
         }
@@ -3221,6 +3322,82 @@ mod tests {
         assert_eq!(
             restored.local_hive_identity().unwrap().hive.id,
             expected.hive.id
+        );
+    }
+
+    #[tokio::test]
+    async fn dogfood_report_queue_keeps_reviewed_notes_and_a_private_screenshot() {
+        let runtime = TempDir::new().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_attachment_store(runtime.path().join("attachments"))
+                .with_task_store(TaskStore::in_memory().unwrap()),
+        );
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/feedback/reports")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let attachment = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/feedback/attachments")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "image/png")
+                    .body(Body::from(b"\x89PNG\r\n\x1a\nprivate-screen".as_slice()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(attachment.status(), StatusCode::CREATED);
+        let attachment = response_json(attachment).await;
+        let attachment_name = attachment["name"].as_str().unwrap();
+        assert!(!attachment_name.contains("private"));
+
+        let saved = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/feedback/reports")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "expectation": "Terminal should redraw",
+                            "observation": "It stayed blank",
+                            "diagnostic_bundle": "operator-reviewed sanitized evidence",
+                            "attachment_name": attachment_name,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::CREATED);
+
+        let reports = authorized_get(app, "/api/v1/feedback/reports?limit=1").await;
+        assert_eq!(reports.status(), StatusCode::OK);
+        assert_eq!(reports.headers()[header::CACHE_CONTROL], "no-store");
+        let reports = response_json(reports).await;
+        assert_eq!(reports[0]["observation"], "It stayed blank");
+        assert_eq!(reports[0]["attachment_name"], attachment_name);
+        assert_eq!(
+            std::fs::read_dir(runtime.path().join("attachments"))
+                .unwrap()
+                .count(),
+            1
         );
     }
 

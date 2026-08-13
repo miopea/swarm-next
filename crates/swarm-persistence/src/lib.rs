@@ -16,6 +16,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod decisions;
+mod feedback;
+pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
 mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
 pub use presence::PresenceMutation;
@@ -36,7 +38,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 19;
+const CURRENT_SCHEMA_VERSION: i64 = 20;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -121,6 +123,12 @@ pub enum TaskStoreError {
     ProviderConversationUnavailable,
     #[error("task order must contain every open task exactly once")]
     InvalidTaskOrder,
+    #[error("dogfood report notes and evidence are missing or exceed their private bounds")]
+    InvalidDogfoodReport,
+    #[error("dogfood report attachment identity is invalid")]
+    InvalidDogfoodAttachment,
+    #[error("dogfood report limit must be from 1 through 50")]
+    InvalidDogfoodReportLimit,
     #[error("worker order must contain every non-Queen worker exactly once")]
     InvalidWorkerOrder,
     #[error("database schema version {found} is newer than supported version {supported}")]
@@ -159,7 +167,7 @@ impl TaskStore {
         let schema_version: i64 =
             connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match schema_version {
-            0..=18 => {
+            0..=19 => {
                 let transaction = connection.transaction()?;
                 if schema_version == 0 {
                     transaction.execute_batch(
@@ -1007,7 +1015,26 @@ fn migrate_schema(
     if schema_version < 19 {
         migrate_durable_task_ownership(transaction)?;
     }
+    if schema_version < 20 {
+        migrate_dogfood_reports(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_dogfood_reports(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS dogfood_reports (
+            id TEXT PRIMARY KEY,
+            expectation TEXT NOT NULL,
+            observation TEXT NOT NULL,
+            diagnostic_bundle TEXT NOT NULL,
+            attachment_name TEXT,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         CREATE INDEX IF NOT EXISTS dogfood_reports_newest
+            ON dogfood_reports(created_at DESC, id DESC);
+         PRAGMA user_version = 20;",
+    )
 }
 
 fn migrate_durable_task_ownership(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {

@@ -24,16 +24,30 @@ The report excludes operator credentials, terminal output, task text, worker
 names, workspace paths, and raw backend error messages. A browser clipboard
 failure leaves the preview selectable for manual copy.
 
+## Private Hive queue
+
+The feedback dialog can now save the exact previewed bundle to the local Hive.
+An optional pasted screenshot is stored through the same content-addressed,
+signature-checked, mode-0600 attachment boundary used by terminal image paste;
+the report records only that opaque filename. Reports are authenticated,
+`no-store`, included in the Hive database backup, and capped at the newest 50.
+The UI keeps notes and the image in place if either write fails.
+
+This makes dogfooding asynchronous: the operator can save evidence at the
+moment of failure and a trusted developer can later read it through
+`GET /api/v1/feedback/reports`. No hidden data is recollected after submission.
+
 ## Boundary
 
-This slice deliberately implements preview and copy, not an outbound submission
-transport. GitHub, Jira, or another destination must be chosen explicitly
-before Swarm sends a report off the machine. That later transport will submit
-exactly the operator-reviewed payload rather than recollecting hidden context.
+This is private local retention, not an outbound submission transport. GitHub,
+Jira, or another destination must be chosen explicitly before Swarm sends a
+report off the machine. Any later transport will submit exactly the
+operator-reviewed retained payload rather than recollecting hidden context.
 
 ## Verification
 
-Frontend tests exercise healthy subsystem evidence, terminal/history requests,
-content-free recent transitions, and the privacy exclusions above. The full
-frontend typecheck, test suite, and production build remain required before the
+Persistence, API, and frontend tests exercise bounds, authentication, image
+signature validation, report saving, content-free recent transitions, and the
+privacy exclusions above. The full frontend typecheck, test suite, strict Rust
+lint, database migration, and production build remain required before the
 checkpoint is committed.
