@@ -27,8 +27,7 @@ function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> 
     onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onReorder: vi.fn(),
     ...overrides,
   };
-  render(<TaskBoard {...props} />);
-  return props;
+  return { props, ...render(<TaskBoard {...props} />) };
 }
 
 test("keeps active work above the fold on phones until task creation is requested", async () => {
@@ -47,7 +46,10 @@ test("keeps active work above the fold on phones until task creation is requeste
 
 test("opens and focuses task creation when requested from global navigation", async () => {
   vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
-  renderBoard({ tasks: [], composeRequest: 1 });
+  const { props, rerender } = renderBoard({ tasks: [], composeRequest: 0 });
+
+  expect(screen.queryByLabelText("Task title")).not.toBeInTheDocument();
+  rerender(<TaskBoard {...props} composeRequest={1} />);
 
   const title = await screen.findByLabelText("Task title");
   await waitFor(() => expect(title).toHaveFocus());

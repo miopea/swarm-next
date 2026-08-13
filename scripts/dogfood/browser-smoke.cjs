@@ -279,6 +279,7 @@ async function checkSurface(browser, surface) {
     await page.getByRole("heading", { name: "Task board" }).waitFor();
     const taskTitle = page.getByLabel("Task title");
     await taskTitle.waitFor();
+    await page.waitForFunction(() => document.activeElement?.id === "task-title");
     const createTaskFocused = await taskTitle.evaluate((input) => input === document.activeElement);
     if (!createTaskFocused) throw new Error(`${surface.name}: quick task creation did not focus the title`);
     await page.getByRole("button", { name: /Settings/ }).click();

@@ -127,9 +127,13 @@ export default function TaskBoard({
   useEffect(() => {
     if (!composeRequest) return;
     setComposeOpen(true);
+  }, [composeRequest]);
+
+  useEffect(() => {
+    if (!composeRequest || !composeOpen) return;
     const frame = requestAnimationFrame(() => titleInput.current?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [composeRequest]);
+  }, [composeOpen, composeRequest]);
 
   function reorderBefore(targetTaskId: string) {
     if (!draggedTaskId || draggedTaskId === targetTaskId) return;
