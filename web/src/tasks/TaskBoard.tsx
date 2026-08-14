@@ -502,24 +502,26 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
       onKeyDown={(event) => { if (event.key === "Escape") setMenuOpen(false); }}
     >
       <div className="task-card-topline">
-        <div className="task-signals">
-          <span className={`task-state state-${task.state}`}>{taskStateLabel(task)}</span>
-          <span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span>
+        <div className="task-meta-group">
+          <span className="task-meta-label">Swarm status</span>
+          <div className="task-signals">
+            <span className={`task-state state-${task.state}`}>{taskStateLabel(task)}</span>
+            <span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span>
+          </div>
         </div>
-        {targetWorker?.active_session_id ? (
-          <button type="button" className="task-owner task-owner-link" onClick={() => onOpenWorker(targetWorker.active_session_id!)}>{targetWorker.name}</button>
-        ) : <span className="task-owner">{targetWorker?.name ?? "Unassigned"}</span>}
       </div>
       {jiraLink && (
         <div className="task-jira-origin" aria-label={`Jira issue ${jiraLink.issue_key}`}>
-          {jiraLink.issue_url ? (
-            <a href={jiraLink.issue_url} target="_blank" rel="noreferrer" title={`Open ${jiraLink.issue_key} in Jira`}>
-              <strong>{jiraLink.issue_key}</strong><span aria-hidden="true">↗</span>
-            </a>
-          ) : <strong>{jiraLink.issue_key}</strong>}
-          <span>{jiraLink.project_name}</span>
-          <span>{jiraLink.jira_status_name}</span>
-          {jiraLink.jira_assignee_name && <span>{jiraLink.jira_assignee_name}</span>}
+          <span className="task-jira-field task-jira-issue"><span className="task-meta-label">Jira issue</span>
+            {jiraLink.issue_url ? (
+              <a href={jiraLink.issue_url} target="_blank" rel="noreferrer" title={`Open ${jiraLink.issue_key} in Jira`}>
+                <strong>{jiraLink.issue_key}</strong><span aria-hidden="true">↗</span>
+              </a>
+            ) : <strong>{jiraLink.issue_key}</strong>}
+          </span>
+          <span className="task-jira-field"><span className="task-meta-label">Project</span><span>{jiraLink.project_name}</span></span>
+          <span className="task-jira-field"><span className="task-meta-label">Jira status</span><span>{jiraLink.jira_status_name}</span></span>
+          <span className="task-jira-field"><span className="task-meta-label">Jira assignee</span><span>{jiraLink.jira_assignee_name ?? "Unassigned"}</span></span>
           {jiraLink.outbound_state && (
             <span className={`jira-sync-state ${jiraLink.outbound_state}`}>
               {jiraLink.outbound_state === "queued" || jiraLink.outbound_state === "dispatching"
@@ -540,9 +542,16 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
         <TaskEditForm task={task} busy={busy} onUpdate={onUpdate} onCancel={() => setEditing(false)} />
       ) : task.state !== "completed" && (
         <div className="task-assignment-cell">
+          <div className="task-current-worker">
+            <span className="task-meta-label">Swarm worker</span>
+            {targetWorker?.active_session_id ? (
+              <button type="button" className="task-owner task-owner-link" onClick={() => onOpenWorker(targetWorker.active_session_id!)}>{targetWorker.name}</button>
+            ) : <strong className="task-owner">{targetWorker?.name ?? "Unassigned"}</strong>}
+          </div>
           <div className="assignment-row">
-            <label htmlFor={`assignment-${task.id}`}>Worker</label>
+            <label className="visually-hidden" htmlFor={`assignment-${task.id}`}>Assign Swarm worker</label>
             <select
+              aria-label={`Assign Swarm worker for ${task.title}`}
               id={`assignment-${task.id}`}
               value={targetWorker?.id ?? ""}
               onChange={(event) => event.target.value && void onAssign(task, event.target.value)}

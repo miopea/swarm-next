@@ -114,7 +114,7 @@ test("keeps worker ownership visible while the assigned worker is sleeping", () 
   expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
   expect(within(card).queryByText("In progress", { selector: ".task-state" })).not.toBeInTheDocument();
   expect(within(card).getByText("Daisy")).toBeInTheDocument();
-  expect(within(card).getByLabelText("Worker")).toHaveValue(worker.id);
+  expect(within(card).getByRole("combobox", { name: /Assign Swarm worker/ })).toHaveValue(worker.id);
 });
 
 test("distinguishes assigned work from work that has started", () => {
@@ -148,6 +148,11 @@ test("keeps Jira identity and remote status visible while routing work", () => {
   fireEvent.click(within(card).getByRole("button", { name: "Retry Jira" }));
   expect(onRetryJira).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
   expect(within(card).getByRole("link", { name: /WEB-42/ })).toHaveAttribute("href", "https://jira.example.test/browse/WEB-42");
+  expect(within(card).getByText("Swarm status")).toBeInTheDocument();
+  expect(within(card).getByText("Swarm worker")).toBeInTheDocument();
+  expect(within(card).getByText("Project")).toBeInTheDocument();
+  expect(within(card).getByText("Jira status")).toBeInTheDocument();
+  expect(within(card).getByText("Jira assignee")).toBeInTheDocument();
   expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
 });
 

@@ -236,13 +236,15 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .count-badge { display: grid; min-width: 27px; height: 25px; place-items: center; border-radius: 8px; color: var(--muted); background: var(--good-soft); font-size: .74rem; }
 .task-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; }
 .task-grid.compact { margin-top: 12px; opacity: .8; }
-.task-card { position: relative; display: grid; grid-template-columns: minmax(145px, .5fr) minmax(280px, 1.4fr) minmax(205px, .7fr) minmax(210px, auto); grid-template-areas: "top title assignment actions" "jira description assignment actions"; min-height: 116px; align-items: center; gap: 7px 18px; padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid color-mix(in srgb, var(--state, var(--line-strong)) 70%, var(--line)); border-radius: var(--radius); background: var(--panel); box-shadow: 0 5px 16px color-mix(in srgb, var(--text) 6%, transparent); }
+.task-card { position: relative; display: grid; grid-template-columns: minmax(210px, .72fr) minmax(280px, 1.4fr) minmax(205px, .7fr) minmax(210px, auto); grid-template-areas: "top title assignment actions" "jira description assignment actions"; min-height: 132px; align-items: center; gap: 8px 18px; padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid color-mix(in srgb, var(--state, var(--line-strong)) 70%, var(--line)); border-radius: var(--radius); background: var(--panel); box-shadow: 0 5px 16px color-mix(in srgb, var(--text) 6%, transparent); }
 .task-card:hover { border-color: var(--line-strong); background: var(--panel-raised); }
 .task-card:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent); outline-offset: 2px; }
 .decision-card:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent); outline-offset: 2px; }
 .decision-task-link { width: auto; padding: 0; border: 0; border-radius: 0; color: inherit; background: transparent; font: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .decision-task-link:hover, .decision-task-link:focus-visible { color: var(--accent-strong); background: transparent; }
 .task-card-topline { grid-area: top; display: grid; align-self: end; justify-items: start; gap: 6px; }
+.task-meta-group, .task-current-worker { display: grid; min-width: 0; gap: 5px; }
+.task-meta-label { color: var(--quiet); font-size: .58rem; font-weight: 700; letter-spacing: .065em; line-height: 1.2; text-transform: uppercase; }
 .task-signals { display: flex; align-items: center; gap: 9px; }
 .task-card-topline code { overflow: hidden; color: var(--quiet); font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
 .task-owner-link { width: auto; padding: 2px 0; border: 0; border-radius: 0; color: var(--muted); background: transparent; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; }
@@ -250,12 +252,14 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-state { display: inline-flex; align-items: center; gap: 6px; color: var(--state); font-size: .69rem; font-weight: 500; letter-spacing: .055em; text-transform: uppercase; }
 .task-state::before { width: 7px; height: 7px; border-radius: 50%; background: currentColor; content: ""; }
 .task-card h4 { grid-area: title; align-self: end; margin: 0; color: var(--text); font-size: .96rem; line-height: 1.36; }
-.task-jira-origin { grid-area: jira; display: flex; flex-wrap: wrap; align-self: start; align-items: center; gap: 4px 7px; margin: 0; color: var(--quiet); font-size: .7rem; }
+.task-jira-origin { grid-area: jira; display: grid; align-self: start; gap: 3px; margin: 0; color: var(--quiet); font-size: .7rem; }
+.task-jira-field { display: grid; min-width: 0; grid-template-columns: 67px minmax(0, 1fr); align-items: baseline; gap: 7px; }
+.task-jira-field > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-jira-issue { align-items: center; }
 .task-jira-origin strong { padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent-soft) 70%, var(--panel)); color: var(--text); letter-spacing: .03em; }
 .task-jira-origin a { display: inline-flex; align-items: center; gap: 3px; color: inherit; text-decoration: none; }
 .task-jira-origin a:hover strong, .task-jira-origin a:focus-visible strong { border-color: var(--accent); background: var(--accent-soft); }
 .task-jira-origin a:focus-visible { border-radius: 999px; outline: 2px solid color-mix(in srgb, var(--accent) 34%, transparent); outline-offset: 2px; }
-.task-jira-origin span + span::before { margin-right: 9px; color: var(--line-strong); content: "·"; }
 .task-jira-origin .jira-sync-state { color: var(--accent-strong); font-weight: 650; }
 .task-jira-origin .jira-sync-state.conflict, .task-jira-origin .jira-sync-state.uncertain { color: var(--danger); }
 .task-jira-origin .jira-sync-retry { min-height: 28px; margin-left: auto; padding: 3px 7px; }
@@ -267,7 +271,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-description { grid-area: description; display: -webkit-box; align-self: start; margin: 0; overflow: hidden; color: var(--muted); font-size: .75rem; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .protected-worker { display: inline-flex; align-items: center; min-height: 30px; padding: 0 10px; border: 1px solid var(--good); border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .72rem; }
 .task-assignment-cell { grid-area: assignment; display: grid; align-content: center; gap: 7px; min-width: 0; }
-.assignment-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; margin: 0; }
+.task-current-worker .task-owner { max-width: 100%; color: var(--text); font-size: .79rem; font-weight: 650; }
+.assignment-row { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: 8px; margin: 0; }
 .assignment-row select { min-height: 34px; padding: 6px 9px; font-size: .76rem; }
 .task-dispatch { display: inline-flex; align-items: center; gap: 7px; width: fit-content; margin: 0; color: var(--muted); font-size: .69rem; line-height: 1.35; }
 .task-dispatch::before { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: currentColor; content: ""; }
@@ -329,6 +334,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .completed-tasks summary small { display: grid; min-width: 22px; height: 21px; place-items: center; border-radius: 7px; color: var(--muted); background: var(--panel-soft); font-size: .69rem; }
 .task-grid.compact .task-card { min-height: 96px; box-shadow: none; }
 .task-owner { max-width: 52%; color: var(--muted); font-size: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 
 .decision-inbox { min-height: 0; padding: 26px; overflow-y: auto; }
 .decision-inbox-intro { display: flex; max-width: 1180px; margin: 0 auto 20px; align-items: end; justify-content: space-between; gap: 24px; }
@@ -530,7 +536,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-card { display: flex; min-height: 190px; flex-direction: column; padding: 17px; border-top: 3px solid color-mix(in srgb, var(--state, var(--line-strong)) 70%, var(--line)); border-left-width: 1px; }
   .task-card-topline { display: flex; width: 100%; align-self: auto; align-items: center; justify-content: space-between; }
   .task-card h4 { align-self: auto; margin: 14px 0 15px; font-size: 1rem; }
-  .task-jira-origin { align-self: auto; margin-top: 11px; }
+  .task-jira-origin { width: 100%; align-self: auto; margin-top: 11px; padding: 10px; border-radius: var(--radius-sm); background: var(--surface-soft); }
+  .task-jira-field { grid-template-columns: 82px minmax(0, 1fr); gap: 9px; }
   .task-description { align-self: auto; margin: -6px 0 15px; font-size: .78rem; }
   .task-assignment-cell { width: 100%; margin-top: auto; }
   .assignment-row { width: 100%; }
