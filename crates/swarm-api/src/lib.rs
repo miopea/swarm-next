@@ -5178,6 +5178,31 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "jira_comment_queue_full",
             error.to_string(),
         ),
+        TaskStoreError::InvalidEmailMessage
+        | TaskStoreError::InvalidEmailAttachment
+        | TaskStoreError::InvalidTaskDeployment
+        | TaskStoreError::InvalidEmailReply => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_email_workflow",
+            error.to_string(),
+        ),
+        TaskStoreError::EmailSourceNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "email_source_not_found",
+            error.to_string(),
+        ),
+        TaskStoreError::EmailReplyNotReady | TaskStoreError::EmailReplyAlreadyExists => {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "email_reply_not_ready",
+                error.to_string(),
+            )
+        }
+        TaskStoreError::EmailReplyQueueFull => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "email_reply_queue_full",
+            error.to_string(),
+        ),
         TaskStoreError::WorkerNotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "worker_not_found", error.to_string())
         }

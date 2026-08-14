@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 mod apiary;
 mod decisions;
+mod email;
 mod federation;
 mod feedback;
 pub use federation::{
@@ -34,6 +35,10 @@ pub use jira::{
 };
 mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
+pub use email::{
+    EmailAttachmentSnapshot, EmailImport, EmailMessageSnapshot, EmailReplyDispatch,
+    EmailReplyFailure, EmailReplyState, EmailTaskAttachment, EmailTaskLink, TaskDeploymentRecord,
+};
 pub use presence::PresenceMutation;
 mod notifications;
 pub use notifications::{
@@ -52,7 +57,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 39;
+const CURRENT_SCHEMA_VERSION: i64 = 40;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -155,6 +160,22 @@ pub enum TaskStoreError {
     InvalidJiraComment,
     #[error("this Hive already has the maximum number of pending Jira comments")]
     JiraCommentQueueFull,
+    #[error("email message metadata or content is invalid")]
+    InvalidEmailMessage,
+    #[error("email attachment metadata exceeds its private bounds")]
+    InvalidEmailAttachment,
+    #[error("email source was not found")]
+    EmailSourceNotFound,
+    #[error("task deployment evidence is invalid")]
+    InvalidTaskDeployment,
+    #[error("email resolution reply content is invalid")]
+    InvalidEmailReply,
+    #[error("email resolution replies require completed and deployed work")]
+    EmailReplyNotReady,
+    #[error("this task already has an email resolution reply")]
+    EmailReplyAlreadyExists,
+    #[error("this Hive already has the maximum number of pending email replies")]
+    EmailReplyQueueFull,
     #[error("task title must contain 1 to {MAX_TASK_TITLE_BYTES} bytes")]
     InvalidTitle,
     #[error("task description must not exceed {MAX_TASK_DESCRIPTION_BYTES} bytes")]
@@ -1324,6 +1345,9 @@ fn migrate_schema(
         apiary::migrate_apiary_lifecycle(transaction)?;
     }
     migrate_federation_schema(transaction, schema_version)?;
+    if schema_version < 40 {
+        email::migrate_email_intake(transaction)?;
+    }
     Ok(())
 }
 
