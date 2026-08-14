@@ -496,3 +496,16 @@ the independently updated terminal host through the API to worker settings:
   and expose Updating, needs-attention, and explicit Retry states on the task
   card. Full workspace tests, strict clippy, all frontend tests, and the
   production build gate this slice before deployment.
+- Release `0.1.0-33844fd0a466` adds an opt-in, same-port development reload
+  without coupling worker lifetime to the replaceable API. The packaged release
+  first replaced API PID `2416713` while preserving terminal-host PID `1528937`,
+  two running sessions, and two retained sessions. A dedicated clean checkout
+  was then configured on the dogfood host and one authenticated reload advanced
+  the live app to `0.1.0-dev-33844fd0a466-20260814200458-2470159`. The reload
+  completed with state `ready`; terminal-host PID and session counts remained
+  unchanged. The first cold build peaked at 2.8 GiB while compiling Rust and
+  then exited, so that transient build memory is not attributed to the daemon.
+  Local desktop (1440x900) and Android (412x915) visual gates passed, and a live
+  authenticated 1280x720 proof showed the development version, bounded Settings
+  layout, preserved-worker diagnostics, and the reload control. All Chromium
+  tabs were closed after proof.
