@@ -229,7 +229,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .app-crash-recovery h1 { margin-bottom: 10px; font-size: clamp(1.45rem, 5vw, 2rem); }
 .app-crash-recovery p:not(.eyebrow) { max-width: 470px; color: var(--muted); line-height: 1.55; }
 
-.task-board { min-height: 0; padding: 26px; overflow-y: auto; }
+.task-board { min-height: 0; padding: 26px; overflow-x: clip; overflow-y: auto; }
 .task-compose { display: grid; max-width: 1600px; gap: 16px; margin: 0 auto 24px; padding: 18px 20px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 6%, transparent); }
 .task-compose-header { display: flex; min-width: 0; align-items: end; justify-content: space-between; gap: 22px; }
 .task-compose h3 { margin: 0 0 5px; font-size: 1.08rem; letter-spacing: -.015em; }
