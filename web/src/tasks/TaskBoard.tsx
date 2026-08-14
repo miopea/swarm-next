@@ -501,27 +501,29 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
       onContextMenu={(event) => { event.preventDefault(); setMenuOpen(true); }}
       onKeyDown={(event) => { if (event.key === "Escape") setMenuOpen(false); }}
     >
-      <div className="task-card-topline">
-        <div className="task-meta-group">
-          <span className="task-meta-label">Swarm status</span>
-          <div className="task-signals">
-            <span className={`task-state state-${task.state}`}>{taskStateLabel(task)}</span>
-            <span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span>
-          </div>
-        </div>
-      </div>
-      {jiraLink && (
-        <div className="task-jira-origin" aria-label={`Jira issue ${jiraLink.issue_key}`}>
-          <span className="task-jira-field task-jira-issue"><span className="task-meta-label">Jira issue</span>
-            {jiraLink.issue_url ? (
-              <a href={jiraLink.issue_url} target="_blank" rel="noreferrer" title={`Open ${jiraLink.issue_key} in Jira`}>
-                <strong>{jiraLink.issue_key}</strong><span aria-hidden="true">↗</span>
-              </a>
-            ) : <strong>{jiraLink.issue_key}</strong>}
-          </span>
-          <span className="task-jira-field"><span className="task-meta-label">Project</span><span>{jiraLink.project_name}</span></span>
-          <span className="task-jira-field"><span className="task-meta-label">Jira status</span><span>{jiraLink.jira_status_name}</span></span>
-          <span className="task-jira-field"><span className="task-meta-label">Jira assignee</span><span>{jiraLink.jira_assignee_name ?? "Unassigned"}</span></span>
+      <div className="task-metadata-panel">
+        <section className="task-metadata-section" aria-label="Swarm details">
+          <strong className="task-section-label">Swarm</strong>
+          <dl>
+            <div><dt>Status</dt><dd><span className={`task-state state-${task.state}`}>{taskStateLabel(task)}</span></dd></div>
+            <div><dt>Priority</dt><dd><span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span></dd></div>
+          </dl>
+        </section>
+        {jiraLink && (
+          <section className="task-metadata-section task-jira-origin" aria-label={`Jira issue ${jiraLink.issue_key}`}>
+            <strong className="task-section-label">Jira</strong>
+            <dl>
+              <div><dt>Issue</dt><dd>
+                {jiraLink.issue_url ? (
+                  <a href={jiraLink.issue_url} target="_blank" rel="noreferrer" title={`Open ${jiraLink.issue_key} in Jira`}>
+                    <strong>{jiraLink.issue_key}</strong><span aria-hidden="true">↗</span>
+                  </a>
+                ) : <strong>{jiraLink.issue_key}</strong>}
+              </dd></div>
+              <div><dt>Project</dt><dd title={jiraLink.project_name}>{jiraLink.project_name}</dd></div>
+              <div><dt>Status</dt><dd>{jiraLink.jira_status_name}</dd></div>
+              <div><dt>Assignee</dt><dd>{jiraLink.jira_assignee_name ?? "Unassigned"}</dd></div>
+            </dl>
           {jiraLink.outbound_state && (
             <span className={`jira-sync-state ${jiraLink.outbound_state}`}>
               {jiraLink.outbound_state === "queued" || jiraLink.outbound_state === "dispatching"
@@ -534,8 +536,9 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
               Retry Jira
             </button>
           )}
-        </div>
-      )}
+          </section>
+        )}
+      </div>
       <h4>{task.title}</h4>
       {task.description && !editing && <p className="task-description">{task.description}</p>}
       {editing ? (
@@ -578,7 +581,7 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
         </div>
       )}
       <div className="task-actions">
-        {!editing && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} targetWorker={targetWorker} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}
+        {!editing && (targetWorker || task.state !== "ready") && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} targetWorker={targetWorker} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}
         {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
         {!editing && jiraLink && <button className="text-button" disabled={busy} onClick={() => void toggleDiscussion()}>{discussionOpen ? "Hide discussion" : "Discussion"}</button>}
         {!editing && (

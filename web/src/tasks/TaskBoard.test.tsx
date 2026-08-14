@@ -148,11 +148,15 @@ test("keeps Jira identity and remote status visible while routing work", () => {
   fireEvent.click(within(card).getByRole("button", { name: "Retry Jira" }));
   expect(onRetryJira).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
   expect(within(card).getByRole("link", { name: /WEB-42/ })).toHaveAttribute("href", "https://jira.example.test/browse/WEB-42");
-  expect(within(card).getByText("Swarm status")).toBeInTheDocument();
+  const swarmDetails = within(card).getByRole("region", { name: "Swarm details" });
+  expect(within(swarmDetails).getByText("Status")).toBeInTheDocument();
+  expect(within(swarmDetails).getByText("Priority")).toBeInTheDocument();
   expect(within(card).getByText("Swarm worker")).toBeInTheDocument();
-  expect(within(card).getByText("Project")).toBeInTheDocument();
-  expect(within(card).getByText("Jira status")).toBeInTheDocument();
-  expect(within(card).getByText("Jira assignee")).toBeInTheDocument();
+  const jiraDetails = within(card).getByRole("region", { name: "Jira issue WEB-42" });
+  expect(within(jiraDetails).getByText("Issue")).toBeInTheDocument();
+  expect(within(jiraDetails).getByText("Project")).toBeInTheDocument();
+  expect(within(jiraDetails).getByText("Status")).toBeInTheDocument();
+  expect(within(jiraDetails).getByText("Assignee")).toBeInTheDocument();
   expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
 });
 
