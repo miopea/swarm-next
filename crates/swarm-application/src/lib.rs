@@ -260,6 +260,23 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Applies one Keeper-signed acceptance to the invited Hive only after the
+    /// receipt and credential pass persistence-owned identity checks.
+    ///
+    /// # Errors
+    /// Rejects invalid or unsolicited receipts, expired credentials,
+    /// invitation drift, existing membership, and persistence failures.
+    pub fn apply_remote_join_acceptance(
+        &self,
+        invitation_id: ApiaryInvitationId,
+        acceptance: &FederationJoinAcceptance,
+        now: i64,
+    ) -> Result<LocalApiaryContext, ApplicationError> {
+        self.store
+            .apply_federation_join_acceptance(invitation_id, acceptance, now)
+            .map_err(Into::into)
+    }
+
     /// Creates one Apiary around the current personal Hive. The local operator
     /// becomes Keeper and backend selection is permanent.
     ///

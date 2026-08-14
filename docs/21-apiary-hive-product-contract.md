@@ -97,8 +97,11 @@ authenticates it with both the pinned Hive signature and one-time bearer secret,
 rechecks current policy and catalog identity, then atomically creates exactly
 one remote membership and returns a Keeper-signed receipt plus bounded node
 credential. Identical lost-response retries return the same durable result;
-altered replay fails closed. Applying that receipt and credential on the
-invited Hive, plus the outbound HTTPS adapter, remain the next handshake slice.
+altered replay fails closed. The invited Hive now verifies that result against
+its pinned Keeper and exact invitation, then atomically stores the private
+credential, mirrors public Apiary identity, becomes a Member, and revokes
+competing invitations. The bounded outbound HTTPS adapter remains the next
+handshake slice.
 
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries

@@ -53,6 +53,24 @@ struct KeeperJoinContext {
     envelope_json: String,
 }
 
+struct InvitedJoinApplicationContext {
+    apiary_id: String,
+    apiary_name: String,
+    backend: SharedWorkBackend,
+    policy_revision: u64,
+    catalog_digest: String,
+    keeper_node_id: String,
+    keeper_hive_id: String,
+    keeper_hive_name: String,
+    keeper_operator_id: String,
+    keeper_operator_display_name: String,
+    keeper_public_key: String,
+    invited_node_id: String,
+    invited_hive_id: String,
+    invited_operator_id: String,
+    state: String,
+}
+
 impl TaskStore {
     /// Issues a short-lived, self-authenticating public identity document for
     /// the local Hive. It contains no endpoint, credential, repository, task,
@@ -592,6 +610,94 @@ impl TaskStore {
         Ok(acceptance)
     }
 
+    /// Verifies and atomically applies the Keeper's signed acceptance on the
+    /// invited Hive. Membership becomes visible only after the receipt and
+    /// bounded credential are durable in the same transaction.
+    ///
+    /// # Errors
+    /// Rejects invalid signatures, mismatched identities/policy/catalog,
+    /// expired credentials, unsolicited receipts, and conflicting membership.
+    pub fn apply_federation_join_acceptance(
+        &self,
+        invitation_id: ApiaryInvitationId,
+        acceptance: &FederationJoinAcceptance,
+        now: i64,
+    ) -> Result<swarm_domain::LocalApiaryContext, TaskStoreError> {
+        if now < 0 || acceptance.receipt.payload.invitation_id != invitation_id {
+            return Err(TaskStoreError::InvalidFederationInvitation);
+        }
+        let credential: [u8; 32] = Base64UrlUnpadded::decode_vec(&acceptance.node_credential)
+            .map_err(|_| TaskStoreError::InvalidFederationInvitation)?
+            .try_into()
+            .map_err(|_| TaskStoreError::InvalidFederationInvitation)?;
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let invitation = invited_join_application_context(&transaction, invitation_id)?;
+        verify_federation_membership_receipt(
+            &acceptance.receipt,
+            &invitation.keeper_public_key,
+            now,
+        )?;
+        validate_join_acceptance_bindings(&identity, &invitation, acceptance)?;
+        if invitation.state == "consumed" {
+            validate_stored_local_acceptance(&transaction, acceptance, &credential)?;
+            drop(transaction);
+            drop(connection);
+            return self.local_apiary_context();
+        }
+        if invitation.state != "submitted" || identity.hive.apiary_id.is_some() {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        insert_remote_apiary_identity(&transaction, &invitation, now)?;
+        if transaction.execute(
+            "UPDATE hives SET apiary_id = ?1, updated_at = ?2
+             WHERE id = ?3 AND apiary_id IS NULL",
+            params![invitation.apiary_id, now, identity.hive.id.to_string()],
+        )? != 1
+        {
+            return Err(TaskStoreError::ApiaryMembershipConflict);
+        }
+        transaction.execute(
+            "INSERT INTO local_federation_membership
+                (singleton, receipt_id, invitation_id, apiary_id,
+                 keeper_node_id, receipt_json, node_credential,
+                 credential_digest, joined_at, credential_expires_at)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                acceptance.receipt.payload.receipt_id.to_string(),
+                invitation_id.to_string(),
+                invitation.apiary_id,
+                invitation.keeper_node_id,
+                serde_json::to_string(&acceptance.receipt)
+                    .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?,
+                credential.as_slice(),
+                invitation_secret_digest(&credential).as_slice(),
+                acceptance.receipt.payload.joined_at,
+                acceptance.receipt.payload.credential_expires_at,
+            ],
+        )?;
+        if transaction.execute(
+            "UPDATE apiary_join_invitations
+             SET state = 'consumed', resolved_at = ?1
+             WHERE id = ?2 AND state = 'submitted'",
+            params![now, invitation_id.to_string()],
+        )? != 1
+        {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        transaction.execute(
+            "UPDATE apiary_join_invitations
+             SET state = 'revoked', resolved_at = ?1
+             WHERE id <> ?2
+               AND state IN ('keeper_pinned', 'policy_accepted', 'submitted')",
+            params![now, invitation_id.to_string()],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        self.local_apiary_context()
+    }
+
     /// Reports the number of current distributed invitations for one pinned
     /// candidate without exposing their secret digests or envelopes.
     ///
@@ -1070,6 +1176,146 @@ fn register_federation_membership(
         receipt,
         node_credential: encoded_credential,
     })
+}
+
+fn invited_join_application_context(
+    connection: &rusqlite::Connection,
+    invitation_id: ApiaryInvitationId,
+) -> Result<InvitedJoinApplicationContext, TaskStoreError> {
+    connection
+        .query_row(
+            "SELECT apiary_id, apiary_name, shared_work_backend,
+                    required_policy_revision, promoted_project_catalog_digest,
+                    keeper_node_id, keeper_hive_id, keeper_hive_name,
+                    keeper_operator_id, keeper_operator_display_name,
+                    keeper_public_key, invited_node_id, invited_hive_id,
+                    invited_operator_id, state
+             FROM apiary_join_invitations WHERE id = ?1",
+            [invitation_id.to_string()],
+            |row| {
+                Ok(InvitedJoinApplicationContext {
+                    apiary_id: row.get(0)?,
+                    apiary_name: row.get(1)?,
+                    backend: row
+                        .get::<_, String>(2)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    policy_revision: row.get(3)?,
+                    catalog_digest: row.get(4)?,
+                    keeper_node_id: row.get(5)?,
+                    keeper_hive_id: row.get(6)?,
+                    keeper_hive_name: row.get(7)?,
+                    keeper_operator_id: row.get(8)?,
+                    keeper_operator_display_name: row.get(9)?,
+                    keeper_public_key: row.get(10)?,
+                    invited_node_id: row.get(11)?,
+                    invited_hive_id: row.get(12)?,
+                    invited_operator_id: row.get(13)?,
+                    state: row.get(14)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(TaskStoreError::ApiaryInvitationNotFound)
+}
+
+fn validate_join_acceptance_bindings(
+    identity: &swarm_domain::HiveIdentity,
+    invitation: &InvitedJoinApplicationContext,
+    acceptance: &FederationJoinAcceptance,
+) -> Result<(), TaskStoreError> {
+    let receipt = &acceptance.receipt.payload;
+    let valid = receipt.apiary_id.to_string() == invitation.apiary_id
+        && receipt.apiary_name == invitation.apiary_name
+        && receipt.shared_work_backend == invitation.backend
+        && receipt.policy_revision == invitation.policy_revision
+        && receipt.promoted_project_catalog_digest == invitation.catalog_digest
+        && receipt.keeper_node_id.to_string() == invitation.keeper_node_id
+        && receipt.keeper_hive_id.to_string() == invitation.keeper_hive_id
+        && receipt.keeper_operator_id.to_string() == invitation.keeper_operator_id
+        && receipt.member_node_id.to_string() == invitation.invited_node_id
+        && receipt.member_hive_id == identity.hive.id
+        && receipt.member_hive_id.to_string() == invitation.invited_hive_id
+        && receipt.member_operator_id == identity.operator.id
+        && receipt.member_operator_id.to_string() == invitation.invited_operator_id;
+    if valid {
+        Ok(())
+    } else {
+        Err(TaskStoreError::InvalidFederationInvitation)
+    }
+}
+
+fn insert_remote_apiary_identity(
+    transaction: &rusqlite::Transaction<'_>,
+    invitation: &InvitedJoinApplicationContext,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    transaction
+        .execute(
+            "INSERT INTO operators (id, display_name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?3)",
+            params![
+                invitation.keeper_operator_id,
+                invitation.keeper_operator_display_name,
+                now
+            ],
+        )
+        .map_err(|_| TaskStoreError::ApiaryMembershipConflict)?;
+    transaction
+        .execute(
+            "INSERT INTO apiaries
+                (id, name, keeper_operator_id, shared_work_backend,
+                 policy_revision, created_at, updated_at, collapsed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, NULL)",
+            params![
+                invitation.apiary_id,
+                invitation.apiary_name,
+                invitation.keeper_operator_id,
+                invitation.backend.to_string(),
+                invitation.policy_revision,
+                now
+            ],
+        )
+        .map_err(|_| TaskStoreError::ApiaryMembershipConflict)?;
+    transaction
+        .execute(
+            "INSERT INTO hives (id, name, operator_id, apiary_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            params![
+                invitation.keeper_hive_id,
+                invitation.keeper_hive_name,
+                invitation.keeper_operator_id,
+                invitation.apiary_id,
+                now
+            ],
+        )
+        .map_err(|_| TaskStoreError::ApiaryMembershipConflict)?;
+    Ok(())
+}
+
+fn validate_stored_local_acceptance(
+    connection: &rusqlite::Connection,
+    acceptance: &FederationJoinAcceptance,
+    credential: &[u8; 32],
+) -> Result<(), TaskStoreError> {
+    let stored = connection
+        .query_row(
+            "SELECT receipt_json, node_credential
+             FROM local_federation_membership WHERE singleton = 1",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            TaskStoreError::IntegrityFailure("consumed join has no local membership".into())
+        })?;
+    let receipt: FederationMembershipReceipt = serde_json::from_str(&stored.0)
+        .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+    if receipt == acceptance.receipt && constant_time_bytes_eq(&stored.1, credential) {
+        Ok(())
+    } else {
+        Err(TaskStoreError::InvalidFederationInvitation)
+    }
 }
 
 fn keeper_invitation_context(
@@ -1606,6 +1852,30 @@ pub(super) fn migrate_federation_memberships(
              ON apiary_federation_memberships
              BEGIN SELECT RAISE(ABORT, 'Federation membership identity is immutable'); END;
          PRAGMA user_version = 35;",
+    )
+}
+
+pub(super) fn migrate_local_federation_membership(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS local_federation_membership (
+             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+             receipt_id TEXT NOT NULL UNIQUE,
+             invitation_id TEXT NOT NULL UNIQUE
+                 REFERENCES apiary_join_invitations(id),
+             apiary_id TEXT NOT NULL UNIQUE REFERENCES apiaries(id),
+             keeper_node_id TEXT NOT NULL,
+             receipt_json TEXT NOT NULL,
+             node_credential BLOB NOT NULL CHECK (length(node_credential) = 32),
+             credential_digest BLOB NOT NULL UNIQUE CHECK (length(credential_digest) = 32),
+             joined_at INTEGER NOT NULL CHECK (joined_at >= 0),
+             credential_expires_at INTEGER NOT NULL CHECK (credential_expires_at > joined_at)
+         );
+         CREATE TRIGGER IF NOT EXISTS immutable_local_federation_membership
+             BEFORE UPDATE ON local_federation_membership
+             BEGIN SELECT RAISE(ABORT, 'Local federation membership is immutable'); END;
+         PRAGMA user_version = 36;",
     )
 }
 
@@ -2373,6 +2643,22 @@ mod tests {
                 .unwrap(),
             0
         );
+        let joined = invited
+            .apply_federation_join_acceptance(invitation.invitation_id, &accepted, now + 5)
+            .unwrap();
+        assert!(matches!(
+            joined,
+            swarm_domain::LocalApiaryContext::Federated {
+                local_role: swarm_domain::LocalApiaryRole::Member,
+                ..
+            }
+        ));
+        assert_eq!(
+            invited
+                .apply_federation_join_acceptance(invitation.invitation_id, &accepted, now + 6,)
+                .unwrap(),
+            joined
+        );
 
         let mut tampered = submission;
         tampered.payload.required_policy_revision = 2;
@@ -2406,6 +2692,37 @@ mod tests {
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
                      WHERE type = 'table' AND name = 'apiary_federation_memberships'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn schema_v35_migrates_to_local_federation_membership() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE local_federation_membership;
+                 PRAGMA user_version = 35;",
+            )
+            .unwrap();
+        drop(store);
+
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'local_federation_membership'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )

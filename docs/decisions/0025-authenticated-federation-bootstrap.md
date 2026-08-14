@@ -130,6 +130,12 @@ returns the same durable receipt and credential; altered or expired replay
 fails closed. The response is `no-store`, and independent-database persistence
 and HTTP tests prove only one membership is created.
 
-Later slices must prove invited-Hive receipt application and credential
-activation, protocol negotiation beyond version 1, and the complete outbound
-HTTPS call between two independently running processes.
+The invited-Hive application slice now verifies the receipt against the pinned
+Keeper key, matches every Apiary/Keeper/member/policy/catalog identity to the
+imported invitation, validates the bounded credential, and atomically stores
+the private credential, mirrors public Apiary/Keeper identity, marks the local
+Hive as a Member, consumes the local invitation, and revokes competitors.
+Identical application is idempotent; altered material fails closed.
+
+Later slices must prove protocol negotiation beyond version 1 and the complete
+outbound HTTPS call between two independently running processes.
