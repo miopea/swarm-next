@@ -242,6 +242,7 @@ pub struct HiveIdentity {
 pub const FEDERATION_CONNECTION_CARD_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_INVITATION_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_MEMBERSHIP_SCHEMA_VERSION: u16 = 1;
+pub const FEDERATION_CATALOG_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_PROTOCOL_VERSION: u16 = 1;
 
 /// Public, signed identity material that one Hive can deliberately share with
@@ -323,6 +324,31 @@ pub struct FederationProjectManifestEntry {
     pub project_id: String,
     pub project_key: String,
     pub project_name: String,
+}
+
+/// Keeper-signed public project catalog for one authenticated member node.
+/// Per-Hive Jira access, workflow mappings, credentials, and issue content are
+/// deliberately absent; the recipient must acknowledge readiness locally.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationCatalogSnapshotPayload {
+    pub schema_version: u16,
+    pub protocol_version: u16,
+    pub apiary_id: ApiaryId,
+    pub policy_revision: u64,
+    pub promoted_project_catalog_digest: String,
+    pub projects: Vec<FederationProjectManifestEntry>,
+    pub keeper_node_id: FederationNodeId,
+    pub keeper_hive_id: HiveId,
+    pub keeper_operator_id: OperatorId,
+    pub member_node_id: FederationNodeId,
+    pub issued_at: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationCatalogSnapshot {
+    pub payload: FederationCatalogSnapshotPayload,
+    pub signature: String,
 }
 
 /// A one-time handoff bundle. The secret is shown only in this response and is

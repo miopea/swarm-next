@@ -23,8 +23,8 @@ mod feedback;
 pub use federation::{
     MAX_CONNECTION_CARD_LIFETIME_SECONDS, MAX_FEDERATION_INVITATION_LIFETIME_SECONDS,
     MIN_CONNECTION_CARD_LIFETIME_SECONDS, MIN_FEDERATION_INVITATION_LIFETIME_SECONDS,
-    verify_apiary_invitation_envelope, verify_federation_membership_receipt,
-    verify_hive_connection_card,
+    verify_apiary_invitation_envelope, verify_federation_catalog_snapshot,
+    verify_federation_membership_receipt, verify_hive_connection_card,
 };
 mod jira;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
@@ -103,6 +103,8 @@ pub enum TaskStoreError {
     HiveCandidateNotFound,
     #[error("The Apiary invitation envelope is invalid or expired")]
     InvalidFederationInvitation,
+    #[error("The federation node credential is invalid or expired")]
+    InvalidFederationCredential,
     #[error("A current invitation already exists for this pinned Hive")]
     FederationInvitationConflict,
     #[error("task was not found")]

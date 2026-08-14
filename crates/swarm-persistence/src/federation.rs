@@ -6,9 +6,10 @@ use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use swarm_domain::{
     ApiaryHiveCandidate, ApiaryId, ApiaryInvitationBundle, ApiaryInvitationEnvelope,
-    ApiaryInvitationEnvelopePayload, ApiaryInvitationId, FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
-    FEDERATION_INVITATION_SCHEMA_VERSION, FEDERATION_MEMBERSHIP_SCHEMA_VERSION,
-    FEDERATION_PROTOCOL_VERSION, FederationJoinAcceptance, FederationJoinInvitation,
+    ApiaryInvitationEnvelopePayload, ApiaryInvitationId, FEDERATION_CATALOG_SCHEMA_VERSION,
+    FEDERATION_CONNECTION_CARD_SCHEMA_VERSION, FEDERATION_INVITATION_SCHEMA_VERSION,
+    FEDERATION_MEMBERSHIP_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION, FederationCatalogSnapshot,
+    FederationCatalogSnapshotPayload, FederationJoinAcceptance, FederationJoinInvitation,
     FederationJoinInvitationState, FederationJoinReadiness, FederationJoinSubmission,
     FederationJoinSubmissionPayload, FederationMembershipReceipt, FederationMembershipReceiptId,
     FederationMembershipReceiptPayload, FederationNodeId, FederationProjectManifestEntry,
@@ -27,6 +28,7 @@ const MAX_CLOCK_SKEW_SECONDS: i64 = 5 * 60;
 const MAX_KEEPER_ENDPOINT_BYTES: usize = 2_048;
 const MAX_PROMOTED_PROJECTS_PER_INVITATION: usize = 1_000;
 const FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
+const FEDERATION_CATALOG_LIFETIME_SECONDS: i64 = 5 * 60;
 
 struct LocalFederationIdentity {
     node_id: FederationNodeId,
@@ -72,6 +74,70 @@ struct InvitedJoinApplicationContext {
 }
 
 impl TaskStore {
+    /// Returns a short-lived Keeper-signed public project catalog bound to the
+    /// exact joined member node authenticated by `node_credential`.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown or expired credentials, identity drift,
+    /// invalid time, and unavailable persistence.
+    pub fn signed_federation_catalog(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<FederationCatalogSnapshot, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationCredential);
+        }
+        let credential: [u8; 32] = Base64UrlUnpadded::decode_vec(node_credential)
+            .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+            .try_into()
+            .map_err(|_| TaskStoreError::InvalidFederationCredential)?;
+        let identity = self.local_hive_identity()?;
+        let apiary_id = identity
+            .hive
+            .apiary_id
+            .ok_or(TaskStoreError::ApiaryKeeperRequired)?;
+        let local_node = self.local_federation_identity(now)?;
+        let connection = self.connection()?;
+        let context =
+            keeper_invitation_context(&connection, apiary_id, &identity.operator.id.to_string())?;
+        let credential_digest = invitation_secret_digest(&credential);
+        let member_node_id = connection
+            .query_row(
+                "SELECT member_node_id FROM apiary_federation_memberships
+                 WHERE apiary_id = ?1 AND credential_digest = ?2
+                   AND credential_expires_at > ?3",
+                params![apiary_id.to_string(), credential_digest.as_slice(), now],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::InvalidFederationCredential)?;
+        let projects = promoted_project_manifest(&connection, apiary_id)?;
+        let payload = FederationCatalogSnapshotPayload {
+            schema_version: FEDERATION_CATALOG_SCHEMA_VERSION,
+            protocol_version: FEDERATION_PROTOCOL_VERSION,
+            apiary_id,
+            policy_revision: context.policy_revision,
+            promoted_project_catalog_digest: promoted_project_manifest_digest(&projects)?,
+            projects,
+            keeper_node_id: local_node.node_id,
+            keeper_hive_id: identity.hive.id,
+            keeper_operator_id: identity.operator.id,
+            member_node_id: parse_domain_id(&member_node_id)?,
+            issued_at: now,
+            expires_at: now
+                .checked_add(FEDERATION_CATALOG_LIFETIME_SECONDS)
+                .ok_or(TaskStoreError::InvalidFederationCredential)?,
+        };
+        let signature = local_node
+            .signing_key
+            .sign(&canonical_catalog_snapshot_payload(&payload)?);
+        Ok(FederationCatalogSnapshot {
+            payload,
+            signature: Base64UrlUnpadded::encode_string(&signature.to_bytes()),
+        })
+    }
+
     /// Issues a short-lived, self-authenticating public identity document for
     /// the local Hive. It contains no endpoint, credential, repository, task,
     /// terminal, or integration material.
@@ -978,6 +1044,12 @@ fn canonical_membership_receipt_payload(
     serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
 }
 
+fn canonical_catalog_snapshot_payload(
+    payload: &FederationCatalogSnapshotPayload,
+) -> Result<Vec<u8>, TaskStoreError> {
+    serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
+}
+
 fn verify_join_submission(
     submission: &FederationJoinSubmission,
     expected_public_key: &str,
@@ -1574,6 +1646,53 @@ pub fn verify_federation_membership_receipt(
     VerifyingKey::from_bytes(&public_key)
         .and_then(|key| key.verify(&canonical, &Signature::from_bytes(&signature)))
         .map_err(|_| TaskStoreError::InvalidFederationInvitation)
+}
+
+/// Verifies a short-lived catalog snapshot against the Keeper key pinned by
+/// the member Hive and every federation identity in its membership receipt.
+///
+/// # Errors
+/// Rejects unsupported versions, stale bounds, altered project catalogs,
+/// recipient mismatch, malformed encoding, and invalid signatures.
+pub fn verify_federation_catalog_snapshot(
+    snapshot: &FederationCatalogSnapshot,
+    expected_keeper_public_key: &str,
+    membership_receipt: &FederationMembershipReceipt,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let payload = &snapshot.payload;
+    let membership = &membership_receipt.payload;
+    if now < 0
+        || payload.schema_version != FEDERATION_CATALOG_SCHEMA_VERSION
+        || payload.protocol_version != FEDERATION_PROTOCOL_VERSION
+        || payload.policy_revision == 0
+        || payload.apiary_id != membership.apiary_id
+        || payload.keeper_node_id != membership.keeper_node_id
+        || payload.keeper_hive_id != membership.keeper_hive_id
+        || payload.keeper_operator_id != membership.keeper_operator_id
+        || payload.member_node_id != membership.member_node_id
+        || payload.issued_at < 0
+        || payload.issued_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
+        || payload.expires_at <= now
+        || payload.expires_at <= payload.issued_at
+        || payload.expires_at - payload.issued_at > FEDERATION_CATALOG_LIFETIME_SECONDS
+        || promoted_project_manifest_digest(&payload.projects)?
+            != payload.promoted_project_catalog_digest
+    {
+        return Err(TaskStoreError::InvalidFederationCredential);
+    }
+    let public_key: [u8; 32] = Base64UrlUnpadded::decode_vec(expected_keeper_public_key)
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?;
+    let signature: [u8; 64] = Base64UrlUnpadded::decode_vec(&snapshot.signature)
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?;
+    let canonical = canonical_catalog_snapshot_payload(payload)?;
+    VerifyingKey::from_bytes(&public_key)
+        .and_then(|key| key.verify(&canonical, &Signature::from_bytes(&signature)))
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)
 }
 
 fn canonical_invitation_payload(
@@ -2629,6 +2748,13 @@ mod tests {
                 .consume_federation_join_submission(&submission, now + 5)
                 .unwrap()
         );
+        assert_signed_catalog(
+            &keeper,
+            &accepted,
+            &bundle.keeper_connection_card.payload.public_key,
+            apiary.id,
+            now + 5,
+        );
         assert_eq!(
             keeper
                 .connection()
@@ -2660,11 +2786,49 @@ mod tests {
             joined
         );
 
-        let mut tampered = submission;
-        tampered.payload.required_policy_revision = 2;
+        assert_tampered_submission_is_rejected(&keeper, submission, now + 6);
+    }
+
+    fn assert_tampered_submission_is_rejected(
+        keeper: &TaskStore,
+        mut submission: FederationJoinSubmission,
+        now: i64,
+    ) {
+        submission.payload.required_policy_revision += 1;
         assert!(matches!(
-            keeper.consume_federation_join_submission(&tampered, now + 6),
+            keeper.consume_federation_join_submission(&submission, now),
             Err(TaskStoreError::InvalidFederationInvitation)
+        ));
+    }
+
+    fn assert_signed_catalog(
+        keeper: &TaskStore,
+        accepted: &FederationJoinAcceptance,
+        keeper_public_key: &str,
+        apiary_id: ApiaryId,
+        now: i64,
+    ) {
+        let catalog = keeper
+            .signed_federation_catalog(&accepted.node_credential, now)
+            .unwrap();
+        verify_federation_catalog_snapshot(&catalog, keeper_public_key, &accepted.receipt, now)
+            .unwrap();
+        assert_eq!(catalog.payload.apiary_id, apiary_id);
+        assert!(catalog.payload.projects.is_empty());
+        assert!(matches!(
+            keeper.signed_federation_catalog("not-a-credential", now),
+            Err(TaskStoreError::InvalidFederationCredential)
+        ));
+        let mut tampered = catalog;
+        tampered.payload.policy_revision += 1;
+        assert!(matches!(
+            verify_federation_catalog_snapshot(
+                &tampered,
+                keeper_public_key,
+                &accepted.receipt,
+                now,
+            ),
+            Err(TaskStoreError::InvalidFederationCredential)
         ));
     }
 

@@ -1550,6 +1550,7 @@ fn api_router(state: AppState) -> Router {
             post(prepare_imported_apiary_join),
         )
         .route("/api/v1/federation/join", post(consume_federation_join))
+        .route("/api/v1/federation/catalog", get(federation_catalog))
         .route(
             "/api/v1/apiary/collapse-readiness",
             get(apiary_collapse_readiness),
@@ -2014,6 +2015,17 @@ async fn consume_federation_join(
         Json(acceptance),
     )
         .into_response())
+}
+
+async fn federation_catalog(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let snapshot = apiary_service(&state)?
+        .federation_catalog(credential, unix_timestamp())
+        .map_err(federation_catalog_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
 }
 
 async fn create_apiary(
@@ -4484,6 +4496,21 @@ fn application_error(error: ApplicationError) -> ApiError {
     }
 }
 
+fn federation_catalog_error(error: ApplicationError) -> ApiError {
+    match error {
+        ApplicationError::Store(
+            TaskStoreError::InvalidFederationCredential
+            | TaskStoreError::ApiaryKeeperRequired
+            | TaskStoreError::ApiaryNotFound,
+        ) => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_federation_credential",
+            "a current federation node credential is required",
+        ),
+        other => application_error(other),
+    }
+}
+
 fn jira_adapter_error(error: jira::JiraAdapterError) -> ApiError {
     match error {
         jira::JiraAdapterError::NotConfigured => ApiError::new(
@@ -4625,6 +4652,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::InvalidFederationInvitation => ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_federation_invitation",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidFederationCredential => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_federation_credential",
             error.to_string(),
         ),
         TaskStoreError::FederationInvitationConflict => ApiError::new(
@@ -4851,6 +4883,21 @@ fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+fn federation_node_credential(headers: &HeaderMap) -> Result<&str, ApiError> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::UNAUTHORIZED,
+                "invalid_federation_credential",
+                "a current federation node credential is required",
+            )
+        })
 }
 
 fn browser_session_set_cookie(
@@ -5636,6 +5683,7 @@ mod tests {
         assert!(first_json["node_credential"].as_str().unwrap().len() >= 43);
 
         let retry = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -5648,6 +5696,13 @@ mod tests {
             .unwrap();
         assert_eq!(retry.status(), StatusCode::CREATED);
         assert_eq!(response_json(retry).await, first_json);
+
+        assert_federation_catalog_endpoint(
+            app,
+            first_json["node_credential"].as_str().unwrap(),
+            invited_card.payload.node_id,
+        )
+        .await;
         let apiary_id = keeper
             .local_hive_identity()
             .unwrap()
@@ -5661,6 +5716,44 @@ mod tests {
                 .active_hive_count,
             2
         );
+    }
+
+    async fn assert_federation_catalog_endpoint(
+        app: Router,
+        credential: &str,
+        member_node_id: swarm_domain::FederationNodeId,
+    ) {
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/federation/catalog")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/federation/catalog")
+                    .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(response).await;
+        assert_eq!(
+            json["payload"]["member_node_id"],
+            member_node_id.to_string()
+        );
+        let serialized = json.to_string();
+        assert!(!serialized.contains("node_credential"));
+        assert!(!serialized.contains("receipt"));
     }
 
     async fn assert_imported_policy_acceptance(app: Router, invitation_id: ApiaryInvitationId) {

@@ -117,6 +117,17 @@ never includes node credentials, signed receipts, repositories, tasks, or
 terminal state. Keeper-pinned candidates remain visibly separate until the
 authenticated handshake creates membership.
 
+A joined Hive's bounded node credential can now authenticate a read-only
+Keeper catalog request. The Keeper returns a five-minute Ed25519-signed
+snapshot bound to that exact member node, current policy revision, and the
+canonical digest of the ordered promoted-project identities. The response is
+`no-store` and contains no node credential, Jira credential, access evidence,
+workflow map, issue content, task, repository, or terminal data. Invalid and
+expired credentials fail as authentication failures. This is a pull contract,
+not delivery: Member-side acknowledgement, offline reconciliation, and
+outbound polling remain later slices, and this endpoint performs no Jira or
+membership mutation.
+
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
 reject Jira promotion, and a joining Hive passes project readiness only when

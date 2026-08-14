@@ -2,12 +2,12 @@ use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks,
     ApiaryJoinReadiness, ApiaryMemberSummary, DecisionRequest, DecisionRequestId,
-    DecisionRequestKind, DecisionUrgency, FederationJoinAcceptance, FederationJoinInvitation,
-    FederationJoinReadiness, FederationJoinSubmission, HiveConnectionCard, HiveId,
-    JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
-    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
-    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
-    WorkerSessionId,
+    DecisionRequestKind, DecisionUrgency, FederationCatalogSnapshot, FederationJoinAcceptance,
+    FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
+    HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
+    OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    PresenceObservationState, SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId,
+    WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -66,6 +66,22 @@ impl ApiaryService {
     #[must_use]
     pub const fn new(store: TaskStore) -> Self {
         Self { store }
+    }
+
+    /// Authenticates a joined member node and returns its Keeper-signed public
+    /// promoted-project catalog. No Jira or membership state is mutated.
+    ///
+    /// # Errors
+    /// Rejects invalid or expired member credentials, non-Keepers, identity
+    /// drift, and unavailable persistence.
+    pub fn federation_catalog(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<FederationCatalogSnapshot, ApplicationError> {
+        self.store
+            .signed_federation_catalog(node_credential, now)
+            .map_err(Into::into)
     }
 
     /// Lists the public Hive/operator identities registered in this Apiary.
