@@ -444,13 +444,29 @@ impl SessionRegistry {
         command: &ProviderCommand,
         size: TerminalSize,
     ) -> Result<Arc<ProcessTerminalSession>, SessionRegistryError> {
+        self.spawn_with_root_override(command, size, false)
+    }
+
+    /// Spawns a command with an explicit trusted-caller exception to configured roots.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the workspace is unavailable or unsafe, the
+    /// registry cannot accept a session, or the PTY process cannot be started.
+    pub fn spawn_with_root_override(
+        &self,
+        command: &ProviderCommand,
+        size: TerminalSize,
+        allow_outside_roots: bool,
+    ) -> Result<Arc<ProcessTerminalSession>, SessionRegistryError> {
         let canonical_workspace = command.working_directory.canonicalize().map_err(|_| {
             SessionRegistryError::WorkspaceUnavailable(command.working_directory.clone())
         })?;
-        if !self
-            .allowed_roots
-            .iter()
-            .any(|root| canonical_workspace.starts_with(root))
+        if !allow_outside_roots
+            && !self
+                .allowed_roots
+                .iter()
+                .any(|root| canonical_workspace.starts_with(root))
         {
             return Err(SessionRegistryError::WorkspaceNotAllowed(
                 canonical_workspace,
@@ -876,6 +892,30 @@ mod tests {
         ));
         registry.stop(first.id()).unwrap();
         assert!(registry.is_empty().unwrap());
+    }
+
+    #[test]
+    fn explicit_root_override_still_requires_a_real_non_root_workspace() {
+        let allowed = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let registry = SessionRegistry::new(
+            JournalLimits::new(1024, 16),
+            1,
+            [allowed.path().canonicalize().unwrap()],
+        )
+        .unwrap();
+        let mut command = shell_command("printf outside-root");
+        command.working_directory = outside.path().to_path_buf();
+
+        assert!(matches!(
+            registry.spawn(&command, TerminalSize::default()),
+            Err(SessionRegistryError::WorkspaceNotAllowed(_))
+        ));
+        let session = registry
+            .spawn_with_root_override(&command, TerminalSize::default(), true)
+            .unwrap();
+        assert!(output_until(&session, "outside-root").contains("outside-root"));
+        session.stop().unwrap();
     }
 
     #[test]

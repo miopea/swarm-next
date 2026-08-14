@@ -82,8 +82,12 @@ h1, h2, h3, h4, strong, button { font-weight: 500; }
 code { font-family: "Atkinson Hyperlegible Mono Variable", "Cascadia Code", Consolas, monospace; }
 svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 
-.app-shell { display: grid; grid-template-columns: 286px minmax(0, 1fr); height: 100%; min-height: 0; overflow: hidden; background: var(--bg); }
-.control-rail { display: flex; min-height: 0; flex-direction: column; padding: 22px 16px 16px; overflow: hidden; border-right: 1px solid var(--line); background: var(--rail); }
+.app-shell { display: grid; grid-template-columns: clamp(220px, var(--rail-width, 286px), 480px) minmax(0, 1fr); height: 100%; min-height: 0; overflow: hidden; background: var(--bg); }
+.app-shell.resizing-rail { cursor: col-resize; user-select: none; }
+.control-rail { position: relative; display: flex; min-height: 0; flex-direction: column; padding: 22px 16px 16px; overflow: hidden; border-right: 1px solid var(--line); background: var(--rail); }
+.rail-resize-handle { position: absolute; z-index: 20; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; touch-action: none; }
+.rail-resize-handle::after { position: absolute; top: 0; right: 2px; width: 2px; height: 100%; background: transparent; content: ""; transition: background .15s; }
+.rail-resize-handle:hover::after, .rail-resize-handle:focus-visible::after, .app-shell.resizing-rail .rail-resize-handle::after { background: var(--accent); }
 .brand-lockup { display: flex; align-items: center; gap: 12px; padding: 0 6px 21px; }
 .brand-lockup h1 { margin: 0; font-size: 1rem; letter-spacing: -.01em; }
 .brand-mark { display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border: 1px solid var(--accent); border-radius: 13px; color: var(--text); background: var(--accent-soft); }
@@ -105,6 +109,21 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .task-board-controls label { display: grid; gap: 5px; color: var(--quiet); font-size: .7rem; font-weight: 650; }
 .task-board-controls input, .task-board-controls select { width: 100%; min-height: 38px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-raised); color: var(--text); font: inherit; }
 .task-board-controls small { padding-top: 4px; border-top: 1px solid var(--line); color: var(--quiet); font-size: .68rem; line-height: 1.45; }
+.task-project-controls { display: grid; padding-top: 9px; gap: 5px; border-top: 1px solid var(--line); }
+.task-control-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--quiet); font-size: .68rem; font-weight: 650; }
+.task-control-heading button { min-height: 28px; padding: 3px 7px; border-color: transparent; background: transparent; color: var(--muted); font-size: .68rem; }
+.task-project-controls > button, .task-project-row > button { display: flex; min-width: 0; min-height: 32px; align-items: center; gap: 6px; padding: 5px 7px; border-color: transparent; background: transparent; color: var(--muted); text-align: left; }
+.task-project-controls button.selected { background: var(--good-soft); color: var(--text); }
+.task-project-row { display: grid; grid-template-columns: minmax(0, 1fr) 30px; align-items: center; gap: 3px; }
+.task-project-row > button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-project-row > a { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 8px; color: var(--muted); text-decoration: none; }
+.task-project-row > a:hover, .task-project-row > a:focus-visible { background: var(--panel-soft); color: var(--text); }
+.worker-repository-path { display: grid; gap: 3px; color: var(--quiet); }
+.worker-repository-path code { overflow-wrap: anywhere; color: var(--muted); font: inherit; user-select: text; }
+.outside-workspace-warning { display: flex !important; align-items: flex-start; gap: 8px !important; margin-top: 4px; padding: 9px; border: 1px solid var(--warn); border-radius: 9px; background: var(--warn-soft); color: var(--text) !important; }
+.outside-workspace-warning input { width: auto; margin-top: 2px; }
+.outside-workspace-warning span { display: grid; gap: 3px; }
+.outside-workspace-warning small { color: var(--muted); font-weight: 400; line-height: 1.4; }
 .state-dot, .presence { display: block; width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--quiet); }
 .state-ready { --state: var(--good); }
 .state-active { --state: var(--warn); }
@@ -275,6 +294,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-description { grid-area: description; display: -webkit-box; align-self: start; margin: 0; overflow: hidden; color: var(--muted); font-size: .75rem; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .protected-worker { display: inline-flex; align-items: center; min-height: 30px; padding: 0 10px; border: 1px solid var(--good); border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .72rem; }
 .task-assignment-cell { grid-area: assignment; display: grid; align-content: center; gap: 7px; min-width: 0; }
+.task-assignment-cell > button { width: 100%; min-height: 30px; padding: 5px 9px; font-size: .73rem; }
 .task-current-worker .task-owner { max-width: 100%; color: var(--text); font-size: .79rem; font-weight: 650; }
 .assignment-row { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: 8px; margin: 0; }
 .assignment-row select { min-height: 34px; padding: 6px 9px; font-size: .76rem; }
@@ -391,6 +411,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .configured-worker { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto auto; min-height: 58px; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-soft); }
 .configured-worker[draggable="true"] { cursor: grab; }
 .configured-worker-dragging { opacity: .52; border-color: var(--accent); }
+.drop-target-before { border-color: var(--accent) !important; background: color-mix(in srgb, var(--accent-soft) 62%, var(--panel)) !important; }
+.drop-target-before::before { position: absolute; z-index: 3; top: -6px; right: 8px; left: 8px; height: 3px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 78%, transparent); content: ""; }
+.configured-worker { position: relative; }
 .configured-worker > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
 .configured-worker small { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .configured-worker-summary { min-width: 0; }
@@ -533,7 +556,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
 @media (max-width: 1200px) {
-  .app-shell { grid-template-columns: 235px minmax(0, 1fr); }
+  .app-shell { grid-template-columns: clamp(220px, var(--rail-width, 286px), 40vw) minmax(0, 1fr); }
 }
 @media (max-width: 900px) {
   .task-grid { grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 12px; }
@@ -560,6 +583,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   body { overflow: hidden; }
   .app-shell { grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); height: 100dvh; min-height: 0; }
   .control-rail { min-width: 0; max-height: none; padding: 9px 12px 0; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
+  .rail-resize-handle { display: none; }
   .brand-lockup { display: none; }
   .brand-mark { width: 34px; height: 34px; border-radius: 10px; }
   .brand-mark .bee-mascot { width: 30px; height: 30px; }

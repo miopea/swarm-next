@@ -114,8 +114,10 @@ actual production web build against the rebuilt API binary:
 - Typing `personal/bud` produced the nested `budgetbug` repository and Enter
   completed the canonical absolute path before creating Daisy.
 - A directly typed existing path is accepted even when it is outside the
-  bounded suggestion result, while the server rejects non-existent paths,
-  symlinks, and paths outside configured workspace roots.
+  bounded suggestion result. The server rejects non-existent paths, symlinks,
+  and filesystem roots; an existing folder outside configured workspace roots
+  requires an explicit operator warning acknowledgement carried through the API
+  and terminal-host request.
 - At 412 by 915, `rcg/pub` displayed `public-website` first with its full path
   as secondary context; the popup stayed anchored with zero horizontal
   overflow.

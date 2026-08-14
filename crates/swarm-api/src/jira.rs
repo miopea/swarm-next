@@ -611,7 +611,7 @@ impl JiraReadinessProbe {
         {
             self.assign_issue(&issue.id, &account.account_id).await?;
             issue.assignee_account_id = Some(account.account_id.clone());
-            issue.assignee_name = account.display_name.clone();
+            issue.assignee_name.clone_from(&account.display_name);
         }
         Ok(())
     }

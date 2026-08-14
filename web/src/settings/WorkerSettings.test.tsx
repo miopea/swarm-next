@@ -43,10 +43,11 @@ test("configures and reorders durable workers with progressive path completion",
   fireEvent.keyDown(pathInput, { key: "Enter" });
   expect(pathInput).toHaveValue("/projects/public-website");
   fireEvent.click(screen.getByRole("button", { name: "Add sleeping worker" }));
-  expect(onCreate).toHaveBeenCalledWith("Clover", "/projects/public-website", "claude_code");
+  expect(onCreate).toHaveBeenCalledWith("Clover", "/projects/public-website", "claude_code", false);
 
   fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
   const editForm = screen.getByRole("form", { name: "Edit Daisy" });
+  expect(within(editForm).getByText(budget.workspace)).toBeInTheDocument();
   fireEvent.change(within(editForm).getByLabelText("Worker name"), { target: { value: "Marigold" } });
   fireEvent.click(within(editForm).getByLabelText("Keep this worker active automatically"));
   fireEvent.click(within(editForm).getByRole("button", { name: "Save" }));
@@ -71,8 +72,9 @@ test("accepts a complete typed path when it is not in the bounded suggestions", 
   fireEvent.change(rendered.getByPlaceholderText("Daisy"), { target: { value: "Clover" } });
   fireEvent.change(rendered.getByPlaceholderText("Search by name or path"), { target: { value: "/home/bschleifer/projects/personal/budgetbug" } });
   expect(rendered.getByText(/No suggestion yet/)).toBeInTheDocument();
+  fireEvent.click(rendered.getByLabelText(/Use this path outside discovered project folders/));
   fireEvent.click(rendered.getByRole("button", { name: "Add sleeping worker" }));
-  expect(onCreate).toHaveBeenCalledWith("Clover", "/home/bschleifer/projects/personal/budgetbug", "claude_code");
+  expect(onCreate).toHaveBeenCalledWith("Clover", "/home/bschleifer/projects/personal/budgetbug", "claude_code", true);
 });
 
 test("offers Codex only when the terminal host reports it ready", () => {
@@ -92,8 +94,9 @@ test("offers Codex only when the terminal host reports it ready", () => {
   fireEvent.change(container.querySelector("#configured-worker-name")!, { target: { value: "Aster" } });
   fireEvent.change(container.querySelector("#configured-worker-provider")!, { target: { value: "codex" } });
   fireEvent.change(container.querySelector("#configured-worker-repository")!, { target: { value: "/projects/aster" } });
+  fireEvent.click(rendered.getByLabelText(/Use this path outside discovered project folders/));
   fireEvent.click(rendered.getByRole("button", { name: "Add sleeping worker" }));
-  expect(onCreate).toHaveBeenCalledWith("Aster", "/projects/aster", "codex");
+  expect(onCreate).toHaveBeenCalledWith("Aster", "/projects/aster", "codex", true);
 });
 
 test("desktop drag ordering keeps accessible arrow controls as a fallback", () => {
@@ -115,6 +118,7 @@ test("desktop drag ordering keeps accessible arrow controls as a fallback", () =
   const dataTransfer = { effectAllowed: "", setData: vi.fn() };
   fireEvent.dragStart(source, { dataTransfer });
   fireEvent.dragOver(target, { dataTransfer });
+  expect(target).toHaveClass("drop-target-before");
   fireEvent.drop(target, { dataTransfer });
   expect(onReorder).toHaveBeenCalledWith([studio.id, budget.id]);
   expect(rendered.getByRole("button", { name: "Move Poppy earlier" })).toBeInTheDocument();

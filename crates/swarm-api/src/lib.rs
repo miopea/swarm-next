@@ -357,6 +357,10 @@ impl AppState {
             .map_or(Ok(0), TaskStore::recover_inflight_jira_transitions)
     }
 
+    /// Recovers crash-interrupted Jira comments as explicit uncertainty.
+    ///
+    /// # Errors
+    /// Returns persistence failures.
     pub fn recover_jira_comment_deliveries(&self) -> Result<usize, TaskStoreError> {
         self.task_store
             .as_ref()
@@ -1086,6 +1090,8 @@ struct CreateWorkerRequest {
     workspace: String,
     #[serde(default)]
     autostart: bool,
+    #[serde(default)]
+    allow_outside_roots: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1136,9 +1142,7 @@ fn worker_view(
         WorkerAttentionState::Sleeping
     } else if engagement_expires_at.is_some() {
         WorkerAttentionState::WithOperator
-    } else if awaiting_operator {
-        WorkerAttentionState::AwaitingOperator
-    } else if provider_activity == ProviderActivity::AwaitingOperator {
+    } else if awaiting_operator || provider_activity == ProviderActivity::AwaitingOperator {
         WorkerAttentionState::AwaitingOperator
     } else if provider_activity == ProviderActivity::Resting {
         WorkerAttentionState::Resting
@@ -1206,7 +1210,7 @@ struct ResolveDecisionRequest {
 
 #[derive(Debug, Deserialize)]
 struct AssignTaskRequest {
-    worker_id: WorkerId,
+    worker_id: Option<WorkerId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1517,6 +1521,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/integrations/jira/bindings/{binding_id}/sync",
             post(sync_jira_binding),
+        )
+        .route(
+            "/api/v1/integrations/jira/reconcile",
+            post(reconcile_jira_now),
         )
         .route("/api/v1/workers/order", put(reorder_workers))
         .route("/api/v1/workers/{worker_id}", patch(update_worker))
@@ -2311,8 +2319,12 @@ fn sample_machine_resources() -> MachineResourceResponse {
         let swap_used_bytes = swap_total_bytes
             .zip(swap_free_bytes)
             .map(|(total, free)| total.saturating_sub(free));
-        let percent =
-            |used: u64, total: u64| (total > 0).then_some((used as f64 / total as f64) * 100.0);
+        let percent = |used: u64, total: u64| {
+            (total > 0).then(|| {
+                let basis_points = used.saturating_mul(10_000) / total;
+                f64::from(u32::try_from(basis_points).unwrap_or(u32::MAX)) / 100.0
+            })
+        };
         let memory_used_percent = memory_total_bytes
             .zip(memory_available_bytes)
             .and_then(|(total, available)| percent(total.saturating_sub(available), total));
@@ -2333,7 +2345,7 @@ fn sample_machine_resources() -> MachineResourceResponse {
             (Some(_), _) => ResourcePressure::Normal,
             _ => ResourcePressure::Unavailable,
         };
-        return MachineResourceResponse {
+        MachineResourceResponse {
             memory_total_bytes,
             memory_available_bytes,
             memory_used_percent,
@@ -2346,7 +2358,7 @@ fn sample_machine_resources() -> MachineResourceResponse {
             cpu_pressure_avg10,
             io_pressure_avg10,
             pressure,
-        };
+        }
     }
     #[cfg(not(target_os = "linux"))]
     MachineResourceResponse {
@@ -2565,9 +2577,12 @@ async fn assign_task(
     Json(request): Json<AssignTaskRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let task = task_service(&state)?
-        .assign_operator_task(parse_task_id(&task_id)?, request.worker_id)
-        .map_err(application_error)?;
+    let task_id = parse_task_id(&task_id)?;
+    let task = match request.worker_id {
+        Some(worker_id) => task_service(&state)?.assign_operator_task(task_id, worker_id),
+        None => task_service(&state)?.unassign_operator_task(task_id),
+    }
+    .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     state.deliver_coordination().await;
     let task = task_store(&state)?
@@ -2657,7 +2672,7 @@ async fn refresh_provider_activity(
         if *previous == observed {
             false
         } else {
-            *previous = observed.clone();
+            previous.clone_from(&observed);
             true
         }
     };
@@ -3078,6 +3093,15 @@ async fn sync_jira_binding(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
 }
 
+async fn reconcile_jira_now(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    authorize(&state, &headers)?;
+    state.reconcile_jira().await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn jira_issue_snapshot(issue: &jira::JiraIssue) -> JiraIssueSnapshot<'_> {
     JiraIssueSnapshot {
         issue_id: &issue.id,
@@ -3175,7 +3199,11 @@ async fn workspace_catalog(
     Ok(workspaces)
 }
 
-async fn resolve_workspace_path(state: &AppState, requested: &str) -> Result<PathBuf, ApiError> {
+async fn resolve_workspace_path(
+    state: &AppState,
+    requested: &str,
+    allow_outside_roots: bool,
+) -> Result<PathBuf, ApiError> {
     let requested = FilePath::new(requested.trim());
     if !requested.is_absolute() {
         return Err(ApiError::new(
@@ -3205,12 +3233,22 @@ async fn resolve_workspace_path(state: &AppState, requested: &str) -> Result<Pat
             "that workspace folder could not be resolved",
         )
     })?;
+    if canonical.parent().is_none() {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unsafe_workspace",
+            "a filesystem root cannot be used as a worker repository",
+        ));
+    }
     for root in state.workspace_roots.iter() {
         if let Ok(root) = tokio::fs::canonicalize(root).await
             && canonical.starts_with(root)
         {
             return Ok(canonical);
         }
+    }
+    if allow_outside_roots {
+        return Ok(canonical);
     }
     Err(ApiError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -3228,7 +3266,8 @@ async fn create_worker(
     let profiles = task_store(&state)?
         .list_worker_profiles()
         .map_err(|error| task_store_error(&error))?;
-    let workspace = resolve_workspace_path(&state, &request.workspace).await?;
+    let workspace =
+        resolve_workspace_path(&state, &request.workspace, request.allow_outside_roots).await?;
     let workspace = workspace.to_string_lossy().into_owned();
     if profiles
         .iter()
@@ -3456,6 +3495,7 @@ async fn start_session(
                 session_id: ProviderConversationId::new(),
             },
             mcp_config: None,
+            allow_outside_roots: false,
         },
     )
     .await?;
@@ -3572,9 +3612,14 @@ async fn start_worker_process(
         None
     };
 
+    let worker_workspace = PathBuf::from(&profile.workspace);
+    let allow_outside_roots = !state
+        .workspace_roots
+        .iter()
+        .any(|root| worker_workspace.starts_with(root));
     let request = match profile.provider {
         ProviderKind::ClaudeCode => HostRequest::StartClaude {
-            workspace: PathBuf::from(&profile.workspace),
+            workspace: worker_workspace.clone(),
             size,
             conversation: match (
                 profile.provider_conversation_id,
@@ -3591,15 +3636,17 @@ async fn start_worker_process(
                 }
             },
             mcp_config,
+            allow_outside_roots,
         },
         ProviderKind::Codex => HostRequest::StartCodex {
-            workspace: PathBuf::from(&profile.workspace),
+            workspace: worker_workspace,
             size,
             conversation: if profile.has_session_history {
                 CodexConversationStart::Continue
             } else {
                 CodexConversationStart::New
             },
+            allow_outside_roots,
         },
     };
     let response = request_host(state, request).await?;
@@ -7333,7 +7380,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn typed_workspace_paths_resolve_inside_roots_and_reject_escape() {
+    async fn typed_workspace_paths_require_explicit_approval_outside_roots() {
         let root = TempDir::new().unwrap();
         let nested = root.path().join("personal").join("swarm-next");
         std::fs::create_dir_all(&nested).unwrap();
@@ -7341,17 +7388,23 @@ mod tests {
         let state = AppState::default().with_workspace_roots(vec![root.path().to_path_buf()]);
 
         assert_eq!(
-            resolve_workspace_path(&state, nested.to_string_lossy().as_ref())
+            resolve_workspace_path(&state, nested.to_string_lossy().as_ref(), false)
                 .await
                 .unwrap(),
             nested.canonicalize().unwrap()
         );
         assert_eq!(
-            resolve_workspace_path(&state, outside.path().to_string_lossy().as_ref())
+            resolve_workspace_path(&state, outside.path().to_string_lossy().as_ref(), false)
                 .await
                 .unwrap_err()
                 .code,
             "unknown_workspace"
+        );
+        assert_eq!(
+            resolve_workspace_path(&state, outside.path().to_string_lossy().as_ref(), true)
+                .await
+                .unwrap(),
+            outside.path().canonicalize().unwrap()
         );
     }
 

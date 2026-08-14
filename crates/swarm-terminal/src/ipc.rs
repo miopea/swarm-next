@@ -39,11 +39,15 @@ pub enum HostRequest {
         size: TerminalSize,
         conversation: ClaudeConversationStart,
         mcp_config: Option<PathBuf>,
+        #[serde(default)]
+        allow_outside_roots: bool,
     },
     StartCodex {
         workspace: PathBuf,
         size: TerminalSize,
         conversation: CodexConversationStart,
+        #[serde(default)]
+        allow_outside_roots: bool,
     },
     ListSessions,
     HistoryDiagnostics,

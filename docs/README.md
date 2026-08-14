@@ -28,6 +28,7 @@ Read and review these documents in order:
 24. [Live control-room events](22-live-control-room-events.md)
 25. [Privacy-safe diagnostics](23-privacy-safe-diagnostics.md)
 26. [Browser dogfood acceptance](24-browser-dogfood-acceptance.md)
+27. [Component and engineering-principles audit](25-component-and-engineering-audit.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do

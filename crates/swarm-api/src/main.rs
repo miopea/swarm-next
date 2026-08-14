@@ -36,6 +36,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_notifications(vapid_subject_from_env())?;
     state = configure_jira(state, &database_path)?;
     state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
+    recover_interrupted_deliveries(&state)?;
+    state.supervise_workers().await;
+    let supervisor = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            supervisor.supervise_workers().await;
+        }
+    });
+    let jira_reconciler = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            jira_reconciler.reconcile_jira().await;
+        }
+    });
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    info!(%address, "Swarm Next API listening");
+    let app = match (
+        env::var_os("SWARM_WEB_ROOT"),
+        env::var_os("SWARM_ASSET_ROOT"),
+    ) {
+        (Some(root), Some(asset_root)) => router_with_asset_root(state, root, asset_root),
+        (Some(root), None) => router_with_web_root(state, root),
+        (None, _) => router(state),
+    };
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    Ok(())
+}
+
+fn recover_interrupted_deliveries(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
     let recovered = state.recover_decision_deliveries()?;
     if recovered > 0 {
         tracing::warn!(
@@ -78,38 +115,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "crash-interrupted Jira comments require reconciliation"
         );
     }
-    state.supervise_workers().await;
-    let supervisor = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            supervisor.supervise_workers().await;
-        }
-    });
-    let jira_reconciler = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            jira_reconciler.reconcile_jira().await;
-        }
-    });
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    info!(%address, "Swarm Next API listening");
-    let app = match (
-        env::var_os("SWARM_WEB_ROOT"),
-        env::var_os("SWARM_ASSET_ROOT"),
-    ) {
-        (Some(root), Some(asset_root)) => router_with_asset_root(state, root, asset_root),
-        (Some(root), None) => router_with_web_root(state, root),
-        (None, _) => router(state),
-    };
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
     Ok(())
 }
 

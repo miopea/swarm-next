@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 
 import {
   assignTask,
@@ -26,6 +26,7 @@ import {
   fetchWorkspaces,
   reorderTasks,
   reorderWorkers,
+  reconcileJira,
   recoverTransientRuntime,
   releaseWorkerEngagement,
   revokeBrowserSession,
@@ -70,11 +71,13 @@ import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRo
 import SettingsWorkspace from "./settings/SettingsWorkspace";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
-import TaskBoard, { workerName, type TaskBoardFilter, type TaskBoardSort } from "./tasks/TaskBoard";
+import TaskBoard, { workerName } from "./tasks/TaskBoard";
+import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort } from "./tasks/TaskBoardControls";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./terminal/MobileTerminalComposer";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 import WorkerRosterItem from "./workers/WorkerRosterItem";
+import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
@@ -107,6 +110,9 @@ export function App() {
   const [taskQuery, setTaskQuery] = useState("");
   const [taskFilter, setTaskFilter] = useState<TaskBoardFilter>("all");
   const [taskSort, setTaskSort] = useState<TaskBoardSort>("queue");
+  const [taskProject, setTaskProject] = useState("all");
+  const [taskWorker, setTaskWorkerFilter] = useState("all");
+  const workerRail = useWorkerRailWidth();
   const [decisionFocus, setDecisionFocus] = useState<{ id: string; request: number }>();
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -390,10 +396,10 @@ export function App() {
     });
   }
 
-  async function configureWorker(name: string, workspace: string, provider: ProviderKind) {
+  async function configureWorker(name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean) {
     if (!operatorToken) return;
     await perform(async () => {
-      await createWorker(operatorToken, { name, workspace, provider });
+      await createWorker(operatorToken, { name, workspace, provider, allow_outside_roots: allowOutsideRoots });
       const controlRoom = await loadControlRoom(operatorToken);
       setWorkers(controlRoom.workers);
       setWorkspaces(controlRoom.workspaces);
@@ -523,6 +529,10 @@ export function App() {
   async function setTaskWorker(task: Task, workerId: string) {
     if (!operatorToken) return;
     await perform(async () => {
+      if (!workerId) {
+        replaceTask(await assignTask(operatorToken, task.id, null));
+        return;
+      }
       const worker = workers.find((candidate) => candidate.id === workerId && candidate.role !== "queen");
       if (!worker) throw new Error("That worker is no longer configured.");
       let updated = await updateTask(operatorToken, task.id, { workspace: worker.workspace });
@@ -594,6 +604,14 @@ export function App() {
     await perform(async () => {
       await retryJiraTaskLink(operatorToken, task.id);
       setJiraTaskLinks(await fetchJiraTaskLinks(operatorToken));
+    });
+  }
+
+  async function syncJiraBoard() {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await reconcileJira(operatorToken);
+      await refreshControlRoom();
     });
   }
 
@@ -678,6 +696,11 @@ export function App() {
     ),
     [tasks],
   );
+  const taskProjects = useMemo(() => [...new Map(jiraTaskLinks.map((link) => [link.project_key, {
+    key: link.project_key,
+    name: link.project_name,
+    url: jiraProjectUrl(link),
+  }])).values()].sort((left, right) => left.name.localeCompare(right.name)), [jiraTaskLinks]);
   const activeTask = activeSession ? tasksBySession.get(activeSession.session_id) : undefined;
   const commandChoices = useMemo<CommandChoice[]>(() => [
     { id: "decisions", label: "Needs you", detail: `${pendingDecisionCount} pending`, group: "Go to", run: () => setSurface("decisions") },
@@ -739,7 +762,7 @@ export function App() {
   }, [showMobileWorkers]);
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell${workerRail.resizing ? " resizing-rail" : ""}`} style={{ "--rail-width": `${workerRail.width}px` } as CSSProperties}>
       <aside className={`control-rail surface-${surface}`} aria-label="Swarm navigation">
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
@@ -766,31 +789,7 @@ export function App() {
             {surface !== "settings" && surface !== "decisions" && <div className="rail-context">
               <div className="rail-heading"><span>{surface === "tasks" ? "Board view" : "Workers"}</span></div>
               {surface === "tasks" ? (
-                <div className="task-board-controls">
-                  <label>
-                    <span>Find work</span>
-                    <input value={taskQuery} type="search" placeholder="Title or Jira key" onChange={(event) => setTaskQuery(event.target.value)} />
-                  </label>
-                  <label>
-                    <span>Show</span>
-                    <select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value as TaskBoardFilter)}>
-                      <option value="all">All open tasks</option>
-                      <option value="unassigned">Unassigned</option>
-                      <option value="jira">Jira work</option>
-                      <option value="attention">Blocked or review</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Sort by</span>
-                    <select value={taskSort} onChange={(event) => setTaskSort(event.target.value as TaskBoardSort)}>
-                      <option value="queue">Queue order</option>
-                      <option value="priority">Priority</option>
-                      <option value="status">Needs attention</option>
-                      <option value="updated">Recently updated</option>
-                    </select>
-                  </label>
-                  <small>{tasks.filter((task) => task.state !== "completed").length} open · drag ordering is available in Queue order</small>
-                </div>
+                <TaskBoardControls query={taskQuery} filter={taskFilter} sort={taskSort} project={taskProject} worker={taskWorker} workers={workers} projects={taskProjects} openCount={openTaskCount} busy={busy} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onSync={() => void syncJiraBoard()} />
               ) : workers.length === 0 && orphanSessions.length === 0 ? (
                 <p className="empty-rail">No workers configured.</p>
               ) : (
@@ -837,6 +836,7 @@ export function App() {
         ) : <p className="empty-rail">Unlock this runtime to access tasks and workers.</p>}
 
         <div className="rail-footer"><RuntimeStatus state={loadState} /></div>
+        <div className="rail-resize-handle" role="separator" aria-label="Resize worker area" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={480} aria-valuenow={workerRail.width} tabIndex={0} onPointerDown={workerRail.start} onPointerMove={workerRail.move} onPointerUp={workerRail.finish} onPointerCancel={workerRail.finish} onKeyDown={workerRail.resizeWithKeyboard} />
       </aside>
 
       <section className="workspace">
@@ -938,7 +938,7 @@ export function App() {
         ) : surface === "decisions" ? (
           <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} sort={taskSort} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSortChange={setTaskSort} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onReorder={reorderOpenTasks} />
+          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             busy={busy}
@@ -1034,6 +1034,19 @@ function requireActiveSession(worker: Worker): string {
 
 function repositoryName(workspace: string): string {
   return workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace;
+}
+
+function jiraProjectUrl(link: JiraTaskLink): string | undefined {
+  if (!link.issue_url) return undefined;
+  try {
+    const url = new URL(link.issue_url);
+    url.pathname = "/issues/";
+    url.search = "";
+    url.searchParams.set("jql", `project = "${link.project_key}"`);
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function taskStateLabel(task: Task): string {

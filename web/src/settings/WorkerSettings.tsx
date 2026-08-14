@@ -2,13 +2,14 @@ import { useState, type DragEvent, type FormEvent, type KeyboardEvent } from "re
 
 import type { ProviderCapabilities, ProviderKind, Worker, WorkspaceChoice } from "../api";
 import BeeMascot from "../brand/BeeMascot";
+import { useReorderDrag } from "../shared/useReorderDrag";
 
 type Props = {
   workers: Worker[];
   workspaces: WorkspaceChoice[];
   busy: boolean;
   providers: ProviderCapabilities;
-  onCreate: (name: string, workspace: string, provider: ProviderKind) => Promise<void>;
+  onCreate: (name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean) => Promise<void>;
   onUpdate: (workerId: string, name: string, autostart: boolean) => Promise<void>;
   onReorder: (workerIds: string[]) => Promise<void>;
 };
@@ -20,21 +21,25 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
   const [workspace, setWorkspace] = useState("");
   const [provider, setProvider] = useState<ProviderKind>("claude_code");
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [allowOutsideRoots, setAllowOutsideRoots] = useState(false);
   const [highlightedWorkspace, setHighlightedWorkspace] = useState(0);
-  const [draggedWorkerId, setDraggedWorkerId] = useState<string>();
+  const workerReorder = useReorderDrag(roster.map((worker) => worker.id), (workerIds) => void onReorder(workerIds));
   const matchingWorkspaces = workspaceMatches(available, workspace).slice(0, 8);
+  const customWorkspace = Boolean(workspace.trim()) && !workspaces.some((choice) => normalizePath(choice.path) === normalizePath(workspace.trim()));
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!name.trim() || !workspace) return;
-    await onCreate(name, workspace, provider);
+    if (!name.trim() || !workspace || (customWorkspace && !allowOutsideRoots)) return;
+    await onCreate(name, workspace, provider, customWorkspace && allowOutsideRoots);
     setName("");
     setWorkspace("");
+    setAllowOutsideRoots(false);
     setWorkspaceOpen(false);
   }
 
   function selectWorkspace(choice: WorkspaceChoice) {
     setWorkspace(choice.path);
+    setAllowOutsideRoots(false);
     setWorkspaceOpen(false);
     setHighlightedWorkspace(0);
   }
@@ -66,11 +71,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
 
   function dropBefore(targetWorkerId: string, event: DragEvent) {
     event.preventDefault();
-    if (!draggedWorkerId || draggedWorkerId === targetWorkerId) return;
-    const ids = roster.map((worker) => worker.id).filter((workerId) => workerId !== draggedWorkerId);
-    ids.splice(ids.indexOf(targetWorkerId), 0, draggedWorkerId);
-    setDraggedWorkerId(undefined);
-    void onReorder(ids);
+    workerReorder.dropBefore(targetWorkerId);
   }
 
   return (
@@ -91,11 +92,14 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             busy={busy}
             first={index === 0}
             last={index === roster.length - 1}
-            dragging={draggedWorkerId === worker.id}
+            dragging={workerReorder.draggedId === worker.id}
+            dropTarget={workerReorder.dropTargetId === worker.id && workerReorder.draggedId !== worker.id}
             onMove={(offset) => move(index, offset)}
             onUpdate={onUpdate}
-            onDragStart={() => setDraggedWorkerId(worker.id)}
-            onDragEnd={() => setDraggedWorkerId(undefined)}
+            onDragStart={() => workerReorder.start(worker.id)}
+            onDragEnd={workerReorder.end}
+            onDragTarget={() => workerReorder.target(worker.id)}
+            onDragLeave={() => workerReorder.leave(worker.id)}
             onDrop={(event) => dropBefore(worker.id, event)}
           />
         ))}
@@ -135,6 +139,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
               onFocus={() => setWorkspaceOpen(true)}
               onChange={(event) => {
                 setWorkspace(event.target.value);
+                setAllowOutsideRoots(false);
                 setWorkspaceOpen(true);
                 setHighlightedWorkspace(0);
               }}
@@ -162,8 +167,9 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             )}
           </div>
           <small>Start with a repository name and Swarm completes the path. Full paths still work.</small>
+          {customWorkspace && <label className="outside-workspace-warning"><input type="checkbox" checked={allowOutsideRoots} onChange={(event) => setAllowOutsideRoots(event.target.checked)} /><span><strong>Use this path outside discovered project folders</strong><small>Only continue if you recognize and trust this folder. Swarm still requires an existing real directory and blocks files, symlinks, and filesystem roots.</small></span></label>}
         </div>
-        <button disabled={busy || !name.trim() || !workspace}>Add sleeping worker</button>
+        <button disabled={busy || !name.trim() || !workspace || (customWorkspace && !allowOutsideRoots)}>Add sleeping worker</button>
       </form>
       {available.length === 0 && <small className="privacy-note">Every discovered repository already has a worker. Advanced repository-root configuration will live in backup and installation settings.</small>}
     </section>
@@ -176,14 +182,17 @@ type WorkerPreferenceRowProps = {
   first: boolean;
   last: boolean;
   dragging: boolean;
+  dropTarget: boolean;
   onMove: (offset: -1 | 1) => void;
   onUpdate: Props["onUpdate"];
   onDragStart: () => void;
   onDragEnd: () => void;
+  onDragTarget: () => void;
+  onDragLeave: () => void;
   onDrop: (event: DragEvent) => void;
 };
 
-function WorkerPreferenceRow({ worker, busy, first, last, dragging, onMove, onUpdate, onDragStart, onDragEnd, onDrop }: WorkerPreferenceRowProps) {
+function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, onMove, onUpdate, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(worker.name);
   const [autostart, setAutostart] = useState(worker.autostart);
@@ -203,18 +212,20 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, onMove, onUp
 
   return (
     <div
-      className={`configured-worker${dragging ? " configured-worker-dragging" : ""}`}
+      className={`configured-worker${dragging ? " configured-worker-dragging" : ""}${dropTarget ? " drop-target-before" : ""}`}
       draggable={!busy && !editing}
       onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", worker.id); onDragStart(); }}
       onDragEnd={onDragEnd}
-      onDragOver={(event) => { if (!editing) event.preventDefault(); }}
+      onDragEnter={() => { if (!editing) onDragTarget(); }}
+      onDragOver={(event) => { if (!editing) { event.preventDefault(); onDragTarget(); } }}
+      onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragLeave(); }}
       onDrop={onDrop}
     >
       <span className="worker-settings-bee"><BeeMascot expression={worker.running ? "focused" : "sleeping"} /></span>
       {editing ? (
         <form className="worker-preference-form" aria-label={`Edit ${worker.name}`} onSubmit={(event) => void save(event)}>
           <label><span>Worker name</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus /></label>
-          <small>{repositoryName(worker.workspace)} · repository stays with this worker</small>
+          <small className="worker-repository-path"><span>Repository</span><code>{worker.workspace}</code></small>
           <label className="worker-autostart"><input type="checkbox" checked={autostart} onChange={(event) => setAutostart(event.target.checked)} />Keep this worker active automatically</label>
           <span className="worker-edit-actions"><button disabled={busy || !name.trim()}>Save</button><button type="button" className="secondary-button" disabled={busy} onClick={cancel}>Cancel</button></span>
         </form>

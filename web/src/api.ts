@@ -477,7 +477,7 @@ export async function transitionTask(
 export async function assignTask(
   operatorToken: string,
   taskId: string,
-  workerId: string,
+  workerId: string | null,
 ): Promise<Task> {
   const response = await authenticatedFetch(
     operatorToken,
@@ -493,7 +493,7 @@ export async function assignTask(
 
 export async function createWorker(
   operatorToken: string,
-  input: { name: string; workspace: string; provider?: ProviderKind; autostart?: boolean },
+  input: { name: string; workspace: string; provider?: ProviderKind; autostart?: boolean; allow_outside_roots?: boolean },
 ): Promise<Worker> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/workers", {
     method: "POST",
@@ -762,6 +762,10 @@ export async function syncJiraBinding(operatorToken: string, bindingId: string, 
     },
   );
   return response.json() as Promise<Task[]>;
+}
+
+export async function reconcileJira(operatorToken: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/reconcile", { method: "POST" });
 }
 
 export async function uploadDogfoodScreenshot(operatorToken: string, image: File): Promise<string> {

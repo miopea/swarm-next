@@ -292,12 +292,13 @@ fn dispatch_blocking(
             size,
             conversation,
             mcp_config,
+            allow_outside_roots,
         } => ClaudeCodeAdapter
             .command_for_with_mcp(&workspace, conversation, mcp_config.as_deref())
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry
-                    .spawn(&command, size)
+                    .spawn_with_root_override(&command, size, allow_outside_roots)
                     .map_err(|error| error.to_string())
             })
             .map(|session| HostResponse::SessionStarted {
@@ -307,12 +308,13 @@ fn dispatch_blocking(
             workspace,
             size,
             conversation,
+            allow_outside_roots,
         } => CodexAdapter
             .command_for(&workspace, conversation)
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry
-                    .spawn(&command, size)
+                    .spawn_with_root_override(&command, size, allow_outside_roots)
                     .map_err(|error| error.to_string())
             })
             .map(|session| HostResponse::SessionStarted {

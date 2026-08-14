@@ -1,6 +1,23 @@
 import { expect, test, vi } from "vitest";
 
-import { recoverTransientRuntime, RuntimeRequestError } from "./api";
+import { assignTask, recoverTransientRuntime, RuntimeRequestError } from "./api";
+
+test("sends an explicit null worker when returning a task to the queue", async () => {
+  const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    id: "task-1", hive_id: "hive-1", title: "Queue me", workspace: "/workspace", state: "ready",
+    description: "", priority: "normal", assigned_worker_id: null, assigned_session_id: null,
+    position: 0, created_at: 1, updated_at: 1,
+  }), { status: 200, headers: { "content-type": "application/json" } }));
+  vi.stubGlobal("fetch", fetch);
+
+  await assignTask("operator", "task-1", null);
+
+  expect(fetch).toHaveBeenCalledWith("/api/v1/tasks/task-1/assignment", expect.objectContaining({
+    method: "PUT",
+    body: JSON.stringify({ worker_id: null }),
+  }));
+  vi.unstubAllGlobals();
+});
 
 test("recovers a saved browser session after bounded gateway failures", async () => {
   const operation = vi.fn()

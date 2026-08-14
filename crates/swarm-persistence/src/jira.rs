@@ -181,6 +181,11 @@ impl TaskStore {
 
     /// Controls whether open Jira issues assigned to the connected operator are
     /// automatically synchronized into this Hive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the project binding does not exist or the database
+    /// cannot persist or reload the setting.
     pub fn set_jira_auto_sync_assigned(
         &self,
         id: JiraProjectBindingId,
@@ -787,6 +792,11 @@ impl TaskStore {
     }
 
     /// Queues one bounded Jira comment for durable delivery.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the comment is invalid, the task has no Jira issue
+    /// link, or the database transaction cannot be completed.
     pub fn queue_jira_comment(
         &self,
         task_id: TaskId,
@@ -832,6 +842,11 @@ impl TaskStore {
     }
 
     /// Atomically claims a bounded batch of queued Jira comments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the queued comments cannot be read or atomically
+    /// moved into the dispatching state.
     pub fn claim_jira_comments(
         &self,
         now: i64,
@@ -879,6 +894,11 @@ impl TaskStore {
         Ok(candidates)
     }
 
+    /// Marks a claimed Jira comment as delivered.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the delivery record cannot be read or updated.
     pub fn complete_jira_comment(&self, id: &str, now: i64) -> Result<bool, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -911,6 +931,11 @@ impl TaskStore {
         Ok(changed)
     }
 
+    /// Records a failed Jira comment delivery and schedules its next state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the delivery record cannot be read or updated.
     pub fn fail_jira_comment(
         &self,
         id: &str,
@@ -952,6 +977,11 @@ impl TaskStore {
         Ok(changed)
     }
 
+    /// Marks comments left in flight by a stopped process as uncertain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot update the delivery records.
     pub fn recover_inflight_jira_comments(&self) -> Result<usize, TaskStoreError> {
         let connection = self.connection()?;
         connection
@@ -964,6 +994,11 @@ impl TaskStore {
             .map_err(Into::into)
     }
 
+    /// Returns the most recent undelivered Jira comment state for a task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the delivery state cannot be read from the database.
     pub fn jira_comment_state_for_task(
         &self,
         task_id: TaskId,
@@ -981,6 +1016,11 @@ impl TaskStore {
             .map_err(Into::into)
     }
 
+    /// Requeues conflicted or uncertain Jira comments for a task.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot update the delivery records.
     pub fn retry_jira_comments(&self, task_id: TaskId) -> Result<bool, TaskStoreError> {
         let connection = self.connection()?;
         let changed = connection.execute(

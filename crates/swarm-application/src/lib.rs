@@ -128,6 +128,15 @@ impl TaskService {
             .map_err(Into::into)
     }
 
+    /// Returns an operator task to the unassigned Hive queue.
+    ///
+    /// # Errors
+    ///
+    /// Propagates task validation and persistence failures.
+    pub fn unassign_operator_task(&self, task_id: TaskId) -> Result<Task, ApplicationError> {
+        self.store.unassign_task(task_id).map_err(Into::into)
+    }
+
     /// Applies one domain-valid task transition for the operator or Queen.
     ///
     /// # Errors

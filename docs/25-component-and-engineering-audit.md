@@ -1,0 +1,147 @@
+# Component and engineering-principles audit
+
+Status: **Active guardrail**
+
+## Purpose
+
+Swarm Next is being built quickly with AI, but speed does not excuse accidental
+coupling. This audit turns DRY, YAGNI, KISS, SOLID, WET, separation of concerns
+(SoC), principle of least astonishment (POLA), and single level of abstraction
+(SLAP) into concrete repository decisions rather than slogans.
+
+`WASP` does not have one established meaning in this repository or in common
+software-design references. It must be defined by the team before it becomes an
+enforceable rule. Inventing a meaning would itself violate POLA.
+
+## How the principles work together
+
+- **DRY applies to knowledge and behavioral contracts**, not merely similar JSX.
+  Repeated state rules, accessibility behavior, or option lists should have one
+  owner.
+- **WET is an intentional waiting rule.** Two small pieces of similar markup may
+  remain separate until their reasons to change are proven to be the same.
+- **YAGNI and KISS prevent speculative frameworks.** Swarm does not need a
+  general component library or plugin system to share three known behaviors.
+- **SOLID and SoC put state with its owner.** Browser persistence, task queries,
+  terminal lifecycles, and domain transitions should not accumulate in view
+  components or transport handlers.
+- **POLA protects the operator contract.** Labels and actions must reflect the
+  actual state: Sleeping means unloaded, Wake worker starts it, and Unassigned
+  must remain a reversible selection.
+- **SLAP keeps orchestration readable.** A function should coordinate named
+  operations or implement one operation, not alternate between both levels.
+
+## Current evidence
+
+### P0 — repeated behavior that can drift
+
+1. Task-board controls existed independently in the desktop rail and mobile
+   board. Filter values, sort choices, Jira links, and manual synchronization
+   could diverge. They now use one `TaskBoardControls` component.
+2. Task and worker reordering independently owned dragged-id, insertion-target,
+   cleanup, and reorder calculations. They now use one `useReorderDrag` behavior
+   hook while retaining domain-specific row rendering.
+3. Worker-rail sizing and local persistence lived in the root application
+   component. It now has a focused `useWorkerRailWidth` owner.
+4. Task cards inferred assignment from a matching repository even after the API
+   durably returned work to the unassigned queue. That compatibility guess was
+   removed: repository affinity can guide a recommendation but cannot replace
+   explicit assignment truth.
+
+These abstractions are justified by shared behavior, not visual resemblance.
+
+### P1 — oversized presentation responsibilities
+
+- `web/src/App.tsx` remains the browser composition root but is over 1,100 lines.
+  It mixes session restoration, live-feed orchestration, task commands, worker
+  commands, navigation, mobile overlays, and layout rendering.
+- `web/src/tasks/TaskBoard.tsx` is roughly 780 lines. `TaskCard` owns compact
+  metadata, assignment, Jira discussion, editing, history, menus, transitions,
+  and drag behavior.
+- `web/src/api.ts` is roughly 900 lines and combines public contract types with
+  every HTTP operation.
+- `web/src/styles.css` is roughly 760 lines in one global
+  cascade, making component ownership and mobile regressions harder to see.
+
+Required next extractions are vertical and behavior-led:
+
+1. `useControlRoomModel` owns initial load, event refresh, and command results;
+   `App` remains composition and routing.
+2. Task query/filter/sort becomes a pure typed task-board model with direct unit
+   tests. It must not live in the view or in HTTP code.
+3. `TaskCard` splits into compact metadata, assignment control, and on-demand
+   detail panels. Do not create a generic card framework.
+4. API contracts split by domain (`tasks`, `workers`, `jira`, `presence`) while
+   keeping one small shared authenticated request helper.
+5. CSS moves with extracted feature components after their visual contracts are
+   stable. A wholesale CSS-module migration is not justified during alpha.
+
+### P1 — backend adapter concentration
+
+- `crates/swarm-api/src/lib.rs` is over 7,000 lines. Routing, state composition,
+  task handlers, worker lifecycle, workspace validation, diagnostics, tests, and
+  supervisors share one module.
+- `crates/swarm-persistence/src/lib.rs` is over 3,000 lines although Jira,
+  workers, decisions, notifications, dispatches, and outcomes have begun moving
+  to focused modules.
+- `crates/swarm-domain/src/lib.rs` is over 1,800 lines and should be grouped by
+  domain vocabulary before cross-Hive work expands it.
+
+The file size is evidence, not the rule. Split only at existing domain and
+ownership boundaries. Do not introduce microservices, repository traits per
+table, or generic command buses; those would conflict with the modular-monolith
+decision and YAGNI.
+
+Recommended sequence:
+
+1. Move API workspace/worker routes behind a `workers` adapter module because
+   outside-root approval and terminal-host startup now form a coherent boundary.
+2. Move task HTTP handlers behind a `tasks` adapter module while keeping all
+   transition rules in `swarm-application` and persistence.
+3. Continue extracting persistence by aggregate only when a changed aggregate
+   is already under test.
+4. Split domain types by the approved architecture modules without changing
+   public serialized contracts.
+
+### Closed contract gaps from this pass
+
+- Unassignment has persistence and browser tests proving that stable worker
+  ownership clears and a queued brief cannot later reach the former worker.
+- Explicit outside-root approval has API and terminal-host tests. An arbitrary
+  path must never silently become trusted, and filesystem roots remain blocked.
+- Drag insertion cues have interaction assertions for both tasks and workers;
+  arrow controls remain the accessible fallback.
+- Worker-rail resizing has keyboard and persisted-width tests and remains
+  disabled on mobile.
+- Desktop and mobile browser proof must still cover the same task filters and Jira
+  links now that they share one component.
+
+## Definition of a shareable component
+
+A component or hook should be shared when at least one is true:
+
+- it owns the same state transition in two places;
+- it implements the same accessibility contract in two places;
+- it renders one product concept whose changes must appear everywhere;
+- duplicated code has already drifted or caused a defect.
+
+It should remain local when similarity is cosmetic, consumers need materially
+different behavior, or the proposed API has more flexibility than current use
+cases require.
+
+## Review gate for new work
+
+Every feature pass answers these questions before merge:
+
+1. Which layer owns the new fact or transition?
+2. Is the behavior already implemented elsewhere?
+3. If repeated, do both copies have the same reason to change?
+4. Does the operator-facing label match the actual domain state?
+5. Can the main path be read at one level of abstraction?
+6. Are failure, recovery, mobile, desktop, and bounded-resource behavior tested?
+7. Did the change add a framework or future option that current product behavior
+   does not require?
+
+The audit is revisited after the task-board extraction, before Apiary UI work,
+and whenever a root browser or Rust adapter module grows by another major
+responsibility.

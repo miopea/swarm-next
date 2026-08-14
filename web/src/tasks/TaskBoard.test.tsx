@@ -117,6 +117,36 @@ test("keeps worker ownership visible while the assigned worker is sleeping", () 
   expect(within(card).getByRole("combobox", { name: /Assign Swarm worker/ })).toHaveValue(worker.id);
 });
 
+test("lets the operator return assigned work to the unassigned queue", () => {
+  const assigned = { ...task, state: "ready" as const, assigned_worker_id: worker.id };
+  const onAssign = vi.fn().mockResolvedValue(undefined);
+  renderBoard({ tasks: [assigned], onAssign });
+
+  fireEvent.change(screen.getByRole("combobox", { name: /Assign Swarm worker/ }), { target: { value: "" } });
+
+  expect(onAssign).toHaveBeenCalledWith(assigned, "");
+});
+
+test("does not infer assignment merely because a worker owns the repository", () => {
+  renderBoard({ tasks: [{ ...task, state: "ready", assigned_worker_id: null }] });
+
+  const card = screen.getByRole("article", { name: task.title });
+  expect(within(card).getByText("Unassigned", { selector: ".task-owner" })).toBeInTheDocument();
+  expect(within(card).getByRole("combobox", { name: /Assign Swarm worker/ })).toHaveValue("");
+});
+
+test("shares Jira project navigation and manual sync with the board controls", () => {
+  const onJiraSync = vi.fn();
+  renderBoard({
+    projects: [{ key: "WWD", name: "Website Development", url: "https://jira.example.test/issues/?jql=project" }],
+    onJiraSync,
+  });
+
+  expect(screen.getByRole("link", { name: "Open Website Development in Jira" })).toHaveAttribute("href", "https://jira.example.test/issues/?jql=project");
+  fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+  expect(onJiraSync).toHaveBeenCalledOnce();
+});
+
 test("distinguishes assigned work from work that has started", () => {
   const assignedReady = { ...task, state: "ready" as const, assigned_worker_id: worker.id };
   const active = { ...assignedReady, id: "task-2", title: "Actively implement reload", state: "active" as const };
@@ -254,6 +284,8 @@ test("moves open tasks with keyboard-accessible ordering controls", () => {
   onReorder.mockClear();
   const dataTransfer = { effectAllowed: "none", setData: vi.fn() };
   fireEvent.dragStart(screen.getByRole("article", { name: second.title }), { dataTransfer });
+  fireEvent.dragOver(screen.getByRole("article", { name: task.title }), { dataTransfer });
+  expect(screen.getByRole("article", { name: task.title })).toHaveClass("drop-target-before");
   fireEvent.drop(screen.getByRole("article", { name: task.title }), { dataTransfer });
   expect(onReorder).toHaveBeenCalledWith([second.id, task.id]);
 });

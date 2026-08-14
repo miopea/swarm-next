@@ -331,6 +331,51 @@ impl TaskStore {
         self.get_task(id)
     }
 
+    /// Returns an open task to the Hive queue without stopping its former worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the task does not exist, is already completed, or
+    /// the unassignment transaction cannot be committed.
+    pub fn unassign_task(&self, id: TaskId) -> Result<Task, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let state: Option<String> = transaction
+            .query_row(
+                "SELECT state FROM tasks WHERE id = ?1",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let state = state.ok_or(TaskStoreError::NotFound)?;
+        if state == TaskState::Completed.to_string() {
+            return Err(TaskStoreError::CompletedTask);
+        }
+        transaction.execute(
+            "DELETE FROM task_dispatches WHERE assignment_id IN (
+                 SELECT id FROM task_assignments WHERE task_id = ?1 AND released_at IS NULL
+             ) AND state = 'queued'",
+            [id.to_string()],
+        )?;
+        transaction.execute(
+            "UPDATE task_assignments SET released_at = unixepoch()
+             WHERE task_id = ?1 AND released_at IS NULL",
+            [id.to_string()],
+        )?;
+        transaction.execute(
+            "UPDATE tasks SET assigned_worker_id = NULL, updated_at = unixepoch() WHERE id = ?1",
+            [id.to_string()],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'unassigned')",
+            [id.to_string()],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_task(id)
+    }
+
     /// Lists tasks with their current active assignment.
     ///
     /// # Errors
@@ -1901,6 +1946,37 @@ mod tests {
         assert_eq!(activity.events[1].to_state, Some(TaskState::Ready));
         assert_eq!(activity.events[2].kind, TaskActivityKind::Assigned);
         assert_eq!(activity.events[5].to_state, Some(TaskState::Completed));
+    }
+
+    #[test]
+    fn unassigning_releases_worker_ownership_and_cancels_a_queued_brief() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Daisy",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
+        let session_id = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session_id).unwrap();
+        let task = store.create_task("Return this work", "/workspace").unwrap();
+        let assigned = store.assign_task_to_worker(task.id, worker.id).unwrap();
+        assert_eq!(assigned.dispatch_state, Some(TaskDispatchState::Queued));
+
+        let unassigned = store.unassign_task(task.id).unwrap();
+
+        assert_eq!(unassigned.assigned_worker_id, None);
+        assert_eq!(unassigned.assigned_session_id, None);
+        assert_eq!(unassigned.dispatch_state, None);
+        assert!(store.claim_task_dispatches(i64::MAX).unwrap().is_empty());
+        let activity = store.list_task_activity(task.id, 100).unwrap();
+        assert_eq!(
+            activity.events.last().unwrap().kind,
+            TaskActivityKind::Unassigned
+        );
     }
 
     #[test]
