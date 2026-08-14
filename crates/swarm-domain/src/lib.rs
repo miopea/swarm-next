@@ -312,6 +312,40 @@ impl Apiary {
     pub const fn shared_work_backend(&self) -> SharedWorkBackend {
         self.shared_work_backend
     }
+
+    /// Reconstitutes an Apiary whose immutable identity and backend were loaded
+    /// from durable storage.
+    #[must_use]
+    pub fn persisted(
+        id: ApiaryId,
+        name: impl Into<String>,
+        keeper_operator_id: OperatorId,
+        shared_work_backend: SharedWorkBackend,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            keeper_operator_id,
+            shared_work_backend,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalApiaryRole {
+    Keeper,
+    Member,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "mode")]
+pub enum LocalApiaryContext {
+    Personal,
+    Federated {
+        apiary: Apiary,
+        local_role: LocalApiaryRole,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1573,6 +1607,30 @@ mod tests {
         assert_eq!(jira.shared_work_backend(), SharedWorkBackend::Jira);
         assert_eq!(native.shared_work_backend(), SharedWorkBackend::Native);
         assert_ne!(jira.id, native.id);
+    }
+
+    #[test]
+    fn persisted_apiary_context_keeps_backend_and_local_role_explicit() {
+        let keeper_id = OperatorId::new();
+        let apiary = Apiary::persisted(
+            ApiaryId::new(),
+            "Garden",
+            keeper_id,
+            SharedWorkBackend::Jira,
+        );
+        let context = LocalApiaryContext::Federated {
+            apiary: apiary.clone(),
+            local_role: LocalApiaryRole::Keeper,
+        };
+
+        assert_eq!(apiary.shared_work_backend(), SharedWorkBackend::Jira);
+        assert!(matches!(
+            context,
+            LocalApiaryContext::Federated {
+                local_role: LocalApiaryRole::Keeper,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -29,11 +29,11 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use swarm_application::{ApplicationError, TaskService};
 use swarm_domain::{
-    ControlRoomEventKind, DecisionRequestId, JiraProjectBindingId, JiraProjectScope,
-    JiraStatusMapping, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
-    PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
-    QueenAutonomyPolicy, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState,
-    WorkerId, WorkerProfile, WorkerSessionId,
+    ControlRoomEventKind, DecisionRequestId, HiveIdentity, JiraProjectBindingId, JiraProjectScope,
+    JiraStatusMapping, LocalApiaryContext, NotificationPolicy, PresenceDeviceClass,
+    PresenceDeviceId, PresenceMode, PresenceObservationState, ProviderConversationId, ProviderKind,
+    QueenAutonomyLevel, QueenAutonomyPolicy, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
+    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
@@ -1129,6 +1129,13 @@ struct WorkspaceView {
     configured_worker_id: Option<WorkerId>,
 }
 
+#[derive(Debug, Serialize)]
+struct LocalHiveView {
+    #[serde(flatten)]
+    identity: HiveIdentity,
+    apiary_context: LocalApiaryContext,
+}
+
 fn worker_view(
     profile: WorkerProfile,
     running: bool,
@@ -1654,7 +1661,17 @@ async fn local_hive(
     let identity = task_store(&state)?
         .local_hive_identity()
         .map_err(|error| task_store_error(&error))?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(identity)).into_response())
+    let apiary_context = task_store(&state)?
+        .local_apiary_context()
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(LocalHiveView {
+            identity,
+            apiary_context,
+        }),
+    )
+        .into_response())
 }
 
 async fn download_database_backup(
@@ -4589,6 +4606,7 @@ mod tests {
         assert_eq!(json["hive"]["id"], expected.hive.id.to_string());
         assert_eq!(json["hive"]["name"], "My Hive");
         assert!(json["hive"]["apiary_id"].is_null());
+        assert_eq!(json["apiary_context"]["mode"], "personal");
     }
 
     #[tokio::test]

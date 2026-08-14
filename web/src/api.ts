@@ -81,6 +81,11 @@ export type HistoryDiagnostics = {
 export type HiveIdentity = {
   operator: { id: string; display_name: string };
   hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
+  apiary_context?: { mode: "personal" } | {
+    mode: "federated";
+    apiary: { id: string; name: string; keeper_operator_id: string; shared_work_backend: "jira" | "native" };
+    local_role: "keeper" | "member";
+  };
 };
 export type DogfoodReport = {
   id: string;

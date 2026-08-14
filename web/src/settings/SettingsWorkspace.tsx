@@ -211,7 +211,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         <dl className="diagnostic-list">
           <div><dt>Hive</dt><dd>{hiveIdentity?.hive.name ?? "Unavailable"}</dd></div>
           <div><dt>Operator</dt><dd>{hiveIdentity?.operator.display_name ?? "Unavailable"}</dd></div>
-          <div><dt>Membership</dt><dd>{hiveIdentity?.hive.apiary_id ? "Apiary member" : "Personal Hive"}</dd></div>
+          <div><dt>Membership</dt><dd>{apiaryMembershipLabel(hiveIdentity)}</dd></div>
         </dl>
       </section>
 
@@ -330,6 +330,15 @@ function lockDetectionLabel(state: LockDetectionState) {
   if (state === "denied") return "Not granted; activity and visibility fallback remain active.";
   if (state === "error") return "Could not start; activity and visibility fallback remain active.";
   return "Unavailable in this browser; fallback presence remains active.";
+}
+
+function apiaryMembershipLabel(identity: HiveIdentity | undefined) {
+  if (!identity) return "Unavailable";
+  if (!identity.apiary_context) return identity.hive.apiary_id ? "Apiary member" : "Personal Hive";
+  if (identity.apiary_context.mode === "personal") return "Personal Hive";
+  const backend = identity.apiary_context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native";
+  const role = identity.apiary_context.local_role === "keeper" ? "Keeper" : "Member";
+  return `${identity.apiary_context.apiary.name} · ${role} · ${backend}`;
 }
 function liveFeedLabel(state: LiveFeedState) {
   if (state === "connected") return "Connected";

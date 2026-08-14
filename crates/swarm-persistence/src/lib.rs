@@ -7,10 +7,10 @@ use std::{
 
 use rusqlite::{Connection, OptionalExtension, params};
 use swarm_domain::{
-    ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
-    HiveIdentity, Operator, OperatorId, Task, TaskActivity, TaskActivityKind, TaskActivityPage,
-    TaskDetailsUpdate, TaskDispatchState, TaskId, TaskOutcomeDeliveryState, TaskPriority,
-    TaskState, WorkerId, WorkerSessionId,
+    Apiary, ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
+    HiveIdentity, LocalApiaryContext, LocalApiaryRole, Operator, OperatorId, SharedWorkBackend,
+    Task, TaskActivity, TaskActivityKind, TaskActivityPage, TaskDetailsUpdate, TaskDispatchState,
+    TaskId, TaskOutcomeDeliveryState, TaskPriority, TaskState, WorkerId, WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -273,6 +273,55 @@ impl TaskStore {
                             name: row.get(3)?,
                             operator_id,
                             apiary_id,
+                        },
+                    })
+                },
+            )
+            .map_err(TaskStoreError::from)
+    }
+
+    /// Returns the local Hive's optional federation without inferring any
+    /// Steward authority that has not been durably granted.
+    ///
+    /// # Errors
+    /// Returns an error when identity or Apiary persistence is unavailable or invalid.
+    pub fn local_apiary_context(&self) -> Result<LocalApiaryContext, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "
+                SELECT a.id, a.name, a.keeper_operator_id, a.shared_work_backend,
+                       h.operator_id
+                FROM local_hive_identity l
+                JOIN hives h ON h.id = l.hive_id
+                LEFT JOIN apiaries a ON a.id = h.apiary_id
+                WHERE l.singleton = 1
+                ",
+                [],
+                |row| {
+                    let Some(apiary_id) = row.get::<_, Option<String>>(0)? else {
+                        return Ok(LocalApiaryContext::Personal);
+                    };
+                    let apiary_id = parse_domain_id::<ApiaryId>(&apiary_id)?;
+                    let keeper_operator_id =
+                        parse_domain_id::<OperatorId>(&row.get::<_, String>(2)?)?;
+                    let local_operator_id =
+                        parse_domain_id::<OperatorId>(&row.get::<_, String>(4)?)?;
+                    let backend = row
+                        .get::<_, String>(3)?
+                        .parse::<SharedWorkBackend>()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                    Ok(LocalApiaryContext::Federated {
+                        apiary: Apiary::persisted(
+                            apiary_id,
+                            row.get::<_, String>(1)?,
+                            keeper_operator_id,
+                            backend,
+                        ),
+                        local_role: if keeper_operator_id == local_operator_id {
+                            LocalApiaryRole::Keeper
+                        } else {
+                            LocalApiaryRole::Member
                         },
                     })
                 },
@@ -2541,6 +2590,42 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn local_apiary_context_is_personal_until_durable_membership_exists() {
+        let store = TaskStore::in_memory().unwrap();
+        assert_eq!(
+            store.local_apiary_context().unwrap(),
+            LocalApiaryContext::Personal
+        );
+
+        let identity = store.local_hive_identity().unwrap();
+        let apiary_id = ApiaryId::new();
+        {
+            let connection = store.connection().unwrap();
+            connection
+                .execute(
+                    "INSERT INTO apiaries (id, name, keeper_operator_id, shared_work_backend)
+                     VALUES (?1, 'Garden', ?2, 'jira')",
+                    params![apiary_id.to_string(), identity.operator.id.to_string()],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE hives SET apiary_id = ?1 WHERE id = ?2",
+                    params![apiary_id.to_string(), identity.hive.id.to_string()],
+                )
+                .unwrap();
+        }
+
+        assert!(matches!(
+            store.local_apiary_context().unwrap(),
+            LocalApiaryContext::Federated {
+                apiary,
+                local_role: LocalApiaryRole::Keeper,
+            } if apiary.id == apiary_id && apiary.shared_work_backend() == SharedWorkBackend::Jira
+        ));
     }
 
     #[test]
