@@ -63,6 +63,41 @@ Access, mTLS, or a private network without changing this protocol. Rotating a
 node key is a separately authorized, audited protocol; presenting a new
 self-signed card never silently replaces a pinned key.
 
+### Operator-facing invitation flow
+
+Connection-card files are an implementation-safe bootstrap artifact, not the
+primary product experience. The normal flow is a short-lived Keeper invitation
+URL (and matching QR code):
+
+1. Keeper chooses **Invite a Hive**, scopes the invitation, and receives one
+   expiring, single-redemption URL rooted at the Keeper's reachable HTTPS base
+   URL.
+2. The invited Hive opens the URL and sends its signed public connection card
+   outbound to Keeper. The one-time redemption binds the invitation to that
+   exact Hive/node key before Keeper issues the existing signed invitation
+   envelope.
+3. The Hive previews Apiary, Keeper, policy, backend, and promoted-project
+   requirements locally, then explicitly accepts and joins through the existing
+   fail-closed protocol.
+
+The URL is bootstrap capability, not durable membership authority. It expires,
+is consumed once, and cannot replace the signed identities, exact policy
+acceptance, readiness checks, receipt, or node credential. Download/upload of
+signed cards and bundles remains an advanced manual/offline recovery path.
+
+The Keeper base URL must be reachable from every member Hive. A public domain,
+private VPN/mesh name, or trusted LAN HTTPS name is valid. Loopback names are
+valid only for explicitly marked same-machine development because `localhost`
+on a member points back to that member. Member Hives initiate outbound
+authenticated connections to Keeper; ordinary developer machines require no
+inbound port or public URL.
+
+Keeper unavailability must degrade coordination, not local work. Hives retain
+workers, private tasks, terminals, and their local Jira operation, queue bounded
+outbound federation events, show Apiary transport as offline, and reconcile in
+order after reconnect. Cross-Hive rollups, new shared assignments, project
+promotion, and takeover wait for Keeper reachability.
+
 ## Consequences
 
 - A Keeper can distinguish identity discovery from invitation, policy

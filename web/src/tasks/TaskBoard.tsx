@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 
-import type { JiraComment, JiraTaskLink, SessionSummary, Task, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput, Worker } from "../api";
+import { fetchEmailTaskSources, type EmailTaskSource, type JiraComment, type JiraTaskLink, type SessionSummary, type Task, type TaskActivityPage, type TaskDraftInput, type TaskPriority, type TaskState, type TaskUpdateInput, type Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import { useReorderDrag } from "../shared/useReorderDrag";
 import JiraTaskIntake from "./JiraTaskIntake";
+import EmailTaskIntake from "./EmailTaskIntake";
+import EmailResolutionPanel from "./EmailResolutionPanel";
 import JiraDiscussion from "./JiraDiscussion";
 import TaskActivityPanel from "./TaskActivityPanel";
 import TaskAssignment from "./TaskAssignment";
@@ -32,6 +34,7 @@ type Props = {
   onAddJiraComment: (taskId: string, body: string) => Promise<{ state: string }>;
   onRetryJira: (task: Task) => Promise<void>;
   onJiraImported: () => Promise<void>;
+  onEmailImported?: () => Promise<void>;
   onReorder: (taskIds: string[]) => Promise<void>;
   query?: string;
   filter?: TaskBoardFilter;
@@ -92,6 +95,7 @@ export default function TaskBoard({
   onAddJiraComment,
   onRetryJira,
   onJiraImported,
+  onEmailImported = onJiraImported,
   onReorder,
   query = "",
   filter = "all",
@@ -113,6 +117,8 @@ export default function TaskBoard({
   const [workerId, setWorkerId] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
   const [jiraOpen, setJiraOpen] = useState(false);
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailTaskSources, setEmailTaskSources] = useState<EmailTaskSource[]>([]);
   const titleInput = useRef<HTMLInputElement>(null);
   const completedTasksPanel = useRef<HTMLDetailsElement>(null);
 
@@ -131,6 +137,13 @@ export default function TaskBoard({
   }, [assignableWorkers, workerId]);
 
   const taskView = buildTaskBoardView(tasks, jiraTaskLinks, workers, { text: query, filter, sort, project, worker });
+  useEffect(() => {
+    let cancelled = false;
+    void fetchEmailTaskSources(operatorToken)
+      .then((sources) => { if (!cancelled) setEmailTaskSources(Array.isArray(sources) ? sources : []); })
+      .catch(() => { if (!cancelled) setEmailTaskSources([]); });
+    return () => { cancelled = true; };
+  }, [operatorToken, tasks]);
   const { open: openTasks, completed: completedTasks, jiraByTask } = taskView;
   const canReorder = sort === "queue" && !query.trim() && filter === "all";
   const taskReorder = useReorderDrag(openTasks.map((task) => task.id), (taskIds) => void onReorder(taskIds));
@@ -151,6 +164,7 @@ export default function TaskBoard({
     if (!composeRequest) return;
     setComposeOpen(true);
     setJiraOpen(false);
+    setEmailOpen(false);
   }, [composeRequest]);
 
   useEffect(() => {
@@ -169,12 +183,12 @@ export default function TaskBoard({
 
   return (
     <div className="task-board">
-      <section className={`task-compose${composeOpen || jiraOpen ? " compose-open" : " compose-collapsed"}`} aria-labelledby="new-task-heading">
+      <section className={`task-compose${composeOpen || jiraOpen || emailOpen ? " compose-open" : " compose-collapsed"}`} aria-labelledby="new-task-heading">
         <div className="task-compose-header">
           <div>
             <p className="eyebrow">Add work</p>
             <h3 id="new-task-heading">What should the Hive take on next?</h3>
-            <p>Create focused work or claim an unassigned Jira issue.</p>
+            <p>Create focused work, claim Jira work, or turn an Inbox report into a task.</p>
           </div>
           <div className="task-entry-actions">
           <button
@@ -187,6 +201,7 @@ export default function TaskBoard({
               else {
                 setComposeOpen(true);
                 setJiraOpen(false);
+                setEmailOpen(false);
                 requestAnimationFrame(() => titleInput.current?.focus());
               }
             }}
@@ -198,9 +213,18 @@ export default function TaskBoard({
             className={jiraOpen ? "primary-action" : "secondary-button"}
             aria-expanded={jiraOpen}
             aria-controls="jira-work-source"
-            onClick={() => { setJiraOpen((current) => !current); setComposeOpen(false); }}
+            onClick={() => { setJiraOpen((current) => !current); setComposeOpen(false); setEmailOpen(false); }}
           >
             {jiraOpen ? "Close Jira work" : "Choose Jira work"}
+          </button>
+          <button
+            type="button"
+            className={emailOpen ? "primary-action" : "secondary-button"}
+            aria-expanded={emailOpen}
+            aria-controls="email-work-source"
+            onClick={() => { setEmailOpen((current) => !current); setComposeOpen(false); setJiraOpen(false); }}
+          >
+            {emailOpen ? "Close email" : "Import email"}
           </button>
           </div>
         </div>
@@ -246,6 +270,7 @@ export default function TaskBoard({
           <button disabled={busy || !title.trim() || !workerId}>Create draft</button>
         </form>}
         {jiraOpen ? <div id="jira-work-source"><JiraTaskIntake operatorToken={operatorToken} onImported={onJiraImported} /></div> : null}
+        {emailOpen ? <div id="email-work-source"><EmailTaskIntake operatorToken={operatorToken} onImported={onEmailImported} /></div> : null}
       </section>
 
       <details className="task-mobile-controls">
@@ -267,6 +292,8 @@ export default function TaskBoard({
                 key={task.id}
                 task={task}
                 jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
+                emailSource={emailTaskSources.find((source) => source.task_id === task.id)}
+                operatorToken={operatorToken}
                 sessions={sessions}
                 workers={workers}
                 busy={busy}
@@ -325,6 +352,8 @@ export default function TaskBoard({
                 key={task.id}
                 task={task}
                 jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
+                emailSource={emailTaskSources.find((source) => source.task_id === task.id)}
+                operatorToken={operatorToken}
                 sessions={sessions}
                 workers={workers}
                 busy={busy}
@@ -356,7 +385,7 @@ export default function TaskBoard({
   );
 }
 
-function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "operatorToken" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onJiraImported" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; dropTarget: boolean; onDragTarget: () => void; onDragLeave: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, jiraLink, emailSource, operatorToken, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "operatorToken" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onJiraImported" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; emailSource?: EmailTaskSource; operatorToken: string; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; dropTarget: boolean; onDragTarget: () => void; onDragLeave: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -365,6 +394,7 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
   const [historyLoading, setHistoryLoading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [discussionOpen, setDiscussionOpen] = useState(false);
+  const [emailDetailsOpen, setEmailDetailsOpen] = useState(false);
   const cardRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -437,6 +467,7 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
       <div className="task-actions">
         {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
         {!editing && jiraLink && <button className="text-button" disabled={busy} onClick={() => void toggleDiscussion()}>{discussionOpen ? "Hide discussion" : "Discussion"}</button>}
+        {!editing && emailSource && <button className="text-button" disabled={busy} onClick={() => setEmailDetailsOpen((current) => !current)}>{emailDetailsOpen ? "Hide email" : task.state === "completed" ? "Close email loop" : "Email source"}</button>}
         {!editing && (
           <button className="task-menu-trigger" aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)}>
             <span aria-hidden="true">•••</span>
@@ -462,6 +493,7 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
         />
       )}
       {discussionOpen && jiraLink && <JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} />}
+      {emailDetailsOpen && emailSource && <EmailResolutionPanel operatorToken={operatorToken} task={task} source={emailSource} />}
     </article>
   );
 }

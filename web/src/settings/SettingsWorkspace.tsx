@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { downloadDatabaseBackup, fetchDevelopmentRuntime, fetchJiraReadiness, fetchTerminalHostStatus, type ControlRoomEvent, type DevelopmentRuntime, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, fetchDevelopmentRuntime, fetchEmailReadiness, fetchJiraReadiness, fetchTerminalHostStatus, type ControlRoomEvent, type DevelopmentRuntime, type EmailReadiness, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
 import { downloadBlob } from "../shared/download";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
@@ -10,6 +10,7 @@ import type { NotificationCapabilityState } from "../notifications/NotificationC
 import ApiarySettings from "./ApiarySettings";
 import DevelopmentReloadAction from "./DevelopmentReloadAction";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
+import EmailSettings from "./EmailSettings";
 import JiraSettings from "./JiraSettings";
 import WorkerSettings from "./WorkerSettings";
 
@@ -53,6 +54,8 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   const [developmentRuntime, setDevelopmentRuntime] = useState<DevelopmentRuntime>();
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
+  const [emailReadiness, setEmailReadiness] = useState<EmailReadiness>();
+  const [emailUnavailable, setEmailUnavailable] = useState(false);
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState(() => window.location.hash === "#settings-integrations" ? "settings-integrations" : "settings-crew");
   useEffect(() => {
@@ -74,6 +77,13 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
     void fetchJiraReadiness(operatorToken)
       .then((readiness) => { if (!cancelled) setJiraReadiness(readiness); })
       .catch(() => { if (!cancelled) setJiraUnavailable(true); });
+    return () => { cancelled = true; };
+  }, [operatorToken]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchEmailReadiness(operatorToken)
+      .then((readiness) => { if (!cancelled) { setEmailReadiness(readiness); setEmailUnavailable(false); } })
+      .catch(() => { if (!cancelled) setEmailUnavailable(true); });
     return () => { cancelled = true; };
   }, [operatorToken]);
   async function downloadBackup() {
@@ -231,20 +241,36 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         <dl className="diagnostic-list">
           <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
           <div><dt>Worker engine</dt><dd>{workerEngineLabel(health, terminalHostStatus)}</dd></div>
+          {health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? (
+            <div><dt>Workers affected</dt><dd>{terminalHostStatus.running_sessions} active worker{terminalHostStatus.running_sessions === 1 ? "" : "s"} will briefly stop · conversations retained</dd></div>
+          ) : null}
           <div><dt>Live updates</dt><dd>{liveFeedLabel(liveFeedState)}</dd></div>
           <div><dt>Running workers</dt><dd>{workers.filter((worker) => worker.running).length}</dd></div>
           <div><dt>Retained sessions</dt><dd>{sessions.length}</dd></div>
-          <div><dt>Worker updates</dt><dd>Preserved during API releases</dd></div>
+          <div><dt>Development reload</dt><dd>No worker interruption</dd></div>
         </dl>
         {health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? (
           <div className="maintenance-action">
-            <p>The new worker engine is ready. Applying it briefly closes every terminal, then revives Queen and your configured always-active workers with their saved provider conversations and task ownership.</p>
+            <div className="runtime-update-comparison" aria-label="Update interruption comparison">
+              <div className="runtime-impact-card runtime-impact-restart">
+                <span className="runtime-impact-label">Worker engine update</span>
+                <strong>Briefly stops active workers</strong>
+                <p>All Claude and Codex terminal processes close while the engine is replaced. Queen and always-active workers then resume from their saved conversations. Other workers stay sleeping until you wake them.</p>
+                <small>Durable: worker identities, provider conversation IDs, tasks, ownership, and terminal history.</small>
+              </div>
+              <div className="runtime-impact-card runtime-impact-reload">
+                <span className="runtime-impact-label">Development reload</span>
+                <strong>Workers keep running</strong>
+                <p>Only the API and web working copy are rebuilt and swapped. The page reconnects, but the separate worker engine and its Claude or Codex processes are not restarted.</p>
+                <small>Risk: an invalid build is rejected and the current app remains active.</small>
+              </div>
+            </div>
             {!confirmMaintenance ? (
               <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(true)}>Prepare worker engine update</button>
             ) : (
               <div className="maintenance-confirmation" role="group" aria-label="Confirm worker engine update">
                 <strong>Restart {terminalHostStatus.running_sessions} active worker{terminalHostStatus.running_sessions === 1 ? "" : "s"} now?</strong>
-                <span>Open terminal processes will close. Durable workers and tasks will remain.</span>
+                <span>Claude/Codex processes will close. Worker identities, tasks, and known conversation IDs remain durable.</span>
                 <div className="settings-actions">
                   <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(false)}>Not now</button>
                   <button className="primary-action" disabled={busy} onClick={() => { setConfirmMaintenance(false); void onUpdateWorkerEngine(); }}>Restart and update</button>
@@ -257,6 +283,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
       </section>
 
       <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} />
+      <EmailSettings operatorToken={operatorToken} readiness={emailReadiness} unavailable={emailUnavailable} />
 
       <section id="settings-backup" className="settings-card" aria-labelledby="backup-heading">
         <div><p className="eyebrow">Backup</p><h3 id="backup-heading">Carry your Hive safely</h3></div>
@@ -297,7 +324,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
 function workerEngineLabel(health: Health | undefined, host: TerminalHostStatus | undefined) {
   if (!host) return "Unavailable";
   if (health && health.version !== host.host_version) {
-    return `Update waiting · ${host.running_sessions} active`;
+    return "1 update ready";
   }
   return `Current · ${host.running_sessions} active`;
 }

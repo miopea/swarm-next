@@ -157,6 +157,22 @@ pub enum EmailReplyFailure {
 }
 
 impl TaskStore {
+    /// Moves crash-interrupted reply sends to explicit uncertainty. They are never
+    /// replayed automatically because Microsoft may have accepted the original send.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn recover_inflight_email_replies(&self) -> Result<usize, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection.execute(
+            "UPDATE email_reply_deliveries
+             SET state = 'uncertain', last_error = 'Swarm restarted before delivery was confirmed',
+                 updated_at = unixepoch()
+             WHERE state = 'dispatching'",
+            [],
+        )?)
+    }
+
     /// Imports one already-sanitized message and its private attachment metadata atomically.
     /// Repeating the exact integration/message identity returns the original task.
     ///
@@ -297,6 +313,75 @@ impl TaskStore {
         Ok(Some(source))
     }
 
+    /// Lists immutable email sources attached to tasks, newest imports first.
+    ///
+    /// # Errors
+    /// Returns an error when source metadata is corrupt or persistence is unavailable.
+    pub fn email_task_links(&self) -> Result<Vec<EmailTaskLink>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut sources = {
+            let mut statement = connection.prepare(
+                "SELECT task_id, integration_id, message_id, conversation_id,
+                        internet_message_id, sender_name, sender_address, received_at,
+                        web_url, imported_at
+                 FROM email_message_links ORDER BY imported_at DESC, task_id DESC",
+            )?;
+            statement
+                .query_map([], email_task_link_from_row)?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut attachment_statement = connection.prepare(
+            "SELECT storage_name, display_name, media_type, byte_size, is_inline, content_id
+             FROM email_task_attachments WHERE task_id = ?1 ORDER BY created_at, id",
+        )?;
+        for source in &mut sources {
+            source.attachments = attachment_statement
+                .query_map([source.task_id.to_string()], email_attachment_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+        }
+        Ok(sources)
+    }
+
+    /// Lists recorded deployments for one task, newest first.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or stored data is corrupt.
+    pub fn task_deployments(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<TaskDeploymentRecord>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT id, task_id, environment, reference, deployed_at, recorded_at
+             FROM task_deployments WHERE task_id = ?1
+             ORDER BY deployed_at DESC, recorded_at DESC, id DESC",
+        )?;
+        Ok(statement
+            .query_map([task_id.to_string()], deployment_from_row)?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Returns the one reply lifecycle record attached to an email task.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or stored data is corrupt.
+    pub fn email_reply_for_task(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<EmailReplyDispatch>, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT id, task_id, body, state, idempotency_key, attempts,
+                        available_at, attempted_at, delivered_at, provider_reply_id, last_error
+                 FROM email_reply_deliveries WHERE task_id = ?1",
+                [task_id.to_string()],
+                email_reply_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     /// Records operator-approved deployment evidence for a completed task.
     ///
     /// # Errors
@@ -410,6 +495,33 @@ impl TaskStore {
         Ok(dispatch)
     }
 
+    /// Updates a reply while it is still an operator-reviewed draft.
+    ///
+    /// # Errors
+    /// Rejects invalid text, unknown replies, replies already queued for delivery, or unavailable persistence.
+    pub fn update_email_reply_draft(
+        &self,
+        task_id: TaskId,
+        body: &str,
+    ) -> Result<EmailReplyDispatch, TaskStoreError> {
+        let body = body.trim();
+        if !bounded_text(body, MAX_EMAIL_REPLY_BYTES) {
+            return Err(TaskStoreError::InvalidEmailReply);
+        }
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE email_reply_deliveries SET body = ?2, updated_at = unixepoch()
+             WHERE task_id = ?1 AND state = 'draft'",
+            params![task_id.to_string(), body],
+        )?;
+        if changed != 1 {
+            return Err(TaskStoreError::InvalidEmailReply);
+        }
+        drop(connection);
+        self.email_reply_for_task(task_id)?
+            .ok_or(TaskStoreError::InvalidEmailReply)
+    }
+
     /// Moves an operator-reviewed draft into the durable delivery queue.
     ///
     /// # Errors
@@ -437,7 +549,7 @@ impl TaskStore {
         let id = transaction
             .query_row(
                 "SELECT id FROM email_reply_deliveries
-                 WHERE state IN ('queued','uncertain') AND available_at <= unixepoch()
+                 WHERE state = 'queued' AND available_at <= unixepoch()
                    AND attempts < 3
                  ORDER BY available_at, created_at, id LIMIT 1",
                 [],
@@ -479,6 +591,28 @@ impl TaskStore {
                  last_error = NULL, updated_at = unixepoch()
              WHERE id = ?1 AND state = 'dispatching'",
             params![id, provider_reply_id.trim()],
+        )?;
+        if changed != 1 {
+            return Err(TaskStoreError::InvalidEmailReply);
+        }
+        email_reply_by_id(&connection, id)?.ok_or(TaskStoreError::InvalidEmailReply)
+    }
+
+    /// Explicitly retries a crash-ambiguous reply after operator review.
+    ///
+    /// # Errors
+    /// Rejects unknown or non-uncertain replies and unavailable persistence.
+    pub fn retry_uncertain_email_reply(
+        &self,
+        id: &str,
+    ) -> Result<EmailReplyDispatch, TaskStoreError> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE email_reply_deliveries
+             SET state = 'queued', available_at = unixepoch(),
+                 last_error = NULL, updated_at = unixepoch()
+             WHERE id = ?1 AND state = 'uncertain' AND attempts < 3",
+            [id],
         )?;
         if changed != 1 {
             return Err(TaskStoreError::InvalidEmailReply);
@@ -793,6 +927,10 @@ mod tests {
         assert_eq!(first.task.priority, TaskPriority::High);
         assert_eq!(first.task.workspace, "email://inbox");
         assert_eq!(first.source.attachments.len(), 1);
+        assert_eq!(
+            store.email_task_links().unwrap(),
+            vec![first.source.clone()]
+        );
         assert_eq!(store.list_tasks().unwrap().len(), 1);
     }
 
@@ -835,6 +973,13 @@ mod tests {
             store.prepare_email_reply(imported.task.id, "Duplicate"),
             Err(TaskStoreError::EmailReplyAlreadyExists)
         ));
+        let draft = store
+            .update_email_reply_draft(
+                imported.task.id,
+                "Thank you for reporting this. The deployed form now saves your phone number.",
+            )
+            .unwrap();
+        assert!(draft.body.contains("deployed form"));
         let queued = store.queue_email_reply(&draft.id).unwrap();
         assert_eq!(queued.state, EmailReplyState::Queued);
         let claimed = store.claim_email_reply().unwrap().unwrap();
@@ -863,5 +1008,41 @@ mod tests {
             Err(TaskStoreError::InvalidEmailAttachment)
         ));
         assert!(store.list_tasks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn uncertain_delivery_never_replays_without_operator_retry() {
+        let store = TaskStore::in_memory().unwrap();
+        let imported = store
+            .import_email_message(&message(&[]), TaskPriority::Normal)
+            .unwrap();
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+        store
+            .record_task_deployment(imported.task.id, "production", "release-42", 1_786_730_100)
+            .unwrap();
+        let draft = store
+            .prepare_email_reply(imported.task.id, "The reported issue is now fixed.")
+            .unwrap();
+        store.queue_email_reply(&draft.id).unwrap();
+        store.claim_email_reply().unwrap().unwrap();
+        let uncertain = store
+            .fail_email_reply(
+                &draft.id,
+                &EmailReplyFailure::Uncertain("connection ended after send".into()),
+            )
+            .unwrap();
+        assert_eq!(uncertain.state, EmailReplyState::Uncertain);
+        assert!(store.claim_email_reply().unwrap().is_none());
+        assert_eq!(
+            store.retry_uncertain_email_reply(&draft.id).unwrap().state,
+            EmailReplyState::Queued
+        );
     }
 }

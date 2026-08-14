@@ -1,10 +1,13 @@
 mod agent;
 mod attach;
 mod attachments;
+mod email_attachments;
 pub mod federation_http;
 mod jira;
 mod jira_oauth;
+mod microsoft_oauth;
 mod notifications;
+mod outlook;
 mod terminal_socket;
 
 use std::{
@@ -90,18 +93,21 @@ pub struct AppState {
     development_reload: Arc<Mutex<()>>,
     coordination_delivery: Arc<Mutex<()>>,
     jira_delivery: Arc<Mutex<()>>,
+    email_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, ProviderActivity>>>,
     control_room_notify: Arc<Notify>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
+    email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
     workspace_roots: Arc<Vec<PathBuf>>,
     maintenance_request_path: Option<Arc<PathBuf>>,
     development_reload_request_path: Option<Arc<PathBuf>>,
     development_reload_status_path: Option<Arc<PathBuf>>,
     maintenance_timeout: Duration,
     jira_readiness: jira::JiraReadinessProbe,
+    outlook: outlook::OutlookProbe,
     public_base_url: Option<Arc<str>>,
 }
 
@@ -120,18 +126,21 @@ impl AppState {
             development_reload: Arc::new(Mutex::new(())),
             coordination_delivery: Arc::new(Mutex::new(())),
             jira_delivery: Arc::new(Mutex::new(())),
+            email_delivery: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
             control_room_notify: Arc::new(Notify::new()),
             notification_sender: None,
             attachment_store: None,
+            email_attachment_store: None,
             workspace_roots: Arc::new(Vec::new()),
             maintenance_request_path: None,
             development_reload_request_path: None,
             development_reload_status_path: None,
             maintenance_timeout: Duration::from_secs(45),
             jira_readiness: jira::JiraReadinessProbe::default(),
+            outlook: outlook::OutlookProbe::default(),
             public_base_url: None,
         }
     }
@@ -176,6 +185,34 @@ impl AppState {
         Ok(self)
     }
 
+    /// Enables operator-driven Microsoft OAuth with host-owned durable tokens.
+    ///
+    /// # Errors
+    /// Rejects invalid tenant/callback settings or unreadable token storage.
+    pub fn with_outlook_oauth(
+        mut self,
+        tenant_id: &str,
+        client_id: impl Into<Arc<str>>,
+        client_secret: impl Into<Arc<str>>,
+        public_base_url: &str,
+        token_path: PathBuf,
+    ) -> Result<Self, String> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|error| format!("Microsoft OAuth client could not start: {error}"))?;
+        let oauth = microsoft_oauth::MicrosoftOAuthClient::new(
+            client,
+            tenant_id,
+            client_id,
+            client_secret,
+            public_base_url,
+            token_path,
+        )?;
+        self.outlook = outlook::OutlookProbe::oauth(oauth);
+        Ok(self)
+    }
+
     /// Configures the HTTPS endpoint placed in signed federation invitations.
     /// Loopback HTTP is accepted only for isolated local testing.
     ///
@@ -212,6 +249,12 @@ impl AppState {
     #[must_use]
     pub fn with_attachment_store(mut self, root: PathBuf) -> Self {
         self.attachment_store = Some(AttachmentStore::new(root));
+        self
+    }
+
+    #[must_use]
+    pub fn with_email_attachment_store(mut self, root: PathBuf) -> Self {
+        self.email_attachment_store = Some(email_attachments::EmailAttachmentStore::new(root));
         self
     }
 
@@ -398,6 +441,56 @@ impl AppState {
         .await;
     }
 
+    /// Delivers one operator-approved email resolution reply, if queued.
+    pub async fn deliver_email_replies(&self) {
+        let _guard = self.email_delivery.lock().await;
+        let Some(store) = self.task_store.as_ref() else {
+            return;
+        };
+        let dispatch = match store.claim_email_reply() {
+            Ok(Some(dispatch)) => dispatch,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(%error, "email reply queue could not be claimed");
+                return;
+            }
+        };
+        let Ok(Some(source)) = store.email_task_link(dispatch.task_id) else {
+            let _ = store.fail_email_reply(
+                &dispatch.id,
+                &swarm_persistence::EmailReplyFailure::Permanent(
+                    "The original email source is no longer available".into(),
+                ),
+            );
+            return;
+        };
+        let outcome = self.outlook.reply(&source.message_id, &dispatch.body).await;
+        let result = match outcome {
+            Ok(receipt) => store.complete_email_reply(&dispatch.id, &receipt),
+            Err(outlook::OutlookError::AmbiguousDelivery) => store.fail_email_reply(
+                &dispatch.id,
+                &swarm_persistence::EmailReplyFailure::Uncertain(
+                    "Microsoft may have accepted the reply; review the original thread before retrying"
+                        .into(),
+                ),
+            ),
+            Err(outlook::OutlookError::NetworkUnavailable) => store.fail_email_reply(
+                &dispatch.id,
+                &swarm_persistence::EmailReplyFailure::Retryable(
+                    "Microsoft Outlook is temporarily unavailable".into(),
+                ),
+            ),
+            Err(error) => store.fail_email_reply(
+                &dispatch.id,
+                &swarm_persistence::EmailReplyFailure::Permanent(error.to_string()),
+            ),
+        };
+        if let Err(error) = result {
+            tracing::warn!(%error, "email reply delivery state could not be recorded");
+        }
+        self.control_room_notify.notify_waiters();
+    }
+
     /// Recovers a crash-interrupted Jira write as explicit uncertainty.
     ///
     /// # Errors
@@ -416,6 +509,16 @@ impl AppState {
         self.task_store
             .as_ref()
             .map_or(Ok(0), TaskStore::recover_inflight_jira_comments)
+    }
+
+    /// Marks crash-interrupted email sends uncertain so they cannot replay silently.
+    ///
+    /// # Errors
+    /// Returns persistence failures.
+    pub fn recover_email_reply_deliveries(&self) -> Result<usize, TaskStoreError> {
+        self.task_store
+            .as_ref()
+            .map_or(Ok(0), TaskStore::recover_inflight_email_replies)
     }
     #[must_use]
     pub fn with_terminal_host(
@@ -1755,6 +1858,49 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/integrations/jira/reconcile",
             post(reconcile_jira_now),
+        )
+        .route("/api/v1/integrations/email/readiness", get(email_readiness))
+        .route(
+            "/api/v1/integrations/email/auth/start",
+            post(email_auth_start),
+        )
+        .route("/api/v1/integrations/email/auth", delete(email_disconnect))
+        .route("/auth/email/callback", get(email_auth_callback))
+        .route("/api/v1/integrations/email/inbox", get(email_inbox))
+        .route(
+            "/api/v1/integrations/email/messages/{message_id}",
+            get(email_message),
+        )
+        .route(
+            "/api/v1/integrations/email/messages/{message_id}/import",
+            post(import_email_message),
+        )
+        .route(
+            "/api/v1/integrations/email/task-links",
+            get(email_task_sources),
+        )
+        .route("/api/v1/tasks/{task_id}/email", get(email_task_source))
+        .route(
+            "/api/v1/tasks/{task_id}/email/attachments/{storage_name}",
+            get(download_email_attachment),
+        )
+        .route(
+            "/api/v1/tasks/{task_id}/deployments",
+            get(task_deployments).post(record_task_deployment),
+        )
+        .route(
+            "/api/v1/tasks/{task_id}/email/reply",
+            get(email_reply)
+                .post(prepare_email_reply)
+                .put(update_email_reply_draft),
+        )
+        .route(
+            "/api/v1/integrations/email/replies/{reply_id}/send",
+            post(send_email_reply),
+        )
+        .route(
+            "/api/v1/integrations/email/replies/{reply_id}/retry",
+            post(retry_email_reply),
         )
         .route("/api/v1/workers/order", put(reorder_workers))
         .route("/api/v1/workers/{worker_id}", patch(update_worker))
@@ -3949,6 +4095,470 @@ async fn reconcile_jira_now(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Serialize)]
+struct EmailAuthorizationStart {
+    authorization_url: String,
+}
+
+#[derive(Deserialize)]
+struct EmailAuthorizationCallback {
+    state: Option<String>,
+    code: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct EmailInboxQuery {
+    query: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ImportEmailRequest {
+    #[serde(default)]
+    priority: TaskPriority,
+}
+
+#[derive(Deserialize)]
+struct RecordDeploymentRequest {
+    environment: String,
+    reference: String,
+    deployed_at: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct EmailReplyRequest {
+    body: String,
+}
+
+struct StoredEmailAttachment {
+    storage_name: String,
+    display_name: String,
+    media_type: String,
+    byte_size: u64,
+    inline: bool,
+    content_id: Option<String>,
+}
+
+async fn email_readiness(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.outlook.readiness().await),
+    )
+        .into_response())
+}
+
+async fn email_auth_start(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let oauth = state.outlook.oauth_client().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_oauth_unavailable",
+            "Microsoft email OAuth is not configured on this Swarm host",
+        )
+    })?;
+    let url = oauth.authorization_url().await.map_err(email_oauth_error)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(EmailAuthorizationStart {
+            authorization_url: url.to_string(),
+        }),
+    )
+        .into_response())
+}
+
+async fn email_auth_callback(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<EmailAuthorizationCallback>,
+) -> Response {
+    let Some(oauth) = state.outlook.oauth_client() else {
+        return Redirect::to("/?email=unavailable#settings-integrations").into_response();
+    };
+    if query.error.is_some() {
+        return Redirect::to("/?email=denied#settings-integrations").into_response();
+    }
+    let result = match (query.state.as_deref(), query.code.as_deref()) {
+        (Some(auth_state), Some(code)) => oauth.exchange_code(auth_state, code).await,
+        _ => Err(microsoft_oauth::OAuthError::InvalidState),
+    };
+    let location = if result.is_ok() {
+        "/?email=connected#settings-integrations"
+    } else {
+        "/?email=failed#settings-integrations"
+    };
+    Redirect::to(location).into_response()
+}
+
+async fn email_disconnect(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let oauth = state.outlook.oauth_client().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_oauth_unavailable",
+            "Microsoft email OAuth is not configured on this Swarm host",
+        )
+    })?;
+    oauth.disconnect().await.map_err(email_oauth_error)?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn email_inbox(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<EmailInboxQuery>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let messages = state
+        .outlook
+        .inbox(query.query.as_deref())
+        .await
+        .map_err(outlook_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(messages)).into_response())
+}
+
+async fn email_message(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(message_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let message = state
+        .outlook
+        .message(&message_id)
+        .await
+        .map_err(outlook_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(message)).into_response())
+}
+
+async fn import_email_message(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(message_id): Path<String>,
+    Json(request): Json<ImportEmailRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let message = state
+        .outlook
+        .message(&message_id)
+        .await
+        .map_err(outlook_error)?;
+    let attachment_store = state.email_attachment_store.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_attachment_store_unconfigured",
+            "private email attachment storage is not configured",
+        )
+    })?;
+    let mut stored = Vec::with_capacity(message.attachments.len());
+    for attachment in &message.attachments {
+        let content = state
+            .outlook
+            .attachment(&message_id, &attachment.id)
+            .await
+            .map_err(outlook_error)?;
+        let storage_name = attachment_store
+            .save(&content.metadata.media_type, &content.bytes)
+            .await
+            .map_err(email_attachment_error)?;
+        stored.push(StoredEmailAttachment {
+            storage_name,
+            display_name: content.metadata.name,
+            media_type: content.metadata.media_type,
+            byte_size: content.bytes.len() as u64,
+            inline: content.metadata.inline,
+            content_id: content.metadata.content_id,
+        });
+    }
+    let attachments = stored
+        .iter()
+        .map(|attachment| swarm_persistence::EmailAttachmentSnapshot {
+            storage_name: &attachment.storage_name,
+            display_name: &attachment.display_name,
+            media_type: &attachment.media_type,
+            byte_size: attachment.byte_size,
+            inline: attachment.inline,
+            content_id: attachment.content_id.as_deref(),
+        })
+        .collect::<Vec<_>>();
+    let summary = &message.summary;
+    let imported = task_store(&state)?
+        .import_email_message(
+            &swarm_persistence::EmailMessageSnapshot {
+                integration_id: &message.integration_id,
+                message_id: &summary.id,
+                conversation_id: &summary.conversation_id,
+                internet_message_id: summary.internet_message_id.as_deref(),
+                subject: &summary.subject,
+                sender_name: &summary.sender_name,
+                sender_address: &summary.sender_address,
+                received_at: summary.received_at,
+                web_url: &summary.web_url,
+                body_text: &message.body_text,
+                attachments: &attachments,
+            },
+            request.priority,
+        )
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    let status = if imported.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(imported),
+    )
+        .into_response())
+}
+
+async fn email_task_source(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    let source = task_store(&state)?
+        .email_task_link(task_id)
+        .map_err(|error| task_store_error(&error))?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "email_source_not_found",
+                "this task was not imported from email",
+            )
+        })?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(source)).into_response())
+}
+
+async fn email_task_sources(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let sources = task_store(&state)?
+        .email_task_links()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(sources)).into_response())
+}
+
+async fn download_email_attachment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((task_id, storage_name)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    let source = task_store(&state)?
+        .email_task_link(task_id)
+        .map_err(|error| task_store_error(&error))?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "email_source_not_found",
+                "this task was not imported from email",
+            )
+        })?;
+    let attachment = source
+        .attachments
+        .iter()
+        .find(|attachment| attachment.storage_name == storage_name)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "email_attachment_not_found",
+                "the private email attachment was not found",
+            )
+        })?;
+    let store = state.email_attachment_store.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_attachment_store_unconfigured",
+            "private email attachment storage is not configured",
+        )
+    })?;
+    let (bytes, media_type) = store
+        .read(&storage_name)
+        .await
+        .map_err(email_attachment_error)?;
+    let safe_name = attachment
+        .display_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(120)
+        .collect::<String>();
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response_headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&media_type).map_err(|_| {
+            email_attachment_error(email_attachments::EmailAttachmentError::Unavailable)
+        })?,
+    );
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{safe_name}\"")).map_err(|_| {
+            email_attachment_error(email_attachments::EmailAttachmentError::Unavailable)
+        })?,
+    );
+    Ok((response_headers, bytes).into_response())
+}
+
+async fn task_deployments(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let deployments = task_store(&state)?
+        .task_deployments(parse_task_id(&task_id)?)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(deployments)).into_response())
+}
+
+async fn record_task_deployment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<RecordDeploymentRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let record = task_store(&state)?
+        .record_task_deployment(
+            parse_task_id(&task_id)?,
+            &request.environment,
+            &request.reference,
+            request.deployed_at.unwrap_or_else(unix_timestamp),
+        )
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(record),
+    )
+        .into_response())
+}
+
+async fn email_reply(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let reply = task_store(&state)?
+        .email_reply_for_task(parse_task_id(&task_id)?)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(reply)).into_response())
+}
+
+async fn prepare_email_reply(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<EmailReplyRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let reply = task_store(&state)?
+        .prepare_email_reply(parse_task_id(&task_id)?, &request.body)
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(reply),
+    )
+        .into_response())
+}
+
+async fn update_email_reply_draft(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<EmailReplyRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let reply = task_store(&state)?
+        .update_email_reply_draft(parse_task_id(&task_id)?, &request.body)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(reply)).into_response())
+}
+
+async fn send_email_reply(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(reply_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let queued = task_store(&state)?
+        .queue_email_reply(&reply_id)
+        .map_err(|error| task_store_error(&error))?;
+    state.deliver_email_replies().await;
+    let reply = task_store(&state)?
+        .email_reply_for_task(queued.task_id)
+        .map_err(|error| task_store_error(&error))?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "email_reply_not_found",
+                "the email reply was not found",
+            )
+        })?;
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(reply),
+    )
+        .into_response())
+}
+
+async fn retry_email_reply(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(reply_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let queued = task_store(&state)?
+        .retry_uncertain_email_reply(&reply_id)
+        .map_err(|error| task_store_error(&error))?;
+    state.deliver_email_replies().await;
+    let reply = task_store(&state)?
+        .email_reply_for_task(queued.task_id)
+        .map_err(|error| task_store_error(&error))?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "email_reply_not_found",
+                "the email reply was not found",
+            )
+        })?;
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(reply),
+    )
+        .into_response())
+}
+
 fn jira_issue_snapshot(issue: &jira::JiraIssue) -> JiraIssueSnapshot<'_> {
     JiraIssueSnapshot {
         issue_id: &issue.id,
@@ -4977,6 +5587,119 @@ fn jira_oauth_error(error: jira_oauth::OAuthError) -> ApiError {
             "Jira authorization could not be stored safely",
         ),
     }
+}
+
+fn email_oauth_error(error: microsoft_oauth::OAuthError) -> ApiError {
+    match error {
+        microsoft_oauth::OAuthError::NotConnected => ApiError::new(
+            StatusCode::CONFLICT,
+            "email_not_connected",
+            "connect Microsoft Outlook before continuing",
+        ),
+        microsoft_oauth::OAuthError::CredentialsInvalid => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "email_oauth_invalid",
+            "Microsoft authorization needs to be renewed",
+        ),
+        microsoft_oauth::OAuthError::PermissionDenied => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "email_oauth_denied",
+            "Microsoft did not grant the required mailbox access",
+        ),
+        microsoft_oauth::OAuthError::NetworkUnavailable => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_oauth_unavailable",
+            "Microsoft authorization is temporarily unavailable",
+        ),
+        microsoft_oauth::OAuthError::InvalidState => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "email_oauth_state_invalid",
+            "This email connection attempt expired or was already used",
+        ),
+        microsoft_oauth::OAuthError::InvalidResponse | microsoft_oauth::OAuthError::Storage => {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "email_oauth_failed",
+                "Microsoft authorization could not be stored safely",
+            )
+        }
+    }
+}
+
+fn outlook_error(error: outlook::OutlookError) -> ApiError {
+    match error {
+        outlook::OutlookError::NotConfigured => ApiError::new(
+            StatusCode::CONFLICT,
+            "email_not_connected",
+            "connect Microsoft Outlook before browsing Inbox",
+        ),
+        outlook::OutlookError::CredentialsInvalid => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "email_credentials_invalid",
+            "Microsoft authorization needs to be renewed",
+        ),
+        outlook::OutlookError::PermissionDenied => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "email_access_denied",
+            "Microsoft denied access to this mailbox",
+        ),
+        outlook::OutlookError::NetworkUnavailable => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_network_unavailable",
+            "Microsoft Outlook is temporarily unavailable",
+        ),
+        outlook::OutlookError::NotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "email_message_not_found",
+            "The email message is no longer available",
+        ),
+        outlook::OutlookError::InvalidRequest => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_email_request",
+            "The email request was invalid",
+        ),
+        outlook::OutlookError::InvalidResponse => ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "email_response_invalid",
+            "Microsoft Outlook returned an invalid response",
+        ),
+        outlook::OutlookError::ResponseLimitExceeded => ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "email_response_limit_exceeded",
+            "Microsoft Outlook returned more data than this bounded operation permits",
+        ),
+        outlook::OutlookError::UnsupportedAttachment => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "email_attachment_unsupported",
+            "This message contains an attachment type Swarm cannot safely import yet",
+        ),
+        outlook::OutlookError::AmbiguousDelivery => ApiError::new(
+            StatusCode::CONFLICT,
+            "email_delivery_uncertain",
+            "Microsoft may have accepted this reply; review the original thread before retrying",
+        ),
+    }
+}
+
+fn email_attachment_error(error: email_attachments::EmailAttachmentError) -> ApiError {
+    let (status, code) = match error {
+        email_attachments::EmailAttachmentError::InvalidSize
+        | email_attachments::EmailAttachmentError::InvalidSignature => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "invalid_email_attachment")
+        }
+        email_attachments::EmailAttachmentError::Capacity => (
+            StatusCode::INSUFFICIENT_STORAGE,
+            "email_attachment_store_full",
+        ),
+        email_attachments::EmailAttachmentError::NotFound => {
+            (StatusCode::NOT_FOUND, "email_attachment_not_found")
+        }
+        email_attachments::EmailAttachmentError::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_attachment_store_unavailable",
+        ),
+    };
+    ApiError::new(status, code, error.to_string())
 }
 #[allow(clippy::too_many_lines)]
 fn task_store_error(error: &TaskStoreError) -> ApiError {
@@ -9764,6 +10487,118 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn email_readiness_is_private_and_explicit_when_not_configured() {
+        let runtime = TempDir::new().unwrap();
+        let app = router(AppState::default().with_terminal_host(
+            HostClient::new(runtime.path().join("absent.sock")),
+            "secret",
+        ));
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/integrations/email/readiness")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/integrations/email/readiness").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["configured"], false);
+        assert_eq!(body["connection"], "not_connected");
+        assert_eq!(body["account_address"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn deployed_email_task_can_prepare_but_not_silently_send_a_reply() {
+        let runtime = TempDir::new().unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let imported = store
+            .import_email_message(
+                &swarm_persistence::EmailMessageSnapshot {
+                    integration_id: "account-1",
+                    message_id: "message-1",
+                    conversation_id: "conversation-1",
+                    internet_message_id: Some("<one@example.test>"),
+                    subject: "Website issue",
+                    sender_name: "Reporter",
+                    sender_address: "reporter@example.test",
+                    received_at: 1_786_730_000,
+                    web_url: "https://outlook.office.com/mail/message-1",
+                    body_text: "The page is broken.",
+                    attachments: &[],
+                },
+                TaskPriority::Normal,
+            )
+            .unwrap();
+        for target in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(imported.task.id, target).unwrap();
+        }
+        let app = router(
+            AppState::default()
+                .with_terminal_host(
+                    HostClient::new(runtime.path().join("absent.sock")),
+                    "secret",
+                )
+                .with_task_store(store.clone())
+                .with_email_attachment_store(runtime.path().join("email-attachments")),
+        );
+        let deployment = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/tasks/{}/deployments", imported.task.id))
+                    .header("authorization", "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"environment":"production","reference":"release-42"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(deployment.status(), StatusCode::CREATED);
+
+        let drafted = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/tasks/{}/email/reply", imported.task.id))
+                    .header("authorization", "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"body":"The issue is fixed and available now."}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(drafted.status(), StatusCode::CREATED);
+        let draft = response_json(drafted).await;
+        assert_eq!(draft["state"], "draft");
+        assert_eq!(store.claim_email_reply().unwrap(), None);
+
+        let current = authorized_get(
+            app,
+            &format!("/api/v1/tasks/{}/email/reply", imported.task.id),
+        )
+        .await;
+        assert_eq!(current.status(), StatusCode::OK);
+        assert_eq!(response_json(current).await["state"], "draft");
     }
 
     #[tokio::test]

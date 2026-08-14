@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 axum.workspace = true
 base64ct.workspace = true
+chrono.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
 rmcp.workspace = true

@@ -427,6 +427,9 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).endsWith("/api/v1/integrations/jira/bindings")) {
       return Promise.resolve(ok([]));
     }
+    if (String(url).endsWith("/api/v1/integrations/email/task-links")) {
+      return Promise.resolve(ok([]));
+    }
     const response = responses.shift();
     if (!response) throw new Error(`Unexpected request: ${String(url)}`);
     return Promise.resolve(response);
@@ -445,7 +448,7 @@ test("creates a persisted task draft from the task board", async () => {
     "/api/v1/tasks",
     expect.objectContaining({ method: "POST", body: JSON.stringify({ title: task.title, description: "", priority: "normal", workspace: task.workspace }) }),
   );
-  expect(fetch).toHaveBeenLastCalledWith(
+  expect(fetch).toHaveBeenCalledWith(
     `/api/v1/tasks/${task.id}/assignment`,
     expect.objectContaining({ method: "PUT", body: JSON.stringify({ worker_id: worker.id }) }),
   );

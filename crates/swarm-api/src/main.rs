@@ -30,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
         )
         .with_attachment_store(attachment_root_from_database(&database_path))
+        .with_email_attachment_store(email_attachment_root_from_database(&database_path))
         .with_maintenance_request_path(maintenance_request_path_from_env(&database_path))
         .with_workspace_roots(workspace_roots)
         .with_task_store(store)
@@ -41,6 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state = state.with_public_base_url(&public_base_url)?;
     }
     state = configure_jira(state, &database_path)?;
+    state = configure_email(state, &database_path)?;
     state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
     recover_interrupted_deliveries(&state)?;
     state.supervise_workers().await;
@@ -60,6 +62,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             interval.tick().await;
             jira_reconciler.reconcile_jira().await;
+        }
+    });
+    let email_delivery = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            email_delivery.deliver_email_replies().await;
         }
     });
     let listener = tokio::net::TcpListener::bind(address).await?;
@@ -119,6 +130,13 @@ fn recover_interrupted_deliveries(state: &AppState) -> Result<(), Box<dyn std::e
         tracing::warn!(
             recovered_jira_comments,
             "crash-interrupted Jira comments require reconciliation"
+        );
+    }
+    let recovered_email_replies = state.recover_email_reply_deliveries()?;
+    if recovered_email_replies > 0 {
+        tracing::warn!(
+            recovered_email_replies,
+            "crash-interrupted email replies require operator review"
         );
     }
     Ok(())
@@ -190,6 +208,13 @@ fn attachment_root_from_database(database_path: &std::path::Path) -> PathBuf {
         .join("attachments")
 }
 
+fn email_attachment_root_from_database(database_path: &std::path::Path) -> PathBuf {
+    database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("email-attachments")
+}
+
 fn configure_jira(
     mut state: AppState,
     database_path: &std::path::Path,
@@ -236,6 +261,41 @@ fn jira_token_path(database_path: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("secrets")
         .join("jira-oauth.json")
+}
+
+fn configure_email(
+    mut state: AppState,
+    database_path: &std::path::Path,
+) -> Result<AppState, Box<dyn std::error::Error>> {
+    let settings = (
+        env::var("SWARM_EMAIL_TENANT_ID").ok(),
+        env::var("SWARM_EMAIL_OAUTH_CLIENT_ID").ok(),
+        env::var("SWARM_EMAIL_OAUTH_CLIENT_SECRET").ok(),
+    );
+    match settings {
+        (None, None, None) => {}
+        (Some(tenant_id), Some(client_id), Some(client_secret)) => {
+            let public_url = env::var("SWARM_PUBLIC_BASE_URL")
+                .map_err(|_| "Microsoft email OAuth requires SWARM_PUBLIC_BASE_URL")?;
+            state = state.with_outlook_oauth(
+                &tenant_id,
+                client_id,
+                client_secret,
+                &public_url,
+                email_token_path(database_path),
+            )?;
+        }
+        _ => return Err("Microsoft email OAuth settings are incomplete".into()),
+    }
+    Ok(state)
+}
+
+fn email_token_path(database_path: &std::path::Path) -> PathBuf {
+    database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("secrets")
+        .join("email-oauth.json")
 }
 
 fn maintenance_request_path_from_env(database_path: &std::path::Path) -> PathBuf {

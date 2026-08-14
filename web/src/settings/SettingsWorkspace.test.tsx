@@ -116,7 +116,10 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Live updates").parentElement).toHaveTextContent("Live updatesConnected");
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
-  expect((await screen.findByText("Worker engine")).parentElement).toHaveTextContent("Worker engineUpdate waiting · 1 active");
+  expect((await screen.findByText("Worker engine")).parentElement).toHaveTextContent("Worker engine1 update ready");
+  expect(screen.getByText("Workers affected").parentElement).toHaveTextContent("1 active worker will briefly stop · conversations retained");
+  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("Worker engine updateBriefly stops active workers");
+  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("Development reloadWorkers keep running");
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
   expect(screen.getByRole("group", { name: "Confirm worker engine update" })).toHaveTextContent("Restart 1 active worker now?");
   fireEvent.click(screen.getByRole("button", { name: "Restart and update" }));
@@ -230,8 +233,9 @@ test("confirms an opt-in development reload without implying worker loss", async
   }));
 
   render(<SettingsWorkspace {...minimalProps()} onReloadDevelopment={onReloadDevelopment} />);
-  expect(await screen.findByText("Development checkout connected.")).toBeInTheDocument();
-  expect(screen.getByText(/active worker terminals stay attached/)).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Reload development build" })).toBeInTheDocument();
+  expect(screen.getByText("No worker interruption.", { selector: "strong" })).toBeInTheDocument();
+  expect(screen.getByText(/Claude and Codex processes keep running/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Reload development build" }));
   expect(screen.getByRole("group", { name: "Confirm development reload" })).toHaveTextContent("Build and activate the working copy?");
   fireEvent.click(screen.getByRole("button", { name: "Build and reload" }));

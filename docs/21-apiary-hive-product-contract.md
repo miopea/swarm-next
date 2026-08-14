@@ -84,6 +84,17 @@ secret are revalidated by the private application command. The secret and
 complete envelope remain private to the Hive database; browser reads expose
 only a sanitized pending-join summary and public project identities.
 Import does not join, accept policy, share work, or grant terminal access.
+The normal operator experience will wrap this exact protocol in a short-lived
+Keeper invitation link and QR code. The invited Hive initiates the connection,
+presents its signed public identity, becomes the exact bound candidate, and
+then previews and accepts the resulting invitation. Connection-card and bundle
+files remain an advanced manual fallback rather than the primary workflow.
+Keeper's reachable HTTPS URL may be public or available through a trusted
+LAN/VPN/mesh, but cannot be `localhost` for a multi-machine Apiary. Member Hives
+need no inbound public address because federation connections originate from
+the Hive toward Keeper. When Keeper is offline, local Hive work continues and
+bounded federation events wait for ordered reconciliation; live cross-Hive
+coordination is visibly unavailable until the route returns.
 The invited Hive can separately acknowledge only the exact signed policy
 revision. That local transition grants no membership and performs no network
 request. Browser reads then include server-derived preflight evidence: current

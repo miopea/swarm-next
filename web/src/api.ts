@@ -358,6 +358,79 @@ export type JiraComment = {
   created_at: string;
   updated_at: string;
 };
+export type EmailConnectionState = JiraConnectionState;
+export type EmailReadiness = {
+  configured: boolean;
+  connection: EmailConnectionState;
+  account_name: string | null;
+  account_address: string | null;
+};
+export type EmailAttachment = {
+  id: string;
+  name: string;
+  media_type: string;
+  byte_size: number;
+  inline: boolean;
+  content_id: string | null;
+};
+export type EmailMessageSummary = {
+  id: string;
+  conversation_id: string;
+  internet_message_id: string | null;
+  subject: string;
+  sender_name: string;
+  sender_address: string;
+  received_at: number;
+  web_url: string;
+  has_attachments: boolean;
+  preview: string;
+};
+export type EmailMessage = {
+  summary: EmailMessageSummary;
+  body_text: string;
+  attachments: EmailAttachment[];
+};
+export type EmailTaskAttachment = {
+  storage_name: string;
+  display_name: string;
+  media_type: string;
+  byte_size: number;
+  inline: boolean;
+  content_id: string | null;
+};
+export type EmailTaskSource = {
+  task_id: string;
+  integration_id: string;
+  message_id: string;
+  conversation_id: string;
+  internet_message_id: string | null;
+  sender_name: string;
+  sender_address: string;
+  received_at: number;
+  web_url: string;
+  imported_at: number;
+  attachments: EmailTaskAttachment[];
+};
+export type EmailImport = { task: Task; source: EmailTaskSource; created: boolean };
+export type TaskDeployment = {
+  id: string;
+  task_id: string;
+  environment: string;
+  reference: string;
+  deployed_at: number;
+  recorded_at: number;
+};
+export type EmailReplyState = "draft" | "queued" | "dispatching" | "delivered" | "uncertain" | "cancelled";
+export type EmailReply = {
+  id: string;
+  task_id: string;
+  body: string;
+  state: EmailReplyState;
+  attempts: number;
+  attempted_at: number | null;
+  delivered_at: number | null;
+  last_error: string | null;
+};
 
 export type Worker = {
   id: string;
@@ -1182,6 +1255,100 @@ export async function syncJiraBinding(operatorToken: string, bindingId: string, 
 
 export async function reconcileJira(operatorToken: string): Promise<void> {
   await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/reconcile", { method: "POST" });
+}
+
+export async function fetchEmailReadiness(operatorToken: string): Promise<EmailReadiness> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/readiness");
+  return response.json() as Promise<EmailReadiness>;
+}
+
+export async function beginEmailAuthorization(operatorToken: string): Promise<string> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/auth/start", { method: "POST" });
+  const result = await response.json() as { authorization_url: string };
+  return result.authorization_url;
+}
+
+export async function disconnectEmail(operatorToken: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/integrations/email/auth", { method: "DELETE" });
+}
+
+export async function fetchEmailInbox(operatorToken: string, query = ""): Promise<EmailMessageSummary[]> {
+  const params = new URLSearchParams();
+  if (query.trim()) params.set("query", query.trim());
+  const suffix = params.size ? `?${params}` : "";
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/email/inbox${suffix}`);
+  return response.json() as Promise<EmailMessageSummary[]>;
+}
+
+export async function fetchEmailMessage(operatorToken: string, messageId: string): Promise<EmailMessage> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/email/messages/${encodeURIComponent(messageId)}`);
+  return response.json() as Promise<EmailMessage>;
+}
+
+export async function importEmailMessage(operatorToken: string, messageId: string, priority: TaskPriority): Promise<EmailImport> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/email/messages/${encodeURIComponent(messageId)}/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ priority }),
+  });
+  return response.json() as Promise<EmailImport>;
+}
+
+export async function fetchEmailTaskSource(operatorToken: string, taskId: string): Promise<EmailTaskSource> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email`);
+  return response.json() as Promise<EmailTaskSource>;
+}
+
+export async function fetchEmailTaskSources(operatorToken: string): Promise<EmailTaskSource[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/task-links");
+  return response.json() as Promise<EmailTaskSource[]>;
+}
+
+export async function fetchTaskDeployments(operatorToken: string, taskId: string): Promise<TaskDeployment[]> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/deployments`);
+  return response.json() as Promise<TaskDeployment[]>;
+}
+
+export async function recordTaskDeployment(operatorToken: string, taskId: string, environment: string, reference: string): Promise<TaskDeployment> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/deployments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ environment, reference }),
+  });
+  return response.json() as Promise<TaskDeployment>;
+}
+
+export async function fetchEmailReply(operatorToken: string, taskId: string): Promise<EmailReply | null> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email/reply`);
+  return response.json() as Promise<EmailReply | null>;
+}
+
+export async function prepareEmailReply(operatorToken: string, taskId: string, body: string): Promise<EmailReply> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email/reply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+  return response.json() as Promise<EmailReply>;
+}
+
+export async function updateEmailReplyDraft(operatorToken: string, taskId: string, body: string): Promise<EmailReply> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email/reply`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+  return response.json() as Promise<EmailReply>;
+}
+
+export async function sendEmailReply(operatorToken: string, replyId: string): Promise<EmailReply> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/email/replies/${encodeURIComponent(replyId)}/send`, { method: "POST" });
+  return response.json() as Promise<EmailReply>;
+}
+
+export async function retryEmailReply(operatorToken: string, replyId: string): Promise<EmailReply> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/email/replies/${encodeURIComponent(replyId)}/retry`, { method: "POST" });
+  return response.json() as Promise<EmailReply>;
 }
 
 export async function uploadDogfoodScreenshot(operatorToken: string, image: File): Promise<string> {
