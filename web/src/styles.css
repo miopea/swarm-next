@@ -249,7 +249,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-metadata-section dl { display: grid; margin: 0; gap: 4px; }
 .task-metadata-section dl > div { display: grid; min-width: 0; grid-template-columns: 64px minmax(0, 1fr); align-items: baseline; gap: 8px; }
 .task-metadata-section dt { color: var(--quiet); font-size: .62rem; font-weight: 650; letter-spacing: .025em; }
-.task-metadata-section dd { min-width: 0; margin: 0; overflow: hidden; color: var(--muted); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
+.task-metadata-section dd { min-width: 0; margin: 0; color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.task-metadata-section .task-text-value { overflow: hidden; text-overflow: ellipsis; }
 .task-current-worker { display: grid; min-width: 0; gap: 5px; }
 .task-meta-label { color: var(--quiet); font-size: .58rem; font-weight: 700; letter-spacing: .065em; line-height: 1.2; text-transform: uppercase; }
 .task-owner-link { width: auto; padding: 2px 0; border: 0; border-radius: 0; color: var(--muted); background: transparent; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; }

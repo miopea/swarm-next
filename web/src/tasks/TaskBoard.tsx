@@ -520,9 +520,9 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
                   </a>
                 ) : <strong>{jiraLink.issue_key}</strong>}
               </dd></div>
-              <div><dt>Project</dt><dd title={jiraLink.project_name}>{jiraLink.project_name}</dd></div>
-              <div><dt>Status</dt><dd>{jiraLink.jira_status_name}</dd></div>
-              <div><dt>Assignee</dt><dd>{jiraLink.jira_assignee_name ?? "Unassigned"}</dd></div>
+              <div><dt>Project</dt><dd className="task-text-value" title={jiraLink.project_name}>{jiraLink.project_name}</dd></div>
+              <div><dt>Status</dt><dd className="task-text-value">{jiraLink.jira_status_name}</dd></div>
+              <div><dt>Assignee</dt><dd className="task-text-value">{jiraLink.jira_assignee_name ?? "Unassigned"}</dd></div>
             </dl>
           {jiraLink.outbound_state && (
             <span className={`jira-sync-state ${jiraLink.outbound_state}`}>
