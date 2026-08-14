@@ -1004,8 +1004,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .runtime-impact-card p { margin: 0; color: var(--muted); font-size: .77rem; line-height: 1.45; }
 .runtime-impact-card small { color: var(--muted); font-size: .7rem; line-height: 1.4; }
 .runtime-impact-label { width: fit-content; padding: .18rem .45rem; border-radius: 999px; color: var(--muted); background: var(--surface-soft); font-size: .64rem; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
-.runtime-impact-restart { border-color: color-mix(in srgb, var(--honey) 60%, var(--line)); }
-.runtime-impact-reload { border-color: color-mix(in srgb, var(--sage) 55%, var(--line)); }
+.runtime-impact-restart { border-color: color-mix(in srgb, var(--bad) 46%, var(--line)); background: color-mix(in srgb, var(--bad-soft) 42%, var(--panel)); }
+.runtime-impact-restart .runtime-impact-label { color: var(--bad); background: var(--bad-soft); }
+.runtime-impact-reload { border-color: color-mix(in srgb, var(--good) 55%, var(--line)); background: color-mix(in srgb, var(--good-soft) 38%, var(--panel)); }
+.runtime-impact-reload .runtime-impact-label { color: var(--good); background: var(--good-soft); }
 
 @media (max-width: 680px) {
   .jira-binding-card { grid-template-columns: 1fr; gap: 8px; }

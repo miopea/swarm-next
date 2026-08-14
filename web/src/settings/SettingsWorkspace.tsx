@@ -253,16 +253,16 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
           <div className="maintenance-action">
             <div className="runtime-update-comparison" aria-label="Update interruption comparison">
               <div className="runtime-impact-card runtime-impact-restart">
-                <span className="runtime-impact-label">Worker engine update</span>
-                <strong>Briefly stops active workers</strong>
-                <p>All Claude and Codex terminal processes close while the engine is replaced. Queen and always-active workers then resume from their saved conversations. Other workers stay sleeping until you wake them.</p>
-                <small><strong>Real risk:</strong> a model turn or command running at that moment is interrupted and may need to be checked or retried. Worker identities, provider conversation IDs, tasks, ownership, and terminal history remain durable.</small>
+                <span className="runtime-impact-label">Restart required · interrupts active work</span>
+                <strong>Every running worker briefly goes offline</strong>
+                <p>The worker engine closes all Claude and Codex terminal processes, replaces itself, then revives Queen and configured always-active workers from their saved conversations. Other workers remain sleeping until you wake them.</p>
+                <small><strong>Clear and present risk:</strong> an in-flight model turn or command is cut off and may need to be checked or retried. Wait for workers to rest when practical. Worker identities, provider conversation IDs, tasks, ownership, and terminal history remain durable.</small>
               </div>
               <div className="runtime-impact-card runtime-impact-reload">
-                <span className="runtime-impact-label">Development reload</span>
-                <strong>Workers keep running</strong>
-                <p>Only the API and web working copy are rebuilt and swapped. The page reconnects, but the separate worker engine and its Claude or Codex processes are not restarted.</p>
-                <small>Risk: an invalid build is rejected and the current app remains active.</small>
+                <span className="runtime-impact-label">No restart · safe during active work</span>
+                <strong>Workers keep running without interruption</strong>
+                <p>A development reload only rebuilds and swaps the API and web working copy. This page briefly reconnects; the separate worker engine and every Claude or Codex process continue running.</p>
+                <small><strong>Limited risk:</strong> an invalid build is rejected and the current app remains active. Worker turns and commands are not interrupted.</small>
               </div>
             </div>
             {!confirmMaintenance ? (
@@ -273,7 +273,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
                 <span>Claude/Codex processes will close. Worker identities, tasks, and known conversation IDs remain durable.</span>
                 <div className="settings-actions">
                   <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(false)}>Not now</button>
-                  <button className="primary-action" disabled={busy} onClick={() => { setConfirmMaintenance(false); void onUpdateWorkerEngine(); }}>Restart and update</button>
+                  <button className="primary-action" disabled={busy} onClick={() => { setConfirmMaintenance(false); void onUpdateWorkerEngine(); }}>Stop workers and update</button>
                 </div>
               </div>
             )}

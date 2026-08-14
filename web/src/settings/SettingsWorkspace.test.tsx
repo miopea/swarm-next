@@ -118,12 +118,12 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
   expect((await screen.findByText("Worker engine")).parentElement).toHaveTextContent("Worker engineUpdate ready · restart required");
   expect(screen.getByText("Workers affected").parentElement).toHaveTextContent("1 active worker will briefly stop · conversations retained");
-  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("Worker engine updateBriefly stops active workers");
-  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("a model turn or command running at that moment is interrupted");
-  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("Development reloadWorkers keep running");
+  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("Restart required · interrupts active workEvery running worker briefly goes offline");
+  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("an in-flight model turn or command is cut off");
+  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("No restart · safe during active workWorkers keep running without interruption");
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
   expect(screen.getByRole("group", { name: "Confirm worker engine update" })).toHaveTextContent("Restart 1 active worker now?");
-  fireEvent.click(screen.getByRole("button", { name: "Restart and update" }));
+  fireEvent.click(screen.getByRole("button", { name: "Stop workers and update" }));
   expect(onUpdateWorkerEngine).toHaveBeenCalledOnce();
   const terminalHost = await screen.findByText("Terminal host");
   expect(terminalHost.parentElement).toHaveTextContent("Terminal hostHealthy · 0.1.0-host");
