@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
 
-import type { JiraComment, JiraTaskLink, SessionSummary, Task, TaskActivity, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput, Worker } from "../api";
+import type { JiraComment, JiraTaskLink, SessionSummary, Task, TaskActivityPage, TaskDraftInput, TaskPriority, TaskState, TaskUpdateInput, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import { useReorderDrag } from "../shared/useReorderDrag";
 import JiraTaskIntake from "./JiraTaskIntake";
+import JiraDiscussion from "./JiraDiscussion";
+import TaskActivityPanel from "./TaskActivityPanel";
 import TaskAssignment from "./TaskAssignment";
 import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskProjectChoice } from "./TaskBoardControls";
 import TaskMetadata from "./TaskMetadata";
@@ -363,11 +365,6 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
   const [historyLoading, setHistoryLoading] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [discussionOpen, setDiscussionOpen] = useState(false);
-  const [comments, setComments] = useState<JiraComment[]>([]);
-  const [commentBody, setCommentBody] = useState("");
-  const [discussionLoading, setDiscussionLoading] = useState(false);
-  const [discussionError, setDiscussionError] = useState("");
-  const [discussionMessage, setDiscussionMessage] = useState("");
   const cardRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -411,34 +408,6 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
       return;
     }
     setDiscussionOpen(true);
-    setDiscussionLoading(true);
-    setDiscussionError("");
-    setDiscussionMessage("");
-    try {
-      setComments(await onFetchJiraComments(task.id));
-    } catch (error) {
-      setDiscussionError(error instanceof Error ? error.message : "Jira discussion is unavailable.");
-    } finally {
-      setDiscussionLoading(false);
-    }
-  }
-
-  async function submitComment(event: FormEvent) {
-    event.preventDefault();
-    const body = commentBody.trim();
-    if (!body) return;
-    setDiscussionLoading(true);
-    setDiscussionError("");
-    try {
-      const result = await onAddJiraComment(task.id, body);
-      setCommentBody("");
-      setComments(await onFetchJiraComments(task.id));
-      setDiscussionMessage(result.state === "delivered" ? "Shared to Jira." : "Saved safely; Jira delivery is pending.");
-    } catch (error) {
-      setDiscussionError(error instanceof Error ? error.message : "The Jira update could not be sent.");
-    } finally {
-      setDiscussionLoading(false);
-    }
   }
   return (
     <article
@@ -492,78 +461,9 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
           onRetry={() => void loadActivity()}
         />
       )}
-      {discussionOpen && jiraLink && (
-        <section className="jira-discussion" aria-label={`Jira discussion for ${jiraLink.issue_key}`}>
-          <div className="jira-discussion-heading"><strong>Jira discussion</strong><small>Two-way · shared with everyone on the issue</small></div>
-          {discussionLoading && comments.length === 0 ? <p>Loading discussion…</p> : null}
-          {discussionError ? <p className="settings-error" role="alert">{discussionError}</p> : null}
-          {discussionMessage ? <p className="settings-message" role="status">{discussionMessage}</p> : null}
-          {comments.length > 0 ? (
-            <ol>
-              {comments.map((comment) => (
-                <li key={comment.id}><span><strong>{comment.author_name}</strong><small>{comment.body}</small></span><time>{new Date(comment.created_at).toLocaleString()}</time></li>
-              ))}
-            </ol>
-          ) : !discussionLoading ? <p>No Jira comments yet.</p> : null}
-          <form onSubmit={(event) => void submitComment(event)}>
-            <label htmlFor={`jira-comment-${task.id}`}>Add an update</label>
-            <textarea id={`jira-comment-${task.id}`} value={commentBody} maxLength={4000} placeholder="Progress, a question, evidence, or a handoff" onChange={(event) => setCommentBody(event.target.value)} />
-            <button className="secondary-button" type="submit" disabled={discussionLoading || !commentBody.trim()}>Share to Jira</button>
-          </form>
-        </section>
-      )}
+      {discussionOpen && jiraLink && <JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} />}
     </article>
   );
-}
-
-function TaskActivityPanel({ activity, loading, failed, onRetry }: {
-  activity: TaskActivityPage | undefined;
-  loading: boolean;
-  failed: boolean;
-  onRetry: () => void;
-}) {
-  return (
-    <section className="task-history" aria-label="Task history" aria-live="polite">
-      {loading ? <p>Loading history…</p> : failed ? (
-        <p>History is unavailable. <button className="text-button" type="button" onClick={onRetry}>Retry</button></p>
-      ) : activity?.events.length ? (
-        <>
-        {activity.truncated && <p className="task-history-note">Showing the latest activity.</p>}
-        <ol>
-          {activity.events.map((entry) => (
-            <li key={entry.sequence}>
-              <span>
-                <span>{activityLabel(entry)}</span>
-                {entry.note && <small className="task-history-handoff">{entry.note}</small>}
-              </span>
-              <time dateTime={new Date(entry.occurred_at * 1000).toISOString()}>{formatActivityTime(entry.occurred_at)}</time>
-            </li>
-          ))}
-        </ol>
-        </>
-      ) : <p>No history recorded.</p>}
-    </section>
-  );
-}
-
-function activityLabel(activity: TaskActivity): string {
-  if (activity.kind === "created") return "Task created";
-  if (activity.kind === "details_updated") return "Details updated";
-  if (activity.kind === "assigned") return "Worker assigned";
-  if (activity.kind === "unassigned") return "Worker released";
-  if (activity.from_state && activity.to_state) {
-    return `${stateLabels[activity.from_state]} → ${stateLabels[activity.to_state]}`;
-  }
-  return "State updated";
-}
-
-function formatActivityTime(occurredAt: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(occurredAt * 1000));
 }
 
 function TaskEditForm({ task, busy, onUpdate, onCancel }: {
