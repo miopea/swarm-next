@@ -5,6 +5,7 @@ After=swarm-next-terminal-host.service
 [Service]
 Type=oneshot
 EnvironmentFile=@CONFIG_ROOT@/swarm-next-dev.env
+Environment=PATH=%h/.cargo/bin:%h/.local/share/pnpm:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=@INSTALL_ROOT@/current/swarm-next-package reload-development
 TimeoutStartSec=45min
 NoNewPrivileges=yes
