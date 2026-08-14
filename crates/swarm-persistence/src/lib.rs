@@ -97,6 +97,10 @@ pub enum TaskStoreError {
     FederationEntropyUnavailable,
     #[error("Only the active Apiary Keeper can pin Hive identities")]
     ApiaryKeeperRequired,
+    #[error("The Stewardship scope or capabilities are invalid")]
+    InvalidStewardship,
+    #[error("The Stewardship was not found")]
+    StewardshipNotFound,
     #[error("The Hive identity conflicts with a previously pinned key")]
     HiveCandidateIdentityConflict,
     #[error("The pinned Hive identity was not found")]

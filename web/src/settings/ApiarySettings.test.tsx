@@ -437,6 +437,58 @@ test("shows a low-noise Keeper rollup of reservations and durable ownership", as
   expect(rollup).not.toHaveTextContent("credential");
 });
 
+test("delegates and revokes explicit Steward authority without exposing Hive internals", async () => {
+  let stewardships: Array<Record<string, unknown>> = [];
+  const members = [
+    { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true },
+    { hive_id: "hive-2", hive_name: "IT Lead", operator_id: "operator-2", operator_display_name: "Tessa", role: "member", is_local: false },
+    { hive_id: "hive-3", hive_name: "IT Support", operator_id: "operator-3", operator_display_name: "Ivy", role: "member", is_local: false },
+  ];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/members") return ok(members);
+    if (url === "/api/v1/apiary/collapse-readiness") return ok({ active_hive_count: 3, pending_invitation_count: 0, active_stewardship_count: stewardships.length, open_cross_hive_work_count: 0, departed_node_count: 0 });
+    if (url === "/api/v1/apiary/stewardships" && !init?.method) return ok(stewardships);
+    if (url === "/api/v1/apiary/stewardships/by-operator/operator-2") {
+      expect(init?.method).toBe("PUT");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        managed_hive_ids: ["hive-2", "hive-3"],
+        capabilities: ["observe", "assign", "assist", "takeover"],
+      });
+      const saved = {
+        id: "stewardship-1", apiary_id: "apiary-1", steward_operator_id: "operator-2",
+        managed_hive_ids: ["hive-2", "hive-3"], capabilities: ["observe", "assign", "assist", "takeover"],
+      };
+      stewardships = [saved];
+      return ok(saved);
+    }
+    if (url === "/api/v1/apiary/stewardships/stewardship-1") {
+      expect(init?.method).toBe("DELETE");
+      stewardships = [];
+      return new Response(null, { status: 204 });
+    }
+    if (["/api/v1/apiary/jira-projects", "/api/v1/integrations/jira/bindings", "/api/v1/apiary/hive-candidates", "/api/v1/apiary/shared-work"].includes(url)) return ok([]);
+    throw new Error(`unexpected request ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Delegate a Steward" }));
+  const editor = screen.getByRole("group", { name: "Steward delegation" });
+  expect(editor).toHaveTextContent("Tessa · IT Lead");
+  fireEvent.click(screen.getByLabelText(/IT SupportIvy/));
+  fireEvent.click(screen.getByRole("button", { name: "Save Stewardship" }));
+
+  const list = await screen.findByRole("list", { name: "Apiary Stewards" });
+  expect(list).toHaveTextContent("TessaIT Lead");
+  expect(list).toHaveTextContent("IT Lead, IT Support");
+  expect(list).toHaveTextContent("See statusRoute workAssistTake over");
+  expect(list.textContent).not.toMatch(/credential|repository|terminal/i);
+  fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm revoke" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("Tessa is no longer a Steward");
+  expect(screen.queryByRole("list", { name: "Apiary Stewards" })).not.toBeInTheDocument();
+});
+
 test("shows honest Member convergence without implying a running transport", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);

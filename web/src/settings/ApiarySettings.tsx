@@ -9,6 +9,7 @@ import {
   fetchApiaryJiraProjects,
   fetchApiaryMembers,
   fetchApiarySharedWork,
+  fetchApiaryStewardships,
   fetchFederationCatalogReadiness,
   fetchFederationJoinInvitations,
   fetchFederationSyncHealth,
@@ -20,6 +21,8 @@ import {
   pinApiaryHiveCandidate,
   prepareFederationJoin,
   promoteApiaryJiraProject,
+  revokeApiaryStewardship,
+  setApiaryStewardship,
   type ApiaryCollapseReadiness,
   type ApiaryHiveCandidate,
   type ApiaryInvitationBundle,
@@ -32,6 +35,8 @@ import {
   type HiveConnectionCard,
   type HiveIdentity,
   type JiraProjectBinding,
+  type StewardCapability,
+  type Stewardship,
 } from "../api";
 import { downloadJson } from "../shared/download";
 
@@ -60,6 +65,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [promotedProjects, setPromotedProjects] = useState<ApiaryJiraProject[]>([]);
   const [members, setMembers] = useState<ApiaryMember[]>([]);
   const [sharedWork, setSharedWork] = useState<ApiarySharedWorkClaim[]>([]);
+  const [stewardships, setStewardships] = useState<Stewardship[]>([]);
   const [memberSync, setMemberSync] = useState<FederationSyncHealth>();
   const [memberCatalog, setMemberCatalog] = useState<FederationCatalogReadiness>();
   const [memberSyncLoadError, setMemberSyncLoadError] = useState(false);
@@ -70,6 +76,11 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [projectLoadError, setProjectLoadError] = useState(false);
   const [candidateLoadError, setCandidateLoadError] = useState(false);
   const [sharedWorkLoadError, setSharedWorkLoadError] = useState(false);
+  const [stewardshipLoadError, setStewardshipLoadError] = useState(false);
+  const [editingSteward, setEditingSteward] = useState<string>();
+  const [managedHives, setManagedHives] = useState<string[]>([]);
+  const [stewardCapabilities, setStewardCapabilities] = useState<StewardCapability[]>([]);
+  const [confirmRevoke, setConfirmRevoke] = useState<string>();
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -142,6 +153,9 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       setCandidateLoadError(false);
       setSharedWork([]);
       setSharedWorkLoadError(false);
+      setStewardships([]);
+      setStewardshipLoadError(false);
+      setEditingSteward(undefined);
       return;
     }
     let cancelled = false;
@@ -150,8 +164,9 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       fetchJiraBindings(operatorToken),
       fetchApiaryHiveCandidates(operatorToken),
       fetchApiarySharedWork(operatorToken),
+      fetchApiaryStewardships(operatorToken),
     ])
-      .then(([projects, bindings, candidates, claims]) => {
+      .then(([projects, bindings, candidates, claims, delegations]) => {
         if (cancelled) return;
         setPromotedProjects(projects.status === "fulfilled" ? projects.value : []);
         setJiraBindings(bindings.status === "fulfilled" ? bindings.value : []);
@@ -160,6 +175,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
         setCandidateLoadError(candidates.status === "rejected");
         setSharedWork(claims.status === "fulfilled" ? claims.value : []);
         setSharedWorkLoadError(claims.status === "rejected");
+        setStewardships(delegations.status === "fulfilled" ? delegations.value : []);
+        setStewardshipLoadError(delegations.status === "rejected");
       });
     return () => { cancelled = true; };
   }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id]);
@@ -169,6 +186,76 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   async function refreshIdentity() {
     const identity = await fetchHive(operatorToken);
     onHiveIdentityChange(identity);
+  }
+
+  function editSteward(operatorId: string) {
+    const existing = stewardships.find((stewardship) => stewardship.steward_operator_id === operatorId);
+    const stewardMember = members.find((member) => member.operator_id === operatorId);
+    setEditingSteward(operatorId);
+    setManagedHives(existing?.managed_hive_ids ?? (stewardMember ? [stewardMember.hive_id] : []));
+    setStewardCapabilities(existing?.capabilities ?? ["observe", "assign", "assist", "takeover"]);
+    setConfirmRevoke(undefined);
+    setError("");
+    setMessage("");
+  }
+
+  async function saveStewardship() {
+    if (!editingSteward || managedHives.length === 0) return;
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      const capabilities = stewardCapabilities.includes("observe")
+        ? stewardCapabilities
+        : ["observe" as const, ...stewardCapabilities];
+      const saved = await setApiaryStewardship(
+        operatorToken,
+        editingSteward,
+        managedHives,
+        capabilities,
+      );
+      setStewardships((current) => [
+        ...current.filter((item) => item.steward_operator_id !== saved.steward_operator_id),
+        saved,
+      ]);
+      const operator = members.find((member) => member.operator_id === saved.steward_operator_id);
+      setMessage(`${operator?.operator_display_name ?? "The member"} is now a Steward for ${saved.managed_hive_ids.length} ${saved.managed_hive_ids.length === 1 ? "Hive" : "Hives"}.`);
+      setEditingSteward(undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The Steward delegation could not be saved.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function revokeStewardship(stewardship: Stewardship) {
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      await revokeApiaryStewardship(operatorToken, stewardship.id);
+      setStewardships((current) => current.filter((item) => item.id !== stewardship.id));
+      const operator = members.find((member) => member.operator_id === stewardship.steward_operator_id);
+      setMessage(`${operator?.operator_display_name ?? "The member"} is no longer a Steward.`);
+      setConfirmRevoke(undefined);
+      if (editingSteward === stewardship.steward_operator_id) setEditingSteward(undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The Steward delegation could not be revoked.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  function toggleManagedHive(hiveId: string) {
+    setManagedHives((current) => current.includes(hiveId)
+      ? current.filter((id) => id !== hiveId)
+      : [...current, hiveId]);
+  }
+
+  function toggleStewardCapability(capability: StewardCapability) {
+    setStewardCapabilities((current) => current.includes(capability)
+      ? current.filter((item) => item !== capability)
+      : [...current, capability]);
   }
 
   async function foundApiary() {
@@ -524,6 +611,102 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
           </div>
           {keeper ? (
             <>
+            <div className="apiary-stewards">
+              <div className="apiary-section-heading">
+                <span>
+                  <strong>Stewards</strong>
+                  <small>Give a trusted team lead durable authority over selected Hives. Routine work stays quiet; assistance and takeover remain visible and audited.</small>
+                </span>
+                {!editingSteward && members.some((item) => item.role === "member") ? (
+                  <button
+                    className="secondary-button"
+                    disabled={working}
+                    onClick={() => editSteward(members.find((item) => item.role === "member")!.operator_id)}
+                  >Delegate a Steward</button>
+                ) : null}
+              </div>
+              {stewardshipLoadError ? <p className="apiary-blockers">Steward delegations could not be refreshed. Existing authority is unchanged.</p> : null}
+              {stewardships.length > 0 ? (
+                <ul className="apiary-steward-list" aria-label="Apiary Stewards">
+                  {stewardships.map((stewardship) => {
+                    const steward = members.find((item) => item.operator_id === stewardship.steward_operator_id);
+                    const managedNames = stewardship.managed_hive_ids.map((hiveId) => members.find((item) => item.hive_id === hiveId)?.hive_name ?? "Unknown Hive");
+                    return (
+                      <li key={stewardship.id}>
+                        <span>
+                          <strong>{steward?.operator_display_name ?? "Apiary member"}</strong>
+                          <small>{steward?.hive_name ?? "Member Hive"}</small>
+                        </span>
+                        <span className="apiary-steward-scope">
+                          <small>Responsible for</small>
+                          <strong>{managedNames.join(", ")}</strong>
+                        </span>
+                        <span className="apiary-steward-capabilities" aria-label="Granted capabilities">
+                          {stewardship.capabilities.map((capability) => <span key={capability}>{stewardCapabilityLabel(capability)}</span>)}
+                        </span>
+                        <span className="apiary-steward-actions">
+                          <button className="secondary-button" disabled={working} onClick={() => editSteward(stewardship.steward_operator_id)}>Edit</button>
+                          {confirmRevoke === stewardship.id ? (
+                            <span className="apiary-revoke-confirm">
+                              <button className="secondary-button" disabled={working} onClick={() => setConfirmRevoke(undefined)}>Keep</button>
+                              <button className="danger-button" disabled={working} onClick={() => void revokeStewardship(stewardship)}>Confirm revoke</button>
+                            </span>
+                          ) : (
+                            <button className="secondary-button" disabled={working} onClick={() => setConfirmRevoke(stewardship.id)}>Revoke</button>
+                          )}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : !editingSteward ? <p className="empty-copy">No Stewards are delegated. Member Hives escalate directly to you.</p> : null}
+              {editingSteward ? (
+                <div className="apiary-steward-editor" role="group" aria-label="Steward delegation">
+                  <label className="field-stack" htmlFor="steward-operator">
+                    <span>Team lead</span>
+                    <select id="steward-operator" value={editingSteward} onChange={(event) => editSteward(event.target.value)}>
+                      {members.filter((item) => item.role === "member").map((item) => (
+                        <option key={item.operator_id} value={item.operator_id}>{item.operator_display_name} · {item.hive_name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <fieldset>
+                    <legend>Hives this Steward can help</legend>
+                    <small>Select the complete durable scope. Changes replace the previous grant atomically.</small>
+                    <div className="apiary-choice-grid">
+                      {members.filter((item) => item.role === "member").map((item) => (
+                        <label key={item.hive_id}>
+                          <input type="checkbox" checked={managedHives.includes(item.hive_id)} onChange={() => toggleManagedHive(item.hive_id)} />
+                          <span><strong>{item.hive_name}</strong><small>{item.operator_display_name}</small></span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>What this Steward can do</legend>
+                    <small>Viewing is always included. Takeover replaces active control visibly; it never injects into an operator’s session.</small>
+                    <div className="apiary-choice-grid">
+                      {stewardCapabilityChoices.map(({ capability, label, detail }) => (
+                        <label key={capability}>
+                          <input
+                            type="checkbox"
+                            checked={capability === "observe" || stewardCapabilities.includes(capability)}
+                            disabled={capability === "observe"}
+                            onChange={() => toggleStewardCapability(capability)}
+                          />
+                          <span><strong>{label}</strong><small>{detail}</small></span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <p className="privacy-note">This records authority on the Keeper now. Delivery to remote Hives follows federation synchronization.</p>
+                  <div className="settings-actions">
+                    <button className="secondary-button" disabled={working} onClick={() => setEditingSteward(undefined)}>Cancel</button>
+                    <button className="primary-action" disabled={working || managedHives.length === 0} onClick={() => void saveStewardship()}>{working ? "Saving…" : "Save Stewardship"}</button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <div className="apiary-hive-candidates">
               <div>
                 <strong>Add a Hive</strong>
@@ -653,4 +836,17 @@ function collapseBlockers(readiness: ApiaryCollapseReadiness | undefined) {
 
 function safeFilename(value: string) {
   return value.trim().toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "hive";
+}
+
+const stewardCapabilityChoices: { capability: StewardCapability; label: string; detail: string }[] = [
+  { capability: "observe", label: "See status", detail: "Structured Hive and work state" },
+  { capability: "assign", label: "Route work", detail: "Assign shared work inside the selected Hives" },
+  { capability: "assist", label: "Assist", detail: "Offer scoped help when attention is needed" },
+  { capability: "takeover", label: "Take over", detail: "Explicitly replace an engagement lease" },
+  { capability: "manage_projects", label: "Manage projects", detail: "Maintain shared project configuration" },
+  { capability: "manage_members", label: "Manage members", detail: "Administer approved Hive membership" },
+];
+
+function stewardCapabilityLabel(capability: StewardCapability) {
+  return stewardCapabilityChoices.find((item) => item.capability === capability)?.label ?? capability;
 }

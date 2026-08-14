@@ -1,8 +1,11 @@
+use std::collections::HashSet;
+
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryId, ApiaryInvitation, ApiaryInvitationId,
     ApiaryInvitationState, ApiaryJiraProject, ApiaryJoinReadiness, HiveId, JiraProjectBindingId,
-    JiraProjectScope, OperatorId, SharedWorkBackend,
+    JiraProjectScope, LocalApiaryContext, LocalApiaryRole, OperatorId, SharedWorkBackend,
+    StewardCapability, Stewardship, StewardshipId,
 };
 
 use crate::{TaskStore, TaskStoreError, parse_domain_id};
@@ -12,6 +15,31 @@ const MAX_APIARY_NAME_BYTES: usize = 120;
 const MAX_PROJECT_ID_BYTES: usize = 128;
 const MAX_PROJECT_KEY_BYTES: usize = 64;
 const MAX_PROJECT_NAME_BYTES: usize = 240;
+const MAX_STEWARD_HIVES: usize = 1_000;
+
+fn normalize_stewardship_grant(
+    managed_hive_ids: &[HiveId],
+    capabilities: &[StewardCapability],
+    keeper_hive_id: HiveId,
+    now: i64,
+) -> Result<(HashSet<HiveId>, Vec<StewardCapability>), TaskStoreError> {
+    if now < 0
+        || managed_hive_ids.is_empty()
+        || managed_hive_ids.len() > MAX_STEWARD_HIVES
+        || capabilities.is_empty()
+        || !capabilities.contains(&StewardCapability::Observe)
+    {
+        return Err(TaskStoreError::InvalidStewardship);
+    }
+    let mut hives = managed_hive_ids.iter().copied().collect::<HashSet<_>>();
+    if hives.len() != managed_hive_ids.len() || hives.remove(&keeper_hive_id) {
+        return Err(TaskStoreError::InvalidStewardship);
+    }
+    let mut capabilities = capabilities.to_vec();
+    capabilities.sort_by_key(ToString::to_string);
+    capabilities.dedup();
+    Ok((hives, capabilities))
+}
 
 impl TaskStore {
     /// Atomically creates one Apiary around the local personal Hive. The local
@@ -72,6 +100,145 @@ impl TaskStore {
         transaction.commit()?;
         drop(connection);
         self.local_apiary_context()
+    }
+
+    /// Atomically creates or replaces one Keeper-owned Steward delegation.
+    /// Steward identity, Hive scope, and capabilities remain explicit; no
+    /// terminal, Jira, or remote-Hive action occurs here.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, the Keeper as Steward, empty/foreign scope,
+    /// capability sets without observation, invalid time, and persistence failures.
+    pub fn set_stewardship(
+        &self,
+        steward_operator_id: OperatorId,
+        managed_hive_ids: &[HiveId],
+        capabilities: &[StewardCapability],
+        now: i64,
+    ) -> Result<Stewardship, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let LocalApiaryContext::Federated { apiary, local_role } = self.local_apiary_context()?
+        else {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        };
+        if local_role != LocalApiaryRole::Keeper
+            || apiary.keeper_operator_id != identity.operator.id
+            || steward_operator_id == identity.operator.id
+        {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        }
+        let (hives, capabilities) =
+            normalize_stewardship_grant(managed_hive_ids, capabilities, identity.hive.id, now)?;
+
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let steward_is_member = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM hives
+                 WHERE apiary_id = ?1 AND operator_id = ?2
+             )",
+            params![apiary.id.to_string(), steward_operator_id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !steward_is_member {
+            return Err(TaskStoreError::InvalidStewardship);
+        }
+        for hive_id in &hives {
+            let in_scope = transaction.query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM hives WHERE id = ?1 AND apiary_id = ?2
+                 )",
+                params![hive_id.to_string(), apiary.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !in_scope {
+                return Err(TaskStoreError::InvalidStewardship);
+            }
+        }
+        let existing = transaction
+            .query_row(
+                "SELECT id FROM stewardships
+                 WHERE apiary_id = ?1 AND steward_operator_id = ?2 AND revoked_at IS NULL",
+                params![apiary.id.to_string(), steward_operator_id.to_string()],
+                |row| parse_domain_id::<StewardshipId>(&row.get::<_, String>(0)?),
+            )
+            .optional()?;
+        if let Some(existing_id) = existing {
+            transaction.execute(
+                "UPDATE stewardships SET revoked_at = ?1, updated_at = ?1
+                 WHERE id = ?2 AND revoked_at IS NULL",
+                params![now, existing_id.to_string()],
+            )?;
+        }
+        let stewardship_id = StewardshipId::new();
+        transaction.execute(
+            "INSERT INTO stewardships
+                    (id, apiary_id, steward_operator_id, created_by_operator_id,
+                     created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            params![
+                stewardship_id.to_string(),
+                apiary.id.to_string(),
+                steward_operator_id.to_string(),
+                identity.operator.id.to_string(),
+                now,
+            ],
+        )?;
+        for hive_id in hives {
+            transaction.execute(
+                "INSERT INTO stewardship_hive_grants (stewardship_id, hive_id)
+                 VALUES (?1, ?2)",
+                params![stewardship_id.to_string(), hive_id.to_string()],
+            )?;
+        }
+        for capability in capabilities {
+            transaction.execute(
+                "INSERT INTO stewardship_capability_grants (stewardship_id, capability)
+                 VALUES (?1, ?2)",
+                params![stewardship_id.to_string(), capability.to_string()],
+            )?;
+        }
+        transaction.commit()?;
+        drop(connection);
+        self.stewardships_for_apiary(apiary.id)?
+            .into_iter()
+            .find(|stewardship| stewardship.id == stewardship_id)
+            .ok_or(TaskStoreError::StewardshipNotFound)
+    }
+
+    /// Revokes one active Steward delegation without deleting its audit row.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown/already revoked delegations, invalid time,
+    /// and persistence failures.
+    pub fn revoke_stewardship(
+        &self,
+        stewardship_id: StewardshipId,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidStewardship);
+        }
+        let identity = self.local_hive_identity()?;
+        let LocalApiaryContext::Federated { apiary, local_role } = self.local_apiary_context()?
+        else {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        };
+        if local_role != LocalApiaryRole::Keeper
+            || apiary.keeper_operator_id != identity.operator.id
+        {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        }
+        let changed = self.connection()?.execute(
+            "UPDATE stewardships SET revoked_at = ?1, updated_at = ?1
+             WHERE id = ?2 AND apiary_id = ?3 AND revoked_at IS NULL",
+            params![now, stewardship_id.to_string(), apiary.id.to_string()],
+        )?;
+        if changed == 1 {
+            Ok(())
+        } else {
+            Err(TaskStoreError::StewardshipNotFound)
+        }
     }
 
     /// Returns one durable Apiary by identity without exposing membership or credentials.
@@ -938,6 +1105,150 @@ mod tests {
             )
             .unwrap();
         (apiary, keeper_id)
+    }
+
+    fn add_hive_for_steward_test(
+        store: &TaskStore,
+        hive_name: &str,
+        operator_name: &str,
+        apiary_id: Option<ApiaryId>,
+    ) -> (OperatorId, HiveId) {
+        let operator_id = OperatorId::new();
+        let hive_id = HiveId::new();
+        let connection = store.connection().unwrap();
+        connection
+            .execute(
+                "INSERT INTO operators (id, display_name) VALUES (?1, ?2)",
+                params![operator_id.to_string(), operator_name],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO hives (id, name, operator_id, apiary_id)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    hive_id.to_string(),
+                    hive_name,
+                    operator_id.to_string(),
+                    apiary_id.map(|id| id.to_string())
+                ],
+            )
+            .unwrap();
+        (operator_id, hive_id)
+    }
+
+    fn assert_revoked_stewardship_scope_preserved(
+        store: &TaskStore,
+        stewardship_id: StewardshipId,
+        revoked_at: i64,
+        hive_count: usize,
+    ) {
+        let connection = store.connection().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT revoked_at FROM stewardships WHERE id = ?1",
+                    [stewardship_id.to_string()],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .unwrap(),
+            Some(revoked_at)
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM stewardship_hive_grants WHERE stewardship_id = ?1",
+                    [stewardship_id.to_string()],
+                    |row| row.get::<_, usize>(0),
+                )
+                .unwrap(),
+            hive_count
+        );
+    }
+
+    #[test]
+    fn keeper_sets_updates_and_revokes_explicit_steward_scope_atomically() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        let LocalApiaryContext::Federated { apiary, .. } = store
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap()
+        else {
+            panic!("expected Keeper Apiary");
+        };
+        let (steward_operator_id, first_hive_id) =
+            add_hive_for_steward_test(&store, "IT Lead", "Tessa", Some(apiary.id));
+        let (_, second_hive_id) =
+            add_hive_for_steward_test(&store, "IT Support", "Ivy", Some(apiary.id));
+        let (_, outside_hive_id) = add_hive_for_steward_test(&store, "Outside", "Outside", None);
+
+        let created = store
+            .set_stewardship(
+                steward_operator_id,
+                &[first_hive_id, second_hive_id],
+                &[
+                    StewardCapability::Observe,
+                    StewardCapability::Assign,
+                    StewardCapability::Takeover,
+                ],
+                20,
+            )
+            .unwrap();
+        assert_eq!(created.steward_operator_id, steward_operator_id);
+        assert_eq!(created.managed_hive_ids.len(), 2);
+        assert!(created.capabilities.contains(&StewardCapability::Takeover));
+
+        let updated = store
+            .set_stewardship(
+                steward_operator_id,
+                &[first_hive_id],
+                &[StewardCapability::Observe, StewardCapability::Assist],
+                30,
+            )
+            .unwrap();
+        assert_ne!(updated.id, created.id);
+        assert_eq!(updated.managed_hive_ids, vec![first_hive_id]);
+        assert_eq!(
+            updated.capabilities,
+            vec![StewardCapability::Assist, StewardCapability::Observe]
+        );
+        assert_revoked_stewardship_scope_preserved(&store, created.id, 30, 2);
+
+        for invalid in [
+            store.set_stewardship(
+                identity.operator.id,
+                &[first_hive_id],
+                &[StewardCapability::Observe],
+                40,
+            ),
+            store.set_stewardship(
+                steward_operator_id,
+                &[identity.hive.id],
+                &[StewardCapability::Observe],
+                40,
+            ),
+            store.set_stewardship(
+                steward_operator_id,
+                &[outside_hive_id],
+                &[StewardCapability::Observe],
+                40,
+            ),
+            store.set_stewardship(
+                steward_operator_id,
+                &[first_hive_id],
+                &[StewardCapability::Assign],
+                40,
+            ),
+        ] {
+            assert!(invalid.is_err());
+        }
+
+        store.revoke_stewardship(updated.id, 50).unwrap();
+        assert!(store.stewardships_for_apiary(apiary.id).unwrap().is_empty());
+        assert!(matches!(
+            store.revoke_stewardship(updated.id, 60),
+            Err(TaskStoreError::StewardshipNotFound)
+        ));
     }
 
     fn ready(

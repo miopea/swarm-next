@@ -37,10 +37,11 @@ use swarm_domain::{
     ControlRoomEventKind, DecisionRequestId, FederationCatalogSnapshot, FederationClaimId,
     FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard, HiveId, HiveIdentity,
     JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
-    LocalApiaryContext, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
-    PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
-    QueenAutonomyPolicy, SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
-    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    LocalApiaryContext, NotificationPolicy, OperatorId, PresenceDeviceClass, PresenceDeviceId,
+    PresenceMode, PresenceObservationState, ProviderConversationId, ProviderKind,
+    QueenAutonomyLevel, QueenAutonomyPolicy, SharedWorkBackend, StewardCapability, Stewardship,
+    StewardshipId, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState,
+    WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
@@ -1251,6 +1252,12 @@ struct AcceptApiaryPolicyRequest {
     policy_revision: u64,
 }
 
+#[derive(Debug, Deserialize)]
+struct SetStewardshipRequest {
+    managed_hive_ids: Vec<HiveId>,
+    capabilities: Vec<StewardCapability>,
+}
+
 fn worker_view(
     profile: WorkerProfile,
     running: bool,
@@ -1544,6 +1551,15 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/hive", get(local_hive))
         .route("/api/v1/apiary", post(create_apiary))
         .route("/api/v1/apiary/members", get(apiary_members))
+        .route("/api/v1/apiary/stewardships", get(apiary_stewardships))
+        .route(
+            "/api/v1/apiary/stewardships/by-operator/{operator_id}",
+            put(set_apiary_stewardship),
+        )
+        .route(
+            "/api/v1/apiary/stewardships/{stewardship_id}",
+            delete(revoke_apiary_stewardship),
+        )
         .route("/api/v1/apiary/shared-work", get(apiary_shared_work))
         .route("/api/v1/apiary/sync-health", get(apiary_sync_health))
         .route(
@@ -1864,6 +1880,51 @@ async fn apiary_members(
         .members()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(members)).into_response())
+}
+
+async fn apiary_stewardships(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let stewardships = apiary_service(&state)?
+        .stewardships()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(stewardships)).into_response())
+}
+
+async fn set_apiary_stewardship(
+    State(state): State<Arc<AppState>>,
+    Path(steward_operator_id): Path<OperatorId>,
+    headers: HeaderMap,
+    Json(request): Json<SetStewardshipRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let stewardship: Stewardship = apiary_service(&state)?
+        .set_stewardship(
+            steward_operator_id,
+            &request.managed_hive_ids,
+            &request.capabilities,
+            unix_timestamp(),
+        )
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(stewardship)).into_response())
+}
+
+async fn revoke_apiary_stewardship(
+    State(state): State<Arc<AppState>>,
+    Path(stewardship_id): Path<StewardshipId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    apiary_service(&state)?
+        .revoke_stewardship(stewardship_id, unix_timestamp())
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::CACHE_CONTROL, "no-store")],
+    )
+        .into_response())
 }
 
 async fn apiary_shared_work(
@@ -4861,6 +4922,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "apiary_keeper_required",
             error.to_string(),
         ),
+        TaskStoreError::InvalidStewardship => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_stewardship",
+            error.to_string(),
+        ),
+        TaskStoreError::StewardshipNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "stewardship_not_found",
+            error.to_string(),
+        ),
         TaskStoreError::HiveCandidateIdentityConflict => ApiError::new(
             StatusCode::CONFLICT,
             "hive_identity_conflict",
@@ -5944,6 +6015,12 @@ mod tests {
             .await;
         let acceptance: swarm_domain::FederationJoinAcceptance =
             serde_json::from_value(first_json.clone()).unwrap();
+        assert_stewardship_endpoints(
+            app.clone(),
+            invited_identity.operator.id,
+            invited_identity.hive.id,
+        )
+        .await;
         assert_member_catalog_acknowledgement_endpoint(
             invited,
             &keeper,
@@ -5954,6 +6031,86 @@ mod tests {
         .await;
         assert_federation_claim_endpoints(app, &keeper, credential).await;
         assert_keeper_has_two_hives(&keeper);
+    }
+
+    async fn assert_stewardship_endpoints(
+        app: Router,
+        steward_operator_id: OperatorId,
+        managed_hive_id: HiveId,
+    ) {
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/apiary/stewardships")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let body = serde_json::json!({
+            "managed_hive_ids": [managed_hive_id],
+            "capabilities": ["observe", "assign", "assist", "takeover"]
+        })
+        .to_string();
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!(
+                        "/api/v1/apiary/stewardships/by-operator/{steward_operator_id}"
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        assert_eq!(created.headers()[header::CACHE_CONTROL], "no-store");
+        let created_json = response_json(created).await;
+        assert_eq!(
+            created_json["steward_operator_id"],
+            steward_operator_id.to_string()
+        );
+        assert_eq!(
+            created_json["managed_hive_ids"],
+            serde_json::json!([managed_hive_id])
+        );
+        let serialized = created_json.to_string();
+        for forbidden in ["credential", "endpoint", "repository", "terminal"] {
+            assert!(!serialized.contains(forbidden));
+        }
+
+        let listed = authorized_get(app.clone(), "/api/v1/apiary/stewardships").await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        assert_eq!(listed.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response_json(listed).await,
+            serde_json::json!([created_json])
+        );
+
+        let stewardship_id = created_json["id"].as_str().unwrap();
+        let revoked = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/apiary/stewardships/{stewardship_id}"))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
+        assert_eq!(revoked.headers()[header::CACHE_CONTROL], "no-store");
+        let listed = authorized_get(app, "/api/v1/apiary/stewardships").await;
+        assert_eq!(response_json(listed).await, serde_json::json!([]));
     }
 
     fn assert_keeper_has_two_hives(keeper: &TaskStore) {

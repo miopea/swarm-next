@@ -7,9 +7,10 @@ use swarm_domain::{
     FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
     FederationJoinSubmission, FederationSharedClaim, FederationSyncCondition, FederationSyncHealth,
     HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
-    OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
-    PresenceObservationState, SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId,
-    WorkerProfile, WorkerRole, WorkerSessionId,
+    LocalApiaryRole, OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId,
+    PresenceMode, PresenceObservationState, SharedWorkBackend, StewardCapability, Stewardship,
+    StewardshipId, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
+    WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -252,6 +253,55 @@ impl ApiaryService {
     /// Rejects personal Hives and unavailable persistence.
     pub fn members(&self) -> Result<Vec<ApiaryMemberSummary>, ApplicationError> {
         self.store.list_apiary_members().map_err(Into::into)
+    }
+
+    /// Lists active Keeper-owned Steward delegations for this Apiary.
+    ///
+    /// # Errors
+    /// Rejects personal and Member Hives and unavailable persistence.
+    pub fn stewardships(&self) -> Result<Vec<Stewardship>, ApplicationError> {
+        let LocalApiaryContext::Federated { apiary, local_role } =
+            self.store.local_apiary_context()?
+        else {
+            return Err(TaskStoreError::ApiaryKeeperRequired.into());
+        };
+        if local_role != LocalApiaryRole::Keeper {
+            return Err(TaskStoreError::ApiaryKeeperRequired.into());
+        }
+        self.store
+            .stewardships_for_apiary(apiary.id)
+            .map_err(Into::into)
+    }
+
+    /// Atomically creates or replaces one explicit Steward delegation.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, foreign/empty scope, unsafe capabilities, invalid
+    /// time, and persistence failures.
+    pub fn set_stewardship(
+        &self,
+        steward_operator_id: OperatorId,
+        managed_hive_ids: &[HiveId],
+        capabilities: &[StewardCapability],
+        now: i64,
+    ) -> Result<Stewardship, ApplicationError> {
+        self.store
+            .set_stewardship(steward_operator_id, managed_hive_ids, capabilities, now)
+            .map_err(Into::into)
+    }
+
+    /// Revokes one active delegation while preserving its audit identity.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown delegations, invalid time, and persistence failures.
+    pub fn revoke_stewardship(
+        &self,
+        stewardship_id: StewardshipId,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .revoke_stewardship(stewardship_id, now)
+            .map_err(Into::into)
     }
 
     /// Issues a one-day signed public connection card for deliberate sharing

@@ -82,6 +82,12 @@ Decision meanings:
 | PWA installation, push, and mobile terminal | Redesign | Android Chrome/Edge is a first-class dogfood surface. Push-only service worker and install manifest are implemented; preserve terminal commands alongside long-form voice input and continue rendered mobile acceptance. |
 | In-app feedback | Keep/Redesign | Critical to dogfooding; capture correlated diagnostics, bounded content-free browser failure markers, and privacy-safe context. Chat remains the richer path for screenshots until outbound attachment transport exists. |
 
+Stewardship checkpoint: Keeper can atomically create, replace, list, and
+audit-preservingly revoke an explicit grant over selected Member Hives and
+capabilities. The responsive Keeper UI exposes only public member identity and
+states that remote delivery still depends on federation synchronization.
+Enforcement of Steward-scoped remote actions remains staged work.
+
 ## Platform and administration
 
 | Capability | Decision | Rationale and intended direction |

@@ -97,6 +97,20 @@ export type ApiaryMember = {
   role: "keeper" | "member";
   is_local: boolean;
 };
+export type StewardCapability =
+  | "observe"
+  | "assign"
+  | "assist"
+  | "takeover"
+  | "manage_projects"
+  | "manage_members";
+export type Stewardship = {
+  id: string;
+  apiary_id: string;
+  steward_operator_id: string;
+  managed_hive_ids: string[];
+  capabilities: StewardCapability[];
+};
 export type ApiarySharedWorkClaim = {
   id: string;
   apiary_id: string;
@@ -568,6 +582,40 @@ export async function createApiary(
 export async function fetchApiaryMembers(operatorToken: string): Promise<ApiaryMember[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/members");
   return response.json() as Promise<ApiaryMember[]>;
+}
+
+export async function fetchApiaryStewardships(operatorToken: string): Promise<Stewardship[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/stewardships");
+  return response.json() as Promise<Stewardship[]>;
+}
+
+export async function setApiaryStewardship(
+  operatorToken: string,
+  stewardOperatorId: string,
+  managedHiveIds: string[],
+  capabilities: StewardCapability[],
+): Promise<Stewardship> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/stewardships/by-operator/${encodeURIComponent(stewardOperatorId)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ managed_hive_ids: managedHiveIds, capabilities }),
+    },
+  );
+  return response.json() as Promise<Stewardship>;
+}
+
+export async function revokeApiaryStewardship(
+  operatorToken: string,
+  stewardshipId: string,
+): Promise<void> {
+  await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/stewardships/${encodeURIComponent(stewardshipId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function fetchApiarySharedWork(
