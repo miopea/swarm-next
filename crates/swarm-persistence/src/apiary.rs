@@ -1,7 +1,8 @@
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryId, ApiaryInvitation, ApiaryInvitationId,
-    ApiaryInvitationState, ApiaryJiraProject, ApiaryJoinReadiness, HiveId, OperatorId,
+    ApiaryInvitationState, ApiaryJiraProject, ApiaryJoinReadiness, HiveId, JiraProjectBindingId,
+    JiraProjectScope, OperatorId, SharedWorkBackend,
 };
 
 use crate::{TaskStore, TaskStoreError, parse_domain_id};
@@ -255,6 +256,118 @@ impl TaskStore {
         Ok(statement
             .query_map([apiary_id.to_string()], apiary_jira_project_from_row)?
             .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Atomically promotes one ready local Hive Jira binding into the Keeper's
+    /// Apiary catalog and changes the local binding to Apiary scope. Existing
+    /// issue links and workflow mappings remain attached to the same binding.
+    ///
+    /// # Errors
+    /// Rejects personal or member Hives, Native Apiaries, incomplete local
+    /// access or workflow evidence, foreign bindings, invalid time, and
+    /// persistence failures.
+    pub fn promote_local_jira_binding_to_apiary(
+        &self,
+        binding_id: JiraProjectBindingId,
+        now: i64,
+    ) -> Result<ApiaryJiraProject, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidJiraProject);
+        }
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let candidate = transaction
+            .query_row(
+                "SELECT a.id, a.keeper_operator_id, a.shared_work_backend,
+                        b.project_id, b.project_key, b.project_name, b.scope,
+                        b.apiary_id, b.access_verified, b.workflow_mapped
+                 FROM hives h
+                 JOIN apiaries a ON a.id = h.apiary_id AND a.collapsed_at IS NULL
+                 JOIN jira_project_bindings b ON b.hive_id = h.id
+                 WHERE h.id = ?1 AND b.id = ?2",
+                params![identity.hive.id.to_string(), binding_id.to_string()],
+                |row| {
+                    Ok((
+                        parse_domain_id::<ApiaryId>(&row.get::<_, String>(0)?)?,
+                        parse_domain_id::<OperatorId>(&row.get::<_, String>(1)?)?,
+                        row.get::<_, String>(2)?
+                            .parse::<SharedWorkBackend>()
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?
+                            .parse::<JiraProjectScope>()
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        row.get::<_, Option<String>>(7)?
+                            .as_deref()
+                            .map(parse_domain_id::<ApiaryId>)
+                            .transpose()?,
+                        row.get::<_, bool>(8)?,
+                        row.get::<_, bool>(9)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryProjectPromotionNotReady)?;
+        let (
+            apiary_id,
+            keeper_operator_id,
+            backend,
+            project_id,
+            project_key,
+            project_name,
+            scope,
+            binding_apiary_id,
+            access_verified,
+            workflow_mapped,
+        ) = candidate;
+        let scope_is_valid = scope == JiraProjectScope::Hive
+            || (scope == JiraProjectScope::Apiary && binding_apiary_id == Some(apiary_id));
+        if keeper_operator_id != identity.operator.id
+            || backend != SharedWorkBackend::Jira
+            || !access_verified
+            || !workflow_mapped
+            || !scope_is_valid
+        {
+            return Err(TaskStoreError::ApiaryProjectPromotionNotReady);
+        }
+        transaction.execute(
+            "INSERT INTO apiary_jira_projects
+                (apiary_id, project_id, project_key, project_name,
+                 promoted_by_operator_id, promoted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(apiary_id, project_id) DO UPDATE SET
+                 project_key = excluded.project_key,
+                 project_name = excluded.project_name",
+            params![
+                apiary_id.to_string(),
+                project_id,
+                project_key,
+                project_name,
+                identity.operator.id.to_string(),
+                now
+            ],
+        )?;
+        if transaction.execute(
+            "UPDATE jira_project_bindings
+             SET scope = 'apiary', apiary_id = ?1, updated_at = ?2
+             WHERE id = ?3 AND hive_id = ?4",
+            params![
+                apiary_id.to_string(),
+                now,
+                binding_id.to_string(),
+                identity.hive.id.to_string()
+            ],
+        )? != 1
+        {
+            return Err(TaskStoreError::ApiaryProjectPromotionNotReady);
+        }
+        let promoted = apiary_jira_project(&transaction, apiary_id, &project_id)?
+            .ok_or(TaskStoreError::ApiaryProjectPromotionNotReady)?;
+        transaction.commit()?;
+        Ok(promoted)
     }
 
     /// Returns true only when every promoted project has a matching local,
@@ -961,6 +1074,60 @@ mod tests {
                 )
                 .unwrap(),
             identity.operator.id.to_string()
+        );
+    }
+
+    #[test]
+    fn keeper_promotes_only_a_ready_local_jira_binding_atomically() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+
+        assert!(matches!(
+            store.promote_local_jira_binding_to_apiary(binding.id, 20),
+            Err(TaskStoreError::ApiaryProjectPromotionNotReady)
+        ));
+        assert!(
+            store
+                .list_apiary_jira_projects(
+                    store.local_hive_identity().unwrap().hive.apiary_id.unwrap()
+                )
+                .unwrap()
+                .is_empty()
+        );
+
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "1".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let promoted = store
+            .promote_local_jira_binding_to_apiary(binding.id, 30)
+            .unwrap();
+        assert_eq!(promoted.project_id, "10001");
+        assert_eq!(promoted.project_key, "WEB");
+        let converted = store.get_jira_project_binding(binding.id).unwrap();
+        assert_eq!(converted.scope, JiraProjectScope::Apiary);
+        assert_eq!(converted.apiary_id, Some(promoted.apiary_id));
+        assert!(converted.workflow_mapped);
+        assert_eq!(
+            store.list_apiary_jira_projects(promoted.apiary_id).unwrap(),
+            vec![promoted]
         );
     }
 

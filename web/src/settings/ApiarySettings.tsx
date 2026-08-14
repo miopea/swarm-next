@@ -4,9 +4,14 @@ import {
   collapseApiary,
   createApiary,
   fetchApiaryCollapseReadiness,
+  fetchApiaryJiraProjects,
   fetchHive,
+  fetchJiraBindings,
+  promoteApiaryJiraProject,
   type ApiaryCollapseReadiness,
+  type ApiaryJiraProject,
   type HiveIdentity,
+  type JiraProjectBinding,
 } from "../api";
 
 type Props = {
@@ -23,6 +28,9 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [confirmCreate, setConfirmCreate] = useState(false);
   const [confirmCollapse, setConfirmCollapse] = useState(false);
   const [readiness, setReadiness] = useState<ApiaryCollapseReadiness>();
+  const [promotedProjects, setPromotedProjects] = useState<ApiaryJiraProject[]>([]);
+  const [jiraBindings, setJiraBindings] = useState<JiraProjectBinding[]>([]);
+  const [projectLoadError, setProjectLoadError] = useState(false);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -37,6 +45,24 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     void fetchApiaryCollapseReadiness(operatorToken)
       .then((value) => { if (!cancelled) setReadiness(value); })
       .catch(() => { if (!cancelled) setReadiness(undefined); });
+    return () => { cancelled = true; };
+  }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id]);
+
+  useEffect(() => {
+    if (!keeper) {
+      setPromotedProjects([]);
+      setJiraBindings([]);
+      setProjectLoadError(false);
+      return;
+    }
+    let cancelled = false;
+    void Promise.allSettled([fetchApiaryJiraProjects(operatorToken), fetchJiraBindings(operatorToken)])
+      .then(([projects, bindings]) => {
+        if (cancelled) return;
+        setPromotedProjects(projects.status === "fulfilled" ? projects.value : []);
+        setJiraBindings(bindings.status === "fulfilled" ? bindings.value : []);
+        setProjectLoadError(projects.status === "rejected" || bindings.status === "rejected");
+      });
     return () => { cancelled = true; };
   }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id]);
 
@@ -84,6 +110,26 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
+  async function promoteProject(binding: JiraProjectBinding) {
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      const project = await promoteApiaryJiraProject(operatorToken, binding.id);
+      const [projects, bindings] = await Promise.all([
+        fetchApiaryJiraProjects(operatorToken),
+        fetchJiraBindings(operatorToken),
+      ]);
+      setPromotedProjects(projects);
+      setJiraBindings(bindings);
+      setMessage(`${project.project_key} is now in the Apiary project catalog.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The Jira project could not be promoted.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <section id="settings-apiary" className="settings-card apiary-settings" aria-labelledby="apiary-heading">
       <div><p className="eyebrow">Collaboration</p><h3 id="apiary-heading">Your Apiary</h3></div>
@@ -119,6 +165,32 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
           </div>
           <p>Workers, repositories, provider sessions, credentials, and private tasks remain owned by this Hive.</p>
           {keeper ? (
+            <>
+            <div className="apiary-projects">
+              <div><strong>Apiary Jira projects</strong><small>Promote projects into the authoritative Apiary catalog. Each Hive must still receive the catalog entry and prove its own access and workflow mapping.</small></div>
+              {promotedProjects.length > 0 ? (
+                <ul className="apiary-project-list" aria-label="Promoted Jira projects">
+                  {promotedProjects.map((project) => (
+                    <li key={project.project_id}><strong>{project.project_key}</strong><span>{project.project_name}</span><small>Apiary catalog</small></li>
+                  ))}
+                </ul>
+              ) : <p className="empty-copy">No projects are in the Apiary catalog yet.</p>}
+              {projectLoadError ? <p className="apiary-blockers">The project catalog could not be fully refreshed. Existing Hive work is unchanged.</p> : null}
+              {jiraBindings.some((binding) => binding.scope === "hive") ? (
+                <div className="apiary-promotion-list" aria-label="Hive Jira projects available for promotion">
+                  {jiraBindings.filter((binding) => binding.scope === "hive").map((binding) => {
+                    const ready = binding.access_verified && binding.workflow_mapped;
+                    return (
+                      <div key={binding.id}>
+                        <span><strong>{binding.project_key}</strong><small>{binding.project_name}</small></span>
+                        <span className={ready ? "readiness-ready" : "readiness-blocked"}>{ready ? "Ready to promote" : "Finish access and workflow mapping"}</span>
+                        <button className="secondary-button" disabled={working || !ready} onClick={() => void promoteProject(binding)}>Promote project</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
             <div className="apiary-collapse">
               <div><strong>Return to a personal Hive</strong><small>Available only while this is the sole Hive and no federation state remains.</small></div>
               {readiness ? (
@@ -144,6 +216,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                 </div>
               )}
             </div>
+            </>
           ) : <small className="privacy-note">Membership changes require the Keeper and the explicit leave workflow. Nothing moves between Apiaries automatically.</small>}
         </>
       )}

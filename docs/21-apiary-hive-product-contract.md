@@ -66,6 +66,16 @@ Apiary binding. An empty catalog is valid; a partially received or partially
 mapped catalog fails closed. This is distinct from the Hive-owned Jira projects
 that remain private to one operator.
 
+Promotion is now one private application command rather than a UI convention.
+It atomically adds the project to the Apiary catalog and converts the Keeper
+Hive's existing ready binding to Apiary scope without replacing its workflow
+mapping or issue links. The command rejects member Hives, Native Apiaries,
+foreign bindings, and bindings without verified access and a completed workflow
+map. Keeper UI shows both the promoted catalog and which local Hive projects are
+actually ready to share. Cross-Hive distribution and per-Hive acknowledgements
+remain a separate protocol slice; catalog presence alone never claims that a
+remote Hive is ready.
+
 Every Apiary permanently chooses one canonical shared-work backend:
 
 - **Jira-backed Apiary**: Jira is canonical and every active Hive connects its

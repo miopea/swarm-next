@@ -80,6 +80,8 @@ pub enum TaskStoreError {
     ApiaryJoinNotReady,
     #[error("Apiary cannot collapse until all federation state is clear")]
     ApiaryCollapseNotReady,
+    #[error("Jira project is not ready for Apiary promotion")]
+    ApiaryProjectPromotionNotReady,
     #[error("task was not found")]
     NotFound,
     #[error("decision request was not found")]

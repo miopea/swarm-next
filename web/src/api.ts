@@ -96,6 +96,14 @@ export type ApiaryCollapseReadiness = {
   open_cross_hive_work_count: number;
   departed_node_count: number;
 };
+export type ApiaryJiraProject = {
+  apiary_id: string;
+  project_id: string;
+  project_key: string;
+  project_name: string;
+  promoted_by_operator_id: string;
+  promoted_at: number;
+};
 export type HiveIdentity = {
   operator: { id: string; display_name: string };
   hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
@@ -411,6 +419,25 @@ export async function collapseApiary(operatorToken: string): Promise<LocalApiary
     method: "POST",
   });
   return response.json() as Promise<LocalApiaryContext>;
+}
+
+export async function fetchApiaryJiraProjects(
+  operatorToken: string,
+): Promise<ApiaryJiraProject[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/jira-projects");
+  return response.json() as Promise<ApiaryJiraProject[]>;
+}
+
+export async function promoteApiaryJiraProject(
+  operatorToken: string,
+  bindingId: string,
+): Promise<ApiaryJiraProject> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/jira-projects/${encodeURIComponent(bindingId)}/promotion`,
+    { method: "POST" },
+  );
+  return response.json() as Promise<ApiaryJiraProject>;
 }
 
 export async function fetchSessions(operatorToken: string): Promise<SessionSummary[]> {

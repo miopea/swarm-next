@@ -1,10 +1,10 @@
 use swarm_domain::{
-    Apiary, ApiaryCollapseReadiness, ApiaryInvitation, ApiaryInvitationId, ApiaryJoinCheckState,
-    ApiaryJoinChecks, ApiaryJoinReadiness, DecisionRequest, DecisionRequestId, DecisionRequestKind,
-    DecisionUrgency, JiraConnectionState, LocalApiaryContext, OperatorPresence,
-    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
-    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
-    WorkerSessionId,
+    Apiary, ApiaryCollapseReadiness, ApiaryInvitation, ApiaryInvitationId, ApiaryJiraProject,
+    ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinReadiness, DecisionRequest,
+    DecisionRequestId, DecisionRequestKind, DecisionUrgency, JiraConnectionState,
+    JiraProjectBindingId, LocalApiaryContext, OperatorPresence, PresenceDeviceClass,
+    PresenceDeviceId, PresenceMode, PresenceObservationState, SharedWorkBackend, Task, TaskId,
+    TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -95,6 +95,39 @@ impl ApiaryService {
     /// Rejects non-Keepers, federation blockers, invalid time, or stale state.
     pub fn collapse(&self, now: i64) -> Result<LocalApiaryContext, ApplicationError> {
         self.store.collapse_local_apiary(now).map_err(Into::into)
+    }
+
+    /// Lists the current Apiary's authoritative promoted Jira catalog for this
+    /// member Hive. Personal Hives do not have a shared catalog.
+    ///
+    /// # Errors
+    /// Rejects a personal Hive or unavailable persistence.
+    pub fn promoted_jira_projects(&self) -> Result<Vec<ApiaryJiraProject>, ApplicationError> {
+        let identity = self.store.local_hive_identity()?;
+        let apiary_id = identity
+            .hive
+            .apiary_id
+            .ok_or(TaskStoreError::ApiaryNotFound)?;
+        self.store
+            .list_apiary_jira_projects(apiary_id)
+            .map_err(Into::into)
+    }
+
+    /// Promotes one ready local Jira binding through a single Keeper command.
+    /// Store-owned validation keeps catalog insertion and local scope conversion
+    /// atomic so a partial promotion cannot be observed.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, Native or personal Hives, incomplete Jira readiness,
+    /// foreign bindings, invalid time, and unavailable persistence.
+    pub fn promote_jira_binding(
+        &self,
+        binding_id: JiraProjectBindingId,
+        now: i64,
+    ) -> Result<ApiaryJiraProject, ApplicationError> {
+        self.store
+            .promote_local_jira_binding_to_apiary(binding_id, now)
+            .map_err(Into::into)
     }
 
     /// Lists current invitations and derives readiness from durable state plus
@@ -563,7 +596,8 @@ pub enum ApplicationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::ProviderKind;
+    use swarm_domain::{JiraProjectScope, JiraStatusMapping, ProviderKind};
+    use swarm_persistence::JiraProjectBindingInput;
 
     fn setup() -> (TaskService, WorkerProfile, WorkerProfile) {
         let store = TaskStore::in_memory().unwrap();
@@ -644,6 +678,41 @@ mod tests {
             service.store.get_apiary(apiary.id),
             Ok(preserved) if preserved.id == apiary.id
         ));
+    }
+
+    #[test]
+    fn apiary_project_promotion_is_one_revalidated_application_command() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "1".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let service = ApiaryService::new(store);
+        let LocalApiaryContext::Federated { apiary, .. } = service
+            .create_from_personal_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap()
+        else {
+            panic!("expected a federated Hive");
+        };
+
+        let promoted = service.promote_jira_binding(binding.id, 20).unwrap();
+        assert_eq!(promoted.apiary_id, apiary.id);
+        assert_eq!(service.promoted_jira_projects().unwrap(), vec![promoted]);
     }
 
     #[test]

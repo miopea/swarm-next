@@ -1464,6 +1464,11 @@ fn api_router(state: AppState) -> Router {
             get(apiary_collapse_readiness),
         )
         .route("/api/v1/apiary/collapse", post(collapse_apiary))
+        .route("/api/v1/apiary/jira-projects", get(apiary_jira_projects))
+        .route(
+            "/api/v1/apiary/jira-projects/{binding_id}/promotion",
+            post(promote_apiary_jira_project),
+        )
         .route("/api/v1/apiary/invitations", get(apiary_invitations))
         .route(
             "/api/v1/apiary/invitations/{invitation_id}/policy-acceptance",
@@ -1772,6 +1777,34 @@ async fn collapse_apiary(
         .collapse(unix_timestamp())
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
+}
+
+async fn apiary_jira_projects(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let projects = apiary_service(&state)?
+        .promoted_jira_projects()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(projects)).into_response())
+}
+
+async fn promote_apiary_jira_project(
+    State(state): State<Arc<AppState>>,
+    Path(binding_id): Path<JiraProjectBindingId>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let project = apiary_service(&state)?
+        .promote_jira_binding(binding_id, unix_timestamp())
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(project),
+    )
+        .into_response())
 }
 
 async fn accept_apiary_policy(
@@ -4288,6 +4321,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "apiary_collapse_not_ready",
             error.to_string(),
         ),
+        TaskStoreError::ApiaryProjectPromotionNotReady => ApiError::new(
+            StatusCode::CONFLICT,
+            "apiary_project_promotion_not_ready",
+            error.to_string(),
+        ),
         TaskStoreError::DecisionNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "decision_not_found",
@@ -4963,6 +5001,83 @@ mod tests {
         assert_eq!(collapsed.status(), StatusCode::OK);
         assert_eq!(collapsed.headers()[header::CACHE_CONTROL], "no-store");
         assert_eq!(response_json(collapsed).await["mode"], "personal");
+    }
+
+    #[tokio::test]
+    async fn keeper_jira_project_promotion_is_private_atomic_and_listed() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[swarm_domain::JiraStatusMapping {
+                    jira_status_id: "1".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        store
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/apiary/jira-projects/{}/promotion",
+                        binding.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let promoted = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/apiary/jira-projects/{}/promotion",
+                        binding.id
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(promoted.status(), StatusCode::CREATED);
+        assert_eq!(promoted.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(promoted).await["project_key"], "WEB");
+        assert_eq!(
+            store.get_jira_project_binding(binding.id).unwrap().scope,
+            JiraProjectScope::Apiary
+        );
+
+        let listed = authorized_get(app, "/api/v1/apiary/jira-projects").await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        let json = response_json(listed).await;
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert_eq!(json[0]["project_name"], "Website Services");
     }
 
     #[tokio::test]

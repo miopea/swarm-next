@@ -88,6 +88,45 @@ test("collapses a ready sole-Keeper Apiary only after inline confirmation", asyn
   await vi.waitFor(() => expect(onHiveIdentityChange).toHaveBeenCalledWith(personal));
 });
 
+test("promotes only a ready Hive Jira project and then shows it as Apiary owned", async () => {
+  let promoted = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/collapse-readiness") {
+      return ok({ active_hive_count: 1, pending_invitation_count: 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
+    }
+    if (url === "/api/v1/apiary/jira-projects" && !init?.method) {
+      return ok(promoted ? [{
+        apiary_id: "apiary-1", project_id: "10001", project_key: "WEB",
+        project_name: "Website Services", promoted_by_operator_id: "operator-1", promoted_at: 20,
+      }] : []);
+    }
+    if (url === "/api/v1/integrations/jira/bindings") {
+      return ok([{
+        id: "binding-1", project_id: "10001", project_key: "WEB", project_name: "Website Services",
+        scope: promoted ? "apiary" : "hive", hive_id: "hive-1", apiary_id: promoted ? "apiary-1" : null,
+        access_verified: true, workflow_mapped: true, auto_sync_assigned: true,
+      }]);
+    }
+    if (url === "/api/v1/apiary/jira-projects/binding-1/promotion") {
+      expect(init?.method).toBe("POST");
+      promoted = true;
+      return ok({
+        apiary_id: "apiary-1", project_id: "10001", project_key: "WEB",
+        project_name: "Website Services", promoted_by_operator_id: "operator-1", promoted_at: 20,
+      }, 201);
+    }
+    throw new Error(`unexpected request ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  expect(await screen.findByText("Ready to promote")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Promote project" }));
+  expect(await screen.findByRole("list", { name: "Promoted Jira projects" })).toHaveTextContent("WEBWebsite ServicesApiary catalog");
+  expect(screen.getByRole("status")).toHaveTextContent("WEB is now in the Apiary project catalog");
+});
+
 function personalIdentity(): HiveIdentity {
   return {
     operator: { id: "operator-1", display_name: "Bea" },
