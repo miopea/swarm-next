@@ -185,6 +185,29 @@ export type FederationJoinInvitation = {
   imported_at: number;
   expires_at: number;
 };
+export type FederationProjectReadiness = {
+  project: FederationProjectManifestEntry;
+  binding_id: string | null;
+  access_verified: boolean;
+  workflow_mapped: boolean;
+};
+export type ApiaryJoinBlocker =
+  | "hive_already_federated"
+  | "invitation_required"
+  | "invitation_expired"
+  | "identity_not_verified"
+  | "integration_not_ready"
+  | "project_access_not_ready"
+  | "policy_not_accepted"
+  | "protocol_mismatch";
+export type FederationJoinInvitationOverview = FederationJoinInvitation & {
+  readiness: {
+    jira_connection: JiraConnectionState;
+    projects: FederationProjectReadiness[];
+    blockers: ApiaryJoinBlocker[];
+  };
+  readiness_compatibility_fallback?: true;
+};
 export type HiveIdentity = {
   operator: { id: string; display_name: string };
   hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
@@ -528,9 +551,46 @@ export async function inviteApiaryHiveCandidate(
 
 export async function fetchFederationJoinInvitations(
   operatorToken: string,
-): Promise<FederationJoinInvitation[]> {
+): Promise<FederationJoinInvitationOverview[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/join-invitations");
-  return response.json() as Promise<FederationJoinInvitation[]>;
+  const invitations = await response.json() as FederationJoinInvitationOverview[];
+  return invitations.map((invitation) => {
+    if (invitation.readiness) return invitation;
+    const blockers: ApiaryJoinBlocker[] = ["integration_not_ready"];
+    if (invitation.promoted_projects.length > 0) blockers.push("project_access_not_ready");
+    if (invitation.state !== "policy_accepted") blockers.push("policy_not_accepted");
+    return {
+      ...invitation,
+      readiness: {
+        jira_connection: "not_connected",
+        projects: invitation.promoted_projects.map((project) => ({
+          project,
+          binding_id: null,
+          access_verified: false,
+          workflow_mapped: false,
+        })),
+        blockers,
+      },
+      readiness_compatibility_fallback: true,
+    };
+  });
+}
+
+export async function acceptFederationJoinPolicy(
+  operatorToken: string,
+  invitationId: string,
+  policyRevision: number,
+): Promise<FederationJoinInvitationOverview> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/join-invitations/${encodeURIComponent(invitationId)}/policy-acceptance`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ policy_revision: policyRevision }),
+    },
+  );
+  return response.json() as Promise<FederationJoinInvitationOverview>;
 }
 
 export async function importFederationJoinInvitation(

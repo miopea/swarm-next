@@ -284,6 +284,21 @@ test("reviews an invitation before explicitly pinning its exact Keeper", async (
     imported_at: 20, expires_at: 86_410,
   };
   let saved = false;
+  let policyAccepted = false;
+  const overview = () => ({
+    ...imported,
+    state: policyAccepted ? "policy_accepted" : "keeper_pinned",
+    readiness: {
+      jira_connection: "ready",
+      projects: [{
+        project: bundle.promoted_projects[0],
+        binding_id: null,
+        access_verified: false,
+        workflow_mapped: false,
+      }],
+      blockers: policyAccepted ? ["project_access_not_ready"] : ["project_access_not_ready", "policy_not_accepted"],
+    },
+  });
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/v1/apiary/join-invitations" && init?.method === "POST") {
@@ -291,7 +306,13 @@ test("reviews an invitation before explicitly pinning its exact Keeper", async (
       saved = true;
       return ok(imported, 201);
     }
-    if (url === "/api/v1/apiary/join-invitations") return ok(saved ? [imported] : []);
+    if (url === "/api/v1/apiary/join-invitations/invite-1/policy-acceptance") {
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({ policy_revision: 3 });
+      policyAccepted = true;
+      return ok(overview());
+    }
+    if (url === "/api/v1/apiary/join-invitations") return ok(saved ? [overview()] : []);
     throw new Error(`unexpected request ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -311,8 +332,15 @@ test("reviews an invitation before explicitly pinning its exact Keeper", async (
   fireEvent.click(screen.getByRole("button", { name: "Trust Keeper and save invitation" }));
 
   expect(await screen.findByRole("status")).toHaveTextContent("You have not joined or accepted its policy yet");
-  expect(screen.getByRole("list", { name: "Saved Apiary invitations" })).toHaveTextContent("Keeper pinned · policy not accepted");
+  const savedInvitations = screen.getByRole("list", { name: "Saved Apiary invitations" });
+  expect(savedInvitations).toHaveTextContent("2 readiness steps left");
+  expect(savedInvitations).toHaveTextContent("Connect this Jira project");
   expect(saved).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Acknowledge revision 3" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("Policy revision 3 accepted locally");
+  expect(savedInvitations).toHaveTextContent("Acknowledged");
+  expect(savedInvitations).toHaveTextContent("1 readiness step left");
+  expect(policyAccepted).toBe(true);
 });
 
 function personalIdentity(): HiveIdentity {

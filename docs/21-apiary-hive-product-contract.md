@@ -84,8 +84,15 @@ secret are revalidated by the private application command. The secret and
 complete envelope remain private to the Hive database; browser reads expose
 only a sanitized pending-join summary and public project identities.
 Import does not join, accept policy, share work, or grant terminal access.
-Policy acceptance, readiness submission, atomic remote consumption, and a
-signed membership receipt remain later handshake slices.
+The invited Hive can separately acknowledge only the exact signed policy
+revision. That local transition grants no membership and performs no network
+request. Browser reads then include server-derived preflight evidence: current
+Jira connection state and, for every signed project identity, whether this Hive
+has a matching access-verified binding and completed workflow map. Local Jira
+matching uses immutable project ID rather than mutable key or display name.
+Only policy acknowledgement plus ready Jira and project evidence produces
+`Ready to contact Keeper`. Readiness submission, atomic remote consumption,
+and a signed membership receipt remain later handshake slices.
 
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
@@ -103,8 +110,8 @@ foreign bindings, and bindings without verified access and a completed workflow
 map. Keeper UI shows both the promoted catalog and which local Hive projects are
 actually ready to share. Invitation distribution now carries the exact
 signed-digest project manifest into the invited Hive. Per-Hive Jira access and
-workflow acknowledgement remain a separate readiness slice; manifest presence
-alone never claims that a remote Hive is ready.
+workflow mapping are derived from private local bindings and presented per
+project; manifest presence alone never claims that a remote Hive is ready.
 
 Every Apiary permanently chooses one canonical shared-work backend:
 

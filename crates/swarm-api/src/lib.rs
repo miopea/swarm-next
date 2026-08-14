@@ -29,7 +29,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use swarm_application::{
     ApiaryHiveCandidateOverview, ApiaryInvitationOverview, ApiaryService, ApplicationError,
-    TaskService,
+    FederationJoinInvitationOverview, TaskService,
 };
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinReadiness,
@@ -1185,6 +1185,22 @@ struct ApiaryHiveCandidateView {
     invitation_pending: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct FederationJoinInvitationView {
+    #[serde(flatten)]
+    invitation: swarm_domain::FederationJoinInvitation,
+    readiness: swarm_domain::FederationJoinReadiness,
+}
+
+impl From<FederationJoinInvitationOverview> for FederationJoinInvitationView {
+    fn from(value: FederationJoinInvitationOverview) -> Self {
+        Self {
+            invitation: value.invitation,
+            readiness: value.readiness,
+        }
+    }
+}
+
 impl From<ApiaryHiveCandidateOverview> for ApiaryHiveCandidateView {
     fn from(value: ApiaryHiveCandidateOverview) -> Self {
         Self {
@@ -1523,6 +1539,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/apiary/join-invitations",
             get(apiary_join_invitations).post(import_apiary_join_invitation),
+        )
+        .route(
+            "/api/v1/apiary/join-invitations/{invitation_id}/policy-acceptance",
+            post(accept_imported_apiary_policy),
         )
         .route(
             "/api/v1/apiary/collapse-readiness",
@@ -1883,10 +1903,43 @@ async fn apiary_join_invitations(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let jira = state.jira_readiness.readiness().await;
     let invitations = apiary_service(&state)?
-        .imported_invitations(unix_timestamp())
+        .imported_invitations(jira.connection, unix_timestamp())
         .map_err(application_error)?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(invitations)).into_response())
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(
+            invitations
+                .into_iter()
+                .map(FederationJoinInvitationView::from)
+                .collect::<Vec<_>>(),
+        ),
+    )
+        .into_response())
+}
+
+async fn accept_imported_apiary_policy(
+    State(state): State<Arc<AppState>>,
+    Path(invitation_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<AcceptApiaryPolicyRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let jira = state.jira_readiness.readiness().await;
+    let overview = apiary_service(&state)?
+        .accept_imported_policy(
+            parse_apiary_invitation_id(&invitation_id)?,
+            request.policy_revision,
+            jira.connection,
+            unix_timestamp(),
+        )
+        .map_err(application_error)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(FederationJoinInvitationView::from(overview)),
+    )
+        .into_response())
 }
 
 async fn import_apiary_join_invitation(
@@ -5300,10 +5353,58 @@ mod tests {
                 .is_none()
         );
 
-        let listed = authorized_get(app, "/api/v1/apiary/join-invitations").await;
+        let listed = authorized_get(app.clone(), "/api/v1/apiary/join-invitations").await;
         assert_eq!(listed.status(), StatusCode::OK);
         assert_eq!(listed.headers()[header::CACHE_CONTROL], "no-store");
-        assert_eq!(response_json(listed).await.as_array().unwrap().len(), 1);
+        let listed_json = response_json(listed).await;
+        assert_eq!(listed_json.as_array().unwrap().len(), 1);
+        assert_eq!(listed_json[0]["state"], "keeper_pinned");
+        assert_eq!(
+            listed_json[0]["readiness"]["projects"],
+            serde_json::json!([])
+        );
+        assert!(
+            listed_json[0]["readiness"]["blockers"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("policy_not_accepted"))
+        );
+
+        assert_imported_policy_acceptance(app, bundle.invitation.payload.invitation_id).await;
+    }
+
+    async fn assert_imported_policy_acceptance(app: Router, invitation_id: ApiaryInvitationId) {
+        let policy_uri =
+            format!("/api/v1/apiary/join-invitations/{invitation_id}/policy-acceptance");
+        let stale = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&policy_uri)
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"policy_revision":2}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        let accepted = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(policy_uri)
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"policy_revision":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(accepted.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(accepted).await["state"], "policy_accepted");
     }
 
     #[tokio::test]

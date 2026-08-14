@@ -474,9 +474,16 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-project-manifest li span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .apiary-invitation-preview .settings-actions { grid-column: 1 / -1; }
 .apiary-join-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.apiary-join-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
-.apiary-join-list li > span:first-child { display: grid; gap: 2px; }
+.apiary-join-list > li { display: grid; gap: 10px; padding: 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
 .apiary-join-list .readiness-ready { flex: 0 0 auto; font-size: .7rem; font-weight: 700; }
+.apiary-join-list .readiness-blocked { color: var(--warn); font-size: .7rem; font-weight: 700; }
+.apiary-join-summary, .apiary-policy-acknowledgement { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.apiary-join-summary > span:first-child, .apiary-policy-acknowledgement > span:first-child { display: grid; gap: 2px; }
+.apiary-policy-acknowledgement { padding-top: 9px; border-top: 1px solid var(--line); }
+.apiary-project-readiness { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.apiary-project-readiness li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--surface-soft); }
+.apiary-project-readiness li > span:first-child { display: grid; min-width: 0; }
+.apiary-project-readiness li small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .apiary-summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--good-soft); }
 .apiary-summary > span:first-child, .apiary-collapse > div:first-child { display: grid; gap: 2px; }
 .apiary-backend-badge { flex: 0 0 auto; padding: 5px 9px; border: 1px solid color-mix(in srgb, var(--good) 42%, var(--line)); border-radius: 999px; color: var(--good); font-size: .7rem; font-weight: 700; }
@@ -717,7 +724,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-invitation-preview > p, .apiary-invitation-preview .settings-actions { grid-column: 1; }
   .apiary-invitation-preview .settings-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
   .apiary-invitation-preview .settings-actions button { width: 100%; }
-  .apiary-join-list li { align-items: flex-start; flex-direction: column; }
+  .apiary-join-summary, .apiary-policy-acknowledgement, .apiary-project-readiness li { align-items: flex-start; flex-direction: column; }
   .apiary-candidate-list li { align-items: flex-start; flex-direction: column; }
   .apiary-candidate-state { width: 100%; align-items: stretch; flex-direction: column; }
   .apiary-candidate-state .secondary-button { width: 100%; }

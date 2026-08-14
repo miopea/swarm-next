@@ -109,9 +109,15 @@ The promoted-project manifest slice now sends the bounded, ordered public Jira
 project identities beside the invitation and verifies their canonical digest
 against the signed envelope before import. The invited Hive stores those rows
 in an immutable normalized table and exposes them for operator review without
-Jira access evidence, workflow mappings, credentials, or issue content.
-Manifest tampering and duplicate identities fail closed. Manifest receipt is
-not readiness; each Hive must still prove local Jira access and mapping.
+credentials or issue content. A separate authenticated local command now
+accepts only the exact signed policy revision; it grants no membership and
+contacts no Keeper. Server-derived preflight joins each signed immutable
+project ID to private local Jira binding evidence and reports access and
+workflow-map readiness per project. Mutable project key and name are not
+authorization identities. Manifest tampering, duplicate identities, stale
+policy revisions, incomplete access, and incomplete mappings fail closed.
+Clearing the preflight means only that the Hive is ready to submit the one-time
+handshake.
 
 Later slices must prove one-time remote consumption, replay rejection, protocol
 negotiation, and a complete join handshake between two independent processes.

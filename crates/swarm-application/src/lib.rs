@@ -2,10 +2,11 @@ use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks,
     ApiaryJoinReadiness, DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency,
-    FederationJoinInvitation, HiveConnectionCard, HiveId, JiraConnectionState,
-    JiraProjectBindingId, LocalApiaryContext, OperatorPresence, PresenceDeviceClass,
-    PresenceDeviceId, PresenceMode, PresenceObservationState, SharedWorkBackend, Task, TaskId,
-    TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
+    FederationJoinInvitation, FederationJoinReadiness, HiveConnectionCard, HiveId,
+    JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
+    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
+    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
+    WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -52,6 +53,12 @@ pub struct ApiaryInvitationOverview {
 pub struct ApiaryHiveCandidateOverview {
     pub candidate: ApiaryHiveCandidate,
     pub invitation_pending: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FederationJoinInvitationOverview {
+    pub invitation: FederationJoinInvitation,
+    pub readiness: FederationJoinReadiness,
 }
 
 impl ApiaryService {
@@ -161,11 +168,54 @@ impl ApiaryService {
     /// Returns a persistence error when private invitation state is unavailable.
     pub fn imported_invitations(
         &self,
+        jira_connection: JiraConnectionState,
         now: i64,
-    ) -> Result<Vec<FederationJoinInvitation>, ApplicationError> {
+    ) -> Result<Vec<FederationJoinInvitationOverview>, ApplicationError> {
+        let hive = self.store.local_hive_identity()?.hive;
         self.store
-            .federation_join_invitations(now)
-            .map_err(Into::into)
+            .federation_join_invitations(now)?
+            .into_iter()
+            .map(|invitation| {
+                let projects = self
+                    .store
+                    .federation_project_readiness(invitation.invitation_id)?;
+                let readiness = FederationJoinReadiness::evaluate(
+                    &hive,
+                    &invitation,
+                    jira_connection,
+                    projects,
+                    now,
+                );
+                Ok(FederationJoinInvitationOverview {
+                    invitation,
+                    readiness,
+                })
+            })
+            .collect()
+    }
+
+    /// Acknowledges the exact policy revision from a current imported
+    /// invitation, then returns freshly derived local readiness. No Keeper is
+    /// contacted and no membership is granted.
+    ///
+    /// # Errors
+    /// Rejects a stale revision, expired/resolved invitation, identity or
+    /// membership mismatch, or unavailable local evidence.
+    pub fn accept_imported_policy(
+        &self,
+        invitation_id: ApiaryInvitationId,
+        policy_revision: u64,
+        jira_connection: JiraConnectionState,
+        now: i64,
+    ) -> Result<FederationJoinInvitationOverview, ApplicationError> {
+        self.store
+            .accept_federation_join_policy(invitation_id, policy_revision, now)?;
+        self.imported_invitations(jira_connection, now)?
+            .into_iter()
+            .find(|overview| overview.invitation.invitation_id == invitation_id)
+            .ok_or(ApplicationError::Store(
+                TaskStoreError::ApiaryInvitationNotFound,
+            ))
     }
 
     /// Creates one Apiary around the current personal Hive. The local operator

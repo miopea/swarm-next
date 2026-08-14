@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  acceptFederationJoinPolicy,
   collapseApiary,
   createApiary,
   fetchApiaryCollapseReadiness,
@@ -18,7 +19,7 @@ import {
   type ApiaryHiveCandidate,
   type ApiaryInvitationBundle,
   type ApiaryJiraProject,
-  type FederationJoinInvitation,
+  type FederationJoinInvitationOverview,
   type HiveConnectionCard,
   type HiveIdentity,
   type JiraProjectBinding,
@@ -41,7 +42,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [readiness, setReadiness] = useState<ApiaryCollapseReadiness>();
   const [promotedProjects, setPromotedProjects] = useState<ApiaryJiraProject[]>([]);
   const [hiveCandidates, setHiveCandidates] = useState<ApiaryHiveCandidate[]>([]);
-  const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitation[]>([]);
+  const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
   const [jiraBindings, setJiraBindings] = useState<JiraProjectBinding[]>([]);
   const [projectLoadError, setProjectLoadError] = useState(false);
@@ -250,6 +251,25 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
+  async function acceptImportedPolicy(invitation: FederationJoinInvitationOverview) {
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      await acceptFederationJoinPolicy(
+        operatorToken,
+        invitation.invitation_id,
+        invitation.required_policy_revision,
+      );
+      setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
+      setMessage(`Policy revision ${invitation.required_policy_revision} accepted locally. This Hive has not joined ${invitation.apiary_name} yet.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "That policy revision could not be accepted.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <section id="settings-apiary" className="settings-card apiary-settings" aria-labelledby="apiary-heading">
       <div><p className="eyebrow">Collaboration</p><h3 id="apiary-heading">Your Apiary</h3></div>
@@ -303,8 +323,53 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
               <ul className="apiary-join-list" aria-label="Saved Apiary invitations">
                 {joinInvitations.map((invitation) => (
                   <li key={invitation.invitation_id}>
-                    <span><strong>{invitation.apiary_name}</strong><small>{invitation.keeper_hive_name} · {invitation.keeper_operator_display_name} · {invitation.promoted_projects.length} Jira {invitation.promoted_projects.length === 1 ? "project" : "projects"}</small></span>
-                    <span className="readiness-ready">Keeper pinned · policy not accepted</span>
+                    <div className="apiary-join-summary">
+                      <span><strong>{invitation.apiary_name}</strong><small>{invitation.keeper_hive_name} · {invitation.keeper_operator_display_name}</small></span>
+                      <span className={invitation.readiness.blockers.length === 0 ? "readiness-ready" : "readiness-blocked"}>
+                        {invitation.readiness_compatibility_fallback
+                          ? "Runtime update in progress"
+                          : invitation.readiness.blockers.length === 0
+                            ? "Ready to contact Keeper"
+                            : `${invitation.readiness.blockers.length} readiness ${invitation.readiness.blockers.length === 1 ? "step" : "steps"} left`}
+                      </span>
+                    </div>
+                    <div className="apiary-policy-acknowledgement">
+                      <span>
+                        <strong>Policy revision {invitation.required_policy_revision}</strong>
+                        <small>Jira-backed shared work · {invitation.promoted_projects.length} signed {invitation.promoted_projects.length === 1 ? "project" : "projects"} · Keeper identity pinned</small>
+                      </span>
+                      {invitation.readiness_compatibility_fallback ? (
+                        <button className="secondary-button" disabled>Waiting for runtime</button>
+                      ) : invitation.state === "keeper_pinned" ? (
+                        <button className="secondary-button" disabled={working} onClick={() => void acceptImportedPolicy(invitation)}>
+                          Acknowledge revision {invitation.required_policy_revision}
+                        </button>
+                      ) : <span className="readiness-ready">Acknowledged</span>}
+                    </div>
+                    <ul className="apiary-project-readiness" aria-label={`Jira readiness for ${invitation.apiary_name}`}>
+                      {invitation.readiness.projects.map((project) => {
+                        const ready = project.binding_id && project.access_verified && project.workflow_mapped;
+                        const status = invitation.readiness_compatibility_fallback
+                          ? "Readiness refresh pending"
+                          : !project.binding_id
+                          ? "Connect this Jira project"
+                          : !project.access_verified
+                            ? "Verify Jira access"
+                            : !project.workflow_mapped
+                              ? "Finish workflow mapping"
+                              : "Connected and mapped";
+                        return (
+                          <li key={project.project.project_id}>
+                            <span><strong>{project.project.project_key}</strong><small>{project.project.project_name}</small></span>
+                            <span className={ready ? "readiness-ready" : "readiness-blocked"}>{status}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {invitation.readiness.jira_connection !== "ready" ? (
+                      <p className="readiness-blocked">Connect Jira on this Hive before it can join.</p>
+                    ) : null}
+                    <small>Nothing is sent to the Keeper and no membership is granted at this step.</small>
                   </li>
                 ))}
               </ul>

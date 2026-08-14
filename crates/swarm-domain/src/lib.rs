@@ -408,6 +408,72 @@ pub struct FederationJoinInvitation {
     pub expires_at: i64,
 }
 
+/// Local evidence for one signed Jira project in an imported invitation.
+/// The Keeper supplies only project identity; credentials and mappings remain
+/// private to this Hive.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationProjectReadiness {
+    pub project: FederationProjectManifestEntry,
+    pub binding_id: Option<JiraProjectBindingId>,
+    pub access_verified: bool,
+    pub workflow_mapped: bool,
+}
+
+impl FederationProjectReadiness {
+    #[must_use]
+    pub const fn is_ready(&self) -> bool {
+        self.binding_id.is_some() && self.access_verified && self.workflow_mapped
+    }
+}
+
+/// Server-derived preflight for an imported invitation. This is intentionally
+/// separate from membership: clearing every blocker means the Hive may submit
+/// the one-time handshake, not that it has joined.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationJoinReadiness {
+    pub jira_connection: JiraConnectionState,
+    pub projects: Vec<FederationProjectReadiness>,
+    pub blockers: Vec<ApiaryJoinBlocker>,
+}
+
+impl FederationJoinReadiness {
+    #[must_use]
+    pub fn evaluate(
+        hive: &Hive,
+        invitation: &FederationJoinInvitation,
+        jira_connection: JiraConnectionState,
+        projects: Vec<FederationProjectReadiness>,
+        now: i64,
+    ) -> Self {
+        let mut blockers = Vec::new();
+        if hive.apiary_id.is_some() {
+            blockers.push(ApiaryJoinBlocker::HiveAlreadyFederated);
+        }
+        if invitation.expires_at <= now {
+            blockers.push(ApiaryJoinBlocker::InvitationExpired);
+        }
+        if jira_connection != JiraConnectionState::Ready {
+            blockers.push(ApiaryJoinBlocker::IntegrationNotReady);
+        }
+        if projects.iter().any(|project| !project.is_ready()) {
+            blockers.push(ApiaryJoinBlocker::ProjectAccessNotReady);
+        }
+        if invitation.state != FederationJoinInvitationState::PolicyAccepted {
+            blockers.push(ApiaryJoinBlocker::PolicyNotAccepted);
+        }
+        Self {
+            jira_connection,
+            projects,
+            blockers,
+        }
+    }
+
+    #[must_use]
+    pub fn can_submit(&self) -> bool {
+        self.blockers.is_empty()
+    }
+}
+
 impl Hive {
     #[must_use]
     pub fn personal(name: impl Into<String>, operator_id: OperatorId) -> Self {
@@ -2068,6 +2134,73 @@ mod tests {
             50,
         );
         assert!(ready.can_join());
+    }
+
+    #[test]
+    fn imported_invitation_readiness_requires_local_jira_policy_and_project_evidence() {
+        let operator_id = OperatorId::new();
+        let hive = Hive::personal("Daisy", operator_id);
+        let invitation = FederationJoinInvitation {
+            invitation_id: ApiaryInvitationId::new(),
+            apiary_id: ApiaryId::new(),
+            apiary_name: "Garden".into(),
+            shared_work_backend: SharedWorkBackend::Jira,
+            required_policy_revision: 3,
+            promoted_project_catalog_digest: "digest".into(),
+            promoted_projects: Vec::new(),
+            keeper_node_id: FederationNodeId::new(),
+            keeper_hive_id: HiveId::new(),
+            keeper_hive_name: "Rose Hive".into(),
+            keeper_operator_id: OperatorId::new(),
+            keeper_operator_display_name: "Rosa".into(),
+            keeper_endpoint: "https://keeper.example.test".into(),
+            state: FederationJoinInvitationState::KeeperPinned,
+            imported_at: 10,
+            expires_at: 100,
+        };
+        let project = FederationProjectReadiness {
+            project: FederationProjectManifestEntry {
+                project_id: "10000".into(),
+                project_key: "WWD".into(),
+                project_name: "Website Development".into(),
+            },
+            binding_id: None,
+            access_verified: false,
+            workflow_mapped: false,
+        };
+        let blocked = FederationJoinReadiness::evaluate(
+            &hive,
+            &invitation,
+            JiraConnectionState::NotConnected,
+            vec![project.clone()],
+            50,
+        );
+        assert_eq!(
+            blocked.blockers,
+            vec![
+                ApiaryJoinBlocker::IntegrationNotReady,
+                ApiaryJoinBlocker::ProjectAccessNotReady,
+                ApiaryJoinBlocker::PolicyNotAccepted,
+            ]
+        );
+        assert!(!blocked.can_submit());
+
+        let ready = FederationJoinReadiness::evaluate(
+            &hive,
+            &FederationJoinInvitation {
+                state: FederationJoinInvitationState::PolicyAccepted,
+                ..invitation
+            },
+            JiraConnectionState::Ready,
+            vec![FederationProjectReadiness {
+                binding_id: Some(JiraProjectBindingId::new()),
+                access_verified: true,
+                workflow_mapped: true,
+                ..project
+            }],
+            50,
+        );
+        assert!(ready.can_submit());
     }
 
     #[test]

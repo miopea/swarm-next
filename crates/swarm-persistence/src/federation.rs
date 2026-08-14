@@ -9,7 +9,8 @@ use swarm_domain::{
     ApiaryInvitationEnvelopePayload, ApiaryInvitationId, FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
     FEDERATION_INVITATION_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION, FederationJoinInvitation,
     FederationJoinInvitationState, FederationNodeId, FederationProjectManifestEntry,
-    HiveConnectionCard, HiveConnectionCardPayload, HiveId, SharedWorkBackend,
+    FederationProjectReadiness, HiveConnectionCard, HiveConnectionCardPayload, HiveId,
+    JiraProjectBindingId, SharedWorkBackend,
 };
 use url::Url;
 
@@ -285,6 +286,115 @@ impl TaskStore {
                 imported_project_manifest(&connection, invitation.invitation_id)?;
         }
         Ok(invitations)
+    }
+
+    /// Returns local, private Jira evidence for every signed project in one
+    /// imported invitation. Matching uses immutable Jira project identity,
+    /// never display key or name.
+    ///
+    /// # Errors
+    /// Rejects an invitation not addressed to this Hive and corrupt persistence.
+    pub fn federation_project_readiness(
+        &self,
+        invitation_id: ApiaryInvitationId,
+    ) -> Result<Vec<FederationProjectReadiness>, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let connection = self.connection()?;
+        let invited_hive_id = connection
+            .query_row(
+                "SELECT invited_hive_id FROM apiary_join_invitations WHERE id = ?1",
+                [invitation_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryInvitationNotFound)?;
+        if invited_hive_id != identity.hive.id.to_string() {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        let mut statement = connection.prepare(
+            "SELECT p.project_id, p.project_key, p.project_name,
+                    b.id, b.access_verified, b.workflow_mapped
+             FROM apiary_join_invitation_projects p
+             LEFT JOIN jira_project_bindings b
+               ON b.hive_id = ?2 AND b.project_id = p.project_id
+             WHERE p.invitation_id = ?1
+             ORDER BY p.project_key COLLATE NOCASE, p.project_id",
+        )?;
+        statement
+            .query_map(
+                params![invitation_id.to_string(), identity.hive.id.to_string()],
+                |row| {
+                    Ok(FederationProjectReadiness {
+                        project: FederationProjectManifestEntry {
+                            project_id: row.get(0)?,
+                            project_key: row.get(1)?,
+                            project_name: row.get(2)?,
+                        },
+                        binding_id: row
+                            .get::<_, Option<String>>(3)?
+                            .as_deref()
+                            .map(parse_domain_id::<JiraProjectBindingId>)
+                            .transpose()?,
+                        access_verified: row.get::<_, Option<bool>>(4)?.unwrap_or(false),
+                        workflow_mapped: row.get::<_, Option<bool>>(5)?.unwrap_or(false),
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Accepts only the exact policy revision carried by one current signed
+    /// invitation. This transition grants no membership and performs no
+    /// network request.
+    ///
+    /// # Errors
+    /// Rejects stale revisions, expired/resolved invitations, non-personal
+    /// Hives, identity mismatches, invalid time, and persistence failures.
+    pub fn accept_federation_join_policy(
+        &self,
+        invitation_id: ApiaryInvitationId,
+        policy_revision: u64,
+        now: i64,
+    ) -> Result<FederationJoinInvitation, TaskStoreError> {
+        if now < 0 || policy_revision == 0 {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        let identity = self.local_hive_identity()?;
+        if identity.hive.apiary_id.is_some() {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE apiary_join_invitations
+             SET state = 'policy_accepted', policy_accepted_at = ?1
+             WHERE id = ?2
+               AND invited_hive_id = ?3
+               AND invited_operator_id = ?4
+               AND state = 'keeper_pinned'
+               AND required_policy_revision = ?5
+               AND expires_at > ?1
+               AND EXISTS (
+                   SELECT 1 FROM hives h
+                   WHERE h.id = apiary_join_invitations.invited_hive_id
+                     AND h.apiary_id IS NULL
+               )",
+            params![
+                now,
+                invitation_id.to_string(),
+                identity.hive.id.to_string(),
+                identity.operator.id.to_string(),
+                policy_revision,
+            ],
+        )?;
+        drop(connection);
+        if changed != 1 {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        self.federation_join_invitations(now)?
+            .into_iter()
+            .find(|invitation| invitation.invitation_id == invitation_id)
+            .ok_or(TaskStoreError::ApiaryInvitationNotFound)
     }
 
     /// Reports the number of current distributed invitations for one pinned
@@ -1431,7 +1541,7 @@ mod tests {
         assert_eq!(invited.local_hive_identity().unwrap().hive.apiary_id, None);
         assert_eq!(
             invited.federation_join_invitations(10_102).unwrap(),
-            vec![imported]
+            vec![imported.clone()]
         );
         let stored: (usize, String) = invited
             .connection()
@@ -1459,10 +1569,53 @@ mod tests {
             1
         );
         assert_eq!(invited_identity.hive.id, candidate.hive_id);
+        assert_imported_policy_and_project_readiness(&invited, imported.invitation_id);
         assert!(matches!(
             invited.import_apiary_invitation_bundle(&bundle, 10_102),
             Err(TaskStoreError::FederationInvitationConflict)
         ));
+    }
+
+    fn assert_imported_policy_and_project_readiness(
+        invited: &TaskStore,
+        invitation_id: ApiaryInvitationId,
+    ) {
+        let project_readiness = invited.federation_project_readiness(invitation_id).unwrap();
+        assert_eq!(project_readiness.len(), 1);
+        assert!(!project_readiness[0].is_ready());
+        assert!(matches!(
+            invited.accept_federation_join_policy(invitation_id, 2, 10_102),
+            Err(TaskStoreError::ApiaryJoinNotReady)
+        ));
+        let accepted = invited
+            .accept_federation_join_policy(invitation_id, 1, 10_102)
+            .unwrap();
+        assert_eq!(
+            accepted.state,
+            FederationJoinInvitationState::PolicyAccepted
+        );
+        let binding = invited
+            .upsert_jira_project_binding(&crate::JiraProjectBindingInput {
+                project_id: "10000",
+                project_key: "RENAMED",
+                project_name: "Renamed locally",
+                scope: swarm_domain::JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        invited
+            .replace_jira_status_mappings(
+                binding.id,
+                &[swarm_domain::JiraStatusMapping {
+                    jira_status_id: "1".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: swarm_domain::TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let project_readiness = invited.federation_project_readiness(invitation_id).unwrap();
+        assert_eq!(project_readiness[0].binding_id, Some(binding.id));
+        assert!(project_readiness[0].is_ready());
     }
 
     #[test]
