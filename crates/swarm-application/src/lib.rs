@@ -1,6 +1,8 @@
 use swarm_domain::{
-    DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency, OperatorPresence,
-    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState, Task, TaskId,
+    Apiary, ApiaryInvitation, ApiaryInvitationId, ApiaryJoinCheckState, ApiaryJoinChecks,
+    ApiaryJoinReadiness, DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency,
+    JiraConnectionState, LocalApiaryContext, OperatorPresence, PresenceDeviceClass,
+    PresenceDeviceId, PresenceMode, PresenceObservationState, SharedWorkBackend, Task, TaskId,
     TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
@@ -27,6 +29,152 @@ impl From<&WorkerProfile> for AgentPrincipal {
 #[derive(Clone)]
 pub struct TaskService {
     store: TaskStore,
+}
+
+/// Coordinates the local side of Apiary membership. Adapter evidence is typed
+/// input; sealed readiness and durable membership remain domain/store owned.
+#[derive(Clone)]
+pub struct ApiaryService {
+    store: TaskStore,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApiaryInvitationOverview {
+    pub invitation: ApiaryInvitation,
+    pub apiary: Apiary,
+    pub readiness: ApiaryJoinReadiness,
+    pub jira_connection: JiraConnectionState,
+}
+
+impl ApiaryService {
+    #[must_use]
+    pub const fn new(store: TaskStore) -> Self {
+        Self { store }
+    }
+
+    /// Creates one Apiary around the current personal Hive. The local operator
+    /// becomes Keeper and backend selection is permanent.
+    ///
+    /// # Errors
+    /// Rejects invalid input or a Hive that already belongs to an Apiary.
+    pub fn create_from_personal_hive(
+        &self,
+        name: &str,
+        backend: SharedWorkBackend,
+        now: i64,
+    ) -> Result<LocalApiaryContext, ApplicationError> {
+        self.store
+            .create_apiary_for_local_hive(name, backend, now)
+            .map_err(Into::into)
+    }
+
+    /// Lists current invitations and derives readiness from durable state plus
+    /// the integration adapter's current connection evidence.
+    ///
+    /// # Errors
+    /// Returns a persistence error when any invitation evidence is unavailable.
+    pub fn pending_invitations(
+        &self,
+        jira_connection: JiraConnectionState,
+        now: i64,
+    ) -> Result<Vec<ApiaryInvitationOverview>, ApplicationError> {
+        let identity = self.store.local_hive_identity()?;
+        self.store
+            .pending_apiary_invitations_for_hive(identity.hive.id, now)?
+            .into_iter()
+            .map(|invitation| self.overview(invitation, jira_connection, now))
+            .collect()
+    }
+
+    /// Accepts the exact policy revision required by one current invitation as
+    /// the local Hive operator and returns freshly derived readiness.
+    ///
+    /// # Errors
+    /// Rejects stale revisions, foreign invitations, or unavailable evidence.
+    pub fn accept_policy(
+        &self,
+        invitation_id: ApiaryInvitationId,
+        policy_revision: u64,
+        jira_connection: JiraConnectionState,
+        now: i64,
+    ) -> Result<ApiaryInvitationOverview, ApplicationError> {
+        let identity = self.store.local_hive_identity()?;
+        let invitation = self.store.accept_apiary_policy(
+            invitation_id,
+            identity.operator.id,
+            policy_revision,
+            now,
+        )?;
+        self.overview(invitation, jira_connection, now)
+    }
+
+    /// Re-derives all readiness evidence at command time, then atomically joins
+    /// the invited Apiary. A stale browser snapshot can never authorize joining.
+    ///
+    /// # Errors
+    /// Rejects incomplete or stale readiness and persistence conflicts.
+    pub fn join(
+        &self,
+        invitation_id: ApiaryInvitationId,
+        jira_connection: JiraConnectionState,
+        now: i64,
+    ) -> Result<LocalApiaryContext, ApplicationError> {
+        let invitation = self.store.get_apiary_invitation(invitation_id)?;
+        let overview = self.overview(invitation, jira_connection, now)?;
+        self.store
+            .accept_apiary_invitation(invitation_id, &overview.readiness, now)?;
+        self.store.local_apiary_context().map_err(Into::into)
+    }
+
+    fn overview(
+        &self,
+        invitation: ApiaryInvitation,
+        jira_connection: JiraConnectionState,
+        now: i64,
+    ) -> Result<ApiaryInvitationOverview, ApplicationError> {
+        let identity = self.store.local_hive_identity()?;
+        let apiary = self.store.get_apiary(invitation.apiary_id)?;
+        let project_access = self.store.apiary_jira_project_access_ready(apiary.id)?;
+        let readiness = ApiaryJoinReadiness::evaluate(
+            &identity.hive,
+            &apiary,
+            Some(&invitation),
+            apiary_join_checks(&apiary, jira_connection, project_access),
+            now,
+        );
+        Ok(ApiaryInvitationOverview {
+            invitation,
+            apiary,
+            readiness,
+            jira_connection,
+        })
+    }
+}
+
+fn apiary_join_checks(
+    apiary: &Apiary,
+    jira_connection: JiraConnectionState,
+    project_access: bool,
+) -> ApiaryJoinChecks {
+    let integration = if apiary.shared_work_backend() == SharedWorkBackend::Jira
+        && jira_connection == JiraConnectionState::Ready
+    {
+        ApiaryJoinCheckState::Ready
+    } else {
+        ApiaryJoinCheckState::Blocked
+    };
+    ApiaryJoinChecks {
+        identity: ApiaryJoinCheckState::Ready,
+        integration,
+        project_access: if project_access {
+            ApiaryJoinCheckState::Ready
+        } else {
+            ApiaryJoinCheckState::Blocked
+        },
+        // The local store currently owns both ends of this protocol evidence.
+        // Distributed transport will replace this with negotiated compatibility.
+        protocol: ApiaryJoinCheckState::Ready,
+    }
 }
 
 impl TaskService {
@@ -399,6 +547,53 @@ mod tests {
             )
             .unwrap();
         (TaskService::new(store), queen, worker)
+    }
+
+    #[test]
+    fn apiary_creation_is_a_single_application_command_with_keeper_outcome() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        let service = ApiaryService::new(store.clone());
+
+        let context = service
+            .create_from_personal_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        assert!(matches!(
+            context,
+            LocalApiaryContext::Federated {
+                apiary,
+                local_role: swarm_domain::LocalApiaryRole::Keeper,
+            } if apiary.keeper_operator_id == identity.operator.id
+                && apiary.shared_work_backend() == SharedWorkBackend::Jira
+        ));
+        assert!(matches!(
+            service.create_from_personal_hive("Second", SharedWorkBackend::Native, 20),
+            Err(ApplicationError::Store(
+                TaskStoreError::ApiaryMembershipConflict
+            ))
+        ));
+    }
+
+    #[test]
+    fn apiary_join_checks_use_catalog_evidence_and_block_native_integration() {
+        let identity = TaskStore::in_memory()
+            .unwrap()
+            .local_hive_identity()
+            .unwrap();
+        let jira_apiary = Apiary::new("Garden", identity.operator.id, SharedWorkBackend::Jira);
+        let ready_connection = apiary_join_checks(&jira_apiary, JiraConnectionState::Ready, true);
+        assert_eq!(ready_connection.integration, ApiaryJoinCheckState::Ready);
+        assert_eq!(ready_connection.project_access, ApiaryJoinCheckState::Ready);
+        assert_eq!(
+            apiary_join_checks(&jira_apiary, JiraConnectionState::Ready, false).project_access,
+            ApiaryJoinCheckState::Blocked
+        );
+
+        let native_apiary = Apiary::new("Orchard", identity.operator.id, SharedWorkBackend::Native);
+        assert_eq!(
+            apiary_join_checks(&native_apiary, JiraConnectionState::Ready, true).integration,
+            ApiaryJoinCheckState::Blocked
+        );
     }
 
     #[test]

@@ -27,15 +27,14 @@ use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use swarm_application::{ApplicationError, TaskService};
+use swarm_application::{ApiaryInvitationOverview, ApiaryService, ApplicationError, TaskService};
 use swarm_domain::{
-    Apiary, ApiaryInvitation, ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinReadiness,
-    ControlRoomEventKind, DecisionRequestId, HiveIdentity, JiraConnectionState,
-    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext,
-    NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
-    PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
-    QueenAutonomyPolicy, SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
-    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    Apiary, ApiaryInvitation, ApiaryInvitationId, ApiaryJoinReadiness, ControlRoomEventKind,
+    DecisionRequestId, HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope,
+    JiraStatusMapping, LocalApiaryContext, NotificationPolicy, PresenceDeviceClass,
+    PresenceDeviceId, PresenceMode, PresenceObservationState, ProviderConversationId, ProviderKind,
+    QueenAutonomyLevel, QueenAutonomyPolicy, SharedWorkBackend, TaskDetailsUpdate, TaskId,
+    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
@@ -1146,6 +1145,28 @@ struct ApiaryInvitationView {
     jira_connection: JiraConnectionState,
 }
 
+impl From<ApiaryInvitationOverview> for ApiaryInvitationView {
+    fn from(value: ApiaryInvitationOverview) -> Self {
+        Self {
+            invitation: value.invitation,
+            apiary: value.apiary,
+            readiness: value.readiness,
+            jira_connection: value.jira_connection,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateApiaryRequest {
+    name: String,
+    shared_work_backend: SharedWorkBackend,
+}
+
+#[derive(Debug, Deserialize)]
+struct AcceptApiaryPolicyRequest {
+    policy_revision: u64,
+}
+
 fn worker_view(
     profile: WorkerProfile,
     running: bool,
@@ -1437,7 +1458,16 @@ fn api_router(state: AppState) -> Router {
                 .delete(delete_browser_session),
         )
         .route("/api/v1/hive", get(local_hive))
+        .route("/api/v1/apiary", post(create_apiary))
         .route("/api/v1/apiary/invitations", get(apiary_invitations))
+        .route(
+            "/api/v1/apiary/invitations/{invitation_id}/policy-acceptance",
+            post(accept_apiary_policy),
+        )
+        .route(
+            "/api/v1/apiary/invitations/{invitation_id}/join",
+            post(join_apiary),
+        )
         .route(
             "/api/v1/presence",
             get(operator_presence).put(set_operator_presence),
@@ -1690,63 +1720,71 @@ async fn apiary_invitations(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let store = task_store(&state)?;
-    let identity = store
-        .local_hive_identity()
-        .map_err(|error| task_store_error(&error))?;
     let jira = state.jira_readiness.readiness().await;
-    let invitations = store
-        .pending_apiary_invitations_for_hive(identity.hive.id, unix_timestamp())
-        .map_err(|error| task_store_error(&error))?;
-    let mut views = Vec::with_capacity(invitations.len());
-    for invitation in invitations {
-        let apiary = store
-            .get_apiary(invitation.apiary_id)
-            .map_err(|error| task_store_error(&error))?;
-        let project_access = store
-            .apiary_jira_project_access_ready(apiary.id)
-            .map_err(|error| task_store_error(&error))?;
-        let readiness = ApiaryJoinReadiness::evaluate(
-            &identity.hive,
-            &apiary,
-            Some(&invitation),
-            apiary_join_checks(&apiary, jira.connection, project_access),
-            unix_timestamp(),
-        );
-        views.push(ApiaryInvitationView {
-            invitation,
-            apiary,
-            readiness,
-            jira_connection: jira.connection,
-        });
-    }
+    let views = apiary_service(&state)?
+        .pending_invitations(jira.connection, unix_timestamp())
+        .map_err(application_error)?
+        .into_iter()
+        .map(ApiaryInvitationView::from)
+        .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(views)).into_response())
 }
 
-fn apiary_join_checks(
-    apiary: &Apiary,
-    jira_connection: JiraConnectionState,
-    project_access: bool,
-) -> ApiaryJoinChecks {
-    let integration = if apiary.shared_work_backend() == SharedWorkBackend::Jira
-        && jira_connection == JiraConnectionState::Ready
-    {
-        ApiaryJoinCheckState::Ready
-    } else {
-        ApiaryJoinCheckState::Blocked
-    };
-    ApiaryJoinChecks {
-        identity: ApiaryJoinCheckState::Ready,
-        integration,
-        project_access: if project_access {
-            ApiaryJoinCheckState::Ready
-        } else {
-            ApiaryJoinCheckState::Blocked
-        },
-        // Invitations currently originate in this protocol-owning store.
-        // Distributed transport will replace this with negotiated evidence.
-        protocol: ApiaryJoinCheckState::Ready,
-    }
+async fn create_apiary(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateApiaryRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let context = apiary_service(&state)?
+        .create_from_personal_hive(&request.name, request.shared_work_backend, unix_timestamp())
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(context),
+    )
+        .into_response())
+}
+
+async fn accept_apiary_policy(
+    State(state): State<Arc<AppState>>,
+    Path(invitation_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<AcceptApiaryPolicyRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let jira = state.jira_readiness.readiness().await;
+    let overview = apiary_service(&state)?
+        .accept_policy(
+            parse_apiary_invitation_id(&invitation_id)?,
+            request.policy_revision,
+            jira.connection,
+            unix_timestamp(),
+        )
+        .map_err(application_error)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(ApiaryInvitationView::from(overview)),
+    )
+        .into_response())
+}
+
+async fn join_apiary(
+    State(state): State<Arc<AppState>>,
+    Path(invitation_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let jira = state.jira_readiness.readiness().await;
+    let context = apiary_service(&state)?
+        .join(
+            parse_apiary_invitation_id(&invitation_id)?,
+            jira.connection,
+            unix_timestamp(),
+        )
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
 }
 
 async fn download_database_backup(
@@ -4080,6 +4118,10 @@ fn task_service(state: &AppState) -> Result<TaskService, ApiError> {
     task_store(state).map(|store| TaskService::new(store.clone()))
 }
 
+fn apiary_service(state: &AppState) -> Result<ApiaryService, ApiError> {
+    task_store(state).map(|store| ApiaryService::new(store.clone()))
+}
+
 fn application_error(error: ApplicationError) -> ApiError {
     match error {
         ApplicationError::NotAuthorized => ApiError::new(
@@ -4184,6 +4226,14 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::InvalidApiaryInvitation => ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_apiary_invitation",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidApiary => {
+            ApiError::new(StatusCode::BAD_REQUEST, "invalid_apiary", error.to_string())
+        }
+        TaskStoreError::ApiaryMembershipConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "apiary_membership_conflict",
             error.to_string(),
         ),
         TaskStoreError::ApiaryNotFound => {
@@ -4523,6 +4573,16 @@ fn parse_decision_id(value: &str) -> Result<DecisionRequestId, ApiError> {
     })
 }
 
+fn parse_apiary_invitation_id(value: &str) -> Result<ApiaryInvitationId, ApiError> {
+    ApiaryInvitationId::from_str(value).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_apiary_invitation_id",
+            "Apiary invitation ID must be a UUID",
+        )
+    })
+}
+
 fn require_valid_size(rows: u16, columns: u16) -> Result<(), ApiError> {
     let cells = usize::from(rows) * usize::from(columns);
     if rows < MIN_TERMINAL_ROWS
@@ -4730,26 +4790,108 @@ mod tests {
         assert_eq!(response_json(response).await, serde_json::json!([]));
     }
 
-    #[test]
-    fn apiary_join_checks_use_catalog_evidence_and_block_native_integration() {
-        let identity = TaskStore::in_memory()
-            .unwrap()
-            .local_hive_identity()
+    #[tokio::test]
+    async fn personal_hive_can_found_one_apiary_only_through_private_application_command() {
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+        let body = serde_json::json!({
+            "name": "Wildflower Garden",
+            "shared_work_backend": "jira"
+        })
+        .to_string();
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
             .unwrap();
-        let jira_apiary = Apiary::new("Garden", identity.operator.id, SharedWorkBackend::Jira);
-        let ready_connection = apiary_join_checks(&jira_apiary, JiraConnectionState::Ready, true);
-        assert_eq!(ready_connection.integration, ApiaryJoinCheckState::Ready);
-        assert_eq!(ready_connection.project_access, ApiaryJoinCheckState::Ready);
-        assert_eq!(
-            apiary_join_checks(&jira_apiary, JiraConnectionState::Ready, false).project_access,
-            ApiaryJoinCheckState::Blocked
-        );
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
 
-        let native_apiary = Apiary::new("Orchard", identity.operator.id, SharedWorkBackend::Native);
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        assert_eq!(created.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(created).await;
+        assert_eq!(json["mode"], "federated");
+        assert_eq!(json["apiary"]["name"], "Wildflower Garden");
+        assert_eq!(json["apiary"]["shared_work_backend"], "jira");
+        assert_eq!(json["local_role"], "keeper");
+
+        let duplicate = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
         assert_eq!(
-            apiary_join_checks(&native_apiary, JiraConnectionState::Ready, true).integration,
-            ApiaryJoinCheckState::Blocked
+            response_json(duplicate).await["code"],
+            "apiary_membership_conflict"
         );
+    }
+
+    #[tokio::test]
+    async fn invitation_acceptance_commands_never_bypass_operator_authentication() {
+        let invitation_id = ApiaryInvitationId::new();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(TaskStore::in_memory().unwrap()),
+        );
+        let policy = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/apiary/invitations/{invitation_id}/policy-acceptance"
+                    ))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"policy_revision":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(policy.status(), StatusCode::UNAUTHORIZED);
+
+        let join = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/apiary/invitations/{invitation_id}/join"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(join.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

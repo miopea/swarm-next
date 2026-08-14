@@ -66,6 +66,10 @@ pub enum TaskStoreError {
     LockPoisoned,
     #[error("Apiary invitation is invalid")]
     InvalidApiaryInvitation,
+    #[error("Apiary configuration is invalid")]
+    InvalidApiary,
+    #[error("this Hive must be personal before it can found an Apiary")]
+    ApiaryMembershipConflict,
     #[error("Apiary was not found")]
     ApiaryNotFound,
     #[error("Apiary invitation was not found")]

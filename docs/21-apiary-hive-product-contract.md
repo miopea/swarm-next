@@ -29,6 +29,11 @@ Keeper can invite it to another. Joining always runs the destination Apiary's
 identity, integration, project-access, policy, and protocol readiness checks.
 No tasks or authority transfer automatically between Apiaries.
 
+A personal Hive may found one Apiary atomically. Its operator becomes Keeper,
+the local Hive becomes the first member, and the selected shared-work backend
+is immutable. A Hive that is already federated cannot found another Apiary;
+changing organizations remains leave-then-join rather than conversion.
+
 The executable invitation foundation is durable and fail-closed. A Keeper may
 issue one bounded pending invitation per Apiary/Hive pair only while the target
 Hive is personal. Acceptance uses one atomic transaction: the matching current
@@ -47,6 +52,11 @@ readiness can become ready. If the Apiary policy revision changes, prior
 acceptance becomes stale and joining fails closed until a new invitation and
 acceptance are recorded. Keeper, browser, and agent payloads cannot manufacture
 or override this evidence.
+
+The application command surface now owns founding an Apiary, listing local
+invitations, accepting the exact policy revision, and joining. Join always
+re-derives integration and promoted-project readiness at command time; a stale
+browser snapshot is display evidence only and cannot authorize membership.
 
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries

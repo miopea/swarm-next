@@ -7,11 +7,61 @@ use swarm_domain::{
 use crate::{TaskStore, TaskStoreError, parse_domain_id};
 
 const MAX_INVITATION_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
+const MAX_APIARY_NAME_BYTES: usize = 120;
 const MAX_PROJECT_ID_BYTES: usize = 128;
 const MAX_PROJECT_KEY_BYTES: usize = 64;
 const MAX_PROJECT_NAME_BYTES: usize = 240;
 
 impl TaskStore {
+    /// Atomically creates one Apiary around the local personal Hive. The local
+    /// operator becomes Keeper and the backend is immutable after creation.
+    ///
+    /// # Errors
+    /// Returns an error for invalid naming, time, or existing membership.
+    pub fn create_apiary_for_local_hive(
+        &self,
+        name: &str,
+        shared_work_backend: swarm_domain::SharedWorkBackend,
+        now: i64,
+    ) -> Result<swarm_domain::LocalApiaryContext, TaskStoreError> {
+        let name = name.trim();
+        if now < 0 || name.is_empty() || name.len() > MAX_APIARY_NAME_BYTES {
+            return Err(TaskStoreError::InvalidApiary);
+        }
+        let identity = self.local_hive_identity()?;
+        if identity.hive.apiary_id.is_some() {
+            return Err(TaskStoreError::ApiaryMembershipConflict);
+        }
+        let apiary = Apiary::new(name, identity.operator.id, shared_work_backend);
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO apiaries
+                (id, name, keeper_operator_id, shared_work_backend, policy_revision,
+                 created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![
+                apiary.id.to_string(),
+                &apiary.name,
+                apiary.keeper_operator_id.to_string(),
+                apiary.shared_work_backend().to_string(),
+                apiary.policy_revision(),
+                now
+            ],
+        )?;
+        if transaction.execute(
+            "UPDATE hives SET apiary_id = ?1, updated_at = ?2
+             WHERE id = ?3 AND apiary_id IS NULL",
+            params![apiary.id.to_string(), now, identity.hive.id.to_string()],
+        )? != 1
+        {
+            return Err(TaskStoreError::ApiaryMembershipConflict);
+        }
+        transaction.commit()?;
+        drop(connection);
+        self.local_apiary_context()
+    }
+
     /// Returns one durable Apiary by identity without exposing membership or credentials.
     ///
     /// # Errors
@@ -611,6 +661,47 @@ mod tests {
             },
             now,
         )
+    }
+
+    #[test]
+    fn personal_hive_founds_one_immutable_backend_apiary_atomically() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+
+        let context = store
+            .create_apiary_for_local_hive("  Wildflower Garden  ", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        let swarm_domain::LocalApiaryContext::Federated { apiary, local_role } = context else {
+            panic!("founding an Apiary must federate the local Hive");
+        };
+        assert_eq!(apiary.name, "Wildflower Garden");
+        assert_eq!(apiary.keeper_operator_id, identity.operator.id);
+        assert_eq!(apiary.shared_work_backend(), SharedWorkBackend::Jira);
+        assert_eq!(apiary.policy_revision(), 1);
+        assert_eq!(local_role, swarm_domain::LocalApiaryRole::Keeper);
+        assert_eq!(
+            store.local_hive_identity().unwrap().hive.apiary_id,
+            Some(apiary.id)
+        );
+        assert!(matches!(
+            store.create_apiary_for_local_hive("Another", SharedWorkBackend::Native, 20),
+            Err(TaskStoreError::ApiaryMembershipConflict)
+        ));
+    }
+
+    #[test]
+    fn founding_an_apiary_rejects_invalid_operator_content_without_side_effects() {
+        let store = TaskStore::in_memory().unwrap();
+        for (name, now) in [("", 1), ("   ", 1), (&"a".repeat(121), 1), ("Garden", -1)] {
+            assert!(matches!(
+                store.create_apiary_for_local_hive(name, SharedWorkBackend::Jira, now),
+                Err(TaskStoreError::InvalidApiary)
+            ));
+        }
+        assert_eq!(
+            store.local_apiary_context().unwrap(),
+            swarm_domain::LocalApiaryContext::Personal
+        );
     }
 
     #[test]
