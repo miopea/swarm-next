@@ -3,12 +3,13 @@ use swarm_domain::{
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks,
     ApiaryJoinReadiness, ApiaryMemberSummary, DecisionRequest, DecisionRequestId,
     DecisionRequestKind, DecisionUrgency, FederationCatalogAcknowledgement,
-    FederationCatalogReadiness, FederationCatalogSnapshot, FederationJoinAcceptance,
-    FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
-    HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
-    OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
-    PresenceObservationState, SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId,
-    WorkerProfile, WorkerRole, WorkerSessionId,
+    FederationCatalogReadiness, FederationCatalogSnapshot, FederationClaimId,
+    FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
+    FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard, HiveId,
+    JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
+    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
+    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
+    WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -82,6 +83,59 @@ impl ApiaryService {
     ) -> Result<FederationCatalogSnapshot, ApplicationError> {
         self.store
             .signed_federation_catalog(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Atomically reserves one promoted Jira issue for an authenticated member
+    /// Hive before that Hive attempts the canonical Jira assignee write.
+    ///
+    /// # Errors
+    /// Rejects invalid or expired node credentials, unknown project/issue
+    /// identities, and issues already owned or reserved by another Hive.
+    pub fn reserve_federation_claim(
+        &self,
+        node_credential: &str,
+        project_id: &str,
+        issue_id: &str,
+        issue_key: &str,
+        now: i64,
+    ) -> Result<FederationSharedClaim, ApplicationError> {
+        self.store
+            .reserve_federation_claim(node_credential, project_id, issue_id, issue_key, now)
+            .map_err(Into::into)
+    }
+
+    /// Confirms a reservation only after the member Hive has received Jira's
+    /// acknowledgement of the human-assignee change.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials, foreign, expired, or released claims, and
+    /// unavailable persistence.
+    pub fn confirm_federation_claim(
+        &self,
+        node_credential: &str,
+        claim_id: FederationClaimId,
+        now: i64,
+    ) -> Result<FederationSharedClaim, ApplicationError> {
+        self.store
+            .confirm_federation_claim(node_credential, claim_id, now)
+            .map_err(Into::into)
+    }
+
+    /// Releases one still-unconfirmed reservation after the member's Jira
+    /// assignment fails. Confirmed claims use the later governed handoff path.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials, foreign, confirmed, or expired claims, and
+    /// unavailable persistence.
+    pub fn release_federation_claim(
+        &self,
+        node_credential: &str,
+        claim_id: FederationClaimId,
+        now: i64,
+    ) -> Result<FederationSharedClaim, ApplicationError> {
+        self.store
+            .release_federation_claim(node_credential, claim_id, now)
             .map_err(Into::into)
     }
 

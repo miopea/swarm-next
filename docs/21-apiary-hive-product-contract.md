@@ -145,6 +145,20 @@ explicit blockers for a missing or stale catalog, unavailable Jira identity,
 policy-revision drift, and incomplete project access. A fresh signed catalog
 therefore never silently becomes usable shared work merely because it arrived.
 
+The Keeper now exposes an authenticated claim coordinator for promoted Jira
+issues. A Member reserves an issue by immutable project and issue ID before it
+attempts Jira's human-assignee write. One active reservation or confirmed claim
+exists per issue across the Apiary; an exact retry by the same member returns
+the same record and another member receives a conflict. Reservations expire
+after two minutes and may be explicitly released if Jira assignment fails.
+Only the reserving member can confirm after Jira acknowledges assignment, and
+confirmation makes home-Hive ownership durable. A confirmed claim cannot be
+released through this recovery endpoint; it requires the later explicit
+handoff/release workflow. All claim endpoints require the bounded member node
+credential, disable caching, and never receive or expose Jira credentials.
+This is the Keeper serialization primitive, not yet the complete Member-side
+Jira claim saga or background reconciliation loop.
+
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
 reject Jira promotion, and a joining Hive passes project readiness only when

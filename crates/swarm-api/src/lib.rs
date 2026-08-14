@@ -33,13 +33,13 @@ use swarm_application::{
 };
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinReadiness,
-    ControlRoomEventKind, DecisionRequestId, FederationCatalogSnapshot, FederationJoinSubmission,
-    HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId,
-    JiraProjectScope, JiraStatusMapping, LocalApiaryContext, NotificationPolicy,
-    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
-    ProviderConversationId, ProviderKind, QueenAutonomyLevel, QueenAutonomyPolicy,
-    SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState,
-    WorkerId, WorkerProfile, WorkerSessionId,
+    ControlRoomEventKind, DecisionRequestId, FederationCatalogSnapshot, FederationClaimId,
+    FederationJoinSubmission, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
+    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext,
+    NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
+    QueenAutonomyPolicy, SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
+    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
@@ -1193,6 +1193,13 @@ struct FederationJoinInvitationView {
     readiness: swarm_domain::FederationJoinReadiness,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReserveFederationClaimRequest {
+    project_id: String,
+    issue_id: String,
+    issue_key: String,
+}
+
 impl From<FederationJoinInvitationOverview> for FederationJoinInvitationView {
     fn from(value: FederationJoinInvitationOverview) -> Self {
         Self {
@@ -1552,6 +1559,15 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/federation/join", post(consume_federation_join))
         .route("/api/v1/federation/catalog", get(federation_catalog))
+        .route("/api/v1/federation/claims", post(reserve_federation_claim))
+        .route(
+            "/api/v1/federation/claims/{claim_id}",
+            delete(release_federation_claim),
+        )
+        .route(
+            "/api/v1/federation/claims/{claim_id}/confirmation",
+            post(confirm_federation_claim),
+        )
         .route(
             "/api/v1/apiary/catalog-acknowledgement",
             get(get_federation_catalog_acknowledgement).post(acknowledge_federation_catalog),
@@ -2035,6 +2051,55 @@ async fn federation_catalog(
         .federation_catalog(credential, unix_timestamp())
         .map_err(federation_catalog_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
+}
+
+async fn reserve_federation_claim(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<ReserveFederationClaimRequest>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let claim = apiary_service(&state)?
+        .reserve_federation_claim(
+            credential,
+            &request.project_id,
+            &request.issue_id,
+            &request.issue_key,
+            unix_timestamp(),
+        )
+        .map_err(federation_claim_error)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(claim),
+    )
+        .into_response())
+}
+
+async fn confirm_federation_claim(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(claim_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let claim_id = parse_federation_claim_id(&claim_id)?;
+    let claim = apiary_service(&state)?
+        .confirm_federation_claim(credential, claim_id, unix_timestamp())
+        .map_err(federation_claim_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(claim)).into_response())
+}
+
+async fn release_federation_claim(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(claim_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let claim_id = parse_federation_claim_id(&claim_id)?;
+    let claim = apiary_service(&state)?
+        .release_federation_claim(credential, claim_id, unix_timestamp())
+        .map_err(federation_claim_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(claim)).into_response())
 }
 
 async fn acknowledge_federation_catalog(
@@ -4560,6 +4625,31 @@ fn federation_catalog_error(error: ApplicationError) -> ApiError {
     }
 }
 
+fn federation_claim_error(error: ApplicationError) -> ApiError {
+    match error {
+        ApplicationError::Store(
+            TaskStoreError::InvalidFederationCredential
+            | TaskStoreError::ApiaryKeeperRequired
+            | TaskStoreError::ApiaryNotFound,
+        ) => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_federation_credential",
+            "a current federation node credential is required",
+        ),
+        other => application_error(other),
+    }
+}
+
+fn parse_federation_claim_id(value: &str) -> Result<FederationClaimId, ApiError> {
+    FederationClaimId::from_str(value).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_federation_claim",
+            "federation claim ID must be a UUID",
+        )
+    })
+}
+
 fn jira_adapter_error(error: jira::JiraAdapterError) -> ApiError {
     match error {
         jira::JiraAdapterError::NotConfigured => ApiError::new(
@@ -4711,6 +4801,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::InvalidFederationCatalog => ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_federation_catalog",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidFederationClaim => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_federation_claim",
+            error.to_string(),
+        ),
+        TaskStoreError::FederationClaimConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "federation_claim_conflict",
             error.to_string(),
         ),
         TaskStoreError::FederationInvitationConflict => ApiError::new(
@@ -5751,14 +5851,11 @@ mod tests {
         assert_eq!(retry.status(), StatusCode::CREATED);
         assert_eq!(response_json(retry).await, first_json);
 
-        assert_federation_catalog_endpoint(
-            app,
-            first_json["node_credential"].as_str().unwrap(),
-            invited_card.payload.node_id,
-        )
-        .await;
+        let credential = first_json["node_credential"].as_str().unwrap();
+        assert_federation_catalog_endpoint(app.clone(), credential, invited_card.payload.node_id)
+            .await;
         let acceptance: swarm_domain::FederationJoinAcceptance =
-            serde_json::from_value(first_json).unwrap();
+            serde_json::from_value(first_json.clone()).unwrap();
         assert_member_catalog_acknowledgement_endpoint(
             invited,
             &keeper,
@@ -5767,6 +5864,7 @@ mod tests {
             now,
         )
         .await;
+        assert_federation_claim_endpoints(app, &keeper, credential).await;
         assert_keeper_has_two_hives(&keeper);
     }
 
@@ -5822,6 +5920,94 @@ mod tests {
         let serialized = json.to_string();
         assert!(!serialized.contains("node_credential"));
         assert!(!serialized.contains("receipt"));
+    }
+
+    async fn assert_federation_claim_endpoints(app: Router, keeper: &TaskStore, credential: &str) {
+        let apiary_id = keeper
+            .local_hive_identity()
+            .unwrap()
+            .hive
+            .apiary_id
+            .unwrap();
+        keeper
+            .promote_apiary_jira_project(
+                apiary_id,
+                "10001",
+                "WWD",
+                "Website Development",
+                keeper.local_hive_identity().unwrap().operator.id,
+                unix_timestamp(),
+            )
+            .unwrap();
+        let body = serde_json::json!({
+            "project_id": "10001",
+            "issue_id": "20001",
+            "issue_key": "WWD-101"
+        })
+        .to_string();
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/federation/claims")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        let reserve = || {
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/federation/claims")
+                .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap()
+        };
+        let reserved = app.clone().oneshot(reserve()).await.unwrap();
+        assert_eq!(reserved.status(), StatusCode::CREATED);
+        assert_eq!(reserved.headers()[header::CACHE_CONTROL], "no-store");
+        let reserved_json = response_json(reserved).await;
+        assert_eq!(reserved_json["state"], "reserved");
+        assert!(!reserved_json.to_string().contains("credential"));
+
+        let retry = app.clone().oneshot(reserve()).await.unwrap();
+        assert_eq!(retry.status(), StatusCode::CREATED);
+        assert_eq!(response_json(retry).await, reserved_json);
+
+        let claim_id = reserved_json["id"].as_str().unwrap();
+        let confirmed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/federation/claims/{claim_id}/confirmation"))
+                    .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(confirmed.status(), StatusCode::OK);
+        assert_eq!(confirmed.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(confirmed).await["state"], "confirmed");
+
+        let release_confirmed = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/federation/claims/{claim_id}"))
+                    .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(release_confirmed.status(), StatusCode::BAD_REQUEST);
     }
 
     async fn assert_member_catalog_acknowledgement_endpoint(

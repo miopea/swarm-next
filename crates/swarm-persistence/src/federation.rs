@@ -10,11 +10,12 @@ use swarm_domain::{
     FEDERATION_CONNECTION_CARD_SCHEMA_VERSION, FEDERATION_INVITATION_SCHEMA_VERSION,
     FEDERATION_MEMBERSHIP_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION,
     FederationCatalogAcknowledgement, FederationCatalogSnapshot, FederationCatalogSnapshotPayload,
-    FederationJoinAcceptance, FederationJoinInvitation, FederationJoinInvitationState,
-    FederationJoinReadiness, FederationJoinSubmission, FederationJoinSubmissionPayload,
-    FederationMembershipReceipt, FederationMembershipReceiptId, FederationMembershipReceiptPayload,
-    FederationNodeId, FederationProjectManifestEntry, FederationProjectReadiness,
-    HiveConnectionCard, HiveConnectionCardPayload, HiveId, JiraProjectBindingId, SharedWorkBackend,
+    FederationClaimId, FederationClaimState, FederationJoinAcceptance, FederationJoinInvitation,
+    FederationJoinInvitationState, FederationJoinReadiness, FederationJoinSubmission,
+    FederationJoinSubmissionPayload, FederationMembershipReceipt, FederationMembershipReceiptId,
+    FederationMembershipReceiptPayload, FederationNodeId, FederationProjectManifestEntry,
+    FederationProjectReadiness, FederationSharedClaim, HiveConnectionCard,
+    HiveConnectionCardPayload, HiveId, JiraProjectBindingId, OperatorId, SharedWorkBackend,
 };
 use url::Url;
 
@@ -29,6 +30,7 @@ const MAX_KEEPER_ENDPOINT_BYTES: usize = 2_048;
 const MAX_PROMOTED_PROJECTS_PER_INVITATION: usize = 1_000;
 const FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
 const FEDERATION_CATALOG_LIFETIME_SECONDS: i64 = 5 * 60;
+const FEDERATION_CLAIM_RESERVATION_SECONDS: i64 = 2 * 60;
 
 struct LocalFederationIdentity {
     node_id: FederationNodeId,
@@ -73,7 +75,182 @@ struct InvitedJoinApplicationContext {
     state: String,
 }
 
+struct MemberCredentialContext {
+    apiary: ApiaryId,
+    node: FederationNodeId,
+    hive: HiveId,
+    operator: OperatorId,
+}
+
 impl TaskStore {
+    /// Atomically reserves one promoted Jira issue for the authenticated member
+    /// Hive. Exact retries by that Hive return the same claim; another Hive
+    /// fails closed until an unconfirmed reservation expires or is released.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials or issue identity, non-promoted projects,
+    /// conflicting ownership, and unavailable persistence.
+    pub fn reserve_federation_claim(
+        &self,
+        node_credential: &str,
+        project_id: &str,
+        issue_id: &str,
+        issue_key: &str,
+        now: i64,
+    ) -> Result<FederationSharedClaim, TaskStoreError> {
+        validate_claim_identity(project_id, issue_id, issue_key, now)?;
+        let identity = self.local_hive_identity()?;
+        let credential = decode_node_credential(node_credential)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let member = authenticate_member_credential(&transaction, &identity, &credential, now)?;
+        let project_exists = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM apiary_jira_projects
+             WHERE apiary_id = ?1 AND project_id = ?2)",
+            params![member.apiary.to_string(), project_id.trim()],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !project_exists {
+            return Err(TaskStoreError::InvalidFederationClaim);
+        }
+        transaction.execute(
+            "UPDATE apiary_federation_claims
+             SET state = 'expired', updated_at = ?1
+             WHERE apiary_id = ?2 AND project_id = ?3 AND issue_id = ?4
+               AND state = 'reserved' AND reservation_expires_at <= ?1",
+            params![
+                now,
+                member.apiary.to_string(),
+                project_id.trim(),
+                issue_id.trim()
+            ],
+        )?;
+        if let Some(existing) = active_claim_for_issue(
+            &transaction,
+            member.apiary,
+            project_id.trim(),
+            issue_id.trim(),
+        )? {
+            if existing.home_node_id == member.node {
+                return Ok(existing);
+            }
+            return Err(TaskStoreError::FederationClaimConflict);
+        }
+        let claim = FederationSharedClaim {
+            id: FederationClaimId::new(),
+            apiary_id: member.apiary,
+            project_id: project_id.trim().to_owned(),
+            issue_id: issue_id.trim().to_owned(),
+            issue_key: issue_key.trim().to_owned(),
+            home_node_id: member.node,
+            home_hive_id: member.hive,
+            home_operator_id: member.operator,
+            state: FederationClaimState::Reserved,
+            reserved_at: now,
+            reservation_expires_at: now
+                .checked_add(FEDERATION_CLAIM_RESERVATION_SECONDS)
+                .ok_or(TaskStoreError::InvalidFederationClaim)?,
+            confirmed_at: None,
+            released_at: None,
+        };
+        insert_federation_claim(&transaction, &claim, now)?;
+        transaction.commit()?;
+        Ok(claim)
+    }
+
+    /// Confirms that the authenticated member completed its Jira assignment.
+    /// Confirmation makes home-Hive ownership durable beyond the reservation.
+    ///
+    /// # Errors
+    /// Rejects wrong members, expired/released claims, invalid credentials,
+    /// and unavailable persistence.
+    pub fn confirm_federation_claim(
+        &self,
+        node_credential: &str,
+        claim_id: FederationClaimId,
+        now: i64,
+    ) -> Result<FederationSharedClaim, TaskStoreError> {
+        self.resolve_federation_claim(node_credential, claim_id, now, true)
+    }
+
+    /// Releases an unconfirmed reservation owned by the authenticated member.
+    /// Confirmed work requires the later explicit handoff/release workflow.
+    ///
+    /// # Errors
+    /// Rejects wrong members, confirmed/expired claims, invalid credentials,
+    /// and unavailable persistence.
+    pub fn release_federation_claim(
+        &self,
+        node_credential: &str,
+        claim_id: FederationClaimId,
+        now: i64,
+    ) -> Result<FederationSharedClaim, TaskStoreError> {
+        self.resolve_federation_claim(node_credential, claim_id, now, false)
+    }
+
+    fn resolve_federation_claim(
+        &self,
+        node_credential: &str,
+        claim_id: FederationClaimId,
+        now: i64,
+        confirm: bool,
+    ) -> Result<FederationSharedClaim, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationClaim);
+        }
+        let identity = self.local_hive_identity()?;
+        let credential = decode_node_credential(node_credential)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let member = authenticate_member_credential(&transaction, &identity, &credential, now)?;
+        let mut claim = federation_claim_by_id(&transaction, claim_id)?
+            .ok_or(TaskStoreError::InvalidFederationClaim)?;
+        if claim.apiary_id != member.apiary || claim.home_node_id != member.node {
+            return Err(TaskStoreError::FederationClaimConflict);
+        }
+        let target = if confirm {
+            FederationClaimState::Confirmed
+        } else {
+            FederationClaimState::Released
+        };
+        if claim.state == target {
+            return Ok(claim);
+        }
+        if claim.state != FederationClaimState::Reserved || claim.reservation_expires_at <= now {
+            if claim.state == FederationClaimState::Reserved {
+                transaction.execute(
+                    "UPDATE apiary_federation_claims SET state = 'expired', updated_at = ?1
+                     WHERE id = ?2 AND state = 'reserved'",
+                    params![now, claim_id.to_string()],
+                )?;
+                transaction.commit()?;
+            }
+            return Err(TaskStoreError::InvalidFederationClaim);
+        }
+        let changed = if confirm {
+            transaction.execute(
+                "UPDATE apiary_federation_claims
+                 SET state = 'confirmed', confirmed_at = ?1, updated_at = ?1
+                 WHERE id = ?2 AND state = 'reserved' AND reservation_expires_at > ?1",
+                params![now, claim_id.to_string()],
+            )?
+        } else {
+            transaction.execute(
+                "UPDATE apiary_federation_claims
+                 SET state = 'released', released_at = ?1, updated_at = ?1
+                 WHERE id = ?2 AND state = 'reserved' AND reservation_expires_at > ?1",
+                params![now, claim_id.to_string()],
+            )?
+        };
+        if changed != 1 {
+            return Err(TaskStoreError::FederationClaimConflict);
+        }
+        claim = federation_claim_by_id(&transaction, claim_id)?
+            .ok_or(TaskStoreError::InvalidFederationClaim)?;
+        transaction.commit()?;
+        Ok(claim)
+    }
+
     /// Verifies and atomically acknowledges one Keeper-signed catalog on the
     /// exact joined Member Hive. Exact retries are idempotent; older snapshots
     /// cannot replace newer evidence.
@@ -1240,6 +1417,164 @@ fn catalog_acknowledgement(
     }
 }
 
+fn decode_node_credential(value: &str) -> Result<[u8; 32], TaskStoreError> {
+    Base64UrlUnpadded::decode_vec(value)
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationCredential)
+}
+
+fn validate_claim_identity(
+    project_id: &str,
+    issue_id: &str,
+    issue_key: &str,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let values = [project_id.trim(), issue_id.trim(), issue_key.trim()];
+    if now < 0
+        || values.iter().any(|value| {
+            value.is_empty() || value.len() > 128 || value.chars().any(char::is_control)
+        })
+    {
+        return Err(TaskStoreError::InvalidFederationClaim);
+    }
+    Ok(())
+}
+
+fn authenticate_member_credential(
+    connection: &rusqlite::Connection,
+    identity: &swarm_domain::HiveIdentity,
+    credential: &[u8; 32],
+    now: i64,
+) -> Result<MemberCredentialContext, TaskStoreError> {
+    let apiary_id = identity
+        .hive
+        .apiary_id
+        .ok_or(TaskStoreError::InvalidFederationCredential)?;
+    let keeper = connection
+        .query_row(
+            "SELECT keeper_operator_id FROM apiaries
+             WHERE id = ?1 AND collapsed_at IS NULL",
+            [apiary_id.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(TaskStoreError::InvalidFederationCredential)?;
+    if keeper != identity.operator.id.to_string() {
+        return Err(TaskStoreError::InvalidFederationCredential);
+    }
+    let digest = invitation_secret_digest(credential);
+    connection
+        .query_row(
+            "SELECT member_node_id, member_hive_id, member_operator_id
+             FROM apiary_federation_memberships
+             WHERE apiary_id = ?1 AND credential_digest = ?2
+               AND credential_expires_at > ?3",
+            params![apiary_id.to_string(), digest.as_slice(), now],
+            |row| {
+                Ok(MemberCredentialContext {
+                    apiary: apiary_id,
+                    node: parse_domain_id(&row.get::<_, String>(0)?)?,
+                    hive: parse_domain_id(&row.get::<_, String>(1)?)?,
+                    operator: parse_domain_id(&row.get::<_, String>(2)?)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(TaskStoreError::InvalidFederationCredential)
+}
+
+fn insert_federation_claim(
+    connection: &rusqlite::Connection,
+    claim: &FederationSharedClaim,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    connection
+        .execute(
+            "INSERT INTO apiary_federation_claims
+            (id, apiary_id, project_id, issue_id, issue_key,
+             home_node_id, home_hive_id, home_operator_id, state,
+             reserved_at, reservation_expires_at, confirmed_at,
+             released_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, NULL, ?12)",
+            params![
+                claim.id.to_string(),
+                claim.apiary_id.to_string(),
+                &claim.project_id,
+                &claim.issue_id,
+                &claim.issue_key,
+                claim.home_node_id.to_string(),
+                claim.home_hive_id.to_string(),
+                claim.home_operator_id.to_string(),
+                claim.state.to_string(),
+                claim.reserved_at,
+                claim.reservation_expires_at,
+                now,
+            ],
+        )
+        .map_err(map_federation_claim_insert_error)?;
+    Ok(())
+}
+
+fn active_claim_for_issue(
+    connection: &rusqlite::Connection,
+    apiary_id: ApiaryId,
+    project_id: &str,
+    issue_id: &str,
+) -> Result<Option<FederationSharedClaim>, TaskStoreError> {
+    connection
+        .query_row(
+            "SELECT id, apiary_id, project_id, issue_id, issue_key,
+                    home_node_id, home_hive_id, home_operator_id, state,
+                    reserved_at, reservation_expires_at, confirmed_at, released_at
+             FROM apiary_federation_claims
+             WHERE apiary_id = ?1 AND project_id = ?2 AND issue_id = ?3
+               AND state IN ('reserved','confirmed')",
+            params![apiary_id.to_string(), project_id, issue_id],
+            federation_claim_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn federation_claim_by_id(
+    connection: &rusqlite::Connection,
+    claim_id: FederationClaimId,
+) -> Result<Option<FederationSharedClaim>, TaskStoreError> {
+    connection
+        .query_row(
+            "SELECT id, apiary_id, project_id, issue_id, issue_key,
+                    home_node_id, home_hive_id, home_operator_id, state,
+                    reserved_at, reservation_expires_at, confirmed_at, released_at
+             FROM apiary_federation_claims WHERE id = ?1",
+            [claim_id.to_string()],
+            federation_claim_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn federation_claim_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FederationSharedClaim> {
+    Ok(FederationSharedClaim {
+        id: parse_domain_id(&row.get::<_, String>(0)?)?,
+        apiary_id: parse_domain_id(&row.get::<_, String>(1)?)?,
+        project_id: row.get(2)?,
+        issue_id: row.get(3)?,
+        issue_key: row.get(4)?,
+        home_node_id: parse_domain_id(&row.get::<_, String>(5)?)?,
+        home_hive_id: parse_domain_id(&row.get::<_, String>(6)?)?,
+        home_operator_id: parse_domain_id(&row.get::<_, String>(7)?)?,
+        state: row
+            .get::<_, String>(8)?
+            .parse()
+            .map_err(|()| rusqlite::Error::InvalidQuery)?,
+        reserved_at: row.get(9)?,
+        reservation_expires_at: row.get(10)?,
+        confirmed_at: row.get(11)?,
+        released_at: row.get(12)?,
+    })
+}
+
 fn verify_join_submission(
     submission: &FederationJoinSubmission,
     expected_public_key: &str,
@@ -2208,6 +2543,39 @@ pub(super) fn migrate_local_federation_catalog(
     )
 }
 
+pub(super) fn migrate_federation_claims(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS apiary_federation_claims (
+             id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             project_id TEXT NOT NULL,
+             issue_id TEXT NOT NULL,
+             issue_key TEXT NOT NULL,
+             home_node_id TEXT NOT NULL,
+             home_hive_id TEXT NOT NULL REFERENCES hives(id),
+             home_operator_id TEXT NOT NULL REFERENCES operators(id),
+             state TEXT NOT NULL
+                 CHECK (state IN ('reserved','confirmed','released','expired')),
+             reserved_at INTEGER NOT NULL CHECK (reserved_at >= 0),
+             reservation_expires_at INTEGER NOT NULL
+                 CHECK (reservation_expires_at > reserved_at),
+             confirmed_at INTEGER,
+             released_at INTEGER,
+             updated_at INTEGER NOT NULL CHECK (updated_at >= reserved_at),
+             FOREIGN KEY (apiary_id, project_id)
+                 REFERENCES apiary_jira_projects(apiary_id, project_id)
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS one_active_apiary_claim_per_issue
+             ON apiary_federation_claims(apiary_id, project_id, issue_id)
+             WHERE state IN ('reserved','confirmed');
+         CREATE INDEX IF NOT EXISTS apiary_claims_by_home_hive
+             ON apiary_federation_claims(apiary_id, home_hive_id, state);
+         PRAGMA user_version = 38;",
+    )
+}
+
 fn map_candidate_insert_error(error: rusqlite::Error) -> TaskStoreError {
     match error {
         rusqlite::Error::SqliteFailure(_, Some(message))
@@ -2225,6 +2593,17 @@ fn map_federation_invitation_insert_error(error: rusqlite::Error) -> TaskStoreEr
             if message.contains("UNIQUE constraint failed") =>
         {
             TaskStoreError::FederationInvitationConflict
+        }
+        other => TaskStoreError::Sql(other),
+    }
+}
+
+fn map_federation_claim_insert_error(error: rusqlite::Error) -> TaskStoreError {
+    match error {
+        rusqlite::Error::SqliteFailure(_, Some(message))
+            if message.contains("UNIQUE constraint failed") =>
+        {
+            TaskStoreError::FederationClaimConflict
         }
         other => TaskStoreError::Sql(other),
     }
@@ -3000,6 +3379,215 @@ mod tests {
         assert_tampered_submission_is_rejected(&keeper, submission, now + 6);
     }
 
+    #[test]
+    fn keeper_serializes_member_claims_and_preserves_confirmed_home_hive() {
+        let now = 30_000;
+        let keeper = TaskStore::in_memory().unwrap();
+        let context = keeper
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, now - 10)
+            .unwrap();
+        let swarm_domain::LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected Keeper Apiary");
+        };
+        let first_member = TaskStore::in_memory().unwrap();
+        let second_member = TaskStore::in_memory().unwrap();
+        let first = register_remote_member(&keeper, &first_member, now);
+        let second = register_remote_member(&keeper, &second_member, now + 10);
+        let keeper_operator_id = keeper.local_hive_identity().unwrap().operator.id;
+        keeper
+            .promote_apiary_jira_project(
+                apiary.id,
+                "10001",
+                "WWD",
+                "Website Development",
+                keeper_operator_id,
+                now + 20,
+            )
+            .unwrap();
+
+        let reserved = keeper
+            .reserve_federation_claim(
+                &first.node_credential,
+                "10001",
+                "20001",
+                "WWD-101",
+                now + 21,
+            )
+            .unwrap();
+        assert_eq!(reserved.state, FederationClaimState::Reserved);
+        assert_eq!(reserved.home_hive_id, first.receipt.payload.member_hive_id);
+        assert_eq!(
+            keeper
+                .reserve_federation_claim(
+                    &first.node_credential,
+                    "10001",
+                    "20001",
+                    "WWD-101",
+                    now + 22,
+                )
+                .unwrap(),
+            reserved
+        );
+        assert!(matches!(
+            keeper.reserve_federation_claim(
+                &second.node_credential,
+                "10001",
+                "20001",
+                "WWD-101",
+                now + 22,
+            ),
+            Err(TaskStoreError::FederationClaimConflict)
+        ));
+
+        let confirmed = keeper
+            .confirm_federation_claim(&first.node_credential, reserved.id, now + 23)
+            .unwrap();
+        assert_eq!(confirmed.state, FederationClaimState::Confirmed);
+        assert_eq!(confirmed.confirmed_at, Some(now + 23));
+        assert_eq!(
+            keeper
+                .confirm_federation_claim(&first.node_credential, reserved.id, now + 24)
+                .unwrap(),
+            confirmed
+        );
+        assert!(matches!(
+            keeper.release_federation_claim(&first.node_credential, reserved.id, now + 24),
+            Err(TaskStoreError::InvalidFederationClaim)
+        ));
+        assert!(matches!(
+            keeper.reserve_federation_claim(
+                &second.node_credential,
+                "10001",
+                "20001",
+                "WWD-101",
+                now + 24,
+            ),
+            Err(TaskStoreError::FederationClaimConflict)
+        ));
+    }
+
+    #[test]
+    fn unconfirmed_claims_can_be_released_or_recovered_after_expiry() {
+        let now = 40_000;
+        let keeper = TaskStore::in_memory().unwrap();
+        let context = keeper
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, now - 10)
+            .unwrap();
+        let swarm_domain::LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected Keeper Apiary");
+        };
+        let first_member = TaskStore::in_memory().unwrap();
+        let second_member = TaskStore::in_memory().unwrap();
+        let first = register_remote_member(&keeper, &first_member, now);
+        let second = register_remote_member(&keeper, &second_member, now + 10);
+        keeper
+            .promote_apiary_jira_project(
+                apiary.id,
+                "10001",
+                "WWD",
+                "Website Development",
+                keeper.local_hive_identity().unwrap().operator.id,
+                now + 20,
+            )
+            .unwrap();
+
+        let releasable = keeper
+            .reserve_federation_claim(
+                &first.node_credential,
+                "10001",
+                "20002",
+                "WWD-102",
+                now + 21,
+            )
+            .unwrap();
+        let released = keeper
+            .release_federation_claim(&first.node_credential, releasable.id, now + 22)
+            .unwrap();
+        assert_eq!(released.state, FederationClaimState::Released);
+        let reclaimed = keeper
+            .reserve_federation_claim(
+                &second.node_credential,
+                "10001",
+                "20002",
+                "WWD-102",
+                now + 23,
+            )
+            .unwrap();
+        assert_eq!(
+            reclaimed.home_hive_id,
+            second.receipt.payload.member_hive_id
+        );
+
+        let expiring = keeper
+            .reserve_federation_claim(
+                &first.node_credential,
+                "10001",
+                "20003",
+                "WWD-103",
+                now + 24,
+            )
+            .unwrap();
+        let after_expiry = expiring.reservation_expires_at;
+        let recovered = keeper
+            .reserve_federation_claim(
+                &second.node_credential,
+                "10001",
+                "20003",
+                "WWD-103",
+                after_expiry,
+            )
+            .unwrap();
+        assert_eq!(
+            recovered.home_hive_id,
+            second.receipt.payload.member_hive_id
+        );
+        let prior_state = keeper
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM apiary_federation_claims WHERE id = ?1",
+                [expiring.id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_eq!(prior_state, "expired");
+    }
+
+    fn register_remote_member(
+        keeper: &TaskStore,
+        member: &TaskStore,
+        now: i64,
+    ) -> FederationJoinAcceptance {
+        let identity = member.local_hive_identity().unwrap();
+        let card = member.issue_hive_connection_card(now, 3_600).unwrap();
+        keeper.pin_hive_candidate(&card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                identity.hive.id,
+                "https://keeper.example.test/swarm",
+                now,
+                3_600,
+            )
+            .unwrap();
+        let invitation = member
+            .import_apiary_invitation_bundle(&bundle, now + 1)
+            .unwrap();
+        member
+            .accept_federation_join_policy(invitation.invitation_id, 1, now + 2)
+            .unwrap();
+        let readiness = FederationJoinReadiness {
+            jira_connection: swarm_domain::JiraConnectionState::Ready,
+            projects: Vec::new(),
+            blockers: Vec::new(),
+        };
+        let submission = member
+            .prepare_federation_join_submission(invitation.invitation_id, &readiness, now + 3)
+            .unwrap();
+        keeper
+            .consume_federation_join_submission(&submission, now + 4)
+            .unwrap()
+    }
+
     fn assert_tampered_submission_is_rejected(
         keeper: &TaskStore,
         mut submission: FederationJoinSubmission,
@@ -3161,6 +3749,37 @@ mod tests {
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
                      WHERE type = 'table' AND name = 'local_federation_catalog'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn schema_v37_migrates_to_federation_claims() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE apiary_federation_claims;
+                 PRAGMA user_version = 37;",
+            )
+            .unwrap();
+        drop(store);
+
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'apiary_federation_claims'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )

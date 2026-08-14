@@ -43,6 +43,7 @@ domain_id!(ApiaryId);
 domain_id!(ApiaryInvitationId);
 domain_id!(FederationNodeId);
 domain_id!(FederationMembershipReceiptId);
+domain_id!(FederationClaimId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
@@ -381,6 +382,59 @@ pub struct FederationCatalogReadiness {
     pub jira_connection: JiraConnectionState,
     pub projects: Vec<FederationProjectReadiness>,
     pub blockers: Vec<FederationCatalogBlocker>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationClaimState {
+    Reserved,
+    Confirmed,
+    Released,
+    Expired,
+}
+
+impl fmt::Display for FederationClaimState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Reserved => "reserved",
+            Self::Confirmed => "confirmed",
+            Self::Released => "released",
+            Self::Expired => "expired",
+        })
+    }
+}
+
+impl FromStr for FederationClaimState {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "reserved" => Ok(Self::Reserved),
+            "confirmed" => Ok(Self::Confirmed),
+            "released" => Ok(Self::Released),
+            "expired" => Ok(Self::Expired),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Keeper-authoritative home-Hive claim for one Jira issue in one promoted
+/// project. Issue content and Jira credentials remain local to each Hive.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationSharedClaim {
+    pub id: FederationClaimId,
+    pub apiary_id: ApiaryId,
+    pub project_id: String,
+    pub issue_id: String,
+    pub issue_key: String,
+    pub home_node_id: FederationNodeId,
+    pub home_hive_id: HiveId,
+    pub home_operator_id: OperatorId,
+    pub state: FederationClaimState,
+    pub reserved_at: i64,
+    pub reservation_expires_at: i64,
+    pub confirmed_at: Option<i64>,
+    pub released_at: Option<i64>,
 }
 
 impl FederationCatalogReadiness {
