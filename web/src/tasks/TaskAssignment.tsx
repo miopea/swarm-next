@@ -1,4 +1,5 @@
 import type { Task, TaskState, Worker } from "../api";
+import { workerAttention } from "../workers/workerAttention";
 
 const dispatchLabels = {
   queued: "Briefing waits for a quiet moment",
@@ -13,18 +14,6 @@ const outcomeDeliveryLabels = {
   delivered: "Queen notified",
   uncertain: "Queen handoff uncertain — task remains authoritative",
 } as const;
-
-function workerAttentionLabel(worker: Worker): string {
-  const labels = {
-    sleeping: "sleeping",
-    resting: "resting",
-    buzzing: "buzzing",
-    with_operator: "with you",
-    awaiting_operator: "awaiting you",
-    blocked: "blocked",
-  } as const;
-  return labels[worker.attention_state] ?? (worker.running ? "resting" : "sleeping");
-}
 
 export default function TaskAssignment({ task, workers, workerRunning, busy, onAssign, onOpenWorker, onTransition, onStartWorker }: {
   task: Task;
@@ -58,7 +47,7 @@ export default function TaskAssignment({ task, workers, workerRunning, busy, onA
         >
           <option value="">Unassigned</option>
           {assignableWorkers.map((worker) => (
-            <option key={worker.id} value={worker.id}>{worker.name} · {workerAttentionLabel(worker)}</option>
+            <option key={worker.id} value={worker.id}>{worker.name} · {workerAttention(worker).compactLabel}</option>
           ))}
         </select>
       </div>

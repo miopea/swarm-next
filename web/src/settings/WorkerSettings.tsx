@@ -3,6 +3,7 @@ import { useState, type DragEvent, type FormEvent, type KeyboardEvent } from "re
 import type { ProviderCapabilities, ProviderKind, Worker, WorkspaceChoice } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import { useReorderDrag } from "../shared/useReorderDrag";
+import { workerAttention } from "../workers/workerAttention";
 
 type Props = {
   workers: Worker[];
@@ -196,6 +197,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(worker.name);
   const [autostart, setAutostart] = useState(worker.autostart);
+  const attention = workerAttention(worker);
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -221,7 +223,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, 
       onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragLeave(); }}
       onDrop={onDrop}
     >
-      <span className="worker-settings-bee"><BeeMascot expression={worker.running ? "focused" : "sleeping"} /></span>
+      <span className="worker-settings-bee"><BeeMascot expression={attention.expression} /></span>
       {editing ? (
         <form className="worker-preference-form" aria-label={`Edit ${worker.name}`} onSubmit={(event) => void save(event)}>
           <label><span>Worker name</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus /></label>
@@ -231,7 +233,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, 
         </form>
       ) : (
         <>
-          <span className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {worker.running ? "Buzzing" : "Sleeping"}{worker.autostart ? " · always active" : ""}</small></span>
+          <span className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {attention.label}{worker.autostart ? " · always active" : ""}</small></span>
           <button type="button" className="worker-edit-button secondary-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
           <span className="worker-order-actions">
             <button type="button" className="secondary-button" aria-label={`Move ${worker.name} earlier`} disabled={busy || first} onClick={() => onMove(-1)}>↑</button>

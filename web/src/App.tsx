@@ -62,7 +62,8 @@ import {
   type Worker,
   type WorkspaceChoice,
 } from "./api";
-import BeeMascot, { type BeeExpression } from "./brand/BeeMascot";
+import BeeMascot from "./brand/BeeMascot";
+import { workerAttention } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
 import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
@@ -1056,24 +1057,11 @@ function taskStateLabel(task: Task): string {
 }
 
 function workerAttentionLabel(worker: Worker): string {
-  if (worker.attention_state === "with_operator" && worker.engagement_expires_at !== undefined && worker.engagement_expires_at * 1000 <= Date.now()) return "Resting";
-  return ({
-    sleeping: "Sleeping",
-    resting: "Resting",
-    buzzing: "Buzzing",
-    with_operator: "With you",
-    awaiting_operator: "Awaiting you",
-    blocked: "Blocked",
-  } as const)[worker.attention_state] ?? (worker.running ? "Resting" : "Sleeping");
+  return workerAttention(worker).label;
 }
 
-function workerExpression(worker: Worker): BeeExpression {
-  const attention = workerAttentionLabel(worker);
-  if (attention === "Sleeping") return "sleeping";
-  if (attention === "Buzzing") return "thinking";
-  if (attention === "With you") return "focused";
-  if (attention === "Blocked") return "blocked";
-  return "available";
+function workerExpression(worker: Worker) {
+  return workerAttention(worker).expression;
 }
 
 function presenceModeLabel(mode: PresenceMode) {

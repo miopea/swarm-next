@@ -2,15 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
-
-const attentionPresentation = {
-  sleeping: { label: "Sleeping", expression: "sleeping", presence: "offline" },
-  resting: { label: "Resting", expression: "available", presence: "online" },
-  buzzing: { label: "Buzzing", expression: "thinking", presence: "online" },
-  with_operator: { label: "With you", expression: "focused", presence: "engaged" },
-  awaiting_operator: { label: "Awaiting you", expression: "available", presence: "waiting" },
-  blocked: { label: "Blocked", expression: "blocked", presence: "blocked" },
-} as const;
+import { workerAttention } from "./workerAttention";
 
 type Props = {
   worker: Worker;
@@ -28,10 +20,7 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
   const rowRef = useRef<HTMLDivElement>(null);
   const primaryAction = worker.running ? onOpen : onStart;
   const primaryActionLabel = worker.running ? "Open terminal" : worker.runtime_error ? "Retry worker" : "Wake worker";
-  const engagementExpired = worker.attention_state === "with_operator"
-    && worker.engagement_expires_at !== undefined
-    && worker.engagement_expires_at * 1000 <= Date.now();
-  const attention = attentionPresentation[engagementExpired ? "resting" : worker.attention_state];
+  const attention = workerAttention(worker);
 
   useEffect(() => {
     if (worker.attention_state !== "with_operator" || worker.engagement_expires_at === undefined) return;
@@ -58,7 +47,7 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
   return (
     <div
       ref={rowRef}
-      className={`worker-row worker-state-${engagementExpired ? "resting" : worker.attention_state}`}
+      className={`worker-row worker-state-${attention.state}`}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuOpen(true);
