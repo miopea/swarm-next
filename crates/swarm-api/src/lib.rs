@@ -1459,6 +1459,11 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/hive", get(local_hive))
         .route("/api/v1/apiary", post(create_apiary))
+        .route(
+            "/api/v1/apiary/collapse-readiness",
+            get(apiary_collapse_readiness),
+        )
+        .route("/api/v1/apiary/collapse", post(collapse_apiary))
         .route("/api/v1/apiary/invitations", get(apiary_invitations))
         .route(
             "/api/v1/apiary/invitations/{invitation_id}/policy-acceptance",
@@ -1745,6 +1750,28 @@ async fn create_apiary(
         Json(context),
     )
         .into_response())
+}
+
+async fn apiary_collapse_readiness(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let readiness = apiary_service(&state)?
+        .collapse_readiness()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(readiness)).into_response())
+}
+
+async fn collapse_apiary(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let context = apiary_service(&state)?
+        .collapse(unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
 }
 
 async fn accept_apiary_policy(
@@ -4251,6 +4278,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
                 error.to_string(),
             )
         }
+        TaskStoreError::ApiaryCollapseNotReady => ApiError::new(
+            StatusCode::CONFLICT,
+            "apiary_collapse_not_ready",
+            error.to_string(),
+        ),
         TaskStoreError::DecisionNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "decision_not_found",
@@ -4855,6 +4887,53 @@ mod tests {
             response_json(duplicate).await["code"],
             "apiary_membership_conflict"
         );
+    }
+
+    #[tokio::test]
+    async fn sole_keeper_collapse_routes_are_private_and_return_to_personal_mode() {
+        let store = TaskStore::in_memory().unwrap();
+        store
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/apiary/collapse-readiness")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let readiness = authorized_get(app.clone(), "/api/v1/apiary/collapse-readiness").await;
+        assert_eq!(readiness.status(), StatusCode::OK);
+        assert_eq!(readiness.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(readiness).await;
+        assert_eq!(json["active_hive_count"], 1);
+        assert_eq!(json["pending_invitation_count"], 0);
+
+        let collapsed = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/collapse")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(collapsed.status(), StatusCode::OK);
+        assert_eq!(collapsed.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(collapsed).await["mode"], "personal");
     }
 
     #[tokio::test]

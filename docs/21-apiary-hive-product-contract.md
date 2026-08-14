@@ -83,6 +83,10 @@ A sole Keeper Hive may explicitly collapse an Apiary after automatic safety
 validation. Native tasks become local while preserving identity and history;
 Jira-backed Apiary projects become Hive-owned bindings. Outstanding invitations,
 Stewardships, handoffs, contributions, or departed nodes block the collapse.
+Collapse readiness is derived from durable state and rechecked inside the same
+transaction as detachment. The Apiary record and append-only lifecycle event
+remain as audit history; collapse never deletes the federation identity. An
+inactive Apiary cannot accept Hives, create invitations, or promote projects.
 
 ## Daily interaction
 

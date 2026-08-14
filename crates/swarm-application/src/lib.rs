@@ -1,9 +1,10 @@
 use swarm_domain::{
-    Apiary, ApiaryInvitation, ApiaryInvitationId, ApiaryJoinCheckState, ApiaryJoinChecks,
-    ApiaryJoinReadiness, DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency,
-    JiraConnectionState, LocalApiaryContext, OperatorPresence, PresenceDeviceClass,
-    PresenceDeviceId, PresenceMode, PresenceObservationState, SharedWorkBackend, Task, TaskId,
-    TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
+    Apiary, ApiaryCollapseReadiness, ApiaryInvitation, ApiaryInvitationId, ApiaryJoinCheckState,
+    ApiaryJoinChecks, ApiaryJoinReadiness, DecisionRequest, DecisionRequestId, DecisionRequestKind,
+    DecisionUrgency, JiraConnectionState, LocalApiaryContext, OperatorPresence,
+    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
+    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
+    WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -66,6 +67,31 @@ impl ApiaryService {
         self.store
             .create_apiary_for_local_hive(name, backend, now)
             .map_err(Into::into)
+    }
+
+    /// Returns the persisted blockers that must be cleared before the current
+    /// sole Keeper Hive may become personal again.
+    ///
+    /// # Errors
+    /// Rejects a personal Hive, missing Apiary, or unavailable persistence.
+    pub fn collapse_readiness(&self) -> Result<ApiaryCollapseReadiness, ApplicationError> {
+        let identity = self.store.local_hive_identity()?;
+        let apiary_id = identity
+            .hive
+            .apiary_id
+            .ok_or(TaskStoreError::ApiaryNotFound)?;
+        self.store
+            .apiary_collapse_readiness(apiary_id)
+            .map_err(Into::into)
+    }
+
+    /// Re-derives collapse readiness inside the store transaction and converts
+    /// the sole Keeper Apiary back into a personal Hive.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, federation blockers, invalid time, or stale state.
+    pub fn collapse(&self, now: i64) -> Result<LocalApiaryContext, ApplicationError> {
+        self.store.collapse_local_apiary(now).map_err(Into::into)
     }
 
     /// Lists current invitations and derives readiness from durable state plus
@@ -571,6 +597,34 @@ mod tests {
             Err(ApplicationError::Store(
                 TaskStoreError::ApiaryMembershipConflict
             ))
+        ));
+    }
+
+    #[test]
+    fn apiary_collapse_is_exposed_only_as_a_revalidated_application_command() {
+        let store = TaskStore::in_memory().unwrap();
+        let service = ApiaryService::new(store);
+        let context = service
+            .create_from_personal_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        let LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected a federated Hive");
+        };
+        assert_eq!(
+            service.collapse_readiness().unwrap(),
+            ApiaryCollapseReadiness {
+                active_hive_count: 1,
+                ..ApiaryCollapseReadiness::default()
+            }
+        );
+        assert_eq!(service.collapse(20).unwrap(), LocalApiaryContext::Personal);
+        assert!(matches!(
+            service.collapse_readiness(),
+            Err(ApplicationError::Store(TaskStoreError::ApiaryNotFound))
+        ));
+        assert!(matches!(
+            service.store.get_apiary(apiary.id),
+            Ok(preserved) if preserved.id == apiary.id
         ));
     }
 

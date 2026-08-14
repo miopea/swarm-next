@@ -9,9 +9,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use swarm_domain::{
     Apiary, ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
     HiveIdentity, LocalApiaryContext, LocalApiaryRole, Operator, OperatorId, SharedWorkBackend,
-    StewardCapability, Stewardship, StewardshipId, Task, TaskActivity, TaskActivityKind,
-    TaskActivityPage, TaskDetailsUpdate, TaskDispatchState, TaskId, TaskOutcomeDeliveryState,
-    TaskPriority, TaskState, WorkerId, WorkerSessionId,
+    StewardCapability, Stewardship, StewardshipId, Task,
+    TaskActivity, TaskActivityKind, TaskActivityPage, TaskDetailsUpdate, TaskDispatchState, TaskId,
+    TaskOutcomeDeliveryState, TaskPriority, TaskState, WorkerId, WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -45,7 +45,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 28;
+const CURRENT_SCHEMA_VERSION: i64 = 29;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -78,6 +78,8 @@ pub enum TaskStoreError {
     ApiaryInvitationResolved,
     #[error("Apiary join readiness is incomplete")]
     ApiaryJoinNotReady,
+    #[error("Apiary cannot collapse until all federation state is clear")]
+    ApiaryCollapseNotReady,
     #[error("task was not found")]
     NotFound,
     #[error("decision request was not found")]
@@ -1237,6 +1239,9 @@ fn migrate_schema(
     }
     if schema_version < 28 {
         apiary::migrate_apiary_policy_acceptance(transaction)?;
+    }
+    if schema_version < 29 {
+        apiary::migrate_apiary_lifecycle(transaction)?;
     }
     Ok(())
 }

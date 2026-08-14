@@ -1,7 +1,7 @@
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    Apiary, ApiaryId, ApiaryInvitation, ApiaryInvitationId, ApiaryInvitationState,
-    ApiaryJiraProject, ApiaryJoinReadiness, HiveId, OperatorId,
+    Apiary, ApiaryCollapseReadiness, ApiaryId, ApiaryInvitation, ApiaryInvitationId,
+    ApiaryInvitationState, ApiaryJiraProject, ApiaryJoinReadiness, HiveId, OperatorId,
 };
 
 use crate::{TaskStore, TaskStoreError, parse_domain_id};
@@ -57,6 +57,17 @@ impl TaskStore {
         {
             return Err(TaskStoreError::ApiaryMembershipConflict);
         }
+        transaction.execute(
+            "INSERT INTO apiary_lifecycle_events
+                (apiary_id, actor_operator_id, hive_id, kind, occurred_at)
+             VALUES (?1, ?2, ?3, 'founded', ?4)",
+            params![
+                apiary.id.to_string(),
+                identity.operator.id.to_string(),
+                identity.hive.id.to_string(),
+                now
+            ],
+        )?;
         transaction.commit()?;
         drop(connection);
         self.local_apiary_context()
@@ -87,6 +98,93 @@ impl TaskStore {
             )
             .optional()?
             .ok_or(TaskStoreError::ApiaryNotFound)
+    }
+
+    /// Derives the complete persisted safety boundary for collapsing the local
+    /// Keeper's Apiary. Zero-valued distributed counters are trustworthy while
+    /// those capabilities have no persistence surface and therefore cannot
+    /// create state.
+    ///
+    /// # Errors
+    /// Returns an error when the Apiary or its durable federation state cannot be read.
+    pub fn apiary_collapse_readiness(
+        &self,
+        apiary_id: ApiaryId,
+    ) -> Result<ApiaryCollapseReadiness, TaskStoreError> {
+        let connection = self.connection()?;
+        collapse_readiness(&connection, apiary_id)
+    }
+
+    /// Atomically converts a sole Keeper Apiary back into a personal Hive.
+    /// Jira bindings become Hive-owned while the inactive Apiary and lifecycle
+    /// event remain durable for identity and audit history.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, stale readiness, invalid time, or persistence failures.
+    pub fn collapse_local_apiary(
+        &self,
+        now: i64,
+    ) -> Result<swarm_domain::LocalApiaryContext, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidApiary);
+        }
+        let identity = self.local_hive_identity()?;
+        let apiary_id = identity
+            .hive
+            .apiary_id
+            .ok_or(TaskStoreError::ApiaryNotFound)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let keeper_operator_id = transaction
+            .query_row(
+                "SELECT keeper_operator_id FROM apiaries
+                 WHERE id = ?1 AND collapsed_at IS NULL",
+                [apiary_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryNotFound)?;
+        if keeper_operator_id != identity.operator.id.to_string()
+            || !collapse_readiness(&transaction, apiary_id)?.can_collapse()
+        {
+            return Err(TaskStoreError::ApiaryCollapseNotReady);
+        }
+        transaction.execute(
+            "UPDATE jira_project_bindings
+             SET scope = 'hive', apiary_id = NULL, updated_at = ?1
+             WHERE hive_id = ?2 AND scope = 'apiary' AND apiary_id = ?3",
+            params![now, identity.hive.id.to_string(), apiary_id.to_string()],
+        )?;
+        if transaction.execute(
+            "UPDATE hives SET apiary_id = NULL, updated_at = ?1
+             WHERE id = ?2 AND apiary_id = ?3",
+            params![now, identity.hive.id.to_string(), apiary_id.to_string()],
+        )? != 1
+        {
+            return Err(TaskStoreError::ApiaryCollapseNotReady);
+        }
+        if transaction.execute(
+            "UPDATE apiaries SET collapsed_at = ?1, updated_at = ?1
+             WHERE id = ?2 AND collapsed_at IS NULL",
+            params![now, apiary_id.to_string()],
+        )? != 1
+        {
+            return Err(TaskStoreError::ApiaryCollapseNotReady);
+        }
+        transaction.execute(
+            "INSERT INTO apiary_lifecycle_events
+                (apiary_id, actor_operator_id, hive_id, kind, occurred_at)
+             VALUES (?1, ?2, ?3, 'collapsed', ?4)",
+            params![
+                apiary_id.to_string(),
+                identity.operator.id.to_string(),
+                identity.hive.id.to_string(),
+                now
+            ],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        self.local_apiary_context()
     }
 
     /// Adds or refreshes one Jira project in the Keeper-owned Apiary catalog.
@@ -512,6 +610,93 @@ pub(super) fn migrate_apiary_policy_acceptance(
     transaction.execute_batch("PRAGMA user_version = 28;")
 }
 
+pub(super) fn migrate_apiary_lifecycle(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    // Some isolated historical migration tests intentionally contain only the
+    // table owned by that migration. A real v28 store always has the complete
+    // Hive schema; keep partial fixtures schema-aware instead of inventing it.
+    if !(table_exists(transaction, "apiaries")?
+        && table_exists(transaction, "operators")?
+        && table_exists(transaction, "hives")?
+        && table_exists(transaction, "apiary_invitations")?
+        && table_exists(transaction, "apiary_jira_projects")?)
+    {
+        return transaction.execute_batch("PRAGMA user_version = 29;");
+    }
+    if !column_exists(transaction, "apiaries", "collapsed_at")? {
+        transaction.execute_batch("ALTER TABLE apiaries ADD COLUMN collapsed_at INTEGER;")?;
+    }
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS apiary_lifecycle_events (
+             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             actor_operator_id TEXT NOT NULL REFERENCES operators(id),
+             hive_id TEXT NOT NULL REFERENCES hives(id),
+             kind TEXT NOT NULL CHECK (kind IN ('founded','collapsed')),
+             occurred_at INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS apiary_lifecycle_events_by_apiary
+             ON apiary_lifecycle_events(apiary_id, sequence);
+         CREATE TRIGGER IF NOT EXISTS active_apiary_hive_insert
+             BEFORE INSERT ON hives WHEN NEW.apiary_id IS NOT NULL AND NOT EXISTS (
+                 SELECT 1 FROM apiaries a
+                 WHERE a.id = NEW.apiary_id AND a.collapsed_at IS NULL
+             )
+             BEGIN SELECT RAISE(ABORT, 'Hive cannot join an inactive Apiary'); END;
+         CREATE TRIGGER IF NOT EXISTS active_apiary_hive_update
+             BEFORE UPDATE OF apiary_id ON hives WHEN NEW.apiary_id IS NOT NULL AND NOT EXISTS (
+                 SELECT 1 FROM apiaries a
+                 WHERE a.id = NEW.apiary_id AND a.collapsed_at IS NULL
+             )
+             BEGIN SELECT RAISE(ABORT, 'Hive cannot join an inactive Apiary'); END;
+         CREATE TRIGGER IF NOT EXISTS active_apiary_invitation_insert
+             BEFORE INSERT ON apiary_invitations WHEN NOT EXISTS (
+                 SELECT 1 FROM apiaries a
+                 WHERE a.id = NEW.apiary_id AND a.collapsed_at IS NULL
+             )
+             BEGIN SELECT RAISE(ABORT, 'Inactive Apiary cannot invite a Hive'); END;
+         CREATE TRIGGER IF NOT EXISTS active_apiary_project_insert
+             BEFORE INSERT ON apiary_jira_projects WHEN NOT EXISTS (
+                 SELECT 1 FROM apiaries a
+                 WHERE a.id = NEW.apiary_id AND a.collapsed_at IS NULL
+             )
+             BEGIN SELECT RAISE(ABORT, 'Inactive Apiary cannot promote a project'); END;
+         PRAGMA user_version = 29;",
+    )
+}
+
+fn collapse_readiness(
+    connection: &rusqlite::Connection,
+    apiary_id: ApiaryId,
+) -> Result<ApiaryCollapseReadiness, TaskStoreError> {
+    let active = connection.query_row(
+        "SELECT collapsed_at IS NULL FROM apiaries WHERE id = ?1",
+        [apiary_id.to_string()],
+        |row| row.get::<_, bool>(0),
+    ).optional()?.ok_or(TaskStoreError::ApiaryNotFound)?;
+    if !active {
+        return Err(TaskStoreError::ApiaryNotFound);
+    }
+    let count = |sql: &str| -> Result<usize, TaskStoreError> {
+        let value = connection.query_row(sql, [apiary_id.to_string()], |row| row.get::<_, i64>(0))?;
+        usize::try_from(value).map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
+    };
+    Ok(ApiaryCollapseReadiness {
+        active_hive_count: count("SELECT COUNT(*) FROM hives WHERE apiary_id = ?1")?,
+        pending_invitation_count: count(
+            "SELECT COUNT(*) FROM apiary_invitations WHERE apiary_id = ?1 AND state = 'pending'",
+        )?,
+        active_stewardship_count: count(
+            "SELECT COUNT(*) FROM stewardships WHERE apiary_id = ?1 AND revoked_at IS NULL",
+        )?,
+        // Cross-Hive work and departed execution nodes have no persistence
+        // surface yet, so they cannot currently contain hidden durable state.
+        open_cross_hive_work_count: 0,
+        departed_node_count: 0,
+    })
+}
+
 fn table_exists(transaction: &rusqlite::Transaction<'_>, table: &str) -> rusqlite::Result<bool> {
     transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
@@ -701,6 +886,131 @@ mod tests {
         assert_eq!(
             store.local_apiary_context().unwrap(),
             swarm_domain::LocalApiaryContext::Personal
+        );
+    }
+
+    #[test]
+    fn sole_keeper_collapse_is_atomic_audited_and_converts_jira_scope() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        let context = store
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        let swarm_domain::LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected a federated Hive");
+        };
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Apiary,
+                apiary_id: Some(apiary.id),
+            })
+            .unwrap();
+
+        assert_eq!(
+            store.apiary_collapse_readiness(apiary.id).unwrap(),
+            ApiaryCollapseReadiness {
+                active_hive_count: 1,
+                ..ApiaryCollapseReadiness::default()
+            }
+        );
+        assert_eq!(
+            store.collapse_local_apiary(20).unwrap(),
+            swarm_domain::LocalApiaryContext::Personal
+        );
+        assert_eq!(store.local_hive_identity().unwrap().hive.apiary_id, None);
+        let converted = store.get_jira_project_binding(binding.id).unwrap();
+        assert_eq!(converted.scope, JiraProjectScope::Hive);
+        assert_eq!(converted.apiary_id, None);
+
+        let connection = store.connection().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT collapsed_at FROM apiaries WHERE id = ?1",
+                    [apiary.id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            20
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT group_concat(kind, ',') FROM apiary_lifecycle_events
+                     WHERE apiary_id = ?1 ORDER BY sequence",
+                    [apiary.id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "founded,collapsed"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT actor_operator_id FROM apiary_lifecycle_events
+                     WHERE apiary_id = ?1 AND kind = 'collapsed'",
+                    [apiary.id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            identity.operator.id.to_string()
+        );
+    }
+
+    #[test]
+    fn collapse_fails_closed_while_federation_state_exists() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        let context = store
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        let swarm_domain::LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected a federated Hive");
+        };
+        let invited_operator = OperatorId::new();
+        let invited_hive = HiveId::new();
+        {
+            let connection = store.connection().unwrap();
+            connection
+                .execute(
+                    "INSERT INTO operators (id, display_name) VALUES (?1, 'Guest')",
+                    [invited_operator.to_string()],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO hives (id, name, operator_id) VALUES (?1, 'Guest Hive', ?2)",
+                    params![invited_hive.to_string(), invited_operator.to_string()],
+                )
+                .unwrap();
+        }
+        store
+            .create_apiary_invitation(
+                apiary.id,
+                invited_hive,
+                identity.operator.id,
+                20,
+                100,
+            )
+            .unwrap();
+        assert_eq!(
+            store.apiary_collapse_readiness(apiary.id).unwrap(),
+            ApiaryCollapseReadiness {
+                active_hive_count: 1,
+                pending_invitation_count: 1,
+                ..ApiaryCollapseReadiness::default()
+            }
+        );
+        assert!(matches!(
+            store.collapse_local_apiary(30),
+            Err(TaskStoreError::ApiaryCollapseNotReady)
+        ));
+        assert_eq!(
+            store.local_hive_identity().unwrap().hive.apiary_id,
+            Some(apiary.id)
         );
     }
 
@@ -1075,6 +1385,62 @@ mod tests {
                 .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
                 .unwrap(),
             28
+        );
+    }
+
+    #[test]
+    fn migrates_schema_v28_to_audited_apiary_lifecycle() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE operators (id TEXT PRIMARY KEY);
+                 CREATE TABLE apiaries (id TEXT PRIMARY KEY);
+                 CREATE TABLE hives (
+                     id TEXT PRIMARY KEY,
+                     operator_id TEXT NOT NULL,
+                     apiary_id TEXT REFERENCES apiaries(id)
+                 );
+                 CREATE TABLE apiary_invitations (
+                     id TEXT PRIMARY KEY,
+                     apiary_id TEXT NOT NULL REFERENCES apiaries(id)
+                 );
+                 CREATE TABLE apiary_jira_projects (
+                     apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+                     project_id TEXT NOT NULL
+                 );",
+            )
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        migrate_apiary_lifecycle(&transaction).unwrap();
+        transaction.commit().unwrap();
+        assert!(
+            connection
+                .query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM pragma_table_info('apiaries')
+                         WHERE name = 'collapsed_at'
+                     )",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'apiary_lifecycle_events'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            29
         );
     }
 }
