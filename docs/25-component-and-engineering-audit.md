@@ -52,12 +52,15 @@ These abstractions are justified by shared behavior, not visual resemblance.
 
 ### P1 — oversized presentation responsibilities
 
-- `web/src/App.tsx` remains the browser composition root but is over 1,100 lines.
-  It mixes session restoration, live-feed orchestration, task commands, worker
-  commands, navigation, mobile overlays, and layout rendering.
-- `web/src/tasks/TaskBoard.tsx` is roughly 780 lines. `TaskCard` owns compact
-  metadata, assignment, Jira discussion, editing, history, menus, transitions,
-  and drag behavior.
+- `web/src/App.tsx` remains the browser composition root and still mixes session
+  restoration, live-feed orchestration, commands, navigation, mobile overlays,
+  and layout rendering. The typed snapshot and all aggregate replacement/clear
+  behavior now have one owner in `useControlRoomModel`; locking cannot leave
+  workspace or Jira-link state behind while hiding the rest of the room.
+- `web/src/tasks/TaskBoard.tsx` has dropped to roughly 550 lines. Query/filter/
+  sort is a pure tested `taskBoardModel`, while metadata and assignment are
+  focused components. Editing, activity, Jira/email detail, and action-menu
+  orchestration still belong to the card and remain the next measured split.
 - `web/src/api.ts` is roughly 900 lines and combines public contract types with
   every HTTP operation.
 - `web/src/styles.css` is roughly 760 lines in one global
@@ -65,12 +68,11 @@ These abstractions are justified by shared behavior, not visual resemblance.
 
 Required next extractions are vertical and behavior-led:
 
-1. `useControlRoomModel` owns initial load, event refresh, and command results;
-   `App` remains composition and routing.
-2. Task query/filter/sort becomes a pure typed task-board model with direct unit
-   tests. It must not live in the view or in HTTP code.
-3. `TaskCard` splits into compact metadata, assignment control, and on-demand
-   detail panels. Do not create a generic card framework.
+1. Move live-feed invalidation and saved-session restoration behind the existing
+   `useControlRoomModel`; `App` remains composition and routing.
+2. Continue splitting `TaskCard` only when editing, activity, or integration
+   detail changes next. Metadata, assignment, and query/filter/sort are already
+   behavior-owned and directly tested; do not create a generic card framework.
 4. API contracts split by domain (`tasks`, `workers`, `jira`, `presence`) while
    keeping one small shared authenticated request helper.
 5. CSS moves with extracted feature components after their visual contracts are

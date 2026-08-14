@@ -5,11 +5,9 @@ import {
   BROWSER_SESSION_AUTH,
   createBrowserSession,
   createTask,
-  fetchDecisions,
   fetchDevelopmentRuntime,
   resolveDecision,
   createWorker,
-  fetchHive,
   fetchHealth,
   fetchJiraTaskLinks,
   retryJiraTaskLink,
@@ -18,13 +16,9 @@ import {
   fetchPresence,
   fetchProviderCapabilities,
   fetchPresentationPreferences,
-  fetchSessions,
   fetchTaskActivity,
   fetchJiraComments,
   addJiraComment,
-  fetchTasks,
-  fetchWorkers,
-  fetchWorkspaces,
   reorderTasks,
   reorderWorkers,
   reconcileJira,
@@ -72,6 +66,7 @@ import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
+import { useControlRoomModel } from "./controlRoom/useControlRoomModel";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
@@ -95,15 +90,15 @@ export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
   const [tokenDraft, setTokenDraft] = useState("");
   const [operatorToken, setOperatorToken] = useState<string>();
-  const [hiveIdentity, setHiveIdentity] = useState<HiveIdentity>();
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [workers, setWorkers] = useState<Worker[]>([]);
-  const [workspaces, setWorkspaces] = useState<WorkspaceChoice[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [jiraTaskLinks, setJiraTaskLinks] = useState<JiraTaskLink[]>([]);
+  const controlRoomModel = useControlRoomModel();
+  const {
+    hiveIdentity, sessions, workers, workspaces, tasks, jiraTaskLinks, decisions,
+    setHiveIdentity, setWorkers, setWorkspaces, setTasks,
+    setJiraTaskLinks, setDecisions,
+  } = controlRoomModel;
+  const loadControlRoom = controlRoomModel.load;
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [terminalRevision, setTerminalRevision] = useState(0);
-  const [decisions, setDecisions] = useState<DecisionRequest[]>([]);
   const [showFeedback, setShowFeedback] = useState(false);
   const [feedbackRevision, setFeedbackRevision] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
@@ -218,18 +213,12 @@ export function App() {
       await validateBrowserSession();
       return loadControlRoom(BROWSER_SESSION_AUTH);
     })
-      .then(({ hive, sessions: nextSessions, workers: nextWorkers, workspaces: nextWorkspaces, tasks: nextTasks, jiraTaskLinks: nextJiraTaskLinks, decisions: nextDecisions }) => {
+      .then((nextControlRoom) => {
         if (cancelled) return;
         terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
         setOperatorToken(BROWSER_SESSION_AUTH);
-        setHiveIdentity(hive);
-        setSessions(nextSessions);
-        setWorkers(nextWorkers);
-        setWorkspaces(nextWorkspaces);
-        setTasks(nextTasks);
-        setJiraTaskLinks(nextJiraTaskLinks);
-        setActiveSessionId(restoredSessionId(nextWorkers, nextSessions));
-        setDecisions(nextDecisions);
+        controlRoomModel.replace(nextControlRoom);
+        setActiveSessionId(restoredSessionId(nextControlRoom.workers, nextControlRoom.sessions));
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -271,13 +260,7 @@ export function App() {
             : Promise.resolve(undefined),
         ]);
         if (cancelled) return;
-        setHiveIdentity(controlRoom.hive);
-        setSessions(controlRoom.sessions);
-        setWorkers(controlRoom.workers);
-        setWorkspaces(controlRoom.workspaces);
-        setTasks(controlRoom.tasks);
-        setJiraTaskLinks(controlRoom.jiraTaskLinks);
-        setDecisions(controlRoom.decisions);
+        controlRoomModel.replace(controlRoom);
         if (refreshedPresence) setPresence(refreshedPresence);
         if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
         if (refreshedQueenPolicy) setQueenPolicy(refreshedQueenPolicy);
@@ -314,14 +297,8 @@ export function App() {
       const controlRoom = await loadControlRoom(BROWSER_SESSION_AUTH);
       terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
       setOperatorToken(BROWSER_SESSION_AUTH);
-      setHiveIdentity(controlRoom.hive);
-      setSessions(controlRoom.sessions);
-      setWorkers(controlRoom.workers);
-      setWorkspaces(controlRoom.workspaces);
-      setTasks(controlRoom.tasks);
-      setJiraTaskLinks(controlRoom.jiraTaskLinks);
+      controlRoomModel.replace(controlRoom);
       setActiveSessionId((current) => current ?? preferredSessionId(controlRoom.workers, controlRoom.sessions));
-      setDecisions(controlRoom.decisions);
       setTokenDraft("");
     });
   }
@@ -383,13 +360,7 @@ export function App() {
     if (!operatorToken) return;
     await perform(async () => {
       const controlRoom = await loadControlRoom(operatorToken);
-      setHiveIdentity(controlRoom.hive);
-      setSessions(controlRoom.sessions);
-      setWorkers(controlRoom.workers);
-      setWorkspaces(controlRoom.workspaces);
-      setTasks(controlRoom.tasks);
-      setJiraTaskLinks(controlRoom.jiraTaskLinks);
-      setDecisions(controlRoom.decisions);
+      controlRoomModel.replace(controlRoom);
       if (activeSessionId) terminalWorkspace.closeSession(activeSessionId);
       setTerminalRevision((current) => current + 1);
       setActiveSessionId((current) =>
@@ -442,11 +413,7 @@ export function App() {
       await assignTask(operatorToken, task.id, profile.id);
       await transitionTask(operatorToken, task.id, "active");
       const controlRoom = await loadControlRoom(operatorToken);
-      setHiveIdentity(controlRoom.hive);
-      setSessions(controlRoom.sessions);
-      setWorkers(controlRoom.workers);
-      setTasks(controlRoom.tasks);
-      setJiraTaskLinks(controlRoom.jiraTaskLinks);
+      controlRoomModel.replace(controlRoom);
       releaseEngagementWhenSwitching(activeSessionId, sessionId);
       setActiveSessionId(sessionId);
       setSurface("workers");
@@ -463,11 +430,7 @@ export function App() {
       else await stopClaudeSession(operatorToken, sessionId);
       terminalWorkspace.closeSession(sessionId);
       const controlRoom = await loadControlRoom(operatorToken);
-      setHiveIdentity(controlRoom.hive);
-      setSessions(controlRoom.sessions);
-      setWorkers(controlRoom.workers);
-      setTasks(controlRoom.tasks);
-      setJiraTaskLinks(controlRoom.jiraTaskLinks);
+      controlRoomModel.replace(controlRoom);
       setActiveSessionId((current) => current === sessionId ? preferredSessionId(controlRoom.workers, controlRoom.sessions) : current);
     });
   }
@@ -479,11 +442,7 @@ export function App() {
       const runningWorker = await startWorker(operatorToken, profile.id);
       const sessionId = requireActiveSession(runningWorker);
       const controlRoom = await loadControlRoom(operatorToken);
-      setHiveIdentity(controlRoom.hive);
-      setSessions(controlRoom.sessions);
-      setWorkers(controlRoom.workers);
-      setTasks(controlRoom.tasks);
-      setJiraTaskLinks(controlRoom.jiraTaskLinks);
+      controlRoomModel.replace(controlRoom);
       releaseEngagementWhenSwitching(activeSessionId, sessionId);
       setActiveSessionId(sessionId);
       setSurface("workers");
@@ -629,13 +588,7 @@ export function App() {
         loadControlRoom(operatorToken),
         fetchProviderCapabilities(operatorToken),
       ]);
-      setHiveIdentity(controlRoom.hive);
-      setSessions(controlRoom.sessions);
-      setWorkers(controlRoom.workers);
-      setWorkspaces(controlRoom.workspaces);
-      setTasks(controlRoom.tasks);
-      setJiraTaskLinks(controlRoom.jiraTaskLinks);
-      setDecisions(controlRoom.decisions);
+      controlRoomModel.replace(controlRoom);
       setProviders(nextProviders);
       setActiveSessionId(preferredSessionId(controlRoom.workers, controlRoom.sessions));
     });
@@ -703,11 +656,7 @@ export function App() {
   function lockInterface() {
     terminalWorkspace.logout();
     setOperatorToken(undefined);
-    setHiveIdentity(undefined);
-    setSessions([]);
-    setWorkers([]);
-    setTasks([]);
-    setDecisions([]);
+    controlRoomModel.clear();
     setNotificationSettings(undefined);
     setNotificationState("unsupported");
     setActiveSessionId(undefined);
@@ -1022,19 +971,6 @@ export function App() {
       </section>
     </main>
   );
-}
-
-async function loadControlRoom(operatorToken: string) {
-  const [hive, sessions, workers, workspaces, tasks, decisions, jiraTaskLinks] = await Promise.all([
-    fetchHive(operatorToken),
-    fetchSessions(operatorToken),
-    fetchWorkers(operatorToken),
-    fetchWorkspaces(operatorToken),
-    fetchTasks(operatorToken),
-    fetchDecisions(operatorToken),
-    fetchJiraTaskLinks(operatorToken).catch(() => []),
-  ]);
-  return { hive, sessions, workers, workspaces, tasks, jiraTaskLinks, decisions };
 }
 
 function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): string | undefined {
