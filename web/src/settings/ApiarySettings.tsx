@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 
 import {
   acceptFederationJoinPolicy,
@@ -451,26 +451,28 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
         <>
           <p>Your personal Hive remains fully independent. Form an Apiary only when separate one-operator Hives should share Jira work and coordination.</p>
           <FederationTransportStatus readiness={transportReadiness} />
-          <div className="apiary-connection-card">
-            <span><strong>Share this Hive with a Keeper</strong><small>Download a signed, short-lived identity card. It contains no repositories, tasks, terminals, Jira access, or credentials.</small></span>
-            <button className="secondary-button" disabled={busy || working} onClick={() => void downloadConnectionCard()}>Download connection card</button>
+          <div className="apiary-exchange-intro">
+            <span><strong>Join another Keeper's Apiary</strong><small>Three deliberate handoffs keep each operator in control. No membership or shared access changes until both Hives verify the exact identities.</small></span>
+            <ol className="apiary-exchange-guide" aria-label="How to join an Apiary">
+              <ApiaryExchangeStep number="1" title="Share this Hive's identity" detail="Download the short-lived public card and give it to the Keeper. It contains no repositories, tasks, terminals, Jira access, credentials, or invitation secret.">
+                <button className="secondary-button" disabled={busy || working} onClick={() => void downloadConnectionCard()}>Download connection card</button>
+              </ApiaryExchangeStep>
+              <ApiaryExchangeStep number="2" title="Keeper verifies and invites" detail="The Keeper imports that card, checks your Hive and operator names, then returns one invitation file bound only to this Hive." />
+              <ApiaryExchangeStep number="3" title="Review before joining" detail="Choose the returned invitation below. Swarm verifies the Keeper, policy, Jira projects, and local readiness before it prepares any join request." />
+            </ol>
           </div>
           <div className="apiary-join-card">
             <div>
-              <strong>Join an Apiary</strong>
-              <small>Choose the invitation returned by a Keeper. Swarm shows the exact identity and policy revision before anything is pinned.</small>
+              <strong>Review a returned invitation</strong>
+              <small>This is the file the Keeper created after verifying your connection card. Choosing it does not send anything or join the Apiary.</small>
             </div>
-            <label className="apiary-card-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void previewJoinInvitation(event.dataTransfer.files[0]); }}>
-              <input
-                aria-label="Choose Apiary invitation"
-                type="file"
-                accept="application/json,.json"
-                disabled={busy || working}
-                onChange={(event) => { void previewJoinInvitation(event.target.files?.[0]); event.currentTarget.value = ""; }}
-              />
-              <span>Choose invitation</span>
-              <small>or drop it here</small>
-            </label>
+            <ApiaryFileDrop
+              ariaLabel="Choose Apiary invitation"
+              disabled={busy || working}
+              label="Choose invitation file"
+              detail="or drop the Keeper's .json invitation here"
+              onFile={(file) => void previewJoinInvitation(file)}
+            />
             {invitationPreview ? (
               <div className="apiary-invitation-preview" role="group" aria-label="Review Apiary invitation">
                 <div><span>Apiary</span><strong>{invitationPreview.invitation.payload.apiary_name}</strong></div>
@@ -721,20 +723,21 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
             </div>
             <div className="apiary-hive-candidates">
               <div>
-                <strong>Add a Hive</strong>
-                <small>Choose the signed connection card from another personal Hive. Swarm verifies and pins its identity first; invitations and access remain separate.</small>
+                <strong>Invite a Hive</strong>
+                <small>The other operator starts by sending you her public connection card. Swarm verifies the identity before it enables an invitation.</small>
               </div>
-              <label className="apiary-card-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void importConnectionCard(event.dataTransfer.files[0]); }}>
-                <input
-                  aria-label="Choose Hive connection card"
-                  type="file"
-                  accept="application/json,.json"
-                  disabled={busy || working}
-                  onChange={(event) => { void importConnectionCard(event.target.files?.[0]); event.currentTarget.value = ""; }}
-                />
-                <span>{working ? "Verifying…" : "Choose connection card"}</span>
-                <small>or drop it here</small>
-              </label>
+              <ol className="apiary-exchange-guide apiary-keeper-exchange" aria-label="How to invite a Hive">
+                <ApiaryExchangeStep number="1" title="Receive her connection card" detail="Ask the Hive operator to download her card under Join another Keeper's Apiary and send that .json file to you." />
+                <ApiaryExchangeStep number="2" title="Verify the exact identity" detail="Choose the card below. Swarm verifies its signature and shows the Hive and operator before any invitation exists." />
+                <ApiaryExchangeStep number="3" title="Return the invitation file" detail="Create invitation downloads one bounded file for that Hive. Return it to the same operator; it grants no access by itself." />
+              </ol>
+              <ApiaryFileDrop
+                ariaLabel="Choose Hive connection card"
+                disabled={busy || working}
+                label={working ? "Verifying…" : "Choose connection card"}
+                detail="or drop the Hive's .json connection card here"
+                onFile={(file) => void importConnectionCard(file)}
+              />
               {candidateLoadError ? <p className="apiary-blockers">Pinned Hive identities could not be refreshed. No membership changed.</p> : null}
               {hiveCandidates.length > 0 ? (
                 <ul className="apiary-candidate-list" aria-label="Pinned Hive identities">
@@ -832,6 +835,60 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       {message ? <p className="form-message" role="status">{message}</p> : null}
       {error ? <p className="form-error" role="alert">{error}</p> : null}
     </section>
+  );
+}
+
+type ApiaryExchangeStepProps = {
+  number: string;
+  title: string;
+  detail: string;
+  children?: ReactNode;
+};
+
+function ApiaryExchangeStep({ number, title, detail, children }: ApiaryExchangeStepProps) {
+  return (
+    <li>
+      <span className="apiary-step-number" aria-hidden="true">{number}</span>
+      <span className="apiary-step-copy"><strong>{title}</strong><small>{detail}</small></span>
+      {children ? <span className="apiary-step-action">{children}</span> : null}
+    </li>
+  );
+}
+
+type ApiaryFileDropProps = {
+  ariaLabel: string;
+  disabled: boolean;
+  label: string;
+  detail: string;
+  onFile: (file: File | undefined) => void;
+};
+
+function ApiaryFileDrop({ ariaLabel, disabled, label, detail, onFile }: ApiaryFileDropProps) {
+  const [dragging, setDragging] = useState(false);
+  const detailId = useId();
+  return (
+    <label
+      className={`apiary-card-drop${dragging ? " drag-active" : ""}`}
+      onDragEnter={(event) => { event.preventDefault(); if (!disabled) setDragging(true); }}
+      onDragOver={(event) => event.preventDefault()}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragging(false);
+        if (!disabled) onFile(event.dataTransfer.files[0]);
+      }}
+    >
+      <input
+        aria-label={ariaLabel}
+        aria-describedby={detailId}
+        type="file"
+        accept="application/json,.json"
+        disabled={disabled}
+        onChange={(event) => { onFile(event.target.files?.[0]); event.currentTarget.value = ""; }}
+      />
+      <span>{label}</span>
+      <small id={detailId}>{detail}</small>
+    </label>
   );
 }
 

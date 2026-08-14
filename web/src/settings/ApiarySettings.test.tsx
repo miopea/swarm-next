@@ -23,6 +23,11 @@ test("explains when this Hive has a remotely reachable Apiary URL", async () => 
   expect(await screen.findByText("Reachable Hive URL ready")).toBeInTheDocument();
   expect(screen.getByText("https://swarm2.bfgsolutions.net")).toBeInTheDocument();
   expect(screen.getByText(/must remain online for invitations and shared coordination/i)).toBeInTheDocument();
+  const joinGuide = screen.getByRole("list", { name: "How to join an Apiary" });
+  expect(joinGuide).toHaveTextContent("Share this Hive's identity");
+  expect(joinGuide).toHaveTextContent("Keeper verifies and invites");
+  expect(joinGuide).toHaveTextContent("Review before joining");
+  expect(screen.getByText(/Choosing it does not send anything or join the Apiary/)).toBeInTheDocument();
 });
 
 test("warns that a loopback Apiary URL reaches only this machine", async () => {
@@ -257,6 +262,16 @@ test("pins an imported Hive identity without implying membership or access", asy
   vi.stubGlobal("fetch", fetchMock);
 
   render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+  const inviteGuide = screen.getByRole("list", { name: "How to invite a Hive" });
+  expect(inviteGuide).toHaveTextContent("Receive her connection card");
+  expect(inviteGuide).toHaveTextContent("Verify the exact identity");
+  expect(inviteGuide).toHaveTextContent("Return the invitation file");
+  const dropTarget = screen.getByText("Choose connection card").closest("label");
+  expect(dropTarget).not.toBeNull();
+  fireEvent.dragEnter(dropTarget!);
+  expect(dropTarget).toHaveClass("drag-active");
+  fireEvent.dragLeave(dropTarget!);
+  expect(dropTarget).not.toHaveClass("drag-active");
   const file = { size: 512, text: vi.fn(async () => JSON.stringify(card)) } as unknown as File;
   fireEvent.change(screen.getByLabelText("Choose Hive connection card"), { target: { files: [file] } });
 
