@@ -509,3 +509,25 @@ the independently updated terminal host through the API to worker settings:
   authenticated 1280x720 proof showed the development version, bounded Settings
   layout, preserved-worker diagnostics, and the reload control. All Chromium
   tabs were closed after proof.
+- Releases through `0.1.0-dev-6b2faac33286` make the maintenance boundary
+  explicit instead of presenting two similar update actions. The worker-engine
+  path states that every loaded Claude or Codex process briefly stops, names an
+  in-flight model turn or command as the real interruption risk, and preserves
+  durable worker, conversation, task, ownership, and history state. The
+  development reload path states that only API/web code is rebuilt and swapped,
+  workers keep running, and a failed build leaves the current app active. The
+  ambiguous `1 update ready` count is now `Update ready · restart required`;
+  the separate affected-workers row owns the actual count. Live 1,440 by 900
+  and 412 by 915 proofs found and corrected a cramped half-width desktop card,
+  then measured exact page and card bounds with the comparison at two desktop
+  columns and one mobile column. Three successive development reloads retained
+  terminal-host PID `1528937` and the exact same Claude process set.
+- The same pass shipped self-service Microsoft Outlook app registration in
+  Settings. An operator sees the exact Web callback URL and required delegated
+  permissions, submits tenant ID, client ID, and the one-time client-secret
+  value over HTTPS, and receives only a secret-free configuration view. The
+  host stores the registration privately and can reload it after an API restart;
+  environment-managed registrations remain immutable from the browser. Live
+  proof caught and fixed a clipped half-width form before handoff. The final
+  1,440 by 900 and 412 by 915 layouts expose every field and action with zero
+  document overflow, without submitting real Microsoft credentials.
