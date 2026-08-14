@@ -359,6 +359,46 @@ pub enum StewardCapability {
     ManageMembers,
 }
 
+impl fmt::Display for StewardCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Observe => "observe",
+            Self::Assign => "assign",
+            Self::Assist => "assist",
+            Self::Takeover => "takeover",
+            Self::ManageProjects => "manage_projects",
+            Self::ManageMembers => "manage_members",
+        })
+    }
+}
+
+impl FromStr for StewardCapability {
+    type Err = ParseStewardCapabilityError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "observe" => Ok(Self::Observe),
+            "assign" => Ok(Self::Assign),
+            "assist" => Ok(Self::Assist),
+            "takeover" => Ok(Self::Takeover),
+            "manage_projects" => Ok(Self::ManageProjects),
+            "manage_members" => Ok(Self::ManageMembers),
+            _ => Err(ParseStewardCapabilityError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseStewardCapabilityError;
+
+impl fmt::Display for ParseStewardCapabilityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown Steward capability")
+    }
+}
+
+impl std::error::Error for ParseStewardCapabilityError {}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Stewardship {
     pub id: StewardshipId,

@@ -9,8 +9,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use swarm_domain::{
     Apiary, ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
     HiveIdentity, LocalApiaryContext, LocalApiaryRole, Operator, OperatorId, SharedWorkBackend,
-    Task, TaskActivity, TaskActivityKind, TaskActivityPage, TaskDetailsUpdate, TaskDispatchState,
-    TaskId, TaskOutcomeDeliveryState, TaskPriority, TaskState, WorkerId, WorkerSessionId,
+    StewardCapability, Stewardship, StewardshipId, Task, TaskActivity, TaskActivityKind,
+    TaskActivityPage, TaskDetailsUpdate, TaskDispatchState, TaskId, TaskOutcomeDeliveryState,
+    TaskPriority, TaskState, WorkerId, WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -43,7 +44,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 24;
+const CURRENT_SCHEMA_VERSION: i64 = 25;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -327,6 +328,67 @@ impl TaskStore {
                 },
             )
             .map_err(TaskStoreError::from)
+    }
+
+    /// Loads only active, explicitly persisted Steward grants for one Apiary.
+    /// Missing grants return an empty set and never imply authority.
+    ///
+    /// # Errors
+    /// Returns an error when persisted identifiers or capabilities are invalid.
+    pub fn stewardships_for_apiary(
+        &self,
+        apiary_id: ApiaryId,
+    ) -> Result<Vec<Stewardship>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT id, steward_operator_id
+             FROM stewardships
+             WHERE apiary_id = ?1 AND revoked_at IS NULL
+             ORDER BY created_at, id",
+        )?;
+        let rows = statement.query_map([apiary_id.to_string()], |row| {
+            Ok((
+                parse_domain_id::<StewardshipId>(&row.get::<_, String>(0)?)?,
+                parse_domain_id::<OperatorId>(&row.get::<_, String>(1)?)?,
+            ))
+        })?;
+        let grants = rows.collect::<Result<Vec<_>, _>>()?;
+        grants
+            .into_iter()
+            .map(|(id, steward_operator_id)| {
+                let managed_hive_ids = {
+                    let mut statement = connection.prepare(
+                        "SELECT hive_id FROM stewardship_hive_grants
+                         WHERE stewardship_id = ?1 ORDER BY hive_id",
+                    )?;
+                    statement
+                        .query_map([id.to_string()], |row| {
+                            parse_domain_id::<HiveId>(&row.get::<_, String>(0)?)
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+                let capabilities = {
+                    let mut statement = connection.prepare(
+                        "SELECT capability FROM stewardship_capability_grants
+                         WHERE stewardship_id = ?1 ORDER BY capability",
+                    )?;
+                    statement
+                        .query_map([id.to_string()], |row| {
+                            row.get::<_, String>(0)?
+                                .parse::<StewardCapability>()
+                                .map_err(|_| rusqlite::Error::InvalidQuery)
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+                Ok(Stewardship {
+                    id,
+                    apiary_id,
+                    steward_operator_id,
+                    managed_hive_ids,
+                    capabilities,
+                })
+            })
+            .collect()
     }
 
     /// Creates a validated draft and its first activity event atomically.
@@ -1148,7 +1210,67 @@ fn migrate_schema(
     if schema_version < 24 {
         migrate_jira_assigned_sync_preference(transaction)?;
     }
+    if schema_version < 25 {
+        migrate_apiary_stewardships(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_apiary_stewardships(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS stewardships (
+             id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             steward_operator_id TEXT NOT NULL REFERENCES operators(id),
+             created_by_operator_id TEXT NOT NULL REFERENCES operators(id),
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             revoked_at INTEGER
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS one_active_stewardship_per_operator
+             ON stewardships(apiary_id, steward_operator_id) WHERE revoked_at IS NULL;
+         CREATE TABLE IF NOT EXISTS stewardship_hive_grants (
+             stewardship_id TEXT NOT NULL REFERENCES stewardships(id) ON DELETE CASCADE,
+             hive_id TEXT NOT NULL REFERENCES hives(id),
+             PRIMARY KEY (stewardship_id, hive_id)
+         );
+         CREATE TABLE IF NOT EXISTS stewardship_capability_grants (
+             stewardship_id TEXT NOT NULL REFERENCES stewardships(id) ON DELETE CASCADE,
+             capability TEXT NOT NULL CHECK (capability IN (
+                 'observe','assign','assist','takeover','manage_projects','manage_members'
+             )),
+             PRIMARY KEY (stewardship_id, capability)
+         );
+         CREATE TRIGGER IF NOT EXISTS stewardship_creator_is_keeper
+             BEFORE INSERT ON stewardships
+             WHEN NOT EXISTS (
+                 SELECT 1 FROM apiaries a
+                 WHERE a.id = NEW.apiary_id
+                   AND a.keeper_operator_id = NEW.created_by_operator_id
+             )
+             BEGIN SELECT RAISE(ABORT, 'Only the Apiary Keeper can grant Stewardship'); END;
+         CREATE TRIGGER IF NOT EXISTS immutable_stewardship_identity
+             BEFORE UPDATE OF id, apiary_id, steward_operator_id, created_by_operator_id
+             ON stewardships
+             BEGIN SELECT RAISE(ABORT, 'Stewardship identity is immutable'); END;
+         CREATE TRIGGER IF NOT EXISTS stewardship_hive_scope_insert
+             BEFORE INSERT ON stewardship_hive_grants
+             WHEN NOT EXISTS (
+                 SELECT 1 FROM stewardships s
+                 JOIN hives h ON h.id = NEW.hive_id
+                 WHERE s.id = NEW.stewardship_id AND h.apiary_id = s.apiary_id
+             )
+             BEGIN SELECT RAISE(ABORT, 'Steward Hive grant must stay inside its Apiary'); END;
+         CREATE TRIGGER IF NOT EXISTS stewardship_hive_scope_update
+             BEFORE UPDATE OF stewardship_id, hive_id ON stewardship_hive_grants
+             WHEN NOT EXISTS (
+                 SELECT 1 FROM stewardships s
+                 JOIN hives h ON h.id = NEW.hive_id
+                 WHERE s.id = NEW.stewardship_id AND h.apiary_id = s.apiary_id
+             )
+             BEGIN SELECT RAISE(ABORT, 'Steward Hive grant must stay inside its Apiary'); END;
+         PRAGMA user_version = 25;",
+    )
 }
 
 fn migrate_jira_assigned_sync_preference(
@@ -2626,6 +2748,164 @@ mod tests {
                 local_role: LocalApiaryRole::Keeper,
             } if apiary.id == apiary_id && apiary.shared_work_backend() == SharedWorkBackend::Jira
         ));
+    }
+
+    fn insert_test_operator(connection: &Connection, operator_id: OperatorId, name: &str) {
+        connection
+            .execute(
+                "INSERT INTO operators (id, display_name) VALUES (?1, ?2)",
+                params![operator_id.to_string(), name],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn stewardship_scope_is_explicit_durable_and_apiary_bounded() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        let apiary_id = ApiaryId::new();
+        let steward_operator_id = OperatorId::new();
+        let stewardship_id = StewardshipId::new();
+        let managed_hive_id = HiveId::new();
+        let outside_operator_id = OperatorId::new();
+        let outside_hive_id = HiveId::new();
+        {
+            let connection = store.connection().unwrap();
+            connection
+                .execute(
+                    "INSERT INTO apiaries (id, name, keeper_operator_id, shared_work_backend)
+                     VALUES (?1, 'Garden', ?2, 'jira')",
+                    params![apiary_id.to_string(), identity.operator.id.to_string()],
+                )
+                .unwrap();
+            insert_test_operator(&connection, steward_operator_id, "Steward");
+            insert_test_operator(&connection, outside_operator_id, "Outside");
+            connection
+                .execute(
+                    "INSERT INTO hives (id, name, operator_id, apiary_id)
+                     VALUES (?1, 'Managed Hive', ?2, ?3)",
+                    params![
+                        managed_hive_id.to_string(),
+                        steward_operator_id.to_string(),
+                        apiary_id.to_string()
+                    ],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO hives (id, name, operator_id)
+                     VALUES (?1, 'Outside Hive', ?2)",
+                    params![outside_hive_id.to_string(), outside_operator_id.to_string()],
+                )
+                .unwrap();
+            assert!(
+                connection
+                    .execute(
+                        "INSERT INTO stewardships
+                            (id, apiary_id, steward_operator_id, created_by_operator_id)
+                         VALUES (?1, ?2, ?3, ?3)",
+                        params![
+                            StewardshipId::new().to_string(),
+                            apiary_id.to_string(),
+                            steward_operator_id.to_string()
+                        ],
+                    )
+                    .is_err()
+            );
+            connection
+                .execute(
+                    "INSERT INTO stewardships
+                        (id, apiary_id, steward_operator_id, created_by_operator_id)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![
+                        stewardship_id.to_string(),
+                        apiary_id.to_string(),
+                        steward_operator_id.to_string(),
+                        identity.operator.id.to_string()
+                    ],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO stewardship_hive_grants (stewardship_id, hive_id)
+                     VALUES (?1, ?2)",
+                    params![stewardship_id.to_string(), managed_hive_id.to_string()],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO stewardship_capability_grants (stewardship_id, capability)
+                     VALUES (?1, 'observe'), (?1, 'takeover')",
+                    [stewardship_id.to_string()],
+                )
+                .unwrap();
+            assert!(
+                connection
+                    .execute(
+                        "INSERT INTO stewardship_hive_grants (stewardship_id, hive_id)
+                         VALUES (?1, ?2)",
+                        params![stewardship_id.to_string(), outside_hive_id.to_string()],
+                    )
+                    .is_err()
+            );
+        }
+
+        assert_eq!(
+            store.stewardships_for_apiary(apiary_id).unwrap(),
+            vec![Stewardship {
+                id: stewardship_id,
+                apiary_id,
+                steward_operator_id,
+                managed_hive_ids: vec![managed_hive_id],
+                capabilities: vec![StewardCapability::Observe, StewardCapability::Takeover],
+            }]
+        );
+    }
+
+    #[test]
+    fn migrates_schema_v24_to_explicit_stewardship_grants() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "DROP TRIGGER stewardship_hive_scope_update;
+                     DROP TRIGGER stewardship_hive_scope_insert;
+                     DROP TABLE stewardship_capability_grants;
+                     DROP TABLE stewardship_hive_grants;
+                     DROP TABLE stewardships;
+                     PRAGMA user_version = 24;",
+                )
+                .unwrap();
+        }
+
+        let migrated = TaskStore::open(path).unwrap();
+        let connection = migrated.connection().unwrap();
+        for table in [
+            "stewardships",
+            "stewardship_hive_grants",
+            "stewardship_capability_grants",
+        ] {
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        [table],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1
+            );
+        }
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
     }
 
     #[test]
