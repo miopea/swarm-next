@@ -7,8 +7,11 @@ use sha2::{Digest, Sha256};
 use swarm_domain::{
     ApiaryHiveCandidate, ApiaryId, ApiaryInvitationBundle, ApiaryInvitationEnvelope,
     ApiaryInvitationEnvelopePayload, ApiaryInvitationId, FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
-    FEDERATION_INVITATION_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION, FederationJoinInvitation,
-    FederationJoinInvitationState, FederationNodeId, FederationProjectManifestEntry,
+    FEDERATION_INVITATION_SCHEMA_VERSION, FEDERATION_MEMBERSHIP_SCHEMA_VERSION,
+    FEDERATION_PROTOCOL_VERSION, FederationJoinAcceptance, FederationJoinInvitation,
+    FederationJoinInvitationState, FederationJoinReadiness, FederationJoinSubmission,
+    FederationJoinSubmissionPayload, FederationMembershipReceipt, FederationMembershipReceiptId,
+    FederationMembershipReceiptPayload, FederationNodeId, FederationProjectManifestEntry,
     FederationProjectReadiness, HiveConnectionCard, HiveConnectionCardPayload, HiveId,
     JiraProjectBindingId, SharedWorkBackend,
 };
@@ -23,6 +26,7 @@ pub const MAX_FEDERATION_INVITATION_LIFETIME_SECONDS: i64 = 7 * 24 * 60 * 60;
 const MAX_CLOCK_SKEW_SECONDS: i64 = 5 * 60;
 const MAX_KEEPER_ENDPOINT_BYTES: usize = 2_048;
 const MAX_PROMOTED_PROJECTS_PER_INVITATION: usize = 1_000;
+const FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 struct LocalFederationIdentity {
     node_id: FederationNodeId,
@@ -33,6 +37,20 @@ struct KeeperInvitationContext {
     apiary_name: String,
     backend: SharedWorkBackend,
     policy_revision: u64,
+}
+
+struct KeeperJoinContext {
+    apiary_id: String,
+    candidate_hive_id: String,
+    candidate_node_id: String,
+    candidate_operator_id: String,
+    secret_digest: Vec<u8>,
+    state: String,
+    expires_at: i64,
+    hive_name: String,
+    operator_display_name: String,
+    public_key: String,
+    envelope_json: String,
 }
 
 impl TaskStore {
@@ -397,6 +415,183 @@ impl TaskStore {
             .ok_or(TaskStoreError::ApiaryInvitationNotFound)
     }
 
+    /// Seals the locally derived readiness into a signed, retry-stable
+    /// submission for the exact imported invitation. The retained bearer
+    /// secret is included only in this private transport object.
+    ///
+    /// # Errors
+    /// Rejects incomplete readiness, stale invitation state, identity drift,
+    /// expiry, invalid time, and persistence failures.
+    pub fn prepare_federation_join_submission(
+        &self,
+        invitation_id: ApiaryInvitationId,
+        readiness: &FederationJoinReadiness,
+        now: i64,
+    ) -> Result<FederationJoinSubmission, TaskStoreError> {
+        if now < 0 || !readiness.can_submit() {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        let identity = self.local_hive_identity()?;
+        if identity.hive.apiary_id.is_some() {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        let local_node = self.local_federation_identity(now)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let stored = transaction
+            .query_row(
+                "SELECT apiary_id, required_policy_revision,
+                        promoted_project_catalog_digest, invited_node_id,
+                        invited_hive_id, invited_operator_id, one_time_secret,
+                        state, expires_at, submission_json
+                 FROM apiary_join_invitations WHERE id = ?1",
+                [invitation_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, u64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Vec<u8>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryInvitationNotFound)?;
+        if let Some(json) = stored.9 {
+            return serde_json::from_str(&json)
+                .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()));
+        }
+        if stored.7 != "policy_accepted"
+            || stored.8 <= now
+            || stored.3 != local_node.node_id.to_string()
+            || stored.4 != identity.hive.id.to_string()
+            || stored.5 != identity.operator.id.to_string()
+            || stored.6.len() != 32
+        {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        let payload = FederationJoinSubmissionPayload {
+            schema_version: FEDERATION_MEMBERSHIP_SCHEMA_VERSION,
+            protocol_version: FEDERATION_PROTOCOL_VERSION,
+            invitation_id,
+            apiary_id: parse_domain_id(&stored.0)?,
+            required_policy_revision: stored.1,
+            promoted_project_catalog_digest: stored.2,
+            invited_node_id: local_node.node_id,
+            invited_hive_id: identity.hive.id,
+            invited_operator_id: identity.operator.id,
+            submitted_at: now,
+        };
+        let signature = local_node
+            .signing_key
+            .sign(&canonical_join_submission_payload(&payload)?);
+        let submission = FederationJoinSubmission {
+            payload,
+            signature: Base64UrlUnpadded::encode_string(&signature.to_bytes()),
+            one_time_secret: Base64UrlUnpadded::encode_string(&stored.6),
+        };
+        let serialized = serde_json::to_string(&submission)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        if transaction.execute(
+            "UPDATE apiary_join_invitations
+             SET state = 'submitted', submitted_at = ?1, submission_json = ?2
+             WHERE id = ?3 AND state = 'policy_accepted' AND expires_at > ?1",
+            params![now, serialized, invitation_id.to_string()],
+        )? != 1
+        {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        transaction.commit()?;
+        Ok(submission)
+    }
+
+    /// Atomically consumes a Keeper-side one-time invitation and registers the
+    /// pinned Hive as a member. Exact authenticated retries return the same
+    /// receipt and credential so a lost response cannot create a second join.
+    ///
+    /// # Errors
+    /// Rejects invalid signatures or secrets, identity/catalog/policy drift,
+    /// expiry, replay with altered material, and membership conflicts.
+    pub fn consume_federation_join_submission(
+        &self,
+        submission: &FederationJoinSubmission,
+        now: i64,
+    ) -> Result<FederationJoinAcceptance, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationInvitation);
+        }
+        let identity = self.local_hive_identity()?;
+        let apiary_id = identity
+            .hive
+            .apiary_id
+            .ok_or(TaskStoreError::ApiaryKeeperRequired)?;
+        let local_node = self.local_federation_identity(now)?;
+        let secret: [u8; 32] = Base64UrlUnpadded::decode_vec(&submission.one_time_secret)
+            .map_err(|_| TaskStoreError::InvalidFederationInvitation)?
+            .try_into()
+            .map_err(|_| TaskStoreError::InvalidFederationInvitation)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let join = keeper_join_context(&transaction, submission.payload.invitation_id)?;
+        verify_join_submission(submission, &join.public_key, now)?;
+        let envelope: ApiaryInvitationEnvelope = serde_json::from_str(&join.envelope_json)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        let payload = &submission.payload;
+        let bindings_match = join.apiary_id == apiary_id.to_string()
+            && join.candidate_hive_id == payload.invited_hive_id.to_string()
+            && join.candidate_node_id == payload.invited_node_id.to_string()
+            && join.candidate_operator_id == payload.invited_operator_id.to_string()
+            && payload.apiary_id == apiary_id
+            && payload.required_policy_revision == envelope.payload.required_policy_revision
+            && payload.promoted_project_catalog_digest
+                == envelope.payload.promoted_project_catalog_digest
+            && join.expires_at > now
+            && constant_time_bytes_eq(&join.secret_digest, &invitation_secret_digest(&secret));
+        if !bindings_match {
+            return Err(TaskStoreError::InvalidFederationInvitation);
+        }
+        if join.state == "consumed" {
+            return federation_acceptance_by_invitation(
+                &transaction,
+                submission.payload.invitation_id,
+            )?
+            .ok_or(TaskStoreError::IntegrityFailure(
+                "consumed invitation has no membership receipt".into(),
+            ));
+        }
+        if join.state != "pending" {
+            return Err(TaskStoreError::ApiaryInvitationResolved);
+        }
+        let context =
+            keeper_invitation_context(&transaction, apiary_id, &identity.operator.id.to_string())?;
+        if context.policy_revision != payload.required_policy_revision
+            || context.backend != SharedWorkBackend::Jira
+            || promoted_project_manifest_digest(&promoted_project_manifest(
+                &transaction,
+                apiary_id,
+            )?)? != payload.promoted_project_catalog_digest
+        {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        let acceptance = register_federation_membership(
+            &transaction,
+            &identity,
+            &local_node,
+            &join,
+            payload,
+            context,
+            now,
+        )?;
+        transaction.commit()?;
+        Ok(acceptance)
+    }
+
     /// Reports the number of current distributed invitations for one pinned
     /// candidate without exposing their secret digests or envelopes.
     ///
@@ -658,6 +853,225 @@ fn invitation_material() -> Result<([u8; 32], String, String), TaskStoreError> {
     Ok((secret, one_time_secret, nonce))
 }
 
+fn node_credential_material() -> Result<([u8; 32], String), TaskStoreError> {
+    let mut credential = [0_u8; 32];
+    getrandom::fill(&mut credential).map_err(|_| TaskStoreError::FederationEntropyUnavailable)?;
+    let encoded = Base64UrlUnpadded::encode_string(&credential);
+    Ok((credential, encoded))
+}
+
+fn canonical_join_submission_payload(
+    payload: &FederationJoinSubmissionPayload,
+) -> Result<Vec<u8>, TaskStoreError> {
+    serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
+}
+
+fn canonical_membership_receipt_payload(
+    payload: &FederationMembershipReceiptPayload,
+) -> Result<Vec<u8>, TaskStoreError> {
+    serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
+}
+
+fn verify_join_submission(
+    submission: &FederationJoinSubmission,
+    expected_public_key: &str,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let payload = &submission.payload;
+    if payload.schema_version != FEDERATION_MEMBERSHIP_SCHEMA_VERSION
+        || payload.protocol_version != FEDERATION_PROTOCOL_VERSION
+        || payload.required_policy_revision == 0
+        || payload.submitted_at < 0
+        || payload.submitted_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
+    {
+        return Err(TaskStoreError::InvalidFederationInvitation);
+    }
+    let public_key: [u8; 32] = Base64UrlUnpadded::decode_vec(expected_public_key)
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?;
+    let signature: [u8; 64] = Base64UrlUnpadded::decode_vec(&submission.signature)
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?;
+    let canonical = canonical_join_submission_payload(payload)?;
+    VerifyingKey::from_bytes(&public_key)
+        .and_then(|key| key.verify(&canonical, &Signature::from_bytes(&signature)))
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)
+}
+
+fn constant_time_bytes_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
+}
+
+fn federation_acceptance_by_invitation(
+    connection: &rusqlite::Connection,
+    invitation_id: ApiaryInvitationId,
+) -> Result<Option<FederationJoinAcceptance>, TaskStoreError> {
+    connection
+        .query_row(
+            "SELECT receipt_json, node_credential
+             FROM apiary_federation_memberships WHERE invitation_id = ?1",
+            [invitation_id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()?
+        .map(|(receipt_json, credential)| {
+            let receipt = serde_json::from_str(&receipt_json)
+                .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+            if credential.len() != 32 {
+                return Err(TaskStoreError::IntegrityFailure(
+                    "stored federation node credential is invalid".into(),
+                ));
+            }
+            Ok(FederationJoinAcceptance {
+                receipt,
+                node_credential: Base64UrlUnpadded::encode_string(&credential),
+            })
+        })
+        .transpose()
+}
+
+fn keeper_join_context(
+    connection: &rusqlite::Connection,
+    invitation_id: ApiaryInvitationId,
+) -> Result<KeeperJoinContext, TaskStoreError> {
+    connection
+        .query_row(
+            "SELECT i.apiary_id, i.candidate_hive_id, i.candidate_node_id,
+                    i.candidate_operator_id, i.secret_digest, i.state,
+                    i.expires_at, c.hive_name, c.operator_display_name,
+                    c.public_key, i.envelope_json
+             FROM apiary_federation_invitations i
+             JOIN apiary_hive_candidates c
+               ON c.apiary_id = i.apiary_id
+              AND c.hive_id = i.candidate_hive_id
+             WHERE i.id = ?1",
+            [invitation_id.to_string()],
+            |row| {
+                Ok(KeeperJoinContext {
+                    apiary_id: row.get(0)?,
+                    candidate_hive_id: row.get(1)?,
+                    candidate_node_id: row.get(2)?,
+                    candidate_operator_id: row.get(3)?,
+                    secret_digest: row.get(4)?,
+                    state: row.get(5)?,
+                    expires_at: row.get(6)?,
+                    hive_name: row.get(7)?,
+                    operator_display_name: row.get(8)?,
+                    public_key: row.get(9)?,
+                    envelope_json: row.get(10)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(TaskStoreError::ApiaryInvitationNotFound)
+}
+
+fn register_federation_membership(
+    transaction: &rusqlite::Transaction<'_>,
+    identity: &swarm_domain::HiveIdentity,
+    local_node: &LocalFederationIdentity,
+    join: &KeeperJoinContext,
+    payload: &FederationJoinSubmissionPayload,
+    context: KeeperInvitationContext,
+    now: i64,
+) -> Result<FederationJoinAcceptance, TaskStoreError> {
+    transaction
+        .execute(
+            "INSERT INTO operators (id, display_name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?3)",
+            params![join.candidate_operator_id, join.operator_display_name, now],
+        )
+        .map_err(|_| TaskStoreError::ApiaryMembershipConflict)?;
+    transaction
+        .execute(
+            "INSERT INTO hives (id, name, operator_id, apiary_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            params![
+                join.candidate_hive_id,
+                join.hive_name,
+                join.candidate_operator_id,
+                payload.apiary_id.to_string(),
+                now
+            ],
+        )
+        .map_err(|_| TaskStoreError::ApiaryMembershipConflict)?;
+    let (credential, encoded_credential) = node_credential_material()?;
+    let credential_expires_at = now
+        .checked_add(FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS)
+        .ok_or(TaskStoreError::InvalidFederationInvitation)?;
+    let receipt_payload = FederationMembershipReceiptPayload {
+        schema_version: FEDERATION_MEMBERSHIP_SCHEMA_VERSION,
+        protocol_version: FEDERATION_PROTOCOL_VERSION,
+        receipt_id: FederationMembershipReceiptId::new(),
+        invitation_id: payload.invitation_id,
+        apiary_id: payload.apiary_id,
+        apiary_name: context.apiary_name,
+        shared_work_backend: context.backend,
+        policy_revision: context.policy_revision,
+        promoted_project_catalog_digest: payload.promoted_project_catalog_digest.clone(),
+        keeper_node_id: local_node.node_id,
+        keeper_hive_id: identity.hive.id,
+        keeper_operator_id: identity.operator.id,
+        member_node_id: payload.invited_node_id,
+        member_hive_id: payload.invited_hive_id,
+        member_operator_id: payload.invited_operator_id,
+        joined_at: now,
+        credential_expires_at,
+    };
+    let receipt_signature = local_node
+        .signing_key
+        .sign(&canonical_membership_receipt_payload(&receipt_payload)?);
+    let receipt = FederationMembershipReceipt {
+        payload: receipt_payload,
+        signature: Base64UrlUnpadded::encode_string(&receipt_signature.to_bytes()),
+    };
+    transaction.execute(
+        "INSERT INTO apiary_federation_memberships
+            (receipt_id, invitation_id, apiary_id, member_node_id,
+             member_hive_id, member_operator_id, receipt_json,
+             node_credential, credential_digest, joined_at,
+             credential_expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            receipt.payload.receipt_id.to_string(),
+            payload.invitation_id.to_string(),
+            payload.apiary_id.to_string(),
+            payload.invited_node_id.to_string(),
+            payload.invited_hive_id.to_string(),
+            payload.invited_operator_id.to_string(),
+            serde_json::to_string(&receipt)
+                .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?,
+            credential.as_slice(),
+            invitation_secret_digest(&credential).as_slice(),
+            now,
+            credential_expires_at,
+        ],
+    )?;
+    if transaction.execute(
+        "UPDATE apiary_federation_invitations
+         SET state = 'consumed', consumed_at = ?1
+         WHERE id = ?2 AND state = 'pending'",
+        params![now, payload.invitation_id.to_string()],
+    )? != 1
+    {
+        return Err(TaskStoreError::ApiaryInvitationResolved);
+    }
+    Ok(FederationJoinAcceptance {
+        receipt,
+        node_credential: encoded_credential,
+    })
+}
+
 fn keeper_invitation_context(
     connection: &rusqlite::Connection,
     apiary_id: ApiaryId,
@@ -871,6 +1285,46 @@ pub fn verify_apiary_invitation_envelope(
         .try_into()
         .map_err(|_| TaskStoreError::InvalidFederationInvitation)?;
     let canonical = canonical_invitation_payload(payload)?;
+    VerifyingKey::from_bytes(&public_key)
+        .and_then(|key| key.verify(&canonical, &Signature::from_bytes(&signature)))
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)
+}
+
+/// Verifies a membership receipt against the Keeper public key already pinned
+/// by the invited Hive.
+///
+/// # Errors
+/// Rejects unsupported versions, invalid bounds or encoding, identity
+/// tampering, expired credentials, and invalid signatures.
+pub fn verify_federation_membership_receipt(
+    receipt: &FederationMembershipReceipt,
+    expected_keeper_public_key: &str,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let payload = &receipt.payload;
+    if now < 0
+        || payload.schema_version != FEDERATION_MEMBERSHIP_SCHEMA_VERSION
+        || payload.protocol_version != FEDERATION_PROTOCOL_VERSION
+        || payload.apiary_name.trim().is_empty()
+        || payload.policy_revision == 0
+        || payload.joined_at < 0
+        || payload.joined_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
+        || payload.credential_expires_at <= now
+        || payload.credential_expires_at <= payload.joined_at
+        || payload.credential_expires_at - payload.joined_at
+            > FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS
+    {
+        return Err(TaskStoreError::InvalidFederationInvitation);
+    }
+    let public_key: [u8; 32] = Base64UrlUnpadded::decode_vec(expected_keeper_public_key)
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?;
+    let signature: [u8; 64] = Base64UrlUnpadded::decode_vec(&receipt.signature)
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?;
+    let canonical = canonical_membership_receipt_payload(payload)?;
     VerifyingKey::from_bytes(&public_key)
         .and_then(|key| key.verify(&canonical, &Signature::from_bytes(&signature)))
         .map_err(|_| TaskStoreError::InvalidFederationInvitation)
@@ -1109,6 +1563,49 @@ pub(super) fn migrate_federation_join_invitation_projects(
              BEFORE UPDATE ON apiary_join_invitation_projects
              BEGIN SELECT RAISE(ABORT, 'Imported project manifest is immutable'); END;
          PRAGMA user_version = 34;",
+    )
+}
+
+pub(super) fn migrate_federation_memberships(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let has_submission_json = transaction.query_row(
+        "SELECT EXISTS (
+             SELECT 1 FROM pragma_table_info('apiary_join_invitations')
+             WHERE name = 'submission_json'
+         )",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !has_submission_json {
+        transaction.execute(
+            "ALTER TABLE apiary_join_invitations ADD COLUMN submission_json TEXT",
+            [],
+        )?;
+    }
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS apiary_federation_memberships (
+             receipt_id TEXT PRIMARY KEY,
+             invitation_id TEXT NOT NULL UNIQUE
+                 REFERENCES apiary_federation_invitations(id),
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             member_node_id TEXT NOT NULL,
+             member_hive_id TEXT NOT NULL UNIQUE REFERENCES hives(id),
+             member_operator_id TEXT NOT NULL UNIQUE REFERENCES operators(id),
+             receipt_json TEXT NOT NULL,
+             node_credential BLOB NOT NULL CHECK (length(node_credential) = 32),
+             credential_digest BLOB NOT NULL UNIQUE CHECK (length(credential_digest) = 32),
+             joined_at INTEGER NOT NULL CHECK (joined_at >= 0),
+             credential_expires_at INTEGER NOT NULL CHECK (credential_expires_at > joined_at),
+             UNIQUE (apiary_id, member_node_id)
+         );
+         CREATE TRIGGER IF NOT EXISTS immutable_apiary_federation_membership
+             BEFORE UPDATE OF receipt_id, invitation_id, apiary_id,
+                              member_node_id, member_hive_id, member_operator_id,
+                              receipt_json, joined_at
+             ON apiary_federation_memberships
+             BEGIN SELECT RAISE(ABORT, 'Federation membership identity is immutable'); END;
+         PRAGMA user_version = 35;",
     )
 }
 
@@ -1791,6 +2288,124 @@ mod tests {
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
                      WHERE type = 'table' AND name = 'apiary_join_invitation_projects'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn independent_hive_submission_is_consumed_once_with_a_signed_retry_stable_receipt() {
+        let now = 20_000;
+        let invited = TaskStore::in_memory().unwrap();
+        let invited_identity = invited.local_hive_identity().unwrap();
+        let invited_card = invited.issue_hive_connection_card(now, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        let context = keeper
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, now - 1)
+            .unwrap();
+        let swarm_domain::LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected Keeper Apiary");
+        };
+        keeper.pin_hive_candidate(&invited_card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                invited_identity.hive.id,
+                "https://keeper.example.test/swarm",
+                now,
+                3_600,
+            )
+            .unwrap();
+        let invitation = invited
+            .import_apiary_invitation_bundle(&bundle, now + 1)
+            .unwrap();
+        invited
+            .accept_federation_join_policy(invitation.invitation_id, 1, now + 2)
+            .unwrap();
+        let readiness = FederationJoinReadiness {
+            jira_connection: swarm_domain::JiraConnectionState::Ready,
+            projects: Vec::new(),
+            blockers: Vec::new(),
+        };
+        let submission = invited
+            .prepare_federation_join_submission(invitation.invitation_id, &readiness, now + 3)
+            .unwrap();
+        assert_eq!(
+            submission,
+            invited
+                .prepare_federation_join_submission(invitation.invitation_id, &readiness, now + 4,)
+                .unwrap()
+        );
+
+        let accepted = keeper
+            .consume_federation_join_submission(&submission, now + 4)
+            .unwrap();
+        verify_federation_membership_receipt(
+            &accepted.receipt,
+            &bundle.keeper_connection_card.payload.public_key,
+            now + 4,
+        )
+        .unwrap();
+        assert_eq!(accepted.receipt.payload.apiary_id, apiary.id);
+        assert_eq!(
+            accepted.receipt.payload.member_hive_id,
+            invited_identity.hive.id
+        );
+        assert_eq!(
+            accepted,
+            keeper
+                .consume_federation_join_submission(&submission, now + 5)
+                .unwrap()
+        );
+        assert_eq!(
+            keeper
+                .connection()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM hives", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            keeper
+                .pending_federation_invitation_count(invited_identity.hive.id, now + 5)
+                .unwrap(),
+            0
+        );
+
+        let mut tampered = submission;
+        tampered.payload.required_policy_revision = 2;
+        assert!(matches!(
+            keeper.consume_federation_join_submission(&tampered, now + 6),
+            Err(TaskStoreError::InvalidFederationInvitation)
+        ));
+    }
+
+    #[test]
+    fn schema_v34_migrates_to_federation_memberships() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE apiary_federation_memberships;
+                 ALTER TABLE apiary_join_invitations DROP COLUMN submission_json;
+                 PRAGMA user_version = 34;",
+            )
+            .unwrap();
+        drop(store);
+
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'apiary_federation_memberships'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )

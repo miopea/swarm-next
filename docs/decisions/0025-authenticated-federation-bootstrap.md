@@ -119,5 +119,17 @@ policy revisions, incomplete access, and incomplete mappings fail closed.
 Clearing the preflight means only that the Hive is ready to submit the one-time
 handshake.
 
-Later slices must prove one-time remote consumption, replay rejection, protocol
-negotiation, and a complete join handshake between two independent processes.
+The Keeper-consumption slice now accepts a signed submission without browser
+or operator-session authentication: the one-time bearer secret and the exact
+pinned Hive signature are the credential. The submission binds invitation,
+Apiary, policy revision, catalog digest, and all invited identities. One
+transaction rechecks the current Keeper policy/catalog, consumes the pending
+invitation, creates the remote operator/Hive membership, stores a bounded node
+credential, and signs a membership receipt. An identical authenticated retry
+returns the same durable receipt and credential; altered or expired replay
+fails closed. The response is `no-store`, and independent-database persistence
+and HTTP tests prove only one membership is created.
+
+Later slices must prove invited-Hive receipt application and credential
+activation, protocol negotiation beyond version 1, and the complete outbound
+HTTPS call between two independently running processes.

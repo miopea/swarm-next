@@ -33,8 +33,8 @@ use swarm_application::{
 };
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinReadiness,
-    ControlRoomEventKind, DecisionRequestId, HiveConnectionCard, HiveId, HiveIdentity,
-    JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
+    ControlRoomEventKind, DecisionRequestId, FederationJoinSubmission, HiveConnectionCard, HiveId,
+    HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
     LocalApiaryContext, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
     PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
     QueenAutonomyPolicy, SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
@@ -1544,6 +1544,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/apiary/join-invitations/{invitation_id}/policy-acceptance",
             post(accept_imported_apiary_policy),
         )
+        .route("/api/v1/federation/join", post(consume_federation_join))
         .route(
             "/api/v1/apiary/collapse-readiness",
             get(apiary_collapse_readiness),
@@ -1955,6 +1956,21 @@ async fn import_apiary_join_invitation(
         StatusCode::CREATED,
         [(header::CACHE_CONTROL, "no-store")],
         Json(invitation),
+    )
+        .into_response())
+}
+
+async fn consume_federation_join(
+    State(state): State<Arc<AppState>>,
+    Json(submission): Json<FederationJoinSubmission>,
+) -> Result<Response, ApiError> {
+    let acceptance = apiary_service(&state)?
+        .consume_remote_join_submission(&submission, unix_timestamp())
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(acceptance),
     )
         .into_response())
 }
@@ -5371,6 +5387,102 @@ mod tests {
         );
 
         assert_imported_policy_acceptance(app, bundle.invitation.payload.invitation_id).await;
+    }
+
+    #[tokio::test]
+    async fn signed_one_time_federation_join_is_publicly_consumed_once_without_browser_auth() {
+        let now = unix_timestamp();
+        let invited = TaskStore::in_memory().unwrap();
+        let invited_identity = invited.local_hive_identity().unwrap();
+        let invited_card = invited.issue_hive_connection_card(now, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        keeper.pin_hive_candidate(&invited_card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                invited_identity.hive.id,
+                "https://keeper.example.test/swarm",
+                now,
+                3_600,
+            )
+            .unwrap();
+        let imported = invited
+            .import_apiary_invitation_bundle(&bundle, now)
+            .unwrap();
+        invited
+            .accept_federation_join_policy(imported.invitation_id, 1, now)
+            .unwrap();
+        let submission = invited
+            .prepare_federation_join_submission(
+                imported.invitation_id,
+                &swarm_domain::FederationJoinReadiness {
+                    jira_connection: JiraConnectionState::Ready,
+                    projects: Vec::new(),
+                    blockers: Vec::new(),
+                },
+                now,
+            )
+            .unwrap();
+        let body = serde_json::to_string(&submission).unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper.clone()),
+        );
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/federation/join")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::CREATED);
+        assert_eq!(first.headers()[header::CACHE_CONTROL], "no-store");
+        let first_json = response_json(first).await;
+        assert_eq!(
+            first_json["receipt"]["payload"]["member_hive_id"],
+            invited_identity.hive.id.to_string()
+        );
+        assert!(first_json["node_credential"].as_str().unwrap().len() >= 43);
+
+        let retry = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/federation/join")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::CREATED);
+        assert_eq!(response_json(retry).await, first_json);
+        let apiary_id = keeper
+            .local_hive_identity()
+            .unwrap()
+            .hive
+            .apiary_id
+            .unwrap();
+        assert_eq!(
+            keeper
+                .apiary_collapse_readiness(apiary_id)
+                .unwrap()
+                .active_hive_count,
+            2
+        );
     }
 
     async fn assert_imported_policy_acceptance(app: Router, invitation_id: ApiaryInvitationId) {

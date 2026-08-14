@@ -42,6 +42,7 @@ domain_id!(HiveId);
 domain_id!(ApiaryId);
 domain_id!(ApiaryInvitationId);
 domain_id!(FederationNodeId);
+domain_id!(FederationMembershipReceiptId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
@@ -240,6 +241,7 @@ pub struct HiveIdentity {
 
 pub const FEDERATION_CONNECTION_CARD_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_INVITATION_SCHEMA_VERSION: u16 = 1;
+pub const FEDERATION_MEMBERSHIP_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_PROTOCOL_VERSION: u16 = 1;
 
 /// Public, signed identity material that one Hive can deliberately share with
@@ -332,6 +334,70 @@ pub struct ApiaryInvitationBundle {
     pub invitation: ApiaryInvitationEnvelope,
     pub promoted_projects: Vec<FederationProjectManifestEntry>,
     pub one_time_secret: String,
+}
+
+/// A signed assertion from the invited Hive that its private preflight passed
+/// for the exact invitation, policy revision, and promoted-project catalog.
+/// The bearer secret is transported separately and is never part of the
+/// signed payload or an ordinary response.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationJoinSubmissionPayload {
+    pub schema_version: u16,
+    pub protocol_version: u16,
+    pub invitation_id: ApiaryInvitationId,
+    pub apiary_id: ApiaryId,
+    pub required_policy_revision: u64,
+    pub promoted_project_catalog_digest: String,
+    pub invited_node_id: FederationNodeId,
+    pub invited_hive_id: HiveId,
+    pub invited_operator_id: OperatorId,
+    pub submitted_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationJoinSubmission {
+    pub payload: FederationJoinSubmissionPayload,
+    pub signature: String,
+    pub one_time_secret: String,
+}
+
+/// Keeper-signed proof that one invitation was consumed and one remote Hive
+/// became a member. The separately returned node credential is bounded and
+/// adapter-private; ordinary membership reads expose only this receipt.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationMembershipReceiptPayload {
+    pub schema_version: u16,
+    pub protocol_version: u16,
+    pub receipt_id: FederationMembershipReceiptId,
+    pub invitation_id: ApiaryInvitationId,
+    pub apiary_id: ApiaryId,
+    pub apiary_name: String,
+    pub shared_work_backend: SharedWorkBackend,
+    pub policy_revision: u64,
+    pub promoted_project_catalog_digest: String,
+    pub keeper_node_id: FederationNodeId,
+    pub keeper_hive_id: HiveId,
+    pub keeper_operator_id: OperatorId,
+    pub member_node_id: FederationNodeId,
+    pub member_hive_id: HiveId,
+    pub member_operator_id: OperatorId,
+    pub joined_at: i64,
+    pub credential_expires_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationMembershipReceipt {
+    pub payload: FederationMembershipReceiptPayload,
+    pub signature: String,
+}
+
+/// Sensitive handshake response. The credential is returned only to the
+/// authenticated invited node and must never enter browser diagnostics or
+/// general activity streams.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationJoinAcceptance {
+    pub receipt: FederationMembershipReceipt,
+    pub node_credential: String,
 }
 
 /// Durable invited-Hive view of a signed invitation. Sensitive bearer material
@@ -458,7 +524,11 @@ impl FederationJoinReadiness {
         if projects.iter().any(|project| !project.is_ready()) {
             blockers.push(ApiaryJoinBlocker::ProjectAccessNotReady);
         }
-        if invitation.state != FederationJoinInvitationState::PolicyAccepted {
+        if !matches!(
+            invitation.state,
+            FederationJoinInvitationState::PolicyAccepted
+                | FederationJoinInvitationState::Submitted
+        ) {
             blockers.push(ApiaryJoinBlocker::PolicyNotAccepted);
         }
         Self {
@@ -2189,7 +2259,7 @@ mod tests {
             &hive,
             &FederationJoinInvitation {
                 state: FederationJoinInvitationState::PolicyAccepted,
-                ..invitation
+                ..invitation.clone()
             },
             JiraConnectionState::Ready,
             vec![FederationProjectReadiness {
@@ -2201,6 +2271,17 @@ mod tests {
             50,
         );
         assert!(ready.can_submit());
+        let retry_ready = FederationJoinReadiness::evaluate(
+            &hive,
+            &FederationJoinInvitation {
+                state: FederationJoinInvitationState::Submitted,
+                ..invitation
+            },
+            JiraConnectionState::Ready,
+            ready.projects,
+            50,
+        );
+        assert!(retry_ready.can_submit());
     }
 
     #[test]

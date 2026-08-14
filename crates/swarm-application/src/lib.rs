@@ -2,11 +2,11 @@ use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks,
     ApiaryJoinReadiness, DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency,
-    FederationJoinInvitation, FederationJoinReadiness, HiveConnectionCard, HiveId,
-    JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
-    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
-    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
-    WorkerSessionId,
+    FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
+    FederationJoinSubmission, HiveConnectionCard, HiveId, JiraConnectionState,
+    JiraProjectBindingId, LocalApiaryContext, OperatorPresence, PresenceDeviceClass,
+    PresenceDeviceId, PresenceMode, PresenceObservationState, SharedWorkBackend, Task, TaskId,
+    TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -216,6 +216,48 @@ impl ApiaryService {
             .ok_or(ApplicationError::Store(
                 TaskStoreError::ApiaryInvitationNotFound,
             ))
+    }
+
+    /// Re-derives private local readiness and creates one durable signed
+    /// submission for transport to the pinned Keeper. Exact retries return the
+    /// same submission; no remote state is changed by this command.
+    ///
+    /// # Errors
+    /// Rejects incomplete Jira/project readiness, stale policy or invitation
+    /// state, expiry, membership drift, and persistence failures.
+    pub fn prepare_imported_join_submission(
+        &self,
+        invitation_id: ApiaryInvitationId,
+        jira_connection: JiraConnectionState,
+        now: i64,
+    ) -> Result<FederationJoinSubmission, ApplicationError> {
+        let overview = self
+            .imported_invitations(jira_connection, now)?
+            .into_iter()
+            .find(|overview| overview.invitation.invitation_id == invitation_id)
+            .ok_or(ApplicationError::Store(
+                TaskStoreError::ApiaryInvitationNotFound,
+            ))?;
+        self.store
+            .prepare_federation_join_submission(invitation_id, &overview.readiness, now)
+            .map_err(Into::into)
+    }
+
+    /// Consumes one independently signed Hive submission on the Keeper and
+    /// returns the durable signed membership receipt plus bounded credential.
+    /// The one-time secret and node credential remain adapter-private.
+    ///
+    /// # Errors
+    /// Rejects invalid signatures/secrets, stale policy/catalog identity,
+    /// expiry, membership conflicts, and altered replays.
+    pub fn consume_remote_join_submission(
+        &self,
+        submission: &FederationJoinSubmission,
+        now: i64,
+    ) -> Result<FederationJoinAcceptance, ApplicationError> {
+        self.store
+            .consume_federation_join_submission(submission, now)
+            .map_err(Into::into)
     }
 
     /// Creates one Apiary around the current personal Hive. The local operator

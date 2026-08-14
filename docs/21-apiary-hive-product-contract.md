@@ -91,8 +91,14 @@ Jira connection state and, for every signed project identity, whether this Hive
 has a matching access-verified binding and completed workflow map. Local Jira
 matching uses immutable project ID rather than mutable key or display name.
 Only policy acknowledgement plus ready Jira and project evidence produces
-`Ready to contact Keeper`. Readiness submission, atomic remote consumption,
-and a signed membership receipt remain later handshake slices.
+`Ready to contact Keeper`. A locally derived ready state can now be sealed into
+one retry-stable signed submission. The Keeper's public federation endpoint
+authenticates it with both the pinned Hive signature and one-time bearer secret,
+rechecks current policy and catalog identity, then atomically creates exactly
+one remote membership and returns a Keeper-signed receipt plus bounded node
+credential. Identical lost-response retries return the same durable result;
+altered replay fails closed. Applying that receipt and credential on the
+invited Hive, plus the outbound HTTPS adapter, remain the next handshake slice.
 
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries

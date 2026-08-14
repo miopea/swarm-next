@@ -23,7 +23,8 @@ mod feedback;
 pub use federation::{
     MAX_CONNECTION_CARD_LIFETIME_SECONDS, MAX_FEDERATION_INVITATION_LIFETIME_SECONDS,
     MIN_CONNECTION_CARD_LIFETIME_SECONDS, MIN_FEDERATION_INVITATION_LIFETIME_SECONDS,
-    verify_apiary_invitation_envelope, verify_hive_connection_card,
+    verify_apiary_invitation_envelope, verify_federation_membership_receipt,
+    verify_hive_connection_card,
 };
 mod jira;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
@@ -51,7 +52,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 34;
+const CURRENT_SCHEMA_VERSION: i64 = 35;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -1267,6 +1268,14 @@ fn migrate_schema(
     if schema_version < 29 {
         apiary::migrate_apiary_lifecycle(transaction)?;
     }
+    migrate_federation_schema(transaction, schema_version)?;
+    Ok(())
+}
+
+fn migrate_federation_schema(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
     if schema_version < 30 {
         federation::migrate_federation_identity(transaction)?;
     }
@@ -1281,6 +1290,9 @@ fn migrate_schema(
     }
     if schema_version < 34 {
         federation::migrate_federation_join_invitation_projects(transaction)?;
+    }
+    if schema_version < 35 {
+        federation::migrate_federation_memberships(transaction)?;
     }
     Ok(())
 }
