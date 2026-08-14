@@ -1,7 +1,7 @@
 import type { Worker } from "../api";
+import type { TaskBoardFilter, TaskBoardSort } from "./taskBoardModel";
 
-export type TaskBoardFilter = "all" | "unassigned" | "assigned" | "active" | "jira" | "local" | "attention";
-export type TaskBoardSort = "queue" | "priority" | "status" | "updated" | "worker" | "project";
+export type { TaskBoardFilter, TaskBoardSort } from "./taskBoardModel";
 export type TaskProjectChoice = { key: string; name: string; url?: string };
 
 type Props = {

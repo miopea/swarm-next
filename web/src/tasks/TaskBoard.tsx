@@ -5,6 +5,7 @@ import BeeMascot from "../brand/BeeMascot";
 import { useReorderDrag } from "../shared/useReorderDrag";
 import JiraTaskIntake from "./JiraTaskIntake";
 import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskProjectChoice } from "./TaskBoardControls";
+import { buildTaskBoardView } from "./taskBoardModel";
 
 type Props = {
   tasks: Task[];
@@ -74,18 +75,6 @@ const priorityLabels: Record<TaskPriority, string> = {
   high: "High",
   urgent: "Urgent",
 };
-const priorityOrder: Record<TaskPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-const stateOrder: Record<TaskState, number> = { blocked: 0, review: 1, active: 2, ready: 3, draft: 4, completed: 5 };
-
-function taskComparator(sort: TaskBoardSort, workerNames: Map<string, string>, jiraProjects: Map<string, string>): (left: Task, right: Task) => number {
-  if (sort === "priority") return (left, right) => priorityOrder[left.priority] - priorityOrder[right.priority] || left.position - right.position;
-  if (sort === "status") return (left, right) => stateOrder[left.state] - stateOrder[right.state] || left.position - right.position;
-  if (sort === "updated") return (left, right) => right.updated_at - left.updated_at || left.position - right.position;
-  if (sort === "worker") return (left, right) => (workerNames.get(left.assigned_worker_id ?? "") ?? "Unassigned").localeCompare(workerNames.get(right.assigned_worker_id ?? "") ?? "Unassigned") || left.position - right.position;
-  if (sort === "project") return (left, right) => (jiraProjects.get(left.id) ?? "Local work").localeCompare(jiraProjects.get(right.id) ?? "Local work") || left.position - right.position;
-  return (left, right) => left.position - right.position;
-}
-
 const dispatchLabels = {
   queued: "Briefing waits for a quiet moment",
   dispatching: "Briefing worker",
@@ -166,30 +155,9 @@ export default function TaskBoard({
     else if (workerId && !assignableWorkers.some((worker) => worker.id === workerId)) setWorkerId(assignableWorkers[0]?.id ?? "");
   }, [assignableWorkers, workerId]);
 
-  const allOpenTasks = tasks.filter((task) => task.state !== "completed");
-  const jiraByTask = new Map(jiraTaskLinks.map((link) => [link.task_id, link]));
-  const jiraProjects = new Map(jiraTaskLinks.map((link) => [link.task_id, link.project_name]));
-  const workerNames = new Map(workers.map((candidate) => [candidate.id, candidate.name]));
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const openTasks = allOpenTasks
-    .filter((task) => {
-      const jiraLink = jiraByTask.get(task.id);
-      const matchesQuery = !normalizedQuery || [task.title, task.description, jiraLink?.issue_key, jiraLink?.project_name]
-        .some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
-      if (!matchesQuery) return false;
-      if (project !== "all" && jiraLink?.project_key !== project) return false;
-      if (worker === "unassigned" && task.assigned_worker_id) return false;
-      if (worker !== "all" && worker !== "unassigned" && task.assigned_worker_id !== worker) return false;
-      if (filter === "unassigned") return !task.assigned_worker_id;
-      if (filter === "assigned") return Boolean(task.assigned_worker_id);
-      if (filter === "active") return task.state === "active";
-      if (filter === "jira") return Boolean(jiraLink);
-      if (filter === "local") return !jiraLink;
-      if (filter === "attention") return task.state === "blocked" || task.state === "review";
-      return true;
-    })
-    .sort(taskComparator(sort, workerNames, jiraProjects));
-  const completedTasks = tasks.filter((task) => task.state === "completed");
+  const taskView = buildTaskBoardView(tasks, jiraTaskLinks, workers, { text: query, filter, sort, project, worker });
+  const { open: openTasks, completed: completedTasks, jiraByTask } = taskView;
+  const canReorder = sort === "queue" && !query.trim() && filter === "all";
   const taskReorder = useReorderDrag(openTasks.map((task) => task.id), (taskIds) => void onReorder(taskIds));
   const draggedTask = tasks.find((task) => task.id === taskReorder.draggedId);
 
@@ -306,17 +274,17 @@ export default function TaskBoard({
       </section>
 
       <details className="task-mobile-controls">
-        <summary>Find, filter, and sort <span>{openTasks.length}/{allOpenTasks.length}</span></summary>
-        <TaskBoardControls query={query} filter={filter} sort={sort} project={project} worker={worker} workers={workers} projects={projects} openCount={allOpenTasks.length} busy={busy} onQueryChange={(value) => onQueryChange?.(value)} onFilterChange={(value) => onFilterChange?.(value)} onSortChange={(value) => onSortChange?.(value)} onProjectChange={(value) => onProjectChange?.(value)} onWorkerChange={(value) => onWorkerChange?.(value)} onSync={onJiraSync} />
+        <summary>Find, filter, and sort <span>{openTasks.length}/{taskView.allOpenCount}</span></summary>
+        <TaskBoardControls query={query} filter={filter} sort={sort} project={project} worker={worker} workers={workers} projects={projects} openCount={taskView.allOpenCount} busy={busy} onQueryChange={(value) => onQueryChange?.(value)} onFilterChange={(value) => onFilterChange?.(value)} onSortChange={(value) => onSortChange?.(value)} onProjectChange={(value) => onProjectChange?.(value)} onWorkerChange={(value) => onWorkerChange?.(value)} onSync={onJiraSync} />
       </details>
 
       <section className="task-section" aria-labelledby="active-work-heading">
         <div className="section-heading">
           <div><p className="eyebrow">Queue</p><h3 id="active-work-heading">Active work</h3></div>
-          <span className="count-badge">{openTasks.length === allOpenTasks.length ? openTasks.length : `${openTasks.length}/${allOpenTasks.length}`}</span>
+          <span className="count-badge">{openTasks.length === taskView.allOpenCount ? openTasks.length : `${openTasks.length}/${taskView.allOpenCount}`}</span>
         </div>
         {openTasks.length === 0 ? (
-          <div className="empty-card"><BeeMascot className="empty-bee" expression="available" /><div><strong>{allOpenTasks.length ? "No work matches this view" : "No work queued"}</strong><span>{allOpenTasks.length ? "Adjust the task-board filters in the sidebar." : "Create a focused task when you are ready."}</span></div></div>
+          <div className="empty-card"><BeeMascot className="empty-bee" expression="available" /><div><strong>{taskView.allOpenCount ? "No work matches this view" : "No work queued"}</strong><span>{taskView.allOpenCount ? "Adjust the task-board filters in the sidebar." : "Create a focused task when you are ready."}</span></div></div>
         ) : (
           <div className="task-grid">
             {openTasks.map((task, index) => (
@@ -336,15 +304,15 @@ export default function TaskBoard({
                 onFetchJiraComments={onFetchJiraComments}
                 onAddJiraComment={onAddJiraComment}
                 onRetryJira={onRetryJira}
-                canMoveEarlier={sort === "queue" && !normalizedQuery && filter === "all" && index > 0}
-                canMoveLater={sort === "queue" && !normalizedQuery && filter === "all" && index < openTasks.length - 1}
+                canMoveEarlier={canReorder && index > 0}
+                canMoveLater={canReorder && index < openTasks.length - 1}
                 onMoveEarlier={() => moveTaskAt(index, -1)}
                 onMoveLater={() => moveTaskAt(index, 1)}
                 onDropBefore={() => taskReorder.dropBefore(task.id)}
                 dropTarget={taskReorder.dropTargetId === task.id && taskReorder.draggedId !== task.id}
                 onDragTarget={() => taskReorder.target(task.id)}
                 onDragLeave={() => taskReorder.leave(task.id)}
-                onDragStart={sort === "queue" && !normalizedQuery && filter === "all" ? taskReorder.start : () => undefined}
+                onDragStart={canReorder ? taskReorder.start : () => undefined}
                 onDragEnd={taskReorder.end}
               />
             ))}
