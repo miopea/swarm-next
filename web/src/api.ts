@@ -161,6 +161,23 @@ export type ApiaryInvitationBundle = {
   };
   one_time_secret: string;
 };
+export type FederationJoinInvitation = {
+  invitation_id: string;
+  apiary_id: string;
+  apiary_name: string;
+  shared_work_backend: "jira" | "native";
+  required_policy_revision: number;
+  promoted_project_catalog_digest: string;
+  keeper_node_id: string;
+  keeper_hive_id: string;
+  keeper_hive_name: string;
+  keeper_operator_id: string;
+  keeper_operator_display_name: string;
+  keeper_endpoint: string;
+  state: "keeper_pinned" | "policy_accepted" | "submitted" | "consumed" | "revoked" | "expired";
+  imported_at: number;
+  expires_at: number;
+};
 export type HiveIdentity = {
   operator: { id: string; display_name: string };
   hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
@@ -500,6 +517,25 @@ export async function inviteApiaryHiveCandidate(
     { method: "POST" },
   );
   return response.json() as Promise<ApiaryInvitationBundle>;
+}
+
+export async function fetchFederationJoinInvitations(
+  operatorToken: string,
+): Promise<FederationJoinInvitation[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/join-invitations");
+  return response.json() as Promise<FederationJoinInvitation[]>;
+}
+
+export async function importFederationJoinInvitation(
+  operatorToken: string,
+  bundle: ApiaryInvitationBundle,
+): Promise<FederationJoinInvitation> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/join-invitations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(bundle),
+  });
+  return response.json() as Promise<FederationJoinInvitation>;
 }
 
 export async function fetchApiaryCollapseReadiness(

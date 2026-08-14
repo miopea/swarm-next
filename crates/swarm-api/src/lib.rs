@@ -32,10 +32,10 @@ use swarm_application::{
     TaskService,
 };
 use swarm_domain::{
-    Apiary, ApiaryInvitation, ApiaryInvitationId, ApiaryJoinReadiness, ControlRoomEventKind,
-    DecisionRequestId, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
-    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext,
-    NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinReadiness,
+    ControlRoomEventKind, DecisionRequestId, HiveConnectionCard, HiveId, HiveIdentity,
+    JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
+    LocalApiaryContext, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
     PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
     QueenAutonomyPolicy, SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
     WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
@@ -1521,6 +1521,10 @@ fn api_router(state: AppState) -> Router {
             post(invite_apiary_hive_candidate),
         )
         .route(
+            "/api/v1/apiary/join-invitations",
+            get(apiary_join_invitations).post(import_apiary_join_invitation),
+        )
+        .route(
             "/api/v1/apiary/collapse-readiness",
             get(apiary_collapse_readiness),
         )
@@ -1872,6 +1876,34 @@ async fn invite_apiary_hive_candidate(
         HeaderValue::from_static("attachment; filename=swarm-next-apiary-invitation.json"),
     );
     Ok((StatusCode::CREATED, response_headers, Json(bundle)).into_response())
+}
+
+async fn apiary_join_invitations(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let invitations = apiary_service(&state)?
+        .imported_invitations(unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(invitations)).into_response())
+}
+
+async fn import_apiary_join_invitation(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(bundle): Json<ApiaryInvitationBundle>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let invitation = apiary_service(&state)?
+        .import_invitation(&bundle, unix_timestamp())
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(invitation),
+    )
+        .into_response())
 }
 
 async fn create_apiary(
@@ -5193,6 +5225,84 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn exact_invited_hive_privately_pins_keeper_without_joining() {
+        let now = unix_timestamp();
+        let invited = TaskStore::in_memory().unwrap();
+        let invited_card = invited.issue_hive_connection_card(now, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        let candidate = keeper.pin_hive_candidate(&invited_card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                candidate.hive_id,
+                "https://keeper.example.test/swarm",
+                now,
+                3_600,
+            )
+            .unwrap();
+        let bundle_json = serde_json::to_string(&bundle).unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(invited.clone()),
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/join-invitations")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(bundle_json.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let imported = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/join-invitations")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(bundle_json))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(imported.status(), StatusCode::CREATED);
+        assert_eq!(imported.headers()[header::CACHE_CONTROL], "no-store");
+        let imported_json = response_json(imported).await;
+        let serialized = imported_json.to_string();
+        assert_eq!(imported_json["state"], "keeper_pinned");
+        assert!(!serialized.contains(&bundle.one_time_secret));
+        assert!(!serialized.contains(&bundle.keeper_connection_card.payload.public_key));
+        assert!(
+            invited
+                .local_hive_identity()
+                .unwrap()
+                .hive
+                .apiary_id
+                .is_none()
+        );
+
+        let listed = authorized_get(app, "/api/v1/apiary/join-invitations").await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        assert_eq!(listed.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(listed).await.as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]

@@ -2,10 +2,10 @@ use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks,
     ApiaryJoinReadiness, DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency,
-    HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
-    OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
-    PresenceObservationState, SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId,
-    WorkerProfile, WorkerRole, WorkerSessionId,
+    FederationJoinInvitation, HiveConnectionCard, HiveId, JiraConnectionState,
+    JiraProjectBindingId, LocalApiaryContext, OperatorPresence, PresenceDeviceClass,
+    PresenceDeviceId, PresenceMode, PresenceObservationState, SharedWorkBackend, Task, TaskId,
+    TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -134,6 +134,37 @@ impl ApiaryService {
     ) -> Result<ApiaryInvitationBundle, ApplicationError> {
         self.store
             .issue_apiary_invitation_bundle(invited_hive_id, keeper_endpoint, now, 24 * 60 * 60)
+            .map_err(Into::into)
+    }
+
+    /// Verifies and durably imports a signed invitation for this exact personal
+    /// Hive. This pins Keeper identity only; policy and membership remain
+    /// separate explicit steps.
+    ///
+    /// # Errors
+    /// Rejects invalid, expired, misaddressed, duplicate, or unsupported
+    /// invitations and non-personal Hives.
+    pub fn import_invitation(
+        &self,
+        bundle: &ApiaryInvitationBundle,
+        now: i64,
+    ) -> Result<FederationJoinInvitation, ApplicationError> {
+        self.store
+            .import_apiary_invitation_bundle(bundle, now)
+            .map_err(Into::into)
+    }
+
+    /// Lists current imported invitations without exposing the one-time secret,
+    /// pinned public key, or complete signed envelope.
+    ///
+    /// # Errors
+    /// Returns a persistence error when private invitation state is unavailable.
+    pub fn imported_invitations(
+        &self,
+        now: i64,
+    ) -> Result<Vec<FederationJoinInvitation>, ApplicationError> {
+        self.store
+            .federation_join_invitations(now)
             .map_err(Into::into)
     }
 

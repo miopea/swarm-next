@@ -6,15 +6,19 @@ import {
   fetchApiaryCollapseReadiness,
   fetchApiaryHiveCandidates,
   fetchApiaryJiraProjects,
+  fetchFederationJoinInvitations,
   fetchHive,
   fetchHiveConnectionCard,
   fetchJiraBindings,
+  importFederationJoinInvitation,
   inviteApiaryHiveCandidate,
   pinApiaryHiveCandidate,
   promoteApiaryJiraProject,
   type ApiaryCollapseReadiness,
   type ApiaryHiveCandidate,
+  type ApiaryInvitationBundle,
   type ApiaryJiraProject,
+  type FederationJoinInvitation,
   type HiveConnectionCard,
   type HiveIdentity,
   type JiraProjectBinding,
@@ -37,6 +41,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [readiness, setReadiness] = useState<ApiaryCollapseReadiness>();
   const [promotedProjects, setPromotedProjects] = useState<ApiaryJiraProject[]>([]);
   const [hiveCandidates, setHiveCandidates] = useState<ApiaryHiveCandidate[]>([]);
+  const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitation[]>([]);
+  const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
   const [jiraBindings, setJiraBindings] = useState<JiraProjectBinding[]>([]);
   const [projectLoadError, setProjectLoadError] = useState(false);
   const [candidateLoadError, setCandidateLoadError] = useState(false);
@@ -56,6 +62,19 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       .catch(() => { if (!cancelled) setReadiness(undefined); });
     return () => { cancelled = true; };
   }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id]);
+
+  useEffect(() => {
+    if (!personal) {
+      setJoinInvitations([]);
+      setInvitationPreview(undefined);
+      return;
+    }
+    let cancelled = false;
+    void fetchFederationJoinInvitations(operatorToken)
+      .then((value) => { if (!cancelled) setJoinInvitations(value); })
+      .catch(() => { if (!cancelled) setJoinInvitations([]); });
+    return () => { cancelled = true; };
+  }, [personal, operatorToken, hiveIdentity?.hive.apiary_id]);
 
   useEffect(() => {
     if (!keeper) {
@@ -197,6 +216,40 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
+  async function previewJoinInvitation(file: File | undefined) {
+    if (!file) return;
+    setError("");
+    setMessage("");
+    try {
+      if (file.size > 128 * 1024) throw new Error("That invitation file is unexpectedly large.");
+      const bundle = JSON.parse(await file.text()) as ApiaryInvitationBundle;
+      if (!bundle?.keeper_connection_card?.payload || !bundle?.invitation?.payload || !bundle.one_time_secret) {
+        throw new Error("That file is not a Swarm Apiary invitation.");
+      }
+      setInvitationPreview(bundle);
+    } catch (cause) {
+      setInvitationPreview(undefined);
+      setError(cause instanceof Error ? cause.message : "That Apiary invitation could not be read.");
+    }
+  }
+
+  async function trustKeeperAndImport() {
+    if (!invitationPreview) return;
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      const imported = await importFederationJoinInvitation(operatorToken, invitationPreview);
+      setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
+      setInvitationPreview(undefined);
+      setMessage(`${imported.keeper_hive_name} is pinned as Keeper for ${imported.apiary_name}. You have not joined or accepted its policy yet.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "That Apiary invitation could not be verified.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <section id="settings-apiary" className="settings-card apiary-settings" aria-labelledby="apiary-heading">
       <div><p className="eyebrow">Collaboration</p><h3 id="apiary-heading">Your Apiary</h3></div>
@@ -206,6 +259,48 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
           <div className="apiary-connection-card">
             <span><strong>Share this Hive with a Keeper</strong><small>Download a signed, short-lived identity card. It contains no repositories, tasks, terminals, Jira access, or credentials.</small></span>
             <button className="secondary-button" disabled={busy || working} onClick={() => void downloadConnectionCard()}>Download connection card</button>
+          </div>
+          <div className="apiary-join-card">
+            <div>
+              <strong>Join an Apiary</strong>
+              <small>Choose the invitation returned by a Keeper. Swarm shows the exact identity and policy revision before anything is pinned.</small>
+            </div>
+            <label className="apiary-card-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void previewJoinInvitation(event.dataTransfer.files[0]); }}>
+              <input
+                aria-label="Choose Apiary invitation"
+                type="file"
+                accept="application/json,.json"
+                disabled={busy || working}
+                onChange={(event) => { void previewJoinInvitation(event.target.files?.[0]); event.currentTarget.value = ""; }}
+              />
+              <span>Choose invitation</span>
+              <small>or drop it here</small>
+            </label>
+            {invitationPreview ? (
+              <div className="apiary-invitation-preview" role="group" aria-label="Review Apiary invitation">
+                <div><span>Apiary</span><strong>{invitationPreview.invitation.payload.apiary_name}</strong></div>
+                <div><span>Keeper Hive</span><strong>{invitationPreview.keeper_connection_card.payload.hive_name}</strong></div>
+                <div><span>Keeper operator</span><strong>{invitationPreview.keeper_connection_card.payload.operator_display_name}</strong></div>
+                <div><span>Shared work</span><strong>{invitationPreview.invitation.payload.shared_work_backend === "jira" ? "Jira-backed" : "Native Swarm"}</strong></div>
+                <div><span>Policy revision</span><strong>{invitationPreview.invitation.payload.required_policy_revision}</strong></div>
+                <div><span>Expires</span><strong>{new Date(invitationPreview.invitation.payload.expires_at * 1000).toLocaleString()}</strong></div>
+                <p>Trusting pins this exact Keeper key and saves the one-time invitation privately. It does not join the Apiary, accept policy, share work, or grant terminal access.</p>
+                <div className="settings-actions">
+                  <button className="secondary-button" disabled={working} onClick={() => setInvitationPreview(undefined)}>Choose another</button>
+                  <button className="primary-action" disabled={working} onClick={() => void trustKeeperAndImport()}>{working ? "Verifying…" : "Trust Keeper and save invitation"}</button>
+                </div>
+              </div>
+            ) : null}
+            {joinInvitations.length > 0 ? (
+              <ul className="apiary-join-list" aria-label="Saved Apiary invitations">
+                {joinInvitations.map((invitation) => (
+                  <li key={invitation.invitation_id}>
+                    <span><strong>{invitation.apiary_name}</strong><small>{invitation.keeper_hive_name} · {invitation.keeper_operator_display_name}</small></span>
+                    <span className="readiness-ready">Keeper pinned · policy not accepted</span>
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="empty-copy">No Apiary invitation is saved on this Hive.</p>}
           </div>
           <label className="field-stack" htmlFor="apiary-name">
             <span>Apiary name</span>

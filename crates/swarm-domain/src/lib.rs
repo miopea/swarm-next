@@ -323,6 +323,79 @@ pub struct ApiaryInvitationBundle {
     pub one_time_secret: String,
 }
 
+/// Durable invited-Hive view of a signed invitation. Sensitive bearer material
+/// and the complete signed envelope remain private to persistence and are never
+/// returned through ordinary application or browser reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationJoinInvitationState {
+    KeeperPinned,
+    PolicyAccepted,
+    Submitted,
+    Consumed,
+    Revoked,
+    Expired,
+}
+
+impl fmt::Display for FederationJoinInvitationState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::KeeperPinned => "keeper_pinned",
+            Self::PolicyAccepted => "policy_accepted",
+            Self::Submitted => "submitted",
+            Self::Consumed => "consumed",
+            Self::Revoked => "revoked",
+            Self::Expired => "expired",
+        })
+    }
+}
+
+impl FromStr for FederationJoinInvitationState {
+    type Err = ParseFederationJoinInvitationStateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "keeper_pinned" => Ok(Self::KeeperPinned),
+            "policy_accepted" => Ok(Self::PolicyAccepted),
+            "submitted" => Ok(Self::Submitted),
+            "consumed" => Ok(Self::Consumed),
+            "revoked" => Ok(Self::Revoked),
+            "expired" => Ok(Self::Expired),
+            _ => Err(ParseFederationJoinInvitationStateError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseFederationJoinInvitationStateError;
+
+impl fmt::Display for ParseFederationJoinInvitationStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("invalid federation join invitation state")
+    }
+}
+
+impl std::error::Error for ParseFederationJoinInvitationStateError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationJoinInvitation {
+    pub invitation_id: ApiaryInvitationId,
+    pub apiary_id: ApiaryId,
+    pub apiary_name: String,
+    pub shared_work_backend: SharedWorkBackend,
+    pub required_policy_revision: u64,
+    pub promoted_project_catalog_digest: String,
+    pub keeper_node_id: FederationNodeId,
+    pub keeper_hive_id: HiveId,
+    pub keeper_hive_name: String,
+    pub keeper_operator_id: OperatorId,
+    pub keeper_operator_display_name: String,
+    pub keeper_endpoint: String,
+    pub state: FederationJoinInvitationState,
+    pub imported_at: i64,
+    pub expires_at: i64,
+}
+
 impl Hive {
     #[must_use]
     pub fn personal(name: impl Into<String>, operator_id: OperatorId) -> Self {

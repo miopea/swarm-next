@@ -95,6 +95,15 @@ only a domain-separated SHA-256 digest is retained. Duplicate pending
 invitations, insecure remote endpoints, tampering, expiry, wrong verification
 keys, and Apiary collapse with a pending distributed invitation all fail closed.
 
-Later slices must prove invited-Hive Keeper-key pinning, one-time invitation
-consumption, replay rejection, protocol negotiation, and a complete join
-handshake between two independent processes.
+The invited-Hive import slice now verifies the independently signed Keeper card
+and invitation envelope, requires every Keeper identity field to match, requires
+the invitation target to equal the local node/Hive/operator tuple, rejects
+unsupported Native invitations and insecure or expired material, and stores the
+decoded bearer secret only in private Hive persistence. The browser first shows
+the exact Keeper, Apiary, backend, policy revision, and expiry; a separate
+authenticated command explicitly pins the key. Its response and later reads
+exclude the secret, public key, and complete envelope. Membership and policy
+acceptance remain unchanged.
+
+Later slices must prove one-time remote consumption, replay rejection, protocol
+negotiation, and a complete join handshake between two independent processes.

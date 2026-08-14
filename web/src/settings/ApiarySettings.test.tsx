@@ -245,6 +245,69 @@ test("downloads one invitation secret for a pinned Hive and then shows it pendin
   expect(revokeObjectUrl).toHaveBeenCalledWith("blob:invitation");
 });
 
+test("reviews an invitation before explicitly pinning its exact Keeper", async () => {
+  const bundle = {
+    keeper_connection_card: {
+      payload: {
+        schema_version: 1, protocol_version: 1, node_id: "keeper-node", hive_id: "keeper-hive",
+        hive_name: "Rose Hive", operator_id: "keeper-operator", operator_display_name: "Rosa",
+        public_key: "public", issued_at: 10, expires_at: 86_410,
+      },
+      signature: "keeper-card-signature",
+    },
+    invitation: {
+      payload: {
+        schema_version: 1, protocol_version: 1, invitation_id: "invite-1", apiary_id: "apiary-1",
+        apiary_name: "Wildflower Garden", shared_work_backend: "jira" as const,
+        required_policy_revision: 3, promoted_project_catalog_digest: "digest",
+        keeper_node_id: "keeper-node", keeper_hive_id: "keeper-hive",
+        keeper_operator_id: "keeper-operator", invited_node_id: "node-1", invited_hive_id: "hive-1",
+        invited_operator_id: "operator-1", keeper_endpoint: "https://keeper.example.test/swarm",
+        issued_at: 10, expires_at: 86_410, nonce: "nonce",
+      },
+      signature: "invitation-signature",
+    },
+    one_time_secret: "private-secret",
+  };
+  const imported = {
+    invitation_id: "invite-1", apiary_id: "apiary-1", apiary_name: "Wildflower Garden",
+    shared_work_backend: "jira", required_policy_revision: 3,
+    promoted_project_catalog_digest: "digest", keeper_node_id: "keeper-node",
+    keeper_hive_id: "keeper-hive", keeper_hive_name: "Rose Hive",
+    keeper_operator_id: "keeper-operator", keeper_operator_display_name: "Rosa",
+    keeper_endpoint: "https://keeper.example.test/swarm", state: "keeper_pinned",
+    imported_at: 20, expires_at: 86_410,
+  };
+  let saved = false;
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/join-invitations" && init?.method === "POST") {
+      expect(JSON.parse(String(init.body))).toEqual(bundle);
+      saved = true;
+      return ok(imported, 201);
+    }
+    if (url === "/api/v1/apiary/join-invitations") return ok(saved ? [imported] : []);
+    throw new Error(`unexpected request ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+  const file = { size: 1024, text: vi.fn(async () => JSON.stringify(bundle)) } as unknown as File;
+  fireEvent.change(screen.getByLabelText("Choose Apiary invitation"), { target: { files: [file] } });
+
+  const review = await screen.findByRole("group", { name: "Review Apiary invitation" });
+  expect(review).toHaveTextContent("Wildflower Garden");
+  expect(review).toHaveTextContent("Rose Hive");
+  expect(review).toHaveTextContent("Rosa");
+  expect(review).toHaveTextContent("Policy revision3");
+  expect(saved).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Trust Keeper and save invitation" }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent("You have not joined or accepted its policy yet");
+  expect(screen.getByRole("list", { name: "Saved Apiary invitations" })).toHaveTextContent("Keeper pinned · policy not accepted");
+  expect(saved).toBe(true);
+});
+
 function personalIdentity(): HiveIdentity {
   return {
     operator: { id: "operator-1", display_name: "Bea" },

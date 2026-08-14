@@ -73,9 +73,16 @@ operator explicitly chooses a pinned candidate and downloads one signed,
 and endpoint facts plus a bearer secret shown only once; Keeper storage retains
 only its digest. A pending bundle is visible beside that Hive, blocks duplicate
 issuance, and blocks collapsing the Apiary. Downloading the bundle still grants
-no membership or execution authority. Import, policy acceptance, readiness
-submission, atomic consumption, and a signed membership receipt remain later
-handshake slices.
+no membership or execution authority. On the exact invited personal Hive, the
+operator can now review the Apiary, Keeper Hive/operator, backend, policy
+revision, and expiry before explicitly pinning the Keeper key and saving the
+invitation. Both signatures, every Keeper and invited identity field, expiry,
+HTTPS endpoint, supported backend, and the 256-bit secret are revalidated by the
+private application command. The secret and complete envelope remain private to
+the Hive database; browser reads expose only a sanitized pending-join summary.
+Import does not join, accept policy, share work, or grant terminal access.
+Policy acceptance, readiness submission, atomic remote consumption, and a
+signed membership receipt remain later handshake slices.
 
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
