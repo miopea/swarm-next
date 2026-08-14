@@ -15,6 +15,7 @@ import {
   importFederationJoinInvitation,
   inviteApiaryHiveCandidate,
   pinApiaryHiveCandidate,
+  prepareFederationJoin,
   promoteApiaryJiraProject,
   type ApiaryCollapseReadiness,
   type ApiaryHiveCandidate,
@@ -285,6 +286,21 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
+  async function prepareJoinRequest(invitation: FederationJoinInvitationOverview) {
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      await prepareFederationJoin(operatorToken, invitation.invitation_id);
+      setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
+      setMessage(`The signed join request for ${invitation.apiary_name} is prepared locally. Nothing has been sent to the Keeper yet.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The join request could not be prepared.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <section id="settings-apiary" className="settings-card apiary-settings" aria-labelledby="apiary-heading">
       <div><p className="eyebrow">Collaboration</p><h3 id="apiary-heading">Your Apiary</h3></div>
@@ -355,9 +371,15 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                       </span>
                       {invitation.readiness_compatibility_fallback ? (
                         <button className="secondary-button" disabled>Waiting for runtime</button>
+                      ) : invitation.state === "submitted" ? (
+                        <span className="readiness-ready">Join request prepared</span>
                       ) : invitation.state === "keeper_pinned" ? (
                         <button className="secondary-button" disabled={working} onClick={() => void acceptImportedPolicy(invitation)}>
                           Acknowledge revision {invitation.required_policy_revision}
+                        </button>
+                      ) : invitation.readiness.blockers.length === 0 ? (
+                        <button className="primary-action" disabled={working} onClick={() => void prepareJoinRequest(invitation)}>
+                          {working ? "Preparing…" : "Prepare join request"}
                         </button>
                       ) : <span className="readiness-ready">Acknowledged</span>}
                     </div>
@@ -384,7 +406,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                     {invitation.readiness.jira_connection !== "ready" ? (
                       <p className="readiness-blocked">Connect Jira on this Hive before it can join.</p>
                     ) : null}
-                    <small>Nothing is sent to the Keeper and no membership is granted at this step.</small>
+                    <small>{invitation.state === "submitted" ? "The signed request is durable and retry-stable. Delivery to the Keeper is not enabled yet." : "Nothing is sent to the Keeper and no membership is granted at this step."}</small>
                   </li>
                 ))}
               </ul>

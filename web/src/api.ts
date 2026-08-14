@@ -589,6 +589,18 @@ export async function fetchFederationJoinInvitations(
   });
 }
 
+export async function prepareFederationJoin(
+  operatorToken: string,
+  invitationId: string,
+): Promise<FederationJoinInvitationOverview> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/join-invitations/${encodeURIComponent(invitationId)}/submission`,
+    { method: "POST" },
+  );
+  return response.json() as Promise<FederationJoinInvitationOverview>;
+}
+
 export async function acceptFederationJoinPolicy(
   operatorToken: string,
   invitationId: string,

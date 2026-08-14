@@ -365,6 +365,39 @@ test("reviews an invitation before explicitly pinning its exact Keeper", async (
   expect(policyAccepted).toBe(true);
 });
 
+test("prepares a ready join durably without claiming it was delivered", async () => {
+  let prepared = false;
+  const overview = () => ({
+    invitation_id: "invite-1", apiary_id: "apiary-1", apiary_name: "Wildflower Garden",
+    shared_work_backend: "jira", required_policy_revision: 3,
+    promoted_project_catalog_digest: "digest", promoted_projects: [],
+    keeper_node_id: "keeper-node", keeper_hive_id: "keeper-hive", keeper_hive_name: "Rose Hive",
+    keeper_operator_id: "keeper-operator", keeper_operator_display_name: "Rosa",
+    keeper_endpoint: "https://keeper.example.test/swarm",
+    state: prepared ? "submitted" : "policy_accepted",
+    imported_at: 20, expires_at: 86_410,
+    readiness: { jira_connection: "ready", projects: [], blockers: [] },
+  });
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/join-invitations/invite-1/submission") {
+      expect(init?.method).toBe("POST");
+      prepared = true;
+      return ok(overview(), 202);
+    }
+    if (url === "/api/v1/apiary/join-invitations") return ok([overview()]);
+    throw new Error(`unexpected request ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Prepare join request" }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent("prepared locally. Nothing has been sent");
+  const invitations = screen.getByRole("list", { name: "Saved Apiary invitations" });
+  expect(invitations).toHaveTextContent("Join request prepared");
+  expect(invitations).toHaveTextContent("Delivery to the Keeper is not enabled yet");
+});
+
 function personalIdentity(): HiveIdentity {
   return {
     operator: { id: "operator-1", display_name: "Bea" },

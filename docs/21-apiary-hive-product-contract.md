@@ -103,6 +103,13 @@ credential, mirrors public Apiary identity, becomes a Member, and revokes
 competing invitations. The bounded outbound HTTPS adapter remains the next
 handshake slice.
 
+The invited operator can now prepare that signed submission through a private
+browser command once the server-derived preflight is clear. The response
+returns only the refreshed invitation overview: the bearer secret, signature,
+and signed submission remain host-private. The UI labels this as prepared and
+durable, never delivered or joined. Repeating the command reuses the exact
+stored submission; no network request is made by this slice.
+
 Both Keeper and Member Hives can now read a deliberately narrow Apiary roster:
 Hive name and ID, operator name and ID, Keeper/member role, and which row is
 local. The roster describes durable registration rather than live presence and

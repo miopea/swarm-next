@@ -1545,6 +1545,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/apiary/join-invitations/{invitation_id}/policy-acceptance",
             post(accept_imported_apiary_policy),
         )
+        .route(
+            "/api/v1/apiary/join-invitations/{invitation_id}/submission",
+            post(prepare_imported_apiary_join),
+        )
         .route("/api/v1/federation/join", post(consume_federation_join))
         .route(
             "/api/v1/apiary/collapse-readiness",
@@ -1949,6 +1953,31 @@ async fn accept_imported_apiary_policy(
         )
         .map_err(application_error)?;
     Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(FederationJoinInvitationView::from(overview)),
+    )
+        .into_response())
+}
+
+async fn prepare_imported_apiary_join(
+    State(state): State<Arc<AppState>>,
+    Path(invitation_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let invitation_id = parse_apiary_invitation_id(&invitation_id)?;
+    let jira = state.jira_readiness.readiness().await;
+    apiary_service(&state)?
+        .prepare_imported_join_submission(invitation_id, jira.connection, unix_timestamp())
+        .map_err(application_error)?;
+    let overview = apiary_service(&state)?
+        .imported_invitations(jira.connection, unix_timestamp())
+        .map_err(application_error)?
+        .into_iter()
+        .find(|overview| overview.invitation.invitation_id == invitation_id)
+        .ok_or_else(|| task_store_error(&TaskStoreError::ApiaryInvitationNotFound))?;
+    Ok((
+        StatusCode::ACCEPTED,
         [(header::CACHE_CONTROL, "no-store")],
         Json(FederationJoinInvitationView::from(overview)),
     )
@@ -5441,6 +5470,101 @@ mod tests {
         );
 
         assert_imported_policy_acceptance(app, bundle.invitation.payload.invitation_id).await;
+    }
+
+    #[tokio::test]
+    async fn invited_hive_prepares_join_privately_without_exposing_transport_material() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let jira_server = axum::Router::new()
+            .route(
+                "/rest/api/3/project/search",
+                get(|| async { Json(serde_json::json!({ "isLast": true, "values": [] })) }),
+            )
+            .route(
+                "/rest/api/3/myself",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "accountId": "operator-1",
+                        "displayName": "Bea"
+                    }))
+                }),
+            );
+        tokio::spawn(async move { axum::serve(listener, jira_server).await.unwrap() });
+
+        let now = unix_timestamp();
+        let invited = TaskStore::in_memory().unwrap();
+        let invited_card = invited.issue_hive_connection_card(now, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        keeper.pin_hive_candidate(&invited_card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                invited_card.payload.hive_id,
+                "https://keeper.example.test/swarm",
+                now,
+                3_600,
+            )
+            .unwrap();
+        let imported = invited
+            .import_apiary_invitation_bundle(&bundle, now)
+            .unwrap();
+        invited
+            .accept_federation_join_policy(imported.invitation_id, 1, now)
+            .unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(invited)
+            .with_jira_configuration(
+                &format!("http://{address}"),
+                "operator@example.test",
+                "api-token",
+            )
+            .unwrap();
+        let app = router(state);
+        let uri = format!(
+            "/api/v1/apiary/join-invitations/{}/submission",
+            imported.invitation_id
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(response).await;
+        assert_eq!(json["state"], "submitted");
+        let serialized = json.to_string();
+        assert!(!serialized.contains(&bundle.one_time_secret));
+        assert!(!serialized.contains("signature"));
+        assert!(!serialized.contains("submission"));
     }
 
     #[tokio::test]
