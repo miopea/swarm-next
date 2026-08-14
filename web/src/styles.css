@@ -236,7 +236,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .count-badge { display: grid; min-width: 27px; height: 25px; place-items: center; border-radius: 8px; color: var(--muted); background: var(--good-soft); font-size: .74rem; }
 .task-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; }
 .task-grid.compact { margin-top: 12px; opacity: .8; }
-.task-card { position: relative; display: grid; grid-template-columns: minmax(270px, .9fr) minmax(250px, 1.35fr) minmax(190px, .68fr) minmax(130px, auto); grid-template-areas: "metadata title assignment actions" "metadata description assignment actions"; min-height: 106px; align-items: center; gap: 4px 14px; padding: 10px 14px; border: 1px solid var(--line); border-left: 3px solid color-mix(in srgb, var(--state, var(--line-strong)) 70%, var(--line)); border-radius: var(--radius); background: var(--panel); box-shadow: 0 4px 12px color-mix(in srgb, var(--text) 5%, transparent); }
+.task-card { position: relative; display: grid; grid-template-columns: minmax(310px, .98fr) minmax(220px, 1.18fr) minmax(190px, .68fr) minmax(130px, auto); grid-template-areas: "metadata title assignment actions" "metadata description assignment actions"; min-height: 106px; align-items: center; gap: 4px 14px; padding: 10px 14px; border: 1px solid var(--line); border-left: 3px solid color-mix(in srgb, var(--state, var(--line-strong)) 70%, var(--line)); border-radius: var(--radius); background: var(--panel); box-shadow: 0 4px 12px color-mix(in srgb, var(--text) 5%, transparent); }
 .task-card:hover { border-color: var(--line-strong); background: var(--panel-raised); }
 .task-card:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent); outline-offset: 2px; }
 .decision-card:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--accent) 24%, transparent); outline-offset: 2px; }
@@ -247,6 +247,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-metadata-section + .task-metadata-section { padding-top: 6px; border-top: 1px solid var(--line); }
 .task-section-label { color: var(--text); font-size: .66rem; letter-spacing: .08em; text-transform: uppercase; }
 .task-metadata-section dl { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; gap: 3px 8px; }
+.task-jira-origin dl { grid-template-columns: minmax(120px, .9fr) minmax(0, 1.1fr); gap: 3px 12px; }
 .task-metadata-section dl > div { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 4px; }
 .task-metadata-section dt { color: var(--quiet); font-size: .62rem; font-weight: 650; letter-spacing: .025em; }
 .task-metadata-section dd { min-width: 0; margin: 0; color: var(--muted); font-size: .72rem; white-space: nowrap; }
