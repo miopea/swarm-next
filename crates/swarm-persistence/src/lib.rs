@@ -7,11 +7,11 @@ use std::{
 
 use rusqlite::{Connection, OptionalExtension, params};
 use swarm_domain::{
-    Apiary, ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
-    HiveIdentity, LocalApiaryContext, LocalApiaryRole, Operator, OperatorId, SharedWorkBackend,
-    StewardCapability, Stewardship, StewardshipId, Task, TaskActivity, TaskActivityKind,
-    TaskActivityPage, TaskDetailsUpdate, TaskDispatchState, TaskId, TaskOutcomeDeliveryState,
-    TaskPriority, TaskState, WorkerId, WorkerSessionId,
+    Apiary, ApiaryId, ApiaryMemberSummary, ControlRoomEvent, ControlRoomEventKind,
+    ControlRoomEventPage, Hive, HiveId, HiveIdentity, LocalApiaryContext, LocalApiaryRole,
+    Operator, OperatorId, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, Task,
+    TaskActivity, TaskActivityKind, TaskActivityPage, TaskDetailsUpdate, TaskDispatchState, TaskId,
+    TaskOutcomeDeliveryState, TaskPriority, TaskState, WorkerId, WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -371,6 +371,47 @@ impl TaskStore {
                 },
             )
             .map_err(TaskStoreError::from)
+    }
+
+    /// Lists the durable public identities in the local Apiary view. Both a
+    /// Keeper and a joined member can inspect this roster; private federation
+    /// material never leaves its dedicated tables.
+    ///
+    /// # Errors
+    /// Rejects personal Hives and invalid or unavailable persistence.
+    pub fn list_apiary_members(&self) -> Result<Vec<ApiaryMemberSummary>, TaskStoreError> {
+        let LocalApiaryContext::Federated { apiary, .. } = self.local_apiary_context()? else {
+            return Err(TaskStoreError::InvalidApiary);
+        };
+        let identity = self.local_hive_identity()?;
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT h.id, h.name, o.id, o.display_name
+             FROM hives h
+             JOIN operators o ON o.id = h.operator_id
+             WHERE h.apiary_id = ?1
+             ORDER BY CASE WHEN o.id = ?2 THEN 0 ELSE 1 END, lower(h.name), h.id",
+        )?;
+        let rows = statement.query_map(
+            [apiary.id.to_string(), apiary.keeper_operator_id.to_string()],
+            |row| {
+                let hive_id = parse_domain_id::<HiveId>(&row.get::<_, String>(0)?)?;
+                let operator_id = parse_domain_id::<OperatorId>(&row.get::<_, String>(2)?)?;
+                Ok(ApiaryMemberSummary {
+                    hive_id,
+                    hive_name: row.get(1)?,
+                    operator_id,
+                    operator_display_name: row.get(3)?,
+                    role: if operator_id == apiary.keeper_operator_id {
+                        LocalApiaryRole::Keeper
+                    } else {
+                        LocalApiaryRole::Member
+                    },
+                    is_local: hive_id == identity.hive.id,
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// Loads only active, explicitly persisted Steward grants for one Apiary.
@@ -2832,6 +2873,51 @@ mod tests {
                 local_role: LocalApiaryRole::Keeper,
             } if apiary.id == apiary_id && apiary.shared_work_backend() == SharedWorkBackend::Jira
         ));
+    }
+
+    #[test]
+    fn apiary_member_roster_is_role_oriented_and_excludes_personal_hives() {
+        let personal = TaskStore::in_memory().unwrap();
+        assert!(matches!(
+            personal.list_apiary_members(),
+            Err(TaskStoreError::InvalidApiary)
+        ));
+
+        let store = TaskStore::in_memory().unwrap();
+        let keeper = store.local_hive_identity().unwrap();
+        let context = store
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        let LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected federated context");
+        };
+        let member_operator_id = OperatorId::new();
+        let member_hive_id = HiveId::new();
+        {
+            let connection = store.connection().unwrap();
+            insert_test_operator(&connection, member_operator_id, "Cora");
+            connection
+                .execute(
+                    "INSERT INTO hives (id, name, operator_id, apiary_id)
+                     VALUES (?1, 'Clover Hive', ?2, ?3)",
+                    params![
+                        member_hive_id.to_string(),
+                        member_operator_id.to_string(),
+                        apiary.id.to_string()
+                    ],
+                )
+                .unwrap();
+        }
+
+        let members = store.list_apiary_members().unwrap();
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0].hive_id, keeper.hive.id);
+        assert_eq!(members[0].role, LocalApiaryRole::Keeper);
+        assert!(members[0].is_local);
+        assert_eq!(members[1].hive_id, member_hive_id);
+        assert_eq!(members[1].operator_display_name, "Cora");
+        assert_eq!(members[1].role, LocalApiaryRole::Member);
+        assert!(!members[1].is_local);
     }
 
     fn insert_test_operator(connection: &Connection, operator_id: OperatorId, name: &str) {

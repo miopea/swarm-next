@@ -665,6 +665,18 @@ pub enum LocalApiaryContext {
     },
 }
 
+/// Public identity shown in an Apiary roster. This intentionally carries no
+/// federation credential, signed receipt, repository, task, or presence data.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryMemberSummary {
+    pub hive_id: HiveId,
+    pub hive_name: String,
+    pub operator_id: OperatorId,
+    pub operator_display_name: String,
+    pub role: LocalApiaryRole,
+    pub is_local: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiaryInvitationState {

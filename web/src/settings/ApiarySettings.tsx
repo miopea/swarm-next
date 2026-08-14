@@ -7,6 +7,7 @@ import {
   fetchApiaryCollapseReadiness,
   fetchApiaryHiveCandidates,
   fetchApiaryJiraProjects,
+  fetchApiaryMembers,
   fetchFederationJoinInvitations,
   fetchHive,
   fetchHiveConnectionCard,
@@ -19,6 +20,7 @@ import {
   type ApiaryHiveCandidate,
   type ApiaryInvitationBundle,
   type ApiaryJiraProject,
+  type ApiaryMember,
   type FederationJoinInvitationOverview,
   type HiveConnectionCard,
   type HiveIdentity,
@@ -41,6 +43,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [confirmCollapse, setConfirmCollapse] = useState(false);
   const [readiness, setReadiness] = useState<ApiaryCollapseReadiness>();
   const [promotedProjects, setPromotedProjects] = useState<ApiaryJiraProject[]>([]);
+  const [members, setMembers] = useState<ApiaryMember[]>([]);
   const [hiveCandidates, setHiveCandidates] = useState<ApiaryHiveCandidate[]>([]);
   const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
@@ -51,6 +54,18 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const keeper = context?.mode === "federated" && context.local_role === "keeper";
+
+  useEffect(() => {
+    if (personal) {
+      setMembers([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchApiaryMembers(operatorToken)
+      .then((value) => { if (!cancelled) setMembers(value); })
+      .catch(() => { if (!cancelled) setMembers([]); });
+    return () => { cancelled = true; };
+  }, [personal, operatorToken, hiveIdentity?.hive.apiary_id]);
 
   useEffect(() => {
     if (!keeper) {
@@ -403,6 +418,22 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
             <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span>
           </div>
           <p>Workers, repositories, provider sessions, credentials, and private tasks remain owned by this Hive.</p>
+          <div className="apiary-members">
+            <div><strong>Hives in this Apiary</strong><small>Registered membership, not live presence. Each Hive remains independently operated.</small></div>
+            {members.length > 0 ? (
+              <ul aria-label="Apiary Hives">
+                {members.map((member) => (
+                  <li key={member.hive_id}>
+                    <span><strong>{member.hive_name}</strong><small>{member.operator_display_name}</small></span>
+                    <span className="apiary-member-badges">
+                      <span>{member.role === "keeper" ? "Keeper" : "Member"}</span>
+                      {member.is_local ? <span className="readiness-ready">This Hive</span> : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="empty-copy">Membership is being refreshed.</p>}
+          </div>
           {keeper ? (
             <>
             <div className="apiary-hive-candidates">

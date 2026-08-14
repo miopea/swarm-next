@@ -1,12 +1,13 @@
 use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks,
-    ApiaryJoinReadiness, DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency,
-    FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
-    FederationJoinSubmission, HiveConnectionCard, HiveId, JiraConnectionState,
-    JiraProjectBindingId, LocalApiaryContext, OperatorPresence, PresenceDeviceClass,
-    PresenceDeviceId, PresenceMode, PresenceObservationState, SharedWorkBackend, Task, TaskId,
-    TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
+    ApiaryJoinReadiness, ApiaryMemberSummary, DecisionRequest, DecisionRequestId,
+    DecisionRequestKind, DecisionUrgency, FederationJoinAcceptance, FederationJoinInvitation,
+    FederationJoinReadiness, FederationJoinSubmission, HiveConnectionCard, HiveId,
+    JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
+    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
+    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
+    WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -65,6 +66,14 @@ impl ApiaryService {
     #[must_use]
     pub const fn new(store: TaskStore) -> Self {
         Self { store }
+    }
+
+    /// Lists the public Hive/operator identities registered in this Apiary.
+    ///
+    /// # Errors
+    /// Rejects personal Hives and unavailable persistence.
+    pub fn members(&self) -> Result<Vec<ApiaryMemberSummary>, ApplicationError> {
+        self.store.list_apiary_members().map_err(Into::into)
     }
 
     /// Issues a one-day signed public connection card for deliberate sharing

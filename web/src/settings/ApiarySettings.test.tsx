@@ -93,6 +93,28 @@ test("shows every collapse blocker and cannot bypass the disabled action", async
   expect(screen.getByRole("button", { name: "Review return to personal Hive" })).toBeDisabled();
 });
 
+test("shows registered Apiary Hives without implying live presence", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/members") return ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false },
+    ]);
+    if (url === "/api/v1/apiary/collapse-readiness") {
+      return ok({ active_hive_count: 2, pending_invitation_count: 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
+    }
+    if (url === "/api/v1/apiary/jira-projects" || url === "/api/v1/integrations/jira/bindings" || url === "/api/v1/apiary/hive-candidates") return ok([]);
+    throw new Error(`unexpected request ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  const roster = await screen.findByRole("list", { name: "Apiary Hives" });
+  expect(roster).toHaveTextContent("Meadow HiveBeaKeeperThis Hive");
+  expect(roster).toHaveTextContent("Clover HiveCoraMember");
+  expect(screen.getByText(/Registered membership, not live presence/)).toBeVisible();
+});
+
 test("collapses a ready sole-Keeper Apiary only after inline confirmation", async () => {
   const personal = personalIdentity();
   const onHiveIdentityChange = vi.fn();

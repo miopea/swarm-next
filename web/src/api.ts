@@ -89,6 +89,14 @@ export type LocalApiaryContext = { mode: "personal" } | {
   apiary: Apiary;
   local_role: "keeper" | "member";
 };
+export type ApiaryMember = {
+  hive_id: string;
+  hive_name: string;
+  operator_id: string;
+  operator_display_name: string;
+  role: "keeper" | "member";
+  is_local: boolean;
+};
 export type ApiaryCollapseReadiness = {
   active_hive_count: number;
   pending_invitation_count: number;
@@ -509,6 +517,11 @@ export async function createApiary(
     body: JSON.stringify({ name, shared_work_backend: sharedWorkBackend }),
   });
   return response.json() as Promise<LocalApiaryContext>;
+}
+
+export async function fetchApiaryMembers(operatorToken: string): Promise<ApiaryMember[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/members");
+  return response.json() as Promise<ApiaryMember[]>;
 }
 
 export async function fetchHiveConnectionCard(

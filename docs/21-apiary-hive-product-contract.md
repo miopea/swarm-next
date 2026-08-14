@@ -103,6 +103,13 @@ credential, mirrors public Apiary identity, becomes a Member, and revokes
 competing invitations. The bounded outbound HTTPS adapter remains the next
 handshake slice.
 
+Both Keeper and Member Hives can now read a deliberately narrow Apiary roster:
+Hive name and ID, operator name and ID, Keeper/member role, and which row is
+local. The roster describes durable registration rather than live presence and
+never includes node credentials, signed receipts, repositories, tasks, or
+terminal state. Keeper-pinned candidates remain visibly separate until the
+authenticated handshake creates membership.
+
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
 reject Jira promotion, and a joining Hive passes project readiness only when

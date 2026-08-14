@@ -1524,6 +1524,7 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/hive", get(local_hive))
         .route("/api/v1/apiary", post(create_apiary))
+        .route("/api/v1/apiary/members", get(apiary_members))
         .route(
             "/api/v1/apiary/connection-card",
             get(download_hive_connection_card),
@@ -1809,6 +1810,17 @@ async fn local_hive(
         }),
     )
         .into_response())
+}
+
+async fn apiary_members(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let members = apiary_service(&state)?
+        .members()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(members)).into_response())
 }
 
 async fn apiary_invitations(
@@ -5114,6 +5126,48 @@ mod tests {
         assert_eq!(json["hive"]["name"], "My Hive");
         assert!(json["hive"]["apiary_id"].is_null());
         assert_eq!(json["apiary_context"]["mode"], "personal");
+    }
+
+    #[tokio::test]
+    async fn apiary_member_roster_is_private_no_store_and_public_identity_only() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        store
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                unix_timestamp(),
+            )
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/apiary/members")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/apiary/members").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(response).await;
+        let members = json.as_array().unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0]["hive_id"], identity.hive.id.to_string());
+        assert_eq!(members[0]["role"], "keeper");
+        assert_eq!(members[0]["is_local"], true);
+        assert!(members[0].get("node_credential").is_none());
+        assert!(members[0].get("receipt").is_none());
     }
 
     #[tokio::test]
