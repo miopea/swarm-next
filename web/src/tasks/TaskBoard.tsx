@@ -4,7 +4,9 @@ import type { JiraComment, JiraTaskLink, SessionSummary, Task, TaskActivity, Tas
 import BeeMascot from "../brand/BeeMascot";
 import { useReorderDrag } from "../shared/useReorderDrag";
 import JiraTaskIntake from "./JiraTaskIntake";
+import TaskAssignment from "./TaskAssignment";
 import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskProjectChoice } from "./TaskBoardControls";
+import TaskMetadata from "./TaskMetadata";
 import { buildTaskBoardView } from "./taskBoardModel";
 
 type Props = {
@@ -52,41 +54,12 @@ const stateLabels: Record<TaskState, string> = {
   completed: "Completed",
 };
 
-function taskStateLabel(task: Task): string {
-  if (task.state === "ready" && task.assigned_worker_id) return "Assigned";
-  return stateLabels[task.state];
-}
-
-function workerAttentionLabel(worker: Worker): string {
-  const labels = {
-    sleeping: "sleeping",
-    resting: "resting",
-    buzzing: "buzzing",
-    with_operator: "with you",
-    awaiting_operator: "awaiting you",
-    blocked: "blocked",
-  } as const;
-  return labels[worker.attention_state] ?? (worker.running ? "resting" : "sleeping");
-}
-
 const priorityLabels: Record<TaskPriority, string> = {
   low: "Low",
   normal: "Normal",
   high: "High",
   urgent: "Urgent",
 };
-const dispatchLabels = {
-  queued: "Briefing waits for a quiet moment",
-  dispatching: "Briefing worker",
-  delivered: "Worker briefed",
-  uncertain: "Briefing uncertain — task remains authoritative",
-} as const;
-const outcomeDeliveryLabels = {
-  queued: "Queen handoff waits for a quiet moment",
-  dispatching: "Notifying Queen",
-  delivered: "Queen notified",
-  uncertain: "Queen handoff uncertain — task remains authoritative",
-} as const;
 const validTargets: Record<TaskState, TaskState[]> = {
   draft: ["ready"],
   ready: ["active", "blocked"],
@@ -383,8 +356,6 @@ export default function TaskBoard({
 
 function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "operatorToken" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onJiraImported" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; dropTarget: boolean; onDragTarget: () => void; onDragLeave: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
-  const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
-  const targetWorker = assignableWorkers.find((worker) => worker.id === task.assigned_worker_id);
   const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activity, setActivity] = useState<TaskActivityPage>();
@@ -486,85 +457,13 @@ function TaskCard({ task, jiraLink, sessions, workers, busy, onUpdate, onTransit
       onContextMenu={(event) => { event.preventDefault(); setMenuOpen(true); }}
       onKeyDown={(event) => { if (event.key === "Escape") setMenuOpen(false); }}
     >
-      <div className="task-metadata-panel">
-        <section className="task-metadata-section" aria-label="Swarm details">
-          <strong className="task-section-label">Swarm</strong>
-          <dl>
-            <div><dt>Status</dt><dd><span className={`task-state state-${task.state}`}>{taskStateLabel(task)}</span></dd></div>
-            <div><dt>Priority</dt><dd><span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span></dd></div>
-          </dl>
-        </section>
-        {jiraLink && (
-          <section className="task-metadata-section task-jira-origin" aria-label={`Jira issue ${jiraLink.issue_key}`}>
-            <strong className="task-section-label">Jira</strong>
-            <dl>
-              <div><dt>Issue</dt><dd>
-                {jiraLink.issue_url ? (
-                  <a href={jiraLink.issue_url} target="_blank" rel="noreferrer" title={`Open ${jiraLink.issue_key} in Jira`}>
-                    <strong>{jiraLink.issue_key}</strong><span aria-hidden="true">↗</span>
-                  </a>
-                ) : <strong>{jiraLink.issue_key}</strong>}
-              </dd></div>
-              <div><dt>Project</dt><dd className="task-text-value" title={jiraLink.project_name}>{jiraLink.project_name}</dd></div>
-              <div><dt>Status</dt><dd className="task-text-value">{jiraLink.jira_status_name}</dd></div>
-              <div><dt>Assignee</dt><dd className="task-text-value">{jiraLink.jira_assignee_name ?? "Unassigned"}</dd></div>
-            </dl>
-          {jiraLink.outbound_state && (
-            <span className={`jira-sync-state ${jiraLink.outbound_state}`}>
-              {jiraLink.outbound_state === "queued" || jiraLink.outbound_state === "dispatching"
-                ? "Updating Jira…"
-                : "Jira update needs attention"}
-            </span>
-          )}
-          {(jiraLink.outbound_state === "conflict" || jiraLink.outbound_state === "uncertain") && (
-            <button className="text-button jira-sync-retry" type="button" disabled={busy} onClick={() => void onRetryJira(task)}>
-              Retry Jira
-            </button>
-          )}
-          </section>
-        )}
-      </div>
+      <TaskMetadata task={task} jiraLink={jiraLink} busy={busy} onRetryJira={onRetryJira} />
       <h4>{task.title}</h4>
       {task.description && !editing && <p className="task-description">{task.description}</p>}
       {editing ? (
         <TaskEditForm task={task} busy={busy} onUpdate={onUpdate} onCancel={() => setEditing(false)} />
       ) : task.state !== "completed" && (
-        <div className="task-assignment-cell">
-          <div className="task-current-worker">
-            <span className="task-meta-label">Swarm worker</span>
-            {targetWorker?.active_session_id ? (
-              <button type="button" className="task-owner task-owner-link" onClick={() => onOpenWorker(targetWorker.active_session_id!)}>{targetWorker.name}</button>
-            ) : <strong className="task-owner">{targetWorker?.name ?? "Unassigned"}</strong>}
-          </div>
-          <div className="assignment-row">
-            <label className="visually-hidden" htmlFor={`assignment-${task.id}`}>Assign Swarm worker</label>
-            <select
-              aria-label={`Assign Swarm worker for ${task.title}`}
-              id={`assignment-${task.id}`}
-              value={targetWorker?.id ?? ""}
-              onChange={(event) => void onAssign(task, event.target.value)}
-              disabled={busy || assignableWorkers.length === 0}
-            >
-              <option value="">Unassigned</option>
-              {assignableWorkers.map((worker) => (
-                <option key={worker.id} value={worker.id}>
-                  {worker.name} · {workerAttentionLabel(worker)}
-                </option>
-              ))}
-            </select>
-          </div>
-          {task.dispatch_state && (
-            <p className={`task-dispatch task-dispatch-${task.dispatch_state}`} role="status">
-              {dispatchLabels[task.dispatch_state]}
-            </p>
-          )}
-          {task.outcome_delivery_state && (
-            <p className={`task-dispatch task-dispatch-${task.outcome_delivery_state}`} role="status">
-              {outcomeDeliveryLabels[task.outcome_delivery_state]}
-            </p>
-          )}
-          {!editing && (targetWorker || task.state !== "ready") && <PrimaryTaskAction task={task} assigned={Boolean(assigned?.running)} targetWorker={targetWorker} busy={busy} onTransition={onTransition} onStartWorker={onStartWorker} />}
-        </div>
+        <TaskAssignment task={task} workers={workers} workerRunning={Boolean(assigned?.running)} busy={busy} onAssign={onAssign} onOpenWorker={onOpenWorker} onTransition={onTransition} onStartWorker={onStartWorker} />
       )}
       <div className="task-actions">
         {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
@@ -708,23 +607,6 @@ function TaskEditForm({ task, busy, onUpdate, onCancel }: {
       </div>
     </form>
   );
-}
-
-function PrimaryTaskAction({ task, assigned, targetWorker, busy, onTransition, onStartWorker }: {
-  task: Task;
-  assigned: boolean;
-  targetWorker: Worker | undefined;
-  busy: boolean;
-  onTransition: Props["onTransition"];
-  onStartWorker: Props["onStartWorker"];
-}) {
-  if (task.state === "draft") return <button disabled={busy} onClick={() => void onTransition(task, "ready")}>Mark ready</button>;
-  if (task.state === "ready" && !assigned) return <button disabled={busy || !targetWorker} onClick={() => void onStartWorker(task)}>{targetWorker ? `Wake ${targetWorker.name}` : "Choose worker"}</button>;
-  if (task.state === "ready") return <button disabled={busy} onClick={() => void onTransition(task, "active")}>Start work</button>;
-  if (task.state === "active") return <button disabled={busy} onClick={() => void onTransition(task, "review")}>Send to review</button>;
-  if (task.state === "blocked") return <button disabled={busy} onClick={() => void onTransition(task, "active")}>Resume work</button>;
-  if (task.state === "review") return <button disabled={busy} onClick={() => void onTransition(task, "completed")}>Complete</button>;
-  return null;
 }
 
 export function workerName(sessionId: string): string {
