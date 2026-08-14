@@ -9,7 +9,9 @@ import {
   fetchApiaryJiraProjects,
   fetchApiaryMembers,
   fetchApiarySharedWork,
+  fetchFederationCatalogReadiness,
   fetchFederationJoinInvitations,
+  fetchFederationSyncHealth,
   fetchHive,
   fetchHiveConnectionCard,
   fetchJiraBindings,
@@ -25,11 +27,21 @@ import {
   type ApiaryMember,
   type ApiarySharedWorkClaim,
   type FederationJoinInvitationOverview,
+  type FederationCatalogReadiness,
+  type FederationSyncHealth,
   type HiveConnectionCard,
   type HiveIdentity,
   type JiraProjectBinding,
 } from "../api";
 import { downloadJson } from "../shared/download";
+
+const syncCopy = {
+  idle: ["Not connected yet", "Automatic Keeper sync is not enabled in this build."],
+  current: ["Up to date", "This Hive completed its latest Keeper reconciliation."],
+  offline: ["Keeper temporarily unavailable", "Owned work remains local; new shared claims wait."],
+  authentication_required: ["Membership credentials need attention", "Keeper synchronization is paused until access is restored."],
+  incompatible: ["Runtime update required", "This Hive and its Keeper need compatible federation versions."],
+} as const;
 
 type Props = {
   busy: boolean;
@@ -48,6 +60,9 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [promotedProjects, setPromotedProjects] = useState<ApiaryJiraProject[]>([]);
   const [members, setMembers] = useState<ApiaryMember[]>([]);
   const [sharedWork, setSharedWork] = useState<ApiarySharedWorkClaim[]>([]);
+  const [memberSync, setMemberSync] = useState<FederationSyncHealth>();
+  const [memberCatalog, setMemberCatalog] = useState<FederationCatalogReadiness>();
+  const [memberSyncLoadError, setMemberSyncLoadError] = useState(false);
   const [hiveCandidates, setHiveCandidates] = useState<ApiaryHiveCandidate[]>([]);
   const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
@@ -59,6 +74,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const keeper = context?.mode === "federated" && context.local_role === "keeper";
+  const member = context?.mode === "federated" && context.local_role === "member";
 
   useEffect(() => {
     if (personal) {
@@ -83,6 +99,26 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       .catch(() => { if (!cancelled) setReadiness(undefined); });
     return () => { cancelled = true; };
   }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id]);
+
+  useEffect(() => {
+    if (!member) {
+      setMemberSync(undefined);
+      setMemberCatalog(undefined);
+      setMemberSyncLoadError(false);
+      return;
+    }
+    let cancelled = false;
+    void Promise.allSettled([
+      fetchFederationSyncHealth(operatorToken),
+      fetchFederationCatalogReadiness(operatorToken),
+    ]).then(([sync, catalog]) => {
+      if (cancelled) return;
+      setMemberSync(sync.status === "fulfilled" ? sync.value : undefined);
+      setMemberCatalog(catalog.status === "fulfilled" ? catalog.value : undefined);
+      setMemberSyncLoadError(sync.status === "rejected" || catalog.status === "rejected");
+    });
+    return () => { cancelled = true; };
+  }, [member, operatorToken, hiveIdentity?.hive.apiary_id]);
 
   useEffect(() => {
     if (!personal) {
@@ -449,6 +485,27 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
             <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span>
           </div>
           <p>Workers, repositories, provider sessions, credentials, and private tasks remain owned by this Hive.</p>
+          {member ? (
+            <div className="apiary-member-sync" aria-label="Keeper synchronization status">
+              <div>
+                <span className={`apiary-sync-indicator apiary-sync-${memberSync?.condition ?? "idle"}`} aria-hidden="true" />
+                <span>
+                  <strong>{syncCopy[memberSync?.condition ?? "idle"][0]}</strong>
+                  <small>{syncCopy[memberSync?.condition ?? "idle"][1]}</small>
+                </span>
+              </div>
+              <dl>
+                <div><dt>Catalog</dt><dd>{memberCatalog?.acknowledgement ? "Verified" : "Waiting"}</dd></div>
+                <div><dt>Projects ready</dt><dd>{memberCatalog ? `${memberCatalog.projects.filter((project) => project.binding_id && project.access_verified && project.workflow_mapped).length}/${memberCatalog.projects.length}` : "—"}</dd></div>
+                <div><dt>Jira</dt><dd>{memberCatalog?.jira_connection === "ready" ? "Connected" : "Needs attention"}</dd></div>
+                <div><dt>Retries</dt><dd>{memberSync?.consecutive_failures ?? 0}</dd></div>
+              </dl>
+              {memberCatalog && memberCatalog.blockers.length > 0 ? (
+                <p className="apiary-blockers">Shared work waits for: {memberCatalog.blockers.map((blocker) => blocker.replaceAll("_", " ")).join(", ")}.</p>
+              ) : null}
+              {memberSyncLoadError ? <p className="apiary-blockers">Synchronization status could not be refreshed. Local workers and owned work are unchanged.</p> : null}
+            </div>
+          ) : null}
           <div className="apiary-members">
             <div><strong>Hives in this Apiary</strong><small>Registered membership, not live presence. Each Hive remains independently operated.</small></div>
             {members.length > 0 ? (

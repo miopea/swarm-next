@@ -5,11 +5,11 @@ use swarm_domain::{
     DecisionRequestKind, DecisionUrgency, FederationCatalogAcknowledgement,
     FederationCatalogReadiness, FederationCatalogSnapshot, FederationClaimId,
     FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
-    FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard, HiveId,
-    JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
-    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
-    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
-    WorkerSessionId,
+    FederationJoinSubmission, FederationSharedClaim, FederationSyncCondition, FederationSyncHealth,
+    HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
+    OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    PresenceObservationState, SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId,
+    WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -152,6 +152,42 @@ impl ApiaryService {
     ) -> Result<Vec<FederationSharedClaim>, ApplicationError> {
         self.store
             .list_active_federation_claims(now)
+            .map_err(Into::into)
+    }
+
+    /// Returns the Member Hive's content-free durable reconciliation health.
+    /// No transport or remote system is contacted.
+    ///
+    /// # Errors
+    /// Rejects personal and Keeper Hives and unavailable or corrupt storage.
+    pub fn federation_sync_health(&self) -> Result<FederationSyncHealth, ApplicationError> {
+        self.store.federation_sync_health().map_err(Into::into)
+    }
+
+    /// Records a successful reconciliation outcome for a future bounded runner.
+    ///
+    /// # Errors
+    /// Rejects non-Members, invalid time, and persistence failures.
+    pub fn record_federation_sync_success(
+        &self,
+        now: i64,
+    ) -> Result<FederationSyncHealth, ApplicationError> {
+        self.store
+            .record_federation_sync_success(now)
+            .map_err(Into::into)
+    }
+
+    /// Records a classified reconciliation failure for a future bounded runner.
+    ///
+    /// # Errors
+    /// Rejects non-Members, invalid classifications/time, and persistence failures.
+    pub fn record_federation_sync_failure(
+        &self,
+        condition: FederationSyncCondition,
+        now: i64,
+    ) -> Result<FederationSyncHealth, ApplicationError> {
+        self.store
+            .record_federation_sync_failure(condition, now)
             .map_err(Into::into)
     }
 

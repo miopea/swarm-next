@@ -116,6 +116,33 @@ export type ApiarySharedWorkClaim = {
   home_hive_name: string;
   home_operator_display_name: string;
 };
+export type FederationSyncCondition =
+  | "idle"
+  | "current"
+  | "offline"
+  | "authentication_required"
+  | "incompatible";
+export type FederationSyncHealth = {
+  condition: FederationSyncCondition;
+  last_attempt_at: number | null;
+  last_success_at: number | null;
+  consecutive_failures: number;
+  next_attempt_at: number | null;
+};
+export type FederationCatalogReadiness = {
+  acknowledgement: {
+    apiary_id: string;
+    policy_revision: number;
+    promoted_project_catalog_digest: string;
+    project_count: number;
+    snapshot_issued_at: number;
+    snapshot_expires_at: number;
+    acknowledged_at: number;
+  } | null;
+  jira_connection: JiraConnectionState;
+  projects: FederationProjectReadiness[];
+  blockers: ("catalog_missing" | "catalog_stale" | "integration_not_ready" | "policy_revision_changed" | "project_access_not_ready")[];
+};
 export type ApiaryCollapseReadiness = {
   active_hive_count: number;
   pending_invitation_count: number;
@@ -548,6 +575,20 @@ export async function fetchApiarySharedWork(
 ): Promise<ApiarySharedWorkClaim[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/shared-work");
   return response.json() as Promise<ApiarySharedWorkClaim[]>;
+}
+
+export async function fetchFederationSyncHealth(
+  operatorToken: string,
+): Promise<FederationSyncHealth> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/sync-health");
+  return response.json() as Promise<FederationSyncHealth>;
+}
+
+export async function fetchFederationCatalogReadiness(
+  operatorToken: string,
+): Promise<FederationCatalogReadiness> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/catalog-readiness");
+  return response.json() as Promise<FederationCatalogReadiness>;
 }
 
 export async function fetchHiveConnectionCard(

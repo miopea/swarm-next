@@ -437,6 +437,38 @@ test("shows a low-noise Keeper rollup of reservations and durable ownership", as
   expect(rollup).not.toHaveTextContent("credential");
 });
 
+test("shows honest Member convergence without implying a running transport", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/members") return ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: false },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: true },
+    ]);
+    if (url === "/api/v1/apiary/sync-health") return ok({
+      condition: "idle", last_attempt_at: null, last_success_at: null, consecutive_failures: 0, next_attempt_at: null,
+    });
+    if (url === "/api/v1/apiary/catalog-readiness") return ok({
+      acknowledgement: null,
+      jira_connection: "ready",
+      projects: [{
+        project: { project_id: "10001", project_key: "WWD", project_name: "Website Development" },
+        binding_id: "binding-1", access_verified: true, workflow_mapped: true,
+      }],
+      blockers: ["catalog_missing"],
+    });
+    throw new Error(`unexpected request ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={memberIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  const status = await screen.findByLabelText("Keeper synchronization status");
+  expect(status).toHaveTextContent("Not connected yet");
+  expect(status).toHaveTextContent("Automatic Keeper sync is not enabled in this build");
+  expect(status).toHaveTextContent("CatalogWaitingProjects ready1/1JiraConnectedRetries0");
+  expect(status).toHaveTextContent("Shared work waits for: catalog missing");
+  expect(status).not.toHaveTextContent("credential");
+});
+
 function personalIdentity(): HiveIdentity {
   return {
     operator: { id: "operator-1", display_name: "Bea" },
@@ -453,6 +485,18 @@ function keeperIdentity(): HiveIdentity {
       mode: "federated",
       apiary: { id: "apiary-1", name: "Wildflower Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" },
       local_role: "keeper",
+    },
+  };
+}
+
+function memberIdentity(): HiveIdentity {
+  return {
+    operator: { id: "operator-2", display_name: "Cora" },
+    hive: { id: "hive-2", name: "Clover Hive", operator_id: "operator-2", apiary_id: "apiary-1" },
+    apiary_context: {
+      mode: "federated",
+      apiary: { id: "apiary-1", name: "Wildflower Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" },
+      local_role: "member",
     },
   };
 }

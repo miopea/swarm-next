@@ -522,6 +522,18 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-promotion-list .readiness-blocked { color: var(--bad); }
 .apiary-projects .empty-copy { margin: 0; color: var(--muted); font-size: .76rem; }
 .apiary-shared-work { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
+.apiary-member-sync { display: grid; gap: 11px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
+.apiary-member-sync > div:first-child { display: flex; align-items: center; gap: 10px; }
+.apiary-member-sync > div:first-child > span:last-child { display: grid; gap: 2px; }
+.apiary-member-sync small { color: var(--muted); }
+.apiary-member-sync dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.apiary-member-sync dl > div { display: grid; gap: 2px; padding: 8px 9px; border-radius: var(--radius-sm); background: var(--panel); }
+.apiary-member-sync dt { color: var(--muted); font-size: .67rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.apiary-member-sync dd { margin: 0; font-size: .82rem; font-weight: 650; }
+.apiary-sync-indicator { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 4px color-mix(in srgb, var(--muted) 14%, transparent); }
+.apiary-sync-current { background: var(--good); box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 16%, transparent); }
+.apiary-sync-offline, .apiary-sync-authentication_required { background: var(--warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 16%, transparent); }
+.apiary-sync-incompatible { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 16%, transparent); }
 .apiary-shared-work > div:first-child { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .apiary-shared-work > div:first-child > span:first-child { display: grid; gap: 2px; }
 .apiary-shared-work-count { display: grid; min-width: 24px; height: 24px; place-items: center; border-radius: 8px; color: var(--muted); background: var(--panel-soft); font-size: .7rem; font-weight: 700; }
@@ -749,6 +761,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-candidate-state .secondary-button { width: 100%; }
   .apiary-project-list li, .apiary-promotion-list > div { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .apiary-shared-work li { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .apiary-member-sync dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .apiary-project-list li > small { text-align: left; }
   .apiary-promotion-list button { width: 100%; }
   .apiary-confirmation .settings-actions { display: grid; grid-template-columns: minmax(0, 1fr); }

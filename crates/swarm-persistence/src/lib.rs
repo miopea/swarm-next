@@ -52,7 +52,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 38;
+const CURRENT_SCHEMA_VERSION: i64 = 39;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -109,6 +109,8 @@ pub enum TaskStoreError {
     InvalidFederationCatalog,
     #[error("The federation shared-work claim is invalid")]
     InvalidFederationClaim,
+    #[error("The local federation synchronization state is invalid")]
+    InvalidFederationSync,
     #[error("The Jira issue is already claimed by another Hive")]
     FederationClaimConflict,
     #[error("A current invitation already exists for this pinned Hive")]
@@ -1351,6 +1353,9 @@ fn migrate_federation_schema(
     }
     if schema_version < 38 {
         federation::migrate_federation_claims(transaction)?;
+    }
+    if schema_version < 39 {
+        federation::migrate_local_federation_sync(transaction)?;
     }
     Ok(())
 }

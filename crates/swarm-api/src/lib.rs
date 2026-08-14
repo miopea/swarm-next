@@ -1545,6 +1545,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/apiary", post(create_apiary))
         .route("/api/v1/apiary/members", get(apiary_members))
         .route("/api/v1/apiary/shared-work", get(apiary_shared_work))
+        .route("/api/v1/apiary/sync-health", get(apiary_sync_health))
         .route(
             "/api/v1/apiary/connection-card",
             get(download_hive_connection_card),
@@ -1922,6 +1923,17 @@ async fn apiary_shared_work(
         })
         .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(rollup)).into_response())
+}
+
+async fn apiary_sync_health(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let health = apiary_service(&state)?
+        .federation_sync_health()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(health)).into_response())
 }
 
 async fn apiary_invitations(
@@ -4879,6 +4891,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "invalid_federation_claim",
             error.to_string(),
         ),
+        TaskStoreError::InvalidFederationSync => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "apiary_member_required",
+            error.to_string(),
+        ),
         TaskStoreError::FederationClaimConflict => ApiError::new(
             StatusCode::CONFLICT,
             "federation_claim_conflict",
@@ -6129,6 +6146,27 @@ mod tests {
                 .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
                 .with_task_store(invited),
         );
+        let sync_unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/apiary/sync-health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(sync_unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let sync = authorized_get(app.clone(), "/api/v1/apiary/sync-health").await;
+        assert_eq!(sync.status(), StatusCode::OK);
+        assert_eq!(sync.headers()[header::CACHE_CONTROL], "no-store");
+        let sync_json = response_json(sync).await;
+        assert_eq!(sync_json["condition"], "idle");
+        assert_eq!(sync_json["consecutive_failures"], 0);
+        let serialized_sync = sync_json.to_string();
+        for forbidden in ["credential", "endpoint", "receipt", "jira", "task"] {
+            assert!(!serialized_sync.contains(forbidden));
+        }
         let unauthorized = app
             .clone()
             .oneshot(

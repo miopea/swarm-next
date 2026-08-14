@@ -14,8 +14,9 @@ use swarm_domain::{
     FederationJoinInvitationState, FederationJoinReadiness, FederationJoinSubmission,
     FederationJoinSubmissionPayload, FederationMembershipReceipt, FederationMembershipReceiptId,
     FederationMembershipReceiptPayload, FederationNodeId, FederationProjectManifestEntry,
-    FederationProjectReadiness, FederationSharedClaim, HiveConnectionCard,
-    HiveConnectionCardPayload, HiveId, JiraProjectBindingId, OperatorId, SharedWorkBackend,
+    FederationProjectReadiness, FederationSharedClaim, FederationSyncCondition,
+    FederationSyncHealth, HiveConnectionCard, HiveConnectionCardPayload, HiveId,
+    JiraProjectBindingId, OperatorId, SharedWorkBackend, federation_retry_delay_seconds,
 };
 use url::Url;
 
@@ -32,6 +33,8 @@ const FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
 const FEDERATION_CATALOG_LIFETIME_SECONDS: i64 = 5 * 60;
 const FEDERATION_CLAIM_RESERVATION_SECONDS: i64 = 2 * 60;
 const MAX_ACTIVE_FEDERATION_CLAIMS: usize = 1_000;
+const FEDERATION_SYNC_INTERVAL_SECONDS: i64 = 60;
+const MAX_FEDERATION_SYNC_FAILURES: u32 = 1_000;
 
 struct LocalFederationIdentity {
     node_id: FederationNodeId,
@@ -84,6 +87,129 @@ struct MemberCredentialContext {
 }
 
 impl TaskStore {
+    /// Returns content-free local Member synchronization health. The absence of
+    /// a row means that a transport loop has never run on this installation.
+    ///
+    /// # Errors
+    /// Rejects personal and Keeper Hives, corrupt state, and unavailable persistence.
+    pub fn federation_sync_health(&self) -> Result<FederationSyncHealth, TaskStoreError> {
+        self.require_local_federation_member()?;
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT condition, last_attempt_at, last_success_at,
+                        consecutive_failures, next_attempt_at
+                 FROM local_federation_sync WHERE singleton = 1",
+                [],
+                federation_sync_health_from_row,
+            )
+            .optional()?
+            .map_or(Ok(FederationSyncHealth::default()), Ok)
+    }
+
+    /// Records one successful bounded Member reconciliation without retaining
+    /// endpoints, credentials, response bodies, or shared-work content.
+    ///
+    /// # Errors
+    /// Rejects personal and Keeper Hives, invalid time, and persistence failures.
+    pub fn record_federation_sync_success(
+        &self,
+        now: i64,
+    ) -> Result<FederationSyncHealth, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationSync);
+        }
+        self.require_local_federation_member()?;
+        let health = FederationSyncHealth {
+            condition: FederationSyncCondition::Current,
+            last_attempt_at: Some(now),
+            last_success_at: Some(now),
+            consecutive_failures: 0,
+            next_attempt_at: Some(now.saturating_add(FEDERATION_SYNC_INTERVAL_SECONDS)),
+        };
+        self.persist_federation_sync_health(&health, now)?;
+        Ok(health)
+    }
+
+    /// Records a classified Member reconciliation failure. Temporary outages
+    /// back off to five minutes; authentication and protocol failures halt.
+    ///
+    /// # Errors
+    /// Rejects success/idle conditions, personal and Keeper Hives, invalid
+    /// time, corrupt state, and persistence failures.
+    pub fn record_federation_sync_failure(
+        &self,
+        condition: FederationSyncCondition,
+        now: i64,
+    ) -> Result<FederationSyncHealth, TaskStoreError> {
+        if now < 0
+            || !matches!(
+                condition,
+                FederationSyncCondition::Offline
+                    | FederationSyncCondition::AuthenticationRequired
+                    | FederationSyncCondition::Incompatible
+            )
+        {
+            return Err(TaskStoreError::InvalidFederationSync);
+        }
+        self.require_local_federation_member()?;
+        let prior = self.federation_sync_health()?;
+        let consecutive_failures = prior
+            .consecutive_failures
+            .saturating_add(1)
+            .min(MAX_FEDERATION_SYNC_FAILURES);
+        let next_attempt_at = (condition == FederationSyncCondition::Offline)
+            .then(|| now.saturating_add(federation_retry_delay_seconds(consecutive_failures)));
+        let health = FederationSyncHealth {
+            condition,
+            last_attempt_at: Some(now),
+            last_success_at: prior.last_success_at,
+            consecutive_failures,
+            next_attempt_at,
+        };
+        self.persist_federation_sync_health(&health, now)?;
+        Ok(health)
+    }
+
+    fn require_local_federation_member(&self) -> Result<(), TaskStoreError> {
+        match self.local_apiary_context()? {
+            swarm_domain::LocalApiaryContext::Federated {
+                local_role: swarm_domain::LocalApiaryRole::Member,
+                ..
+            } => Ok(()),
+            _ => Err(TaskStoreError::InvalidFederationSync),
+        }
+    }
+
+    fn persist_federation_sync_health(
+        &self,
+        health: &FederationSyncHealth,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        self.connection()?.execute(
+            "INSERT INTO local_federation_sync
+                (singleton, condition, last_attempt_at, last_success_at,
+                 consecutive_failures, next_attempt_at, updated_at)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(singleton) DO UPDATE SET
+                 condition = excluded.condition,
+                 last_attempt_at = excluded.last_attempt_at,
+                 last_success_at = excluded.last_success_at,
+                 consecutive_failures = excluded.consecutive_failures,
+                 next_attempt_at = excluded.next_attempt_at,
+                 updated_at = excluded.updated_at",
+            params![
+                health.condition.to_string(),
+                health.last_attempt_at,
+                health.last_success_at,
+                health.consecutive_failures,
+                health.next_attempt_at,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Lists the current Apiary's active shared-work reservations and durable
     /// home-Hive claims for the Keeper control room. Expired reservations and
     /// released history are deliberately omitted so routine reconciliation
@@ -2622,6 +2748,44 @@ pub(super) fn migrate_federation_claims(
     )
 }
 
+pub(super) fn migrate_local_federation_sync(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS local_federation_sync (
+             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+             condition TEXT NOT NULL CHECK (condition IN
+                 ('idle','current','offline','authentication_required','incompatible')),
+             last_attempt_at INTEGER CHECK (last_attempt_at >= 0),
+             last_success_at INTEGER CHECK (last_success_at >= 0),
+             consecutive_failures INTEGER NOT NULL DEFAULT 0
+                 CHECK (consecutive_failures >= 0 AND consecutive_failures <= 1000),
+             next_attempt_at INTEGER CHECK (next_attempt_at >= 0),
+             updated_at INTEGER NOT NULL CHECK (updated_at >= 0)
+         );
+         PRAGMA user_version = 39;",
+    )
+}
+
+fn federation_sync_health_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<FederationSyncHealth> {
+    let condition = row
+        .get::<_, String>(0)?
+        .parse::<FederationSyncCondition>()
+        .map_err(|()| rusqlite::Error::InvalidQuery)?;
+    let failures = row.get::<_, i64>(3)?;
+    let consecutive_failures = u32::try_from(failures)
+        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(3, failures))?;
+    Ok(FederationSyncHealth {
+        condition,
+        last_attempt_at: row.get(1)?,
+        last_success_at: row.get(2)?,
+        consecutive_failures,
+        next_attempt_at: row.get(4)?,
+    })
+}
+
 fn map_candidate_insert_error(error: rusqlite::Error) -> TaskStoreError {
     match error {
         rusqlite::Error::SqliteFailure(_, Some(message))
@@ -3647,6 +3811,78 @@ mod tests {
             .unwrap()
     }
 
+    fn joined_member(now: i64) -> (TaskStore, TaskStore) {
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .unwrap();
+        let member = TaskStore::in_memory().unwrap();
+        let acceptance = register_remote_member(&keeper, &member, now + 1);
+        member
+            .apply_federation_join_acceptance(
+                acceptance.receipt.payload.invitation_id,
+                &acceptance,
+                now + 6,
+            )
+            .unwrap();
+        (keeper, member)
+    }
+
+    #[test]
+    fn member_sync_health_is_durable_bounded_and_content_free() {
+        let now = 80_000;
+        let (keeper, member) = joined_member(now);
+        assert_eq!(
+            member.federation_sync_health().unwrap(),
+            FederationSyncHealth::default()
+        );
+
+        let first = member
+            .record_federation_sync_failure(FederationSyncCondition::Offline, now + 10)
+            .unwrap();
+        assert_eq!(first.consecutive_failures, 1);
+        assert_eq!(first.next_attempt_at, Some(now + 15));
+        let second = member
+            .record_federation_sync_failure(FederationSyncCondition::Offline, now + 20)
+            .unwrap();
+        assert_eq!(second.consecutive_failures, 2);
+        assert_eq!(second.next_attempt_at, Some(now + 35));
+
+        let current = member.record_federation_sync_success(now + 40).unwrap();
+        assert_eq!(current.condition, FederationSyncCondition::Current);
+        assert_eq!(current.consecutive_failures, 0);
+        assert_eq!(current.last_success_at, Some(now + 40));
+        assert_eq!(current.next_attempt_at, Some(now + 100));
+
+        let halted = member
+            .record_federation_sync_failure(
+                FederationSyncCondition::AuthenticationRequired,
+                now + 50,
+            )
+            .unwrap();
+        assert_eq!(halted.last_success_at, Some(now + 40));
+        assert_eq!(halted.next_attempt_at, None);
+        assert_eq!(member.federation_sync_health().unwrap(), halted);
+
+        assert!(matches!(
+            member.record_federation_sync_failure(FederationSyncCondition::Current, now + 60),
+            Err(TaskStoreError::InvalidFederationSync)
+        ));
+        assert!(matches!(
+            keeper.federation_sync_health(),
+            Err(TaskStoreError::InvalidFederationSync)
+        ));
+        assert!(matches!(
+            TaskStore::in_memory().unwrap().federation_sync_health(),
+            Err(TaskStoreError::InvalidFederationSync)
+        ));
+
+        let serialized = serde_json::to_string(&halted).unwrap().to_ascii_lowercase();
+        for forbidden in ["endpoint", "credential", "jira", "task", "response"] {
+            assert!(!serialized.contains(forbidden));
+        }
+    }
+
     fn assert_tampered_submission_is_rejected(
         keeper: &TaskStore,
         mut submission: FederationJoinSubmission,
@@ -3839,6 +4075,37 @@ mod tests {
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
                      WHERE type = 'table' AND name = 'apiary_federation_claims'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn schema_v38_migrates_to_local_federation_sync() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE local_federation_sync;
+                 PRAGMA user_version = 38;",
+            )
+            .unwrap();
+        drop(store);
+
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'local_federation_sync'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )

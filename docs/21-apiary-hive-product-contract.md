@@ -177,6 +177,16 @@ results. Loopback HTTP exists only for local development and isolated tests.
 This client is not yet wired to persistence or an automatic loop, so the stored
 one-time join secret cannot leave the Hive through this slice.
 
+Member Hives now also retain a content-free reconciliation health record with
+an explicit condition, last attempt/success timestamps, consecutive failure
+count, and next eligible attempt. Temporary outages use a deterministic
+5/15/30/60/120/300-second bounded backoff; authentication and protocol
+incompatibility halt until operator action. The private Member UI combines this
+health with catalog/Jira readiness without exposing endpoints, credentials,
+receipts, issue content, or response bodies. An idle record is presented
+honestly as transport not yet enabled: this durable state is the contract for a
+later runner, not evidence that background synchronization already occurs.
+
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
 reject Jira promotion, and a joining Hive passes project readiness only when

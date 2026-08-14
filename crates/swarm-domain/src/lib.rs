@@ -437,6 +437,81 @@ pub struct FederationSharedClaim {
     pub released_at: Option<i64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationSyncCondition {
+    Idle,
+    Current,
+    Offline,
+    AuthenticationRequired,
+    Incompatible,
+}
+
+impl fmt::Display for FederationSyncCondition {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Idle => "idle",
+            Self::Current => "current",
+            Self::Offline => "offline",
+            Self::AuthenticationRequired => "authentication_required",
+            Self::Incompatible => "incompatible",
+        })
+    }
+}
+
+impl FromStr for FederationSyncCondition {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "idle" => Ok(Self::Idle),
+            "current" => Ok(Self::Current),
+            "offline" => Ok(Self::Offline),
+            "authentication_required" => Ok(Self::AuthenticationRequired),
+            "incompatible" => Ok(Self::Incompatible),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Content-free Member-side evidence for the bounded Keeper reconciliation
+/// loop. It never contains endpoints, credentials, Jira data, or response
+/// bodies.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationSyncHealth {
+    pub condition: FederationSyncCondition,
+    pub last_attempt_at: Option<i64>,
+    pub last_success_at: Option<i64>,
+    pub consecutive_failures: u32,
+    pub next_attempt_at: Option<i64>,
+}
+
+impl Default for FederationSyncHealth {
+    fn default() -> Self {
+        Self {
+            condition: FederationSyncCondition::Idle,
+            last_attempt_at: None,
+            last_success_at: None,
+            consecutive_failures: 0,
+            next_attempt_at: None,
+        }
+    }
+}
+
+/// Returns a deterministic bounded retry delay for temporary federation
+/// outages. The first retry is quick, then backs off to a five-minute ceiling.
+#[must_use]
+pub const fn federation_retry_delay_seconds(consecutive_failures: u32) -> i64 {
+    match consecutive_failures {
+        0 | 1 => 5,
+        2 => 15,
+        3 => 30,
+        4 => 60,
+        5 => 120,
+        _ => 300,
+    }
+}
+
 impl FederationCatalogReadiness {
     #[must_use]
     pub fn evaluate(
@@ -2241,6 +2316,14 @@ impl std::error::Error for ParseNotificationPolicyError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn federation_retry_backoff_is_bounded() {
+        let delays = (0..=8)
+            .map(federation_retry_delay_seconds)
+            .collect::<Vec<_>>();
+        assert_eq!(delays, vec![5, 5, 15, 30, 60, 120, 300, 300, 300]);
+    }
 
     #[test]
     fn session_identity_is_not_worker_identity() {
