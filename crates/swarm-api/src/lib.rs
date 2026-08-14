@@ -1395,6 +1395,13 @@ struct ApiaryHiveCandidateView {
     invitation_pending: bool,
 }
 
+#[derive(Serialize)]
+struct FederationTransportReadinessView {
+    configured: bool,
+    endpoint: Option<String>,
+    reachability: &'static str,
+}
+
 #[derive(Debug, Serialize)]
 struct FederationJoinInvitationView {
     #[serde(flatten)]
@@ -1772,6 +1779,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/apiary/connection-card",
             get(download_hive_connection_card),
+        )
+        .route(
+            "/api/v1/apiary/transport-readiness",
+            get(federation_transport_readiness),
         )
         .route(
             "/api/v1/apiary/hive-candidates",
@@ -2286,6 +2297,30 @@ async fn download_hive_connection_card(
         HeaderValue::from_static("attachment; filename=swarm-next-hive-connection.json"),
     );
     Ok((response_headers, Json(card)).into_response())
+}
+
+async fn federation_transport_readiness(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let endpoint = state.public_base_url.as_deref().map(str::to_owned);
+    let reachability = endpoint.as_deref().map_or("unconfigured", |endpoint| {
+        if federation_endpoint_is_remotely_reachable(endpoint) {
+            "remote_https"
+        } else {
+            "local_only"
+        }
+    });
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(FederationTransportReadinessView {
+            configured: endpoint.is_some(),
+            endpoint,
+            reachability,
+        }),
+    )
+        .into_response())
 }
 
 async fn apiary_hive_candidates(
@@ -5682,6 +5717,20 @@ fn apiary_service(state: &AppState) -> Result<ApiaryService, ApiError> {
     task_store(state).map(|store| ApiaryService::new(store.clone()))
 }
 
+fn federation_endpoint_is_remotely_reachable(endpoint: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    url.scheme() == "https" && !loopback
+}
+
 fn application_error(error: ApplicationError) -> ApiError {
     match error {
         ApplicationError::NotAuthorized => ApiError::new(
@@ -6778,6 +6827,47 @@ mod tests {
         let card: swarm_domain::HiveConnectionCard =
             serde_json::from_value(response_json(response).await).unwrap();
         swarm_persistence::verify_hive_connection_card(&card, unix_timestamp()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn federation_transport_readiness_distinguishes_remote_local_and_missing_urls() {
+        let state = |endpoint: Option<&str>| {
+            let state = AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret");
+            match endpoint {
+                Some(endpoint) => state.with_public_base_url(endpoint),
+                None => Ok(state),
+            }
+        };
+
+        let missing = authorized_get(
+            router(state(None).unwrap()),
+            "/api/v1/apiary/transport-readiness",
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::OK);
+        let missing = response_json(missing).await;
+        assert_eq!(missing["configured"], false);
+        assert_eq!(missing["reachability"], "unconfigured");
+        assert_eq!(missing["endpoint"], Value::Null);
+
+        let local = authorized_get(
+            router(state(Some("http://127.0.0.1:8766")).unwrap()),
+            "/api/v1/apiary/transport-readiness",
+        )
+        .await;
+        let local = response_json(local).await;
+        assert_eq!(local["configured"], true);
+        assert_eq!(local["reachability"], "local_only");
+
+        let remote = authorized_get(
+            router(state(Some("https://swarm2.example.test")).unwrap()),
+            "/api/v1/apiary/transport-readiness",
+        )
+        .await;
+        let remote = response_json(remote).await;
+        assert_eq!(remote["reachability"], "remote_https");
+        assert_eq!(remote["endpoint"], "https://swarm2.example.test");
     }
 
     #[tokio::test]

@@ -4,6 +4,47 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { HiveIdentity } from "../api";
 import ApiarySettings from "./ApiarySettings";
 
+test("explains when this Hive has a remotely reachable Apiary URL", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/apiary/transport-readiness")) {
+      return ok({
+        configured: true,
+        endpoint: "https://swarm2.bfgsolutions.net",
+        reachability: "remote_https",
+      });
+    }
+    if (url.endsWith("/api/v1/federation/join-invitations")) return ok([]);
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  expect(await screen.findByText("Reachable Hive URL ready")).toBeInTheDocument();
+  expect(screen.getByText("https://swarm2.bfgsolutions.net")).toBeInTheDocument();
+  expect(screen.getByText(/must remain online for invitations and shared coordination/i)).toBeInTheDocument();
+});
+
+test("warns that a loopback Apiary URL reaches only this machine", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/apiary/transport-readiness")) {
+      return ok({
+        configured: true,
+        endpoint: "http://127.0.0.1:8766",
+        reachability: "local_only",
+      });
+    }
+    if (url.endsWith("/api/v1/federation/join-invitations")) return ok([]);
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  expect(await screen.findByText("Local testing only")).toBeInTheDocument();
+  expect(screen.getByText(/reaches only this machine/i)).toBeInTheDocument();
+});
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();

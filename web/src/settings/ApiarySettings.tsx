@@ -13,6 +13,7 @@ import {
   fetchFederationCatalogReadiness,
   fetchFederationJoinInvitations,
   fetchFederationSyncHealth,
+  fetchFederationTransportReadiness,
   fetchHive,
   fetchHiveConnectionCard,
   fetchJiraBindings,
@@ -32,6 +33,7 @@ import {
   type FederationJoinInvitationOverview,
   type FederationCatalogReadiness,
   type FederationSyncHealth,
+  type FederationTransportReadiness,
   type HiveConnectionCard,
   type HiveIdentity,
   type JiraProjectBinding,
@@ -67,6 +69,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [sharedWork, setSharedWork] = useState<ApiarySharedWorkClaim[]>([]);
   const [stewardships, setStewardships] = useState<Stewardship[]>([]);
   const [memberSync, setMemberSync] = useState<FederationSyncHealth>();
+  const [transportReadiness, setTransportReadiness] = useState<FederationTransportReadiness>();
   const [memberCatalog, setMemberCatalog] = useState<FederationCatalogReadiness>();
   const [memberSyncLoadError, setMemberSyncLoadError] = useState(false);
   const [hiveCandidates, setHiveCandidates] = useState<ApiaryHiveCandidate[]>([]);
@@ -86,6 +89,14 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [error, setError] = useState("");
   const keeper = context?.mode === "federated" && context.local_role === "keeper";
   const member = context?.mode === "federated" && context.local_role === "member";
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchFederationTransportReadiness(operatorToken)
+      .then((value) => { if (!cancelled) setTransportReadiness(value); })
+      .catch(() => { if (!cancelled) setTransportReadiness(undefined); });
+    return () => { cancelled = true; };
+  }, [operatorToken]);
 
   useEffect(() => {
     if (personal) {
@@ -439,6 +450,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       {personal ? (
         <>
           <p>Your personal Hive remains fully independent. Form an Apiary only when separate one-operator Hives should share Jira work and coordination.</p>
+          <FederationTransportStatus readiness={transportReadiness} />
           <div className="apiary-connection-card">
             <span><strong>Share this Hive with a Keeper</strong><small>Download a signed, short-lived identity card. It contains no repositories, tasks, terminals, Jira access, or credentials.</small></span>
             <button className="secondary-button" disabled={busy || working} onClick={() => void downloadConnectionCard()}>Download connection card</button>
@@ -820,6 +832,42 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       {message ? <p className="form-message" role="status">{message}</p> : null}
       {error ? <p className="form-error" role="alert">{error}</p> : null}
     </section>
+  );
+}
+
+function FederationTransportStatus({ readiness }: { readiness: FederationTransportReadiness | undefined }) {
+  const presentation = !readiness
+    ? {
+        title: "Checking this Hive's network address",
+        detail: "Swarm is verifying whether another Hive can reach this installation.",
+        tone: "waiting",
+      }
+    : readiness.reachability === "remote_https"
+      ? {
+          title: "Reachable Hive URL ready",
+          detail: "Other Hives can contact this installation at the signed HTTPS address below. If this Hive becomes Keeper, it must remain online for invitations and shared coordination.",
+          tone: "online",
+        }
+      : readiness.reachability === "local_only"
+        ? {
+            title: "Local testing only",
+            detail: "A localhost or loopback address reaches only this machine. Configure a reachable HTTPS URL before another computer joins this Apiary.",
+            tone: "waiting",
+          }
+        : {
+            title: "Reachable Hive URL required",
+            detail: "Configure this installation's public HTTPS URL before exchanging Apiary invitations. A private-network hostname is fine when every Hive can resolve and reach it.",
+            tone: "offline",
+          };
+  return (
+    <div className="apiary-network-readiness" aria-label="Hive network readiness" aria-live="polite">
+      <span className={`presence ${presentation.tone}`} />
+      <span>
+        <strong>{presentation.title}</strong>
+        <small>{presentation.detail}</small>
+        {readiness?.endpoint ? <code>{readiness.endpoint}</code> : null}
+      </span>
+    </div>
   );
 }
 

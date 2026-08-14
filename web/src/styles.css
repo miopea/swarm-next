@@ -515,6 +515,11 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-connection-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .apiary-connection-card > span { display: grid; gap: 2px; }
 .apiary-connection-card button { flex: 0 0 auto; }
+.apiary-network-readiness { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
+.apiary-network-readiness > .presence { margin-top: 6px; }
+.apiary-network-readiness > span:last-child { display: grid; min-width: 0; gap: 3px; }
+.apiary-network-readiness small { color: var(--muted); line-height: 1.45; }
+.apiary-network-readiness code { width: fit-content; max-width: 100%; margin-top: 3px; padding: 4px 7px; overflow-wrap: anywhere; border-radius: var(--radius-sm); color: var(--accent-ink); background: var(--panel); font-size: .7rem; }
 .apiary-join-card { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .apiary-join-card > div:first-child { display: grid; gap: 2px; }
 .apiary-invitation-preview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 11px; border: 1px solid var(--accent-strong); border-radius: var(--radius-md); background: var(--accent-soft); }

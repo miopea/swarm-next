@@ -148,6 +148,11 @@ export type FederationSyncHealth = {
   consecutive_failures: number;
   next_attempt_at: number | null;
 };
+export type FederationTransportReadiness = {
+  configured: boolean;
+  endpoint: string | null;
+  reachability: "remote_https" | "local_only" | "unconfigured";
+};
 export type FederationCatalogReadiness = {
   acknowledgement: {
     apiary_id: string;
@@ -730,6 +735,13 @@ export async function fetchHiveConnectionCard(
 ): Promise<HiveConnectionCard> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/connection-card");
   return response.json() as Promise<HiveConnectionCard>;
+}
+
+export async function fetchFederationTransportReadiness(
+  operatorToken: string,
+): Promise<FederationTransportReadiness> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/transport-readiness");
+  return response.json() as Promise<FederationTransportReadiness>;
 }
 
 export async function fetchApiaryHiveCandidates(
