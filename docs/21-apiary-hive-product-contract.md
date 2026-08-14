@@ -138,6 +138,13 @@ count, and timestamps but deliberately does not claim local Jira access,
 workflow readiness, or policy acceptance. Automatic polling and the per-project
 readiness/reconciliation loop remain separate adapter work.
 
+The Member can also inspect a server-derived convergence view for the latest
+acknowledged snapshot. It compares immutable Jira project IDs with the Hive's
+private bindings and reports access and workflow readiness per project, plus
+explicit blockers for a missing or stale catalog, unavailable Jira identity,
+policy-revision drift, and incomplete project access. A fresh signed catalog
+therefore never silently becomes usable shared work merely because it arrived.
+
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
 reject Jira promotion, and a joining Hive passes project readiness only when

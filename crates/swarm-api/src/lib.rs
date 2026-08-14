@@ -1557,6 +1557,10 @@ fn api_router(state: AppState) -> Router {
             get(get_federation_catalog_acknowledgement).post(acknowledge_federation_catalog),
         )
         .route(
+            "/api/v1/apiary/catalog-readiness",
+            get(get_federation_catalog_readiness),
+        )
+        .route(
             "/api/v1/apiary/collapse-readiness",
             get(apiary_collapse_readiness),
         )
@@ -2059,6 +2063,18 @@ async fn get_federation_catalog_acknowledgement(
         .federation_catalog_acknowledgement()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(acknowledgement)).into_response())
+}
+
+async fn get_federation_catalog_readiness(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let jira = state.jira_readiness.readiness().await;
+    let readiness = apiary_service(&state)?
+        .federation_catalog_readiness(jira.connection, unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(readiness)).into_response())
 }
 
 async fn create_apiary(
@@ -5857,10 +5873,19 @@ mod tests {
         assert_eq!(acknowledged.headers()[header::CACHE_CONTROL], "no-store");
         let acknowledged_json = response_json(acknowledged).await;
         assert_eq!(acknowledged_json["project_count"], 0);
-        let current = authorized_get(app, "/api/v1/apiary/catalog-acknowledgement").await;
+        let current = authorized_get(app.clone(), "/api/v1/apiary/catalog-acknowledgement").await;
         assert_eq!(current.status(), StatusCode::OK);
         assert_eq!(current.headers()[header::CACHE_CONTROL], "no-store");
         assert_eq!(response_json(current).await, acknowledged_json);
+        let readiness = authorized_get(app, "/api/v1/apiary/catalog-readiness").await;
+        assert_eq!(readiness.status(), StatusCode::OK);
+        assert_eq!(readiness.headers()[header::CACHE_CONTROL], "no-store");
+        let readiness_json = response_json(readiness).await;
+        assert_eq!(readiness_json["projects"], serde_json::json!([]));
+        assert_eq!(
+            readiness_json["blockers"],
+            serde_json::json!(["integration_not_ready"])
+        );
     }
 
     async fn assert_imported_policy_acceptance(app: Router, invitation_id: ApiaryInvitationId) {

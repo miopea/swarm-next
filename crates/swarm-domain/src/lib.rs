@@ -360,7 +360,68 @@ pub struct FederationCatalogAcknowledgement {
     pub promoted_project_catalog_digest: String,
     pub project_count: usize,
     pub snapshot_issued_at: i64,
+    pub snapshot_expires_at: i64,
     pub acknowledged_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationCatalogBlocker {
+    CatalogMissing,
+    CatalogStale,
+    IntegrationNotReady,
+    PolicyRevisionChanged,
+    ProjectAccessNotReady,
+}
+
+/// Member-local convergence state for the latest verified Keeper catalog.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationCatalogReadiness {
+    pub acknowledgement: Option<FederationCatalogAcknowledgement>,
+    pub jira_connection: JiraConnectionState,
+    pub projects: Vec<FederationProjectReadiness>,
+    pub blockers: Vec<FederationCatalogBlocker>,
+}
+
+impl FederationCatalogReadiness {
+    #[must_use]
+    pub fn evaluate(
+        acknowledgement: Option<FederationCatalogAcknowledgement>,
+        local_policy_revision: u64,
+        jira_connection: JiraConnectionState,
+        projects: Vec<FederationProjectReadiness>,
+        now: i64,
+    ) -> Self {
+        let mut blockers = Vec::new();
+        match &acknowledgement {
+            None => blockers.push(FederationCatalogBlocker::CatalogMissing),
+            Some(catalog) => {
+                if catalog.snapshot_expires_at <= now {
+                    blockers.push(FederationCatalogBlocker::CatalogStale);
+                }
+                if catalog.policy_revision != local_policy_revision {
+                    blockers.push(FederationCatalogBlocker::PolicyRevisionChanged);
+                }
+            }
+        }
+        if jira_connection != JiraConnectionState::Ready {
+            blockers.push(FederationCatalogBlocker::IntegrationNotReady);
+        }
+        if projects.iter().any(|project| !project.is_ready()) {
+            blockers.push(FederationCatalogBlocker::ProjectAccessNotReady);
+        }
+        Self {
+            acknowledgement,
+            jira_connection,
+            projects,
+            blockers,
+        }
+    }
+
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.blockers.is_empty()
+    }
 }
 
 /// A one-time handoff bundle. The secret is shown only in this response and is

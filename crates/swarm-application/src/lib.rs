@@ -3,12 +3,12 @@ use swarm_domain::{
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks,
     ApiaryJoinReadiness, ApiaryMemberSummary, DecisionRequest, DecisionRequestId,
     DecisionRequestKind, DecisionUrgency, FederationCatalogAcknowledgement,
-    FederationCatalogSnapshot, FederationJoinAcceptance, FederationJoinInvitation,
-    FederationJoinReadiness, FederationJoinSubmission, HiveConnectionCard, HiveId,
-    JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
-    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
-    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
-    WorkerSessionId,
+    FederationCatalogReadiness, FederationCatalogSnapshot, FederationJoinAcceptance,
+    FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
+    HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
+    OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    PresenceObservationState, SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId,
+    WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -111,6 +111,33 @@ impl ApiaryService {
         self.store
             .federation_catalog_acknowledgement()
             .map_err(Into::into)
+    }
+
+    /// Derives current Member-local convergence for the latest verified
+    /// Keeper catalog from private Jira and local policy evidence.
+    ///
+    /// # Errors
+    /// Rejects personal Hives and corrupt or unavailable durable state.
+    pub fn federation_catalog_readiness(
+        &self,
+        jira_connection: JiraConnectionState,
+        now: i64,
+    ) -> Result<FederationCatalogReadiness, ApplicationError> {
+        let context = self.store.local_apiary_context()?;
+        let LocalApiaryContext::Federated { apiary, .. } = context else {
+            return Err(ApplicationError::Store(
+                TaskStoreError::InvalidFederationCatalog,
+            ));
+        };
+        let acknowledgement = self.store.federation_catalog_acknowledgement()?;
+        let projects = self.store.acknowledged_federation_project_readiness()?;
+        Ok(FederationCatalogReadiness::evaluate(
+            acknowledgement,
+            apiary.policy_revision(),
+            jira_connection,
+            projects,
+            now,
+        ))
     }
 
     /// Lists the public Hive/operator identities registered in this Apiary.

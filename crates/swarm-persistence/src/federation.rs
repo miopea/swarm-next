@@ -188,7 +188,8 @@ impl TaskStore {
         connection
             .query_row(
                 "SELECT apiary_id, policy_revision, catalog_digest,
-                        project_count, snapshot_issued_at, acknowledged_at
+                        project_count, snapshot_issued_at, snapshot_expires_at,
+                        acknowledged_at
                  FROM local_federation_catalog WHERE singleton = 1",
                 [],
                 |row| {
@@ -198,12 +199,54 @@ impl TaskStore {
                         promoted_project_catalog_digest: row.get(2)?,
                         project_count: row.get(3)?,
                         snapshot_issued_at: row.get(4)?,
-                        acknowledged_at: row.get(5)?,
+                        snapshot_expires_at: row.get(5)?,
+                        acknowledged_at: row.get(6)?,
                     })
                 },
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// Compares every project in the latest verified Keeper snapshot with
+    /// this Hive's private Jira binding and workflow evidence.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt snapshot state or unavailable persistence.
+    pub fn acknowledged_federation_project_readiness(
+        &self,
+    ) -> Result<Vec<FederationProjectReadiness>, TaskStoreError> {
+        let connection = self.connection()?;
+        let snapshot_json = connection
+            .query_row(
+                "SELECT snapshot_json FROM local_federation_catalog WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        drop(connection);
+        let Some(snapshot_json) = snapshot_json else {
+            return Ok(Vec::new());
+        };
+        let snapshot: FederationCatalogSnapshot = serde_json::from_str(&snapshot_json)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        let bindings = self.list_jira_project_bindings()?;
+        Ok(snapshot
+            .payload
+            .projects
+            .into_iter()
+            .map(|project| {
+                let binding = bindings
+                    .iter()
+                    .find(|binding| binding.project_id == project.project_id);
+                FederationProjectReadiness {
+                    project,
+                    binding_id: binding.map(|binding| binding.id),
+                    access_verified: binding.is_some_and(|binding| binding.access_verified),
+                    workflow_mapped: binding.is_some_and(|binding| binding.workflow_mapped),
+                }
+            })
+            .collect())
     }
 
     /// Returns a short-lived Keeper-signed public project catalog bound to the
@@ -1192,6 +1235,7 @@ fn catalog_acknowledgement(
         promoted_project_catalog_digest: snapshot.payload.promoted_project_catalog_digest.clone(),
         project_count: snapshot.payload.projects.len(),
         snapshot_issued_at: snapshot.payload.issued_at,
+        snapshot_expires_at: snapshot.payload.expires_at,
         acknowledged_at,
     }
 }
