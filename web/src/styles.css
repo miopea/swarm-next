@@ -925,6 +925,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .integration-status small { color: var(--muted); }
 .jira-connect-panel { display: grid; gap: 10px; }
 .jira-auth-action { width: fit-content; min-width: 12rem; }
+.email-settings { grid-column: 1 / -1; }
 .email-connect-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .email-configuration { display: grid; gap: 12px; padding: 14px; border: 1px solid color-mix(in srgb, var(--honey) 55%, var(--line)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--honey-soft) 35%, var(--panel-raised)); }
 .email-configuration-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
