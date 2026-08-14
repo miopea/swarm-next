@@ -64,6 +64,9 @@ impl ApiaryService {
         backend: SharedWorkBackend,
         now: i64,
     ) -> Result<LocalApiaryContext, ApplicationError> {
+        if backend != SharedWorkBackend::Jira {
+            return Err(ApplicationError::SharedWorkBackendUnavailable);
+        }
         self.store
             .create_apiary_for_local_hive(name, backend, now)
             .map_err(Into::into)
@@ -551,6 +554,8 @@ pub enum ApplicationError {
     WorkerNotRunning,
     #[error("integration unavailable: {0}")]
     IntegrationUnavailable(String),
+    #[error("that Apiary shared-work backend is not available yet")]
+    SharedWorkBackendUnavailable,
     #[error(transparent)]
     Store(#[from] TaskStoreError),
 }
@@ -593,11 +598,24 @@ mod tests {
                 && apiary.shared_work_backend() == SharedWorkBackend::Jira
         ));
         assert!(matches!(
-            service.create_from_personal_hive("Second", SharedWorkBackend::Native, 20),
+            service.create_from_personal_hive("Second", SharedWorkBackend::Jira, 20),
             Err(ApplicationError::Store(
                 TaskStoreError::ApiaryMembershipConflict
             ))
         ));
+    }
+
+    #[test]
+    fn native_apiary_creation_stays_unavailable_until_distributed_guarantees_exist() {
+        let service = ApiaryService::new(TaskStore::in_memory().unwrap());
+        assert!(matches!(
+            service.create_from_personal_hive("Orchard", SharedWorkBackend::Native, 10),
+            Err(ApplicationError::SharedWorkBackendUnavailable)
+        ));
+        assert_eq!(
+            service.store.local_apiary_context().unwrap(),
+            LocalApiaryContext::Personal
+        );
     }
 
     #[test]

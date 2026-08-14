@@ -4166,6 +4166,11 @@ fn application_error(error: ApplicationError) -> ApiError {
             "integration_unavailable",
             error.to_string(),
         ),
+        ApplicationError::SharedWorkBackendUnavailable => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "apiary_backend_unavailable",
+            error.to_string(),
+        ),
         ApplicationError::Store(error) => task_store_error(&error),
     }
 }
@@ -4848,6 +4853,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let unavailable_native = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"name":"Orchard","shared_work_backend":"native"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            unavailable_native.status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            response_json(unavailable_native).await["code"],
+            "apiary_backend_unavailable"
+        );
 
         let created = app
             .clone()

@@ -670,16 +670,20 @@ fn collapse_readiness(
     connection: &rusqlite::Connection,
     apiary_id: ApiaryId,
 ) -> Result<ApiaryCollapseReadiness, TaskStoreError> {
-    let active = connection.query_row(
-        "SELECT collapsed_at IS NULL FROM apiaries WHERE id = ?1",
-        [apiary_id.to_string()],
-        |row| row.get::<_, bool>(0),
-    ).optional()?.ok_or(TaskStoreError::ApiaryNotFound)?;
+    let active = connection
+        .query_row(
+            "SELECT collapsed_at IS NULL FROM apiaries WHERE id = ?1",
+            [apiary_id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )
+        .optional()?
+        .ok_or(TaskStoreError::ApiaryNotFound)?;
     if !active {
         return Err(TaskStoreError::ApiaryNotFound);
     }
     let count = |sql: &str| -> Result<usize, TaskStoreError> {
-        let value = connection.query_row(sql, [apiary_id.to_string()], |row| row.get::<_, i64>(0))?;
+        let value =
+            connection.query_row(sql, [apiary_id.to_string()], |row| row.get::<_, i64>(0))?;
         usize::try_from(value).map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
     };
     Ok(ApiaryCollapseReadiness {
@@ -988,13 +992,7 @@ mod tests {
                 .unwrap();
         }
         store
-            .create_apiary_invitation(
-                apiary.id,
-                invited_hive,
-                identity.operator.id,
-                20,
-                100,
-            )
+            .create_apiary_invitation(apiary.id, invited_hive, identity.operator.id, 20, 100)
             .unwrap();
         assert_eq!(
             store.apiary_collapse_readiness(apiary.id).unwrap(),

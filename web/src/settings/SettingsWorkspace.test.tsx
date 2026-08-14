@@ -83,11 +83,12 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       onUpdateWorker={vi.fn().mockResolvedValue(undefined)}
       onReorderWorkers={vi.fn().mockResolvedValue(undefined)}
       onUpdateWorkerEngine={onUpdateWorkerEngine}
+      onHiveIdentityChange={vi.fn()}
     />,
   );
 
   const settingsNavigation = screen.getByRole("navigation", { name: "Settings sections" });
-  expect(settingsNavigation).toHaveTextContent("CrewPresenceQueenAlertsSystemIntegrationsBackupDiagnostics");
+  expect(settingsNavigation).toHaveTextContent("CrewPresenceQueenAlertsSystemApiaryIntegrationsBackupDiagnostics");
   expect(screen.getByRole("button", { name: "Diagnostics" })).toHaveAttribute("aria-controls", "settings-diagnostics");
   fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
   expect(screen.getByRole("button", { name: "Diagnostics" })).toHaveAttribute("aria-current", "location");
@@ -219,7 +220,7 @@ function minimalProps() {
     recentEvents: [], sessions: [], workers: [], workspaces: [], providers: { claude_code: true, codex: false }, health: { status: "ok" as const, version: "0.1.0" },
     hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
     onThemeChange: vi.fn(), onPresenceChange: vi.fn(), onEnableLockDetection: vi.fn(), onNotificationPolicyChange: vi.fn(),
-    onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(), onUpdateWorkerEngine: vi.fn(),
+    onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(), onUpdateWorkerEngine: vi.fn(), onHiveIdentityChange: vi.fn(),
   };
 }
 function ok(body: unknown) {

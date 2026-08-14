@@ -78,14 +78,28 @@ export type HistoryDiagnostics = {
   recovered_truncated_bytes: number;
   recovered_corrupt_segments: number;
 };
+export type Apiary = {
+  id: string;
+  name: string;
+  keeper_operator_id: string;
+  shared_work_backend: "jira" | "native";
+};
+export type LocalApiaryContext = { mode: "personal" } | {
+  mode: "federated";
+  apiary: Apiary;
+  local_role: "keeper" | "member";
+};
+export type ApiaryCollapseReadiness = {
+  active_hive_count: number;
+  pending_invitation_count: number;
+  active_stewardship_count: number;
+  open_cross_hive_work_count: number;
+  departed_node_count: number;
+};
 export type HiveIdentity = {
   operator: { id: string; display_name: string };
   hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
-  apiary_context?: { mode: "personal" } | {
-    mode: "federated";
-    apiary: { id: string; name: string; keeper_operator_id: string; shared_work_backend: "jira" | "native" };
-    local_role: "keeper" | "member";
-  };
+  apiary_context?: LocalApiaryContext;
 };
 export type DogfoodReport = {
   id: string;
@@ -370,6 +384,33 @@ export async function fetchHistoryDiagnostics(operatorToken: string): Promise<Hi
 export async function fetchHive(operatorToken: string): Promise<HiveIdentity> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/hive");
   return response.json() as Promise<HiveIdentity>;
+}
+
+export async function createApiary(
+  operatorToken: string,
+  name: string,
+  sharedWorkBackend: "jira",
+): Promise<LocalApiaryContext> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, shared_work_backend: sharedWorkBackend }),
+  });
+  return response.json() as Promise<LocalApiaryContext>;
+}
+
+export async function fetchApiaryCollapseReadiness(
+  operatorToken: string,
+): Promise<ApiaryCollapseReadiness> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/collapse-readiness");
+  return response.json() as Promise<ApiaryCollapseReadiness>;
+}
+
+export async function collapseApiary(operatorToken: string): Promise<LocalApiaryContext> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/collapse", {
+    method: "POST",
+  });
+  return response.json() as Promise<LocalApiaryContext>;
 }
 
 export async function fetchSessions(operatorToken: string): Promise<SessionSummary[]> {

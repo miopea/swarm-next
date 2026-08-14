@@ -6,6 +6,7 @@ import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
 import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
+import ApiarySettings from "./ApiarySettings";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import JiraSettings from "./JiraSettings";
 import WorkerSettings from "./WorkerSettings";
@@ -40,9 +41,10 @@ type Props = {
   onUpdateWorker: (workerId: string, name: string, autostart: boolean) => Promise<void>;
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
   onUpdateWorkerEngine: () => Promise<void>;
+  onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
-export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers, onUpdateWorkerEngine }: Props) {
+export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers, onUpdateWorkerEngine, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
@@ -81,6 +83,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
           ["settings-queen", "Queen"],
           ["settings-notifications", "Alerts"],
           ["settings-runtime", "System"],
+          ["settings-apiary", "Apiary"],
           ["settings-integrations", "Integrations"],
           ["settings-backup", "Backup"],
           ["settings-diagnostics", "Diagnostics"],
@@ -214,6 +217,8 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
           <div><dt>Membership</dt><dd>{apiaryMembershipLabel(hiveIdentity)}</dd></div>
         </dl>
       </section>
+
+      <ApiarySettings busy={busy} hiveIdentity={hiveIdentity} operatorToken={operatorToken} onHiveIdentityChange={onHiveIdentityChange} />
 
       <section id="settings-runtime" className="settings-card" aria-labelledby="runtime-heading">
         <div><p className="eyebrow">Runtime</p><h3 id="runtime-heading">Local system</h3></div>

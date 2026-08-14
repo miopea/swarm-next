@@ -971,6 +971,7 @@ export function App() {
             onUpdateWorker={maintainWorkerProfile}
             onReorderWorkers={reorderWorkerProfiles}
             onUpdateWorkerEngine={maintainWorkerEngine}
+            onHiveIdentityChange={setHiveIdentity}
           />
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}:${terminalRevision}`}>

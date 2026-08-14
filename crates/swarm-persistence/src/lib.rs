@@ -9,9 +9,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use swarm_domain::{
     Apiary, ApiaryId, ControlRoomEvent, ControlRoomEventKind, ControlRoomEventPage, Hive, HiveId,
     HiveIdentity, LocalApiaryContext, LocalApiaryRole, Operator, OperatorId, SharedWorkBackend,
-    StewardCapability, Stewardship, StewardshipId, Task,
-    TaskActivity, TaskActivityKind, TaskActivityPage, TaskDetailsUpdate, TaskDispatchState, TaskId,
-    TaskOutcomeDeliveryState, TaskPriority, TaskState, WorkerId, WorkerSessionId,
+    StewardCapability, Stewardship, StewardshipId, Task, TaskActivity, TaskActivityKind,
+    TaskActivityPage, TaskDetailsUpdate, TaskDispatchState, TaskId, TaskOutcomeDeliveryState,
+    TaskPriority, TaskState, WorkerId, WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
