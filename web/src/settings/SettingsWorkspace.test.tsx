@@ -116,7 +116,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Live updates").parentElement).toHaveTextContent("Live updatesConnected");
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
-  expect((await screen.findByText("Worker engine")).parentElement).toHaveTextContent("Worker engine1 update ready");
+  expect((await screen.findByText("Worker engine")).parentElement).toHaveTextContent("Worker engineUpdate ready · restart required");
   expect(screen.getByText("Workers affected").parentElement).toHaveTextContent("1 active worker will briefly stop · conversations retained");
   expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("Worker engine updateBriefly stops active workers");
   expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("a model turn or command running at that moment is interrupted");

@@ -324,7 +324,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
 function workerEngineLabel(health: Health | undefined, host: TerminalHostStatus | undefined) {
   if (!host) return "Unavailable";
   if (health && health.version !== host.host_version) {
-    return "1 update ready";
+    return "Update ready · restart required";
   }
   return `Current · ${host.running_sessions} active`;
 }
