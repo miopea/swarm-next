@@ -365,6 +365,14 @@ export type EmailReadiness = {
   account_name: string | null;
   account_address: string | null;
 };
+export type EmailOAuthConfiguration = {
+  configured: boolean;
+  managed_by: "environment" | "operator" | null;
+  tenant_id: string | null;
+  client_id: string | null;
+  callback_url: string | null;
+  secret_stored: boolean;
+};
 export type EmailAttachment = {
   id: string;
   name: string;
@@ -1260,6 +1268,25 @@ export async function reconcileJira(operatorToken: string): Promise<void> {
 export async function fetchEmailReadiness(operatorToken: string): Promise<EmailReadiness> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/readiness");
   return response.json() as Promise<EmailReadiness>;
+}
+
+export async function fetchEmailConfiguration(operatorToken: string): Promise<EmailOAuthConfiguration> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/configuration");
+  return response.json() as Promise<EmailOAuthConfiguration>;
+}
+
+export async function updateEmailConfiguration(
+  operatorToken: string,
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<EmailOAuthConfiguration> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/configuration", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tenant_id: tenantId, client_id: clientId, client_secret: clientSecret }),
+  });
+  return response.json() as Promise<EmailOAuthConfiguration>;
 }
 
 export async function beginEmailAuthorization(operatorToken: string): Promise<string> {

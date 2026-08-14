@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
-import { beginEmailAuthorization, disconnectEmail, type EmailReadiness } from "../api";
+import { beginEmailAuthorization, disconnectEmail, fetchEmailConfiguration, updateEmailConfiguration, type EmailOAuthConfiguration, type EmailReadiness } from "../api";
 
 type Props = {
   operatorToken: string;
@@ -12,6 +12,26 @@ type Props = {
 export default function EmailSettings({ operatorToken, readiness, unavailable, onNavigate = (url) => window.location.assign(url) }: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [configuration, setConfiguration] = useState<EmailOAuthConfiguration>();
+  const [editingConfiguration, setEditingConfiguration] = useState(false);
+  const [tenantId, setTenantId] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+
+  useEffect(() => {
+    let current = true;
+    void fetchEmailConfiguration(operatorToken)
+      .then((next) => {
+        if (!current) return;
+        setConfiguration(next);
+        setTenantId(next.tenant_id ?? "");
+        setClientId(next.client_id ?? "");
+      })
+      .catch((error: unknown) => {
+        if (current) setMessage(error instanceof Error ? error.message : "Microsoft app setup could not be loaded.");
+      });
+    return () => { current = false; };
+  }, [operatorToken]);
 
   async function connect() {
     setBusy(true);
@@ -36,7 +56,27 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
     }
   }
 
+  async function saveConfiguration(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      const next = await updateEmailConfiguration(operatorToken, tenantId, clientId, clientSecret);
+      setConfiguration(next);
+      setClientSecret("");
+      setEditingConfiguration(false);
+      setMessage("Microsoft app registration saved privately. You can connect Outlook now.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Microsoft app setup could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const connected = readiness?.connection === "ready";
+  const configured = readiness?.configured === true || configuration?.configured === true;
+  const canManageConfiguration = configuration?.managed_by !== "environment";
+  const showConfigurationForm = !connected && canManageConfiguration && (!configured || editingConfiguration);
   return (
     <section className="settings-card integration-settings email-settings" aria-labelledby="email-integration-heading">
       <div><p className="eyebrow">Email intake</p><h3 id="email-integration-heading">Turn reported issues into finished work</h3></div>
@@ -45,13 +85,39 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
         <span className={`presence ${connected ? "online" : unavailable || readiness?.connection === "credentials_invalid" || readiness?.connection === "permission_denied" ? "offline" : "waiting"}`} />
         <span><strong>{readinessLabel(readiness, unavailable)}</strong><small>{readinessDetail(readiness, unavailable)}</small></span>
       </div>
-      {connected ? (
+      {showConfigurationForm ? (
+        <form className="email-configuration" aria-label="Microsoft app setup" onSubmit={(event) => void saveConfiguration(event)}>
+          <div className="email-configuration-heading">
+            <div><strong>One-time Microsoft app setup</strong><small>Register a Web application in Microsoft Entra, then enter its three values here.</small></div>
+            <a className="secondary-button compact-action" href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noreferrer">Open Entra</a>
+          </div>
+          <ol className="email-setup-steps">
+            <li>Add this exact <strong>Web redirect URI</strong>.</li>
+            <li>Add delegated permissions: <strong>User.Read, Mail.Read, Mail.Send</strong>.</li>
+            <li>Create a client secret, then save its value here before leaving Entra.</li>
+          </ol>
+          <label className="email-callback-field">Web redirect URI<input readOnly value={configuration?.callback_url ?? "Public Hive URL required"} onFocus={(event) => event.currentTarget.select()} /></label>
+          <div className="email-configuration-fields">
+            <label>Directory (tenant) ID<input required autoComplete="off" value={tenantId} onChange={(event) => setTenantId(event.target.value)} placeholder="organizations or tenant UUID" /></label>
+            <label>Application (client) ID<input required autoComplete="off" value={clientId} onChange={(event) => setClientId(event.target.value)} placeholder="00000000-0000-0000-0000-000000000000" /></label>
+            <label>Client secret value<input required type="password" autoComplete="new-password" value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} placeholder="Shown once by Microsoft" /></label>
+          </div>
+          <small className="privacy-note">The secret travels only to this Hive over HTTPS, is stored in its private host directory, and is never returned to the browser, Queen, or workers.</small>
+          <div className="email-configuration-actions">
+            {configured ? <button className="secondary-button" type="button" disabled={busy} onClick={() => setEditingConfiguration(false)}>Cancel</button> : null}
+            <button className="primary-action" type="submit" disabled={busy || !configuration?.callback_url}>{busy ? "Saving privately…" : "Save app registration"}</button>
+          </div>
+        </form>
+      ) : connected ? (
         <button className="secondary-button jira-auth-action" type="button" disabled={busy} onClick={() => void disconnect()}>Disconnect Outlook</button>
       ) : (
         <div className="jira-connect-panel">
-          <button className="primary-action jira-auth-action" type="button" disabled={busy || unavailable || readiness?.configured === false} onClick={() => void connect()}>
-            {busy ? "Opening Microsoft…" : readiness?.configured === false ? "Microsoft app setup required" : readiness?.connection === "credentials_invalid" ? "Reconnect Outlook" : "Connect Outlook"}
-          </button>
+          <div className="email-connect-actions">
+            <button className="primary-action jira-auth-action" type="button" disabled={busy || unavailable || !configured} onClick={() => void connect()}>
+              {busy ? "Opening Microsoft…" : readiness?.connection === "credentials_invalid" ? "Reconnect Outlook" : "Connect Outlook"}
+            </button>
+            {canManageConfiguration && configured ? <button className="secondary-button" type="button" disabled={busy} onClick={() => setEditingConfiguration(true)}>Replace app registration</button> : null}
+          </div>
           <small className="privacy-note">A Microsoft consent page opens, then returns here. Mail tokens remain private on this host and never enter Queen, workers, or browser storage.</small>
         </div>
       )}

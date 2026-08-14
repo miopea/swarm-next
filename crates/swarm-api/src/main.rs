@@ -41,6 +41,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(public_base_url) = env::var("SWARM_PUBLIC_BASE_URL") {
         state = state.with_public_base_url(&public_base_url)?;
     }
+    state = state.with_email_oauth_paths(
+        email_configuration_path(&database_path),
+        email_token_path(&database_path),
+    );
     state = configure_jira(state, &database_path)?;
     state = configure_email(state, &database_path)?;
     state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
@@ -273,7 +277,7 @@ fn configure_email(
         env::var("SWARM_EMAIL_OAUTH_CLIENT_SECRET").ok(),
     );
     match settings {
-        (None, None, None) => {}
+        (None, None, None) => state = state.with_saved_outlook_oauth()?,
         (Some(tenant_id), Some(client_id), Some(client_secret)) => {
             let public_url = env::var("SWARM_PUBLIC_BASE_URL")
                 .map_err(|_| "Microsoft email OAuth requires SWARM_PUBLIC_BASE_URL")?;
@@ -296,6 +300,14 @@ fn email_token_path(database_path: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("secrets")
         .join("email-oauth.json")
+}
+
+fn email_configuration_path(database_path: &std::path::Path) -> PathBuf {
+    database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("secrets")
+        .join("email-oauth-config.json")
 }
 
 fn maintenance_request_path_from_env(database_path: &std::path::Path) -> PathBuf {

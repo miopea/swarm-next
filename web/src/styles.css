@@ -925,6 +925,18 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .integration-status small { color: var(--muted); }
 .jira-connect-panel { display: grid; gap: 10px; }
 .jira-auth-action { width: fit-content; min-width: 12rem; }
+.email-connect-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.email-configuration { display: grid; gap: 12px; padding: 14px; border: 1px solid color-mix(in srgb, var(--honey) 55%, var(--line)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--honey-soft) 35%, var(--panel-raised)); }
+.email-configuration-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.email-configuration-heading > div { display: grid; min-width: 0; gap: 3px; }
+.email-configuration-heading small { color: var(--muted); line-height: 1.4; }
+.email-configuration-heading .compact-action { flex: 0 0 auto; text-decoration: none; }
+.email-setup-steps { display: grid; gap: 5px; margin: 0; padding-left: 20px; color: var(--muted); font-size: .77rem; line-height: 1.4; }
+.email-configuration label { display: grid; gap: 5px; color: var(--muted); font-size: .74rem; font-weight: 650; }
+.email-configuration input { width: 100%; min-width: 0; }
+.email-callback-field input { color: var(--text); font-family: var(--font-mono); font-size: .75rem; }
+.email-configuration-fields { display: grid; grid-template-columns: minmax(145px, .65fr) minmax(230px, 1fr) minmax(230px, 1fr); gap: 10px; }
+.email-configuration-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .jira-binding-list, .jira-project-setup, .jira-workflow-setup, .jira-status-map { display: grid; gap: 10px; }
 .jira-binding-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 20px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-raised); }
 .jira-binding-card > span { display: grid; min-width: 0; gap: 2px; }
@@ -993,6 +1005,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .jira-binding-card > span:last-child { text-align: left; }
   .jira-binding-destination { grid-column: 1; }
   .jira-auth-action { width: 100%; }
+  .email-connect-actions, .email-configuration-heading { display: grid; grid-template-columns: 1fr; }
+  .email-connect-actions button, .email-configuration-heading .compact-action { width: 100%; }
+  .email-configuration-fields { grid-template-columns: 1fr; }
+  .email-configuration-actions { display: grid; grid-template-columns: 1fr; }
+  .email-configuration-actions button { width: 100%; }
   .jira-status-map label { grid-template-columns: 1fr; }
   .jira-intake { padding: 12px; }
   .jira-intake-heading { align-items: start; }

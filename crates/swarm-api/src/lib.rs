@@ -107,8 +107,24 @@ pub struct AppState {
     development_reload_status_path: Option<Arc<PathBuf>>,
     maintenance_timeout: Duration,
     jira_readiness: jira::JiraReadinessProbe,
-    outlook: outlook::OutlookProbe,
+    outlook: Arc<RwLock<outlook::OutlookProbe>>,
+    email_oauth_configuration: Arc<RwLock<Option<EmailOAuthConfigurationState>>>,
+    email_oauth_config_path: Option<Arc<PathBuf>>,
+    email_oauth_token_path: Option<Arc<PathBuf>>,
     public_base_url: Option<Arc<str>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EmailOAuthConfigurationSource {
+    Environment,
+    Operator,
+}
+
+#[derive(Clone, Debug)]
+struct EmailOAuthConfigurationState {
+    tenant_id: String,
+    client_id: String,
+    source: EmailOAuthConfigurationSource,
 }
 
 impl AppState {
@@ -140,7 +156,10 @@ impl AppState {
             development_reload_status_path: None,
             maintenance_timeout: Duration::from_secs(45),
             jira_readiness: jira::JiraReadinessProbe::default(),
-            outlook: outlook::OutlookProbe::default(),
+            outlook: Arc::new(RwLock::new(outlook::OutlookProbe::default())),
+            email_oauth_configuration: Arc::new(RwLock::new(None)),
+            email_oauth_config_path: None,
+            email_oauth_token_path: None,
             public_base_url: None,
         }
     }
@@ -170,6 +189,8 @@ impl AppState {
         public_base_url: &str,
         token_path: PathBuf,
     ) -> Result<Self, String> {
+        let client_id = client_id.into();
+        let client_secret = client_secret.into();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .build()
@@ -197,6 +218,8 @@ impl AppState {
         public_base_url: &str,
         token_path: PathBuf,
     ) -> Result<Self, String> {
+        let client_id = client_id.into();
+        let client_secret = client_secret.into();
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
             .build()
@@ -204,12 +227,72 @@ impl AppState {
         let oauth = microsoft_oauth::MicrosoftOAuthClient::new(
             client,
             tenant_id,
-            client_id,
+            client_id.clone(),
             client_secret,
             public_base_url,
             token_path,
         )?;
-        self.outlook = outlook::OutlookProbe::oauth(oauth);
+        self.outlook = Arc::new(RwLock::new(outlook::OutlookProbe::oauth(oauth)));
+        self.email_oauth_configuration =
+            Arc::new(RwLock::new(Some(EmailOAuthConfigurationState {
+                tenant_id: tenant_id.trim().to_owned(),
+                client_id: client_id.to_string(),
+                source: EmailOAuthConfigurationSource::Environment,
+            })));
+        Ok(self)
+    }
+
+    /// Configures private storage used by operator-managed Microsoft OAuth setup.
+    #[must_use]
+    pub fn with_email_oauth_paths(
+        mut self,
+        configuration_path: PathBuf,
+        token_path: PathBuf,
+    ) -> Self {
+        self.email_oauth_config_path = Some(Arc::new(configuration_path));
+        self.email_oauth_token_path = Some(Arc::new(token_path));
+        self
+    }
+
+    /// Loads an operator-managed Microsoft OAuth registration when present.
+    ///
+    /// # Errors
+    /// Rejects an unreadable registration or a missing public callback URL.
+    pub fn with_saved_outlook_oauth(mut self) -> Result<Self, String> {
+        let Some(configuration_path) = self.email_oauth_config_path.as_deref() else {
+            return Ok(self);
+        };
+        let Some(configuration) = microsoft_oauth::load_configuration(configuration_path.as_ref())?
+        else {
+            return Ok(self);
+        };
+        let public_base_url = self
+            .public_base_url
+            .as_deref()
+            .ok_or("Microsoft email OAuth requires SWARM_PUBLIC_BASE_URL")?;
+        let token_path = self
+            .email_oauth_token_path
+            .as_deref()
+            .ok_or("Microsoft email OAuth token storage is not configured")?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|error| format!("Microsoft OAuth client could not start: {error}"))?;
+        let oauth = microsoft_oauth::MicrosoftOAuthClient::new(
+            client,
+            &configuration.tenant_id,
+            configuration.client_id.clone(),
+            configuration.client_secret,
+            public_base_url,
+            token_path.clone(),
+        )?;
+        self.outlook = Arc::new(RwLock::new(outlook::OutlookProbe::oauth(oauth)));
+        self.email_oauth_configuration =
+            Arc::new(RwLock::new(Some(EmailOAuthConfigurationState {
+                tenant_id: configuration.tenant_id,
+                client_id: configuration.client_id,
+                source: EmailOAuthConfigurationSource::Operator,
+            })));
         Ok(self)
     }
 
@@ -464,7 +547,8 @@ impl AppState {
             );
             return;
         };
-        let outcome = self.outlook.reply(&source.message_id, &dispatch.body).await;
+        let outlook = self.outlook.read().await.clone();
+        let outcome = outlook.reply(&source.message_id, &dispatch.body).await;
         let result = match outcome {
             Ok(receipt) => store.complete_email_reply(&dispatch.id, &receipt),
             Err(outlook::OutlookError::AmbiguousDelivery) => store.fail_email_reply(
@@ -1860,6 +1944,10 @@ fn api_router(state: AppState) -> Router {
             post(reconcile_jira_now),
         )
         .route("/api/v1/integrations/email/readiness", get(email_readiness))
+        .route(
+            "/api/v1/integrations/email/configuration",
+            get(email_configuration).put(update_email_configuration),
+        )
         .route(
             "/api/v1/integrations/email/auth/start",
             post(email_auth_start),
@@ -4100,6 +4188,23 @@ struct EmailAuthorizationStart {
     authorization_url: String,
 }
 
+#[derive(Serialize)]
+struct EmailOAuthConfigurationView {
+    configured: bool,
+    managed_by: Option<&'static str>,
+    tenant_id: Option<String>,
+    client_id: Option<String>,
+    callback_url: Option<String>,
+    secret_stored: bool,
+}
+
+#[derive(Deserialize)]
+struct UpdateEmailOAuthConfiguration {
+    tenant_id: String,
+    client_id: String,
+    client_secret: String,
+}
+
 #[derive(Deserialize)]
 struct EmailAuthorizationCallback {
     state: Option<String>,
@@ -4144,11 +4249,144 @@ async fn email_readiness(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let outlook = state.outlook.read().await.clone();
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(state.outlook.readiness().await),
+        Json(outlook.readiness().await),
     )
         .into_response())
+}
+
+async fn email_configuration(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let configuration = state.email_oauth_configuration.read().await.clone();
+    let callback_url = state
+        .public_base_url
+        .as_deref()
+        .map(|base| format!("{}/auth/email/callback", base.trim_end_matches('/')));
+    let response = match configuration {
+        Some(configuration) => EmailOAuthConfigurationView {
+            configured: true,
+            managed_by: Some(match configuration.source {
+                EmailOAuthConfigurationSource::Environment => "environment",
+                EmailOAuthConfigurationSource::Operator => "operator",
+            }),
+            tenant_id: Some(configuration.tenant_id),
+            client_id: Some(configuration.client_id),
+            callback_url,
+            secret_stored: true,
+        },
+        None => EmailOAuthConfigurationView {
+            configured: false,
+            managed_by: None,
+            tenant_id: None,
+            client_id: None,
+            callback_url,
+            secret_stored: false,
+        },
+    };
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
+}
+
+async fn update_email_configuration(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateEmailOAuthConfiguration>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    if state
+        .email_oauth_configuration
+        .read()
+        .await
+        .as_ref()
+        .is_some_and(|configuration| {
+            configuration.source == EmailOAuthConfigurationSource::Environment
+        })
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "email_configuration_managed_by_host",
+            "Microsoft email OAuth is managed by this host and cannot be changed here",
+        ));
+    }
+    let current = state.outlook.read().await.clone();
+    if let Some(client) = current.oauth_client()
+        && client.has_connection().await
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "email_account_connected",
+            "Disconnect Outlook before replacing its Microsoft app registration",
+        ));
+    }
+    let tenant_id = request.tenant_id.trim().to_owned();
+    let client_id = request.client_id.trim().to_owned();
+    let client_secret = request.client_secret;
+    let public_base_url = state.public_base_url.as_deref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "email_public_url_unconfigured",
+            "Set the Hive public URL before configuring Microsoft email OAuth",
+        )
+    })?;
+    let configuration_path = state.email_oauth_config_path.as_deref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_configuration_storage_unavailable",
+            "Private Microsoft email configuration storage is unavailable",
+        )
+    })?;
+    let token_path = state.email_oauth_token_path.as_deref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_token_storage_unavailable",
+            "Private Microsoft email token storage is unavailable",
+        )
+    })?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "email_oauth_unavailable",
+                "Microsoft email OAuth could not start",
+            )
+        })?;
+    let oauth = microsoft_oauth::MicrosoftOAuthClient::new(
+        client,
+        &tenant_id,
+        client_id.clone(),
+        client_secret.clone(),
+        public_base_url,
+        token_path.clone(),
+    )
+    .map_err(|error| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_email_configuration",
+            error,
+        )
+    })?;
+    microsoft_oauth::save_configuration(
+        configuration_path.as_ref(),
+        &microsoft_oauth::MicrosoftOAuthConfiguration {
+            tenant_id: tenant_id.clone(),
+            client_id: client_id.clone(),
+            client_secret,
+        },
+    )
+    .map_err(email_oauth_error)?;
+    *state.outlook.write().await = outlook::OutlookProbe::oauth(oauth);
+    *state.email_oauth_configuration.write().await = Some(EmailOAuthConfigurationState {
+        tenant_id,
+        client_id,
+        source: EmailOAuthConfigurationSource::Operator,
+    });
+    email_configuration(State(state), headers).await
 }
 
 async fn email_auth_start(
@@ -4156,7 +4394,8 @@ async fn email_auth_start(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let oauth = state.outlook.oauth_client().ok_or_else(|| {
+    let outlook = state.outlook.read().await.clone();
+    let oauth = outlook.oauth_client().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "email_oauth_unavailable",
@@ -4177,7 +4416,8 @@ async fn email_auth_callback(
     State(state): State<Arc<AppState>>,
     Query(query): Query<EmailAuthorizationCallback>,
 ) -> Response {
-    let Some(oauth) = state.outlook.oauth_client() else {
+    let outlook = state.outlook.read().await.clone();
+    let Some(oauth) = outlook.oauth_client() else {
         return Redirect::to("/?email=unavailable#settings-integrations").into_response();
     };
     if query.error.is_some() {
@@ -4200,7 +4440,8 @@ async fn email_disconnect(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let oauth = state.outlook.oauth_client().ok_or_else(|| {
+    let outlook = state.outlook.read().await.clone();
+    let oauth = outlook.oauth_client().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "email_oauth_unavailable",
@@ -4217,8 +4458,8 @@ async fn email_inbox(
     Query(query): Query<EmailInboxQuery>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let messages = state
-        .outlook
+    let outlook = state.outlook.read().await.clone();
+    let messages = outlook
         .inbox(query.query.as_deref())
         .await
         .map_err(outlook_error)?;
@@ -4231,11 +4472,8 @@ async fn email_message(
     Path(message_id): Path<String>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let message = state
-        .outlook
-        .message(&message_id)
-        .await
-        .map_err(outlook_error)?;
+    let outlook = state.outlook.read().await.clone();
+    let message = outlook.message(&message_id).await.map_err(outlook_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(message)).into_response())
 }
 
@@ -4246,11 +4484,8 @@ async fn import_email_message(
     Json(request): Json<ImportEmailRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let message = state
-        .outlook
-        .message(&message_id)
-        .await
-        .map_err(outlook_error)?;
+    let outlook = state.outlook.read().await.clone();
+    let message = outlook.message(&message_id).await.map_err(outlook_error)?;
     let attachment_store = state.email_attachment_store.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -4260,8 +4495,7 @@ async fn import_email_message(
     })?;
     let mut stored = Vec::with_capacity(message.attachments.len());
     for attachment in &message.attachments {
-        let content = state
-            .outlook
+        let content = outlook
             .attachment(&message_id, &attachment.id)
             .await
             .map_err(outlook_error)?;
@@ -10514,6 +10748,75 @@ mod tests {
         assert_eq!(body["configured"], false);
         assert_eq!(body["connection"], "not_connected");
         assert_eq!(body["account_address"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn operator_can_store_a_private_microsoft_registration_without_a_restart() {
+        let runtime = TempDir::new().unwrap();
+        let configuration_path = runtime.path().join("secrets/email-oauth-config.json");
+        let token_path = runtime.path().join("secrets/email-oauth.json");
+        let state = AppState::default()
+            .with_terminal_host(
+                HostClient::new(runtime.path().join("absent.sock")),
+                "secret",
+            )
+            .with_public_base_url("https://swarm.example.test/")
+            .unwrap()
+            .with_email_oauth_paths(configuration_path.clone(), token_path.clone());
+        let app = router(state);
+
+        let before = authorized_get(app.clone(), "/api/v1/integrations/email/configuration").await;
+        let before = response_json(before).await;
+        assert_eq!(before["configured"], false);
+        assert_eq!(
+            before["callback_url"],
+            "https://swarm.example.test/auth/email/callback"
+        );
+
+        let configured = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/integrations/email/configuration")
+                    .header("authorization", "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"tenant_id":"organizations","client_id":"11112222-bbbb-3333-cccc-4444dddd5555","client_secret":"private-value"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(configured.status(), StatusCode::OK);
+        let configured = response_json(configured).await;
+        assert_eq!(configured["configured"], true);
+        assert_eq!(configured["managed_by"], "operator");
+        assert_eq!(configured["secret_stored"], true);
+        assert_eq!(configured.get("client_secret"), None);
+        assert!(!configured.to_string().contains("private-value"));
+        assert!(configuration_path.exists());
+
+        let readiness = authorized_get(app, "/api/v1/integrations/email/readiness").await;
+        let readiness = response_json(readiness).await;
+        assert_eq!(readiness["configured"], true);
+        assert_eq!(readiness["connection"], "not_connected");
+
+        let restored = AppState::default()
+            .with_public_base_url("https://swarm.example.test/")
+            .unwrap()
+            .with_email_oauth_paths(configuration_path, token_path)
+            .with_saved_outlook_oauth()
+            .unwrap();
+        assert_eq!(
+            restored
+                .email_oauth_configuration
+                .read()
+                .await
+                .as_ref()
+                .map(|configuration| configuration.source),
+            Some(EmailOAuthConfigurationSource::Operator)
+        );
     }
 
     #[tokio::test]

@@ -69,6 +69,13 @@ struct PendingState {
     created_at: u64,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct MicrosoftOAuthConfiguration {
+    pub tenant_id: String,
+    pub client_id: String,
+    pub client_secret: String,
+}
+
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -114,6 +121,19 @@ impl MicrosoftOAuthClient {
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         {
             return Err("SWARM_EMAIL_TENANT_ID must be a tenant UUID or organizations".into());
+        }
+        let client_id = client_id.into();
+        let client_secret = client_secret.into();
+        if client_id.is_empty()
+            || client_id.len() > 128
+            || !client_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("Microsoft email client ID must be an application UUID".into());
+        }
+        if client_secret.is_empty() || client_secret.len() > 4_096 {
+            return Err("Microsoft email client secret must be between 1 and 4096 bytes".into());
         }
         let authority = format!("https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/");
         Self::new_with_endpoints(
@@ -310,6 +330,45 @@ impl MicrosoftOAuthClient {
             Err(_) => Err(OAuthError::Storage),
         }
     }
+
+    pub(crate) async fn has_connection(&self) -> bool {
+        let tokens = self.inner.tokens.lock().await;
+        tokens
+            .refresh_token
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+            || tokens
+                .access_token
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+    }
+}
+
+pub(crate) fn load_configuration(
+    path: &Path,
+) -> Result<Option<MicrosoftOAuthConfiguration>, String> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|_| "Email OAuth configuration file is invalid JSON".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "Email OAuth configuration file could not be read: {error}"
+        )),
+    }
+}
+
+pub(crate) fn save_configuration(
+    path: &Path,
+    configuration: &MicrosoftOAuthConfiguration,
+) -> Result<(), OAuthError> {
+    let parent = path.parent().ok_or(OAuthError::Storage)?;
+    fs::create_dir_all(parent).map_err(|_| OAuthError::Storage)?;
+    secure_directory(parent)?;
+    let temporary = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec(configuration).map_err(|_| OAuthError::Storage)?;
+    write_private(&temporary, &bytes)?;
+    fs::rename(temporary, path).map_err(|_| OAuthError::Storage)
 }
 
 async fn refresh(inner: &Inner, tokens: &mut OAuthTokens) -> Result<(), OAuthError> {
@@ -561,6 +620,19 @@ mod tests {
                     "id",
                     "secret",
                     public_url,
+                    PathBuf::from("tokens.json"),
+                )
+                .is_err()
+            );
+        }
+        for (client_id, client_secret) in [("client/id", "secret"), ("client-id", "")] {
+            assert!(
+                MicrosoftOAuthClient::new(
+                    Client::new(),
+                    "organizations",
+                    client_id,
+                    client_secret,
+                    "https://swarm.example.test",
                     PathBuf::from("tokens.json"),
                 )
                 .is_err()

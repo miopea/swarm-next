@@ -1,6 +1,6 @@
 # Email-to-task dogfood scope
 
-Status: **Accepted daily-driver outcome; interaction decisions pending**
+Status: **First dogfood slice implemented; live Microsoft consent pending**
 
 ## Operator outcome
 
@@ -28,6 +28,23 @@ auto-creates work, or gives Queen access to mailbox credentials. Reply delivery
 is a separate durable, idempotent outbox action gated by completion plus
 deployment and the configured external-send policy.
 
+## One-time Microsoft registration
+
+Swarm uses a tenant-owned confidential Web application because the HTTPS
+callback and authorization-code redemption run on the Hive host. PKCE protects
+the authorization code and the confidential client secret remains required by
+Microsoft for this server-side Web flow.
+
+Settings exposes the exact callback URL and required delegated permissions
+(`User.Read`, `Mail.Read`, and `Mail.Send`). The operator enters the tenant ID,
+application ID, and newly created secret value once over the Hive's HTTPS
+connection. Swarm writes them to a mode-`0600` file below its private state
+directory, never returns the secret to the browser, and swaps the Outlook
+adapter immediately without restarting the API or worker engine. Environment
+configuration remains a host-admin override and cannot be replaced in the UI.
+
+Microsoft protocol reference: <https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow>
+
 ## Privacy and ownership boundary
 
 - OAuth tokens and Graph transport stay inside the Outlook adapter.
@@ -53,7 +70,7 @@ deployment and the configured external-send policy.
 - ingesting an entire mailbox or attachment archive;
 - using email participants as Swarm authorization identities.
 
-## Decisions for the operator interview
+## Follow-on decisions
 
 The short implementation interview must settle:
 

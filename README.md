@@ -37,13 +37,19 @@ remove before implementation.
 
 ## Current milestone
 
-**M1: Durable work foundation**
+**M2: Daily-driver dogfood and integration foundation**
 
-M1 proves bounded terminal history, immutable worker-session identity, stable
-browser attach/detach, survival across browser and API restarts, and one
-persisted task-to-worker journey. Promotion requires the two-worker browser
-recovery test and 24-hour resource soak; implementing later product surfaces
-does not waive that evidence gate.
+The M1 runtime invariants are now implemented and remain continuous regression
+gates: bounded terminal history, immutable worker/session identity, stable
+browser attachment, API/browser restart survival, and persisted task-to-worker
+delivery. The multi-day resource soak continues; later features do not waive
+that evidence.
+
+M2 moves ordinary work into Swarm Next: durable worker/task ergonomics, Jira
+work intake and reconciliation, closed-loop Outlook issue intake, first-class
+desktop/Android operation, and the authenticated Jira-backed Apiary foundation.
+Dogfood evidence determines the order within M2; legacy remains the independent
+fallback until these journeys carry normal work reliably.
 
 ## Development
 
