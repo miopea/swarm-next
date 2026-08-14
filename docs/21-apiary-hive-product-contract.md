@@ -61,10 +61,13 @@ browser snapshot is display evidence only and cannot authorize membership.
 Separate installations bootstrap trust with a durable signing identity rather
 than a shared browser token. An operator may download a one-day signed Hive
 connection card containing only public identity and version evidence. The card
-expires, grants no membership or access, and becomes the pinned target of a
-later Keeper invitation handshake. The full signed-envelope and one-time-secret
-transport is specified by ADR 0025; the current card slice does not pretend that
-distributed invitation delivery already exists.
+expires and grants no membership or access. An active Keeper may import it to
+verify and pin the exact node, Hive, operator, and public-key tuple as a
+candidate. Re-import may refresh display metadata and validity evidence but can
+never replace a pinned key. Candidates remain visibly separate from members and
+invitations. The full signed-envelope and one-time-secret transport is specified
+by ADR 0025; candidate pinning does not pretend that distributed invitation
+delivery already exists.
 
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries

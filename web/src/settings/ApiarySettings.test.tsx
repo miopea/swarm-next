@@ -73,7 +73,8 @@ test("downloads a short-lived signed Hive card without changing membership", asy
 
 test("shows every collapse blocker and cannot bypass the disabled action", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-    if (String(input) === "/api/v1/apiary/collapse-readiness") {
+    const url = String(input);
+    if (url === "/api/v1/apiary/collapse-readiness") {
       return ok({
         active_hive_count: 2,
         pending_invitation_count: 1,
@@ -82,6 +83,7 @@ test("shows every collapse blocker and cannot bypass the disabled action", async
         departed_node_count: 1,
       });
     }
+    if (url === "/api/v1/apiary/hive-candidates") return ok([]);
     throw new Error(`unexpected request ${String(input)}`);
   }));
 
@@ -103,6 +105,7 @@ test("collapses a ready sole-Keeper Apiary only after inline confirmation", asyn
       expect(init?.method).toBe("POST");
       return ok({ mode: "personal" });
     }
+    if (url === "/api/v1/apiary/hive-candidates") return ok([]);
     if (url === "/api/v1/hive") return ok(personal);
     throw new Error(`unexpected request ${url}`);
   }));
@@ -130,6 +133,7 @@ test("promotes only a ready Hive Jira project and then shows it as Apiary owned"
         project_name: "Website Services", promoted_by_operator_id: "operator-1", promoted_at: 20,
       }] : []);
     }
+    if (url === "/api/v1/apiary/hive-candidates") return ok([]);
     if (url === "/api/v1/integrations/jira/bindings") {
       return ok([{
         id: "binding-1", project_id: "10001", project_key: "WEB", project_name: "Website Services",
@@ -154,6 +158,48 @@ test("promotes only a ready Hive Jira project and then shows it as Apiary owned"
   fireEvent.click(screen.getByRole("button", { name: "Promote project" }));
   expect(await screen.findByRole("list", { name: "Promoted Jira projects" })).toHaveTextContent("WEBWebsite ServicesApiary catalog");
   expect(screen.getByRole("status")).toHaveTextContent("WEB is now in the Apiary project catalog");
+});
+
+test("pins an imported Hive identity without implying membership or access", async () => {
+  const card = {
+    payload: {
+      schema_version: 1, protocol_version: 1, node_id: "node-2", hive_id: "hive-2",
+      hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora",
+      public_key: "public", issued_at: 10, expires_at: 86_410,
+    },
+    signature: "signed",
+  };
+  const candidate = {
+    apiary_id: "apiary-1", node_id: "node-2", hive_id: "hive-2", hive_name: "Clover Hive",
+    operator_id: "operator-2", operator_display_name: "Cora", public_key: "public",
+    card_issued_at: 10, card_expires_at: 86_410,
+    pinned_by_operator_id: "operator-1", pinned_at: 20, last_verified_at: 20,
+  };
+  let pinned = false;
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/collapse-readiness") {
+      return ok({ active_hive_count: 1, pending_invitation_count: 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
+    }
+    if (url === "/api/v1/apiary/jira-projects") return ok([]);
+    if (url === "/api/v1/integrations/jira/bindings") return ok([]);
+    if (url === "/api/v1/apiary/hive-candidates" && init?.method === "POST") {
+      expect(JSON.parse(String(init.body))).toEqual(card);
+      pinned = true;
+      return ok(candidate, 201);
+    }
+    if (url === "/api/v1/apiary/hive-candidates") return ok(pinned ? [candidate] : []);
+    throw new Error(`unexpected request ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+  const file = { size: 512, text: vi.fn(async () => JSON.stringify(card)) } as unknown as File;
+  fireEvent.change(screen.getByLabelText("Choose Hive connection card"), { target: { files: [file] } });
+
+  expect(await screen.findByRole("status")).toHaveTextContent("verified and pinned. No membership or access was granted");
+  expect(screen.getByRole("list", { name: "Pinned Hive identities" })).toHaveTextContent("Clover HiveCoraIdentity pinned");
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/invitations"))).toBe(false);
 });
 
 function personalIdentity(): HiveIdentity {

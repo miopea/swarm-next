@@ -79,10 +79,16 @@ self-signed card never silently replaces a pinned key.
 
 ## Validation
 
-The first slice is valid when a fresh or migrated Hive lazily creates one
-stable keypair, repeated cards retain the same node/public identity, every card
-is signed and bounded, tampering/expiry/corrupt key material fails closed, the
-download endpoint requires operator authentication and disables caching, and
-the UI states that the card grants no access. Later slices must prove pinning,
-one-time invitation consumption, replay rejection, protocol negotiation, and
-cross-process integration between two independent databases.
+The connection-card and Keeper-pinning slices now prove that a fresh or
+migrated Hive lazily creates one stable keypair, repeated cards retain the same
+node/public identity, every card is signed and bounded, and
+tampering/expiry/corrupt key material fails closed. Download and import require
+operator authentication and disable caching. A Keeper can pin a card issued by
+an independent database, while personal/member Hives, self-pinning, identity
+collisions, and silent key replacement fail closed. Candidate persistence does
+not create a Hive member or invitation, and the UI states that no access was
+granted.
+
+Later slices must prove signed one-time invitation consumption, replay
+rejection, protocol negotiation, and a complete join handshake between two
+independent processes.

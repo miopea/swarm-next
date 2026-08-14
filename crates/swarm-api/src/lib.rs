@@ -30,11 +30,12 @@ use subtle::ConstantTimeEq;
 use swarm_application::{ApiaryInvitationOverview, ApiaryService, ApplicationError, TaskService};
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationId, ApiaryJoinReadiness, ControlRoomEventKind,
-    DecisionRequestId, HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope,
-    JiraStatusMapping, LocalApiaryContext, NotificationPolicy, PresenceDeviceClass,
-    PresenceDeviceId, PresenceMode, PresenceObservationState, ProviderConversationId, ProviderKind,
-    QueenAutonomyLevel, QueenAutonomyPolicy, SharedWorkBackend, TaskDetailsUpdate, TaskId,
-    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    DecisionRequestId, HiveConnectionCard, HiveIdentity, JiraConnectionState, JiraProjectBindingId,
+    JiraProjectScope, JiraStatusMapping, LocalApiaryContext, NotificationPolicy,
+    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
+    ProviderConversationId, ProviderKind, QueenAutonomyLevel, QueenAutonomyPolicy,
+    SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState,
+    WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
@@ -1464,6 +1465,10 @@ fn api_router(state: AppState) -> Router {
             get(download_hive_connection_card),
         )
         .route(
+            "/api/v1/apiary/hive-candidates",
+            get(apiary_hive_candidates).post(pin_apiary_hive_candidate),
+        )
+        .route(
             "/api/v1/apiary/collapse-readiness",
             get(apiary_collapse_readiness),
         )
@@ -1759,6 +1764,34 @@ async fn download_hive_connection_card(
         HeaderValue::from_static("attachment; filename=swarm-next-hive-connection.json"),
     );
     Ok((response_headers, Json(card)).into_response())
+}
+
+async fn apiary_hive_candidates(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let candidates = apiary_service(&state)?
+        .hive_candidates()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(candidates)).into_response())
+}
+
+async fn pin_apiary_hive_candidate(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(card): Json<HiveConnectionCard>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let candidate = apiary_service(&state)?
+        .pin_hive_candidate(&card, unix_timestamp())
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(candidate),
+    )
+        .into_response())
 }
 
 async fn create_apiary(
@@ -4352,6 +4385,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "invalid_hive_connection_card",
             error.to_string(),
         ),
+        TaskStoreError::ApiaryKeeperRequired => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "apiary_keeper_required",
+            error.to_string(),
+        ),
+        TaskStoreError::HiveCandidateIdentityConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "hive_identity_conflict",
+            error.to_string(),
+        ),
         TaskStoreError::DecisionNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "decision_not_found",
@@ -4897,6 +4940,78 @@ mod tests {
         let card: swarm_domain::HiveConnectionCard =
             serde_json::from_value(response_json(response).await).unwrap();
         swarm_persistence::verify_hive_connection_card(&card, unix_timestamp()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn keeper_pins_a_remote_hive_identity_without_creating_membership() {
+        let now = unix_timestamp();
+        let remote = TaskStore::in_memory().unwrap();
+        let remote_identity = remote.local_hive_identity().unwrap();
+        let card = remote.issue_hive_connection_card(now, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper.clone()),
+        );
+        let body = serde_json::to_string(&card).unwrap();
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/hive-candidates")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let pinned = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/hive-candidates")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pinned.status(), StatusCode::CREATED);
+        assert_eq!(pinned.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(pinned).await;
+        assert_eq!(json["hive_id"], remote_identity.hive.id.to_string());
+
+        let listed = authorized_get(app, "/api/v1/apiary/hive-candidates").await;
+        assert_eq!(listed.status(), StatusCode::OK);
+        assert_eq!(listed.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(listed).await.as_array().unwrap().len(), 1);
+        let apiary_id = keeper
+            .local_hive_identity()
+            .unwrap()
+            .hive
+            .apiary_id
+            .unwrap();
+        assert_eq!(
+            keeper
+                .apiary_collapse_readiness(apiary_id)
+                .unwrap()
+                .active_hive_count,
+            1
+        );
     }
 
     #[tokio::test]

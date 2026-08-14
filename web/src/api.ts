@@ -119,6 +119,20 @@ export type HiveConnectionCard = {
   };
   signature: string;
 };
+export type ApiaryHiveCandidate = {
+  apiary_id: string;
+  node_id: string;
+  hive_id: string;
+  hive_name: string;
+  operator_id: string;
+  operator_display_name: string;
+  public_key: string;
+  card_issued_at: number;
+  card_expires_at: number;
+  pinned_by_operator_id: string;
+  pinned_at: number;
+  last_verified_at: number;
+};
 export type HiveIdentity = {
   operator: { id: string; display_name: string };
   hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
@@ -427,6 +441,25 @@ export async function fetchHiveConnectionCard(
 ): Promise<HiveConnectionCard> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/connection-card");
   return response.json() as Promise<HiveConnectionCard>;
+}
+
+export async function fetchApiaryHiveCandidates(
+  operatorToken: string,
+): Promise<ApiaryHiveCandidate[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/hive-candidates");
+  return response.json() as Promise<ApiaryHiveCandidate[]>;
+}
+
+export async function pinApiaryHiveCandidate(
+  operatorToken: string,
+  card: HiveConnectionCard,
+): Promise<ApiaryHiveCandidate> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/hive-candidates", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(card),
+  });
+  return response.json() as Promise<ApiaryHiveCandidate>;
 }
 
 export async function fetchApiaryCollapseReadiness(

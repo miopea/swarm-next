@@ -4,13 +4,17 @@ import {
   collapseApiary,
   createApiary,
   fetchApiaryCollapseReadiness,
+  fetchApiaryHiveCandidates,
   fetchApiaryJiraProjects,
   fetchHive,
   fetchHiveConnectionCard,
   fetchJiraBindings,
+  pinApiaryHiveCandidate,
   promoteApiaryJiraProject,
   type ApiaryCollapseReadiness,
+  type ApiaryHiveCandidate,
   type ApiaryJiraProject,
+  type HiveConnectionCard,
   type HiveIdentity,
   type JiraProjectBinding,
 } from "../api";
@@ -31,8 +35,10 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [confirmCollapse, setConfirmCollapse] = useState(false);
   const [readiness, setReadiness] = useState<ApiaryCollapseReadiness>();
   const [promotedProjects, setPromotedProjects] = useState<ApiaryJiraProject[]>([]);
+  const [hiveCandidates, setHiveCandidates] = useState<ApiaryHiveCandidate[]>([]);
   const [jiraBindings, setJiraBindings] = useState<JiraProjectBinding[]>([]);
   const [projectLoadError, setProjectLoadError] = useState(false);
+  const [candidateLoadError, setCandidateLoadError] = useState(false);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -53,17 +59,25 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   useEffect(() => {
     if (!keeper) {
       setPromotedProjects([]);
+      setHiveCandidates([]);
       setJiraBindings([]);
       setProjectLoadError(false);
+      setCandidateLoadError(false);
       return;
     }
     let cancelled = false;
-    void Promise.allSettled([fetchApiaryJiraProjects(operatorToken), fetchJiraBindings(operatorToken)])
-      .then(([projects, bindings]) => {
+    void Promise.allSettled([
+      fetchApiaryJiraProjects(operatorToken),
+      fetchJiraBindings(operatorToken),
+      fetchApiaryHiveCandidates(operatorToken),
+    ])
+      .then(([projects, bindings, candidates]) => {
         if (cancelled) return;
         setPromotedProjects(projects.status === "fulfilled" ? projects.value : []);
         setJiraBindings(bindings.status === "fulfilled" ? bindings.value : []);
+        setHiveCandidates(candidates.status === "fulfilled" ? candidates.value : []);
         setProjectLoadError(projects.status === "rejected" || bindings.status === "rejected");
+        setCandidateLoadError(candidates.status === "rejected");
       });
     return () => { cancelled = true; };
   }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id]);
@@ -147,6 +161,24 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
+  async function importConnectionCard(file: File | undefined) {
+    if (!file) return;
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      if (file.size > 64 * 1024) throw new Error("That connection card is unexpectedly large.");
+      const card = JSON.parse(await file.text()) as HiveConnectionCard;
+      const candidate = await pinApiaryHiveCandidate(operatorToken, card);
+      setHiveCandidates(await fetchApiaryHiveCandidates(operatorToken));
+      setMessage(`${candidate.hive_name} is verified and pinned. No membership or access was granted.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "That Hive connection card could not be verified.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <section id="settings-apiary" className="settings-card apiary-settings" aria-labelledby="apiary-heading">
       <div><p className="eyebrow">Collaboration</p><h3 id="apiary-heading">Your Apiary</h3></div>
@@ -187,6 +219,34 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
           <p>Workers, repositories, provider sessions, credentials, and private tasks remain owned by this Hive.</p>
           {keeper ? (
             <>
+            <div className="apiary-hive-candidates">
+              <div>
+                <strong>Add a Hive</strong>
+                <small>Choose the signed connection card from another personal Hive. Swarm verifies and pins its identity first; invitations and access remain separate.</small>
+              </div>
+              <label className="apiary-card-drop" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void importConnectionCard(event.dataTransfer.files[0]); }}>
+                <input
+                  aria-label="Choose Hive connection card"
+                  type="file"
+                  accept="application/json,.json"
+                  disabled={busy || working}
+                  onChange={(event) => { void importConnectionCard(event.target.files?.[0]); event.currentTarget.value = ""; }}
+                />
+                <span>{working ? "Verifying…" : "Choose connection card"}</span>
+                <small>or drop it here</small>
+              </label>
+              {candidateLoadError ? <p className="apiary-blockers">Pinned Hive identities could not be refreshed. No membership changed.</p> : null}
+              {hiveCandidates.length > 0 ? (
+                <ul className="apiary-candidate-list" aria-label="Pinned Hive identities">
+                  {hiveCandidates.map((candidate) => (
+                    <li key={candidate.hive_id}>
+                      <span><strong>{candidate.hive_name}</strong><small>{candidate.operator_display_name}</small></span>
+                      <span className="readiness-ready">Identity pinned</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="empty-copy">No other Hive identities are pinned yet.</p>}
+            </div>
             <div className="apiary-projects">
               <div><strong>Apiary Jira projects</strong><small>Promote projects into the authoritative Apiary catalog. Each Hive must still receive the catalog entry and prove its own access and workflow mapping.</small></div>
               {promotedProjects.length > 0 ? (

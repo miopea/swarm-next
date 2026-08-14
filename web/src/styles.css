@@ -457,7 +457,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-backend-choice > div { display: grid; gap: 3px; min-height: 66px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .apiary-backend-choice > div.selected { border-color: var(--good); background: var(--good-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good) 18%, transparent); }
 .apiary-backend-choice > div[aria-disabled="true"] { opacity: .7; }
-.apiary-backend-choice small, .apiary-summary small, .apiary-collapse small, .apiary-projects small, .apiary-connection-card small { color: var(--muted); line-height: 1.4; }
+.apiary-backend-choice small, .apiary-summary small, .apiary-collapse small, .apiary-projects small, .apiary-connection-card small, .apiary-hive-candidates small { color: var(--muted); line-height: 1.4; }
 .apiary-connection-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .apiary-connection-card > span { display: grid; gap: 2px; }
 .apiary-connection-card button { flex: 0 0 auto; }
@@ -466,6 +466,17 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-backend-badge { flex: 0 0 auto; padding: 5px 9px; border: 1px solid color-mix(in srgb, var(--good) 42%, var(--line)); border-radius: 999px; color: var(--good); font-size: .7rem; font-weight: 700; }
 .apiary-confirmation, .apiary-collapse { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .apiary-confirmation > span { color: var(--muted); font-size: .76rem; line-height: 1.5; }
+.apiary-hive-candidates { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
+.apiary-hive-candidates > div:first-child { display: grid; gap: 2px; }
+.apiary-card-drop { position: relative; display: flex; min-height: 58px; cursor: pointer; align-items: center; justify-content: center; gap: 8px; padding: 10px 14px; border: 1px dashed var(--line-strong); border-radius: var(--radius-md); background: var(--panel); text-align: center; }
+.apiary-card-drop:hover, .apiary-card-drop:focus-within { border-color: var(--accent-strong); background: var(--accent-soft); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent); }
+.apiary-card-drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.apiary-card-drop > span { font-weight: 700; }
+.apiary-candidate-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.apiary-candidate-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.apiary-candidate-list li > span:first-child { display: grid; gap: 2px; }
+.apiary-candidate-list .readiness-ready { flex: 0 0 auto; color: var(--good); font-size: .7rem; font-weight: 700; }
+.apiary-hive-candidates .empty-copy { margin: 0; color: var(--muted); font-size: .76rem; }
 .apiary-projects { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .apiary-projects > div:first-child { display: grid; gap: 2px; }
 .apiary-project-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
@@ -683,6 +694,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-summary { align-items: flex-start; flex-direction: column; }
   .apiary-connection-card { align-items: stretch; flex-direction: column; }
   .apiary-connection-card button { width: 100%; }
+  .apiary-card-drop { align-items: stretch; flex-direction: column; }
+  .apiary-candidate-list li { align-items: flex-start; flex-direction: column; }
   .apiary-project-list li, .apiary-promotion-list > div { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .apiary-project-list li > small { text-align: left; }
   .apiary-promotion-list button { width: 100%; }

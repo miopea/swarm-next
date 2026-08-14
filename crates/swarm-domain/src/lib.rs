@@ -263,6 +263,24 @@ pub struct HiveConnectionCard {
     pub signature: String,
 }
 
+/// A Keeper-pinned remote Hive identity. Pinning proves which public key is
+/// expected for a Hive but grants no membership, invitation, or authority.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryHiveCandidate {
+    pub apiary_id: ApiaryId,
+    pub node_id: FederationNodeId,
+    pub hive_id: HiveId,
+    pub hive_name: String,
+    pub operator_id: OperatorId,
+    pub operator_display_name: String,
+    pub public_key: String,
+    pub card_issued_at: i64,
+    pub card_expires_at: i64,
+    pub pinned_by_operator_id: OperatorId,
+    pub pinned_at: i64,
+    pub last_verified_at: i64,
+}
+
 impl Hive {
     #[must_use]
     pub fn personal(name: impl Into<String>, operator_id: OperatorId) -> Self {

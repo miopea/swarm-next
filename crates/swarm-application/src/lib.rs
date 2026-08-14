@@ -1,7 +1,7 @@
 use swarm_domain::{
-    Apiary, ApiaryCollapseReadiness, ApiaryInvitation, ApiaryInvitationId, ApiaryJiraProject,
-    ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinReadiness, DecisionRequest,
-    DecisionRequestId, DecisionRequestKind, DecisionUrgency, HiveConnectionCard,
+    Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationId,
+    ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinReadiness,
+    DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency, HiveConnectionCard,
     JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
     PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
     SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
@@ -64,6 +64,29 @@ impl ApiaryService {
         self.store
             .issue_hive_connection_card(now, 24 * 60 * 60)
             .map_err(Into::into)
+    }
+
+    /// Verifies and pins one deliberately imported connection card for the
+    /// local Keeper. This records identity only; membership and authority stay
+    /// unchanged until the later invitation handshake succeeds.
+    ///
+    /// # Errors
+    /// Rejects invalid cards, non-Keepers, identity conflicts, and persistence failures.
+    pub fn pin_hive_candidate(
+        &self,
+        card: &HiveConnectionCard,
+        now: i64,
+    ) -> Result<ApiaryHiveCandidate, ApplicationError> {
+        self.store.pin_hive_candidate(card, now).map_err(Into::into)
+    }
+
+    /// Lists the current Keeper's pinned Hive identities without treating them
+    /// as members or invitation recipients.
+    ///
+    /// # Errors
+    /// Rejects personal/member Hives and unavailable persistence.
+    pub fn hive_candidates(&self) -> Result<Vec<ApiaryHiveCandidate>, ApplicationError> {
+        self.store.list_hive_candidates().map_err(Into::into)
     }
 
     /// Creates one Apiary around the current personal Hive. The local operator
@@ -642,6 +665,27 @@ mod tests {
             store.local_apiary_context().unwrap(),
             LocalApiaryContext::Personal
         );
+    }
+
+    #[test]
+    fn keeper_candidate_import_stays_separate_from_membership_and_invitations() {
+        let remote_service = ApiaryService::new(TaskStore::in_memory().unwrap());
+        let card = remote_service.connection_card(10_000).unwrap();
+        let keeper_store = TaskStore::in_memory().unwrap();
+        let keeper = ApiaryService::new(keeper_store.clone());
+        keeper
+            .create_from_personal_hive("Garden", SharedWorkBackend::Jira, 9_000)
+            .unwrap();
+
+        let pinned = keeper.pin_hive_candidate(&card, 10_001).unwrap();
+        assert_eq!(keeper.hive_candidates().unwrap(), vec![pinned]);
+        assert!(
+            keeper
+                .pending_invitations(JiraConnectionState::Ready, 10_001)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(keeper.collapse_readiness().unwrap().active_hive_count, 1);
     }
 
     #[test]
