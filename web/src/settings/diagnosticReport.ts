@@ -3,6 +3,7 @@ import type {
   Health,
   HistoryDiagnostics,
   HiveIdentity,
+  JiraReadiness,
   RuntimeResources,
   SessionSummary,
   TerminalHostStatus,
@@ -34,9 +35,11 @@ type DiagnosticReportInput = {
   runtime: RuntimeDiagnostics;
   sessions: SessionSummary[];
   workers: Worker[];
+  jiraReadiness?: JiraReadiness;
+  jiraUnavailable?: boolean;
 };
 
-export function buildSanitizedDiagnosticReport({ context, health, hiveIdentity, liveFeedState, recentEvents, runtime, sessions, workers }: DiagnosticReportInput) {
+export function buildSanitizedDiagnosticReport({ context, health, hiveIdentity, liveFeedState, recentEvents, runtime, sessions, workers, jiraReadiness, jiraUnavailable }: DiagnosticReportInput) {
   const launchFailures = workers.filter((worker) => Boolean(worker.runtime_error)).length;
   const expectation = context?.expectation?.trim();
   const observation = context?.observation?.trim();
@@ -85,7 +88,13 @@ export function buildSanitizedDiagnosticReport({ context, health, hiveIdentity, 
       worker_sessions: sessions.filter((session) => session.running).map(({ session_id, resources }) => ({ session_id, resources })),
     } : { status: runtime.loaded ? "unavailable" : "checking" },
     terminal_history: runtime.history ?? { status: runtime.loaded ? "unavailable" : "checking" },
-    integrations: { status: "not_configured" },
+    integrations: {
+      jira: jiraUnavailable
+        ? { status: "unavailable" }
+        : jiraReadiness
+          ? { status: jiraReadiness.connection, configured: jiraReadiness.configured }
+          : { status: "checking" },
+    },
     recent_state_transitions: recentEvents.slice(-16).map(({ sequence, kind, occurred_at }) => ({ sequence, kind, occurred_at })),
   };
 }

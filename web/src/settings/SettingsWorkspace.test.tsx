@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import SettingsWorkspace from "./SettingsWorkspace";
-import { resourceLabel } from "./DiagnosticsWorkspace";
+import { jiraStatusLabel, resourceLabel } from "./DiagnosticsWorkspace";
 
 afterEach(() => {
   cleanup();
@@ -124,6 +124,13 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect((await screen.findByText("API memory")).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
   expect(screen.getByText("Terminal host service").parentElement).toHaveTextContent("Terminal host service9.0 MiB");
   expect(screen.getByText("Loaded worker runtimes").parentElement).toHaveTextContent("Loaded worker runtimesUnavailable");
+  expect(screen.getByText("Live metrics")).toBeInTheDocument();
+  expect(screen.getByText(/refreshes every 10 seconds/)).toBeInTheDocument();
+  expect(screen.getByText("Jira").parentElement).toHaveTextContent("JiraNot connected");
+  const resourceRequests = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("runtime/resources")).length;
+  const resourceRequestsBeforeRefresh = resourceRequests();
+  fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
+  await vi.waitFor(() => expect(resourceRequests()).toBeGreaterThan(resourceRequestsBeforeRefresh));
   expect(screen.getByText("Needs you").parentElement).toHaveTextContent("Needs youAlt1");
   expect(screen.getByText("Tasks").parentElement).toHaveTextContent("TasksAlt2");
   expect(screen.getByText("Workers").parentElement).toHaveTextContent("WorkersAlt3");
@@ -163,6 +170,13 @@ test("uses distinct readable labels for every resource pressure state", () => {
   expect(resourceLabel(resource("critical"))).toBe("Critical · 10.0 MiB");
   expect(resourceLabel({ pressure: "unavailable", resident_memory_bytes: null })).toBe("Unavailable");
   expect(resourceLabel(undefined)).toBe("Unavailable");
+});
+
+test("uses actionable Jira diagnostic states", () => {
+  expect(jiraStatusLabel({ configured: true, connection: "ready", account_name: "Bea" }, false)).toBe("Connected · Bea");
+  expect(jiraStatusLabel({ configured: true, connection: "network_unavailable", account_name: null }, false)).toBe("Network unavailable");
+  expect(jiraStatusLabel({ configured: true, connection: "credentials_invalid", account_name: null }, false)).toBe("Credentials need attention");
+  expect(jiraStatusLabel(undefined, true)).toBe("Unavailable");
 });
 
 test("downloads a consistent Hive database snapshot", async () => {

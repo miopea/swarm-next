@@ -451,6 +451,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .theme-swatch.light { background: linear-gradient(135deg, #edf0df 50%, #d69c28 50%); }
 .theme-swatch.dark { background: linear-gradient(135deg, #18251f 50%, #dfaa40 50%); }
 .diagnostic-list, .shortcut-list { display: grid; gap: 0; margin: 0; }
+.diagnostic-live-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
+.diagnostic-live-status > span { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.diagnostic-live-status > span > span:last-child { display: grid; min-width: 0; gap: 1px; }
+.diagnostic-live-status small { color: var(--muted); }
 .diagnostic-list > div, .shortcut-list > div { display: flex; min-height: 40px; align-items: center; justify-content: space-between; gap: 14px; border-top: 1px solid var(--line); }
 .diagnostic-list dt, .shortcut-list dt { color: var(--muted); font-size: .77rem; }
 .diagnostic-list dd, .shortcut-list dd { margin: 0; color: var(--text); font-size: .77rem; text-align: right; }
@@ -640,6 +644,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .settings-workspace { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); padding: 12px; overflow-x: hidden; }
   .settings-section-nav { top: -4px; margin-inline: -4px; padding: 7px; }
   .settings-card { min-width: 0; }
+  .diagnostic-live-status { align-items: stretch; flex-direction: column; }
+  .diagnostic-live-status button { width: 100%; }
   .queen-policy-grid { grid-template-columns: minmax(0, 1fr); }
   .worker-settings { grid-column: auto; }
   .configure-worker-form { grid-template-columns: 1fr; }

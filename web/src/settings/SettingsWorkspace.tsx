@@ -264,7 +264,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         <small className="privacy-note">This file contains private operational data. Store it like a credential. Host credentials and repository contents remain intentionally separate.</small>
       </section>
 
-<DiagnosticsWorkspace feedbackRevision={feedbackRevision} operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} />
+<DiagnosticsWorkspace feedbackRevision={feedbackRevision} operatorToken={operatorToken} health={health} hiveIdentity={hiveIdentity} liveFeedState={liveFeedState} recentEvents={recentEvents} sessions={sessions} workers={workers} jiraReadiness={jiraReadiness} jiraUnavailable={jiraUnavailable} />
 
       <section className="settings-card shortcuts-card" aria-labelledby="shortcuts-heading">
         <div><p className="eyebrow">Keyboard</p><h3 id="shortcuts-heading">Move without losing focus</h3></div>

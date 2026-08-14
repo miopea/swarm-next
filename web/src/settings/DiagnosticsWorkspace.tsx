@@ -11,6 +11,7 @@ import {
   type Health,
   type HistoryDiagnostics,
   type HiveIdentity,
+  type JiraReadiness,
   type RuntimeResources,
   type SessionSummary,
   type TerminalHostStatus,
@@ -28,10 +29,13 @@ type Props = {
   recentEvents: ControlRoomEvent[];
   sessions: SessionSummary[];
   workers: Worker[];
+  jiraReadiness: JiraReadiness | undefined;
+  jiraUnavailable: boolean;
 };
 
-export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, health, hiveIdentity, liveFeedState, recentEvents, sessions, workers }: Props) {
+export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, health, hiveIdentity, liveFeedState, recentEvents, sessions, workers, jiraReadiness, jiraUnavailable }: Props) {
   const [runtime, setRuntime] = useState<RuntimeDiagnostics>({ loaded: false });
+  const [runtimeRevision, setRuntimeRevision] = useState(0);
   const [preview, setPreview] = useState<string>();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "unavailable">("idle");
   const [savedReports, setSavedReports] = useState<DogfoodReport[]>();
@@ -42,11 +46,12 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.allSettled([
-      fetchTerminalHostStatus(operatorToken),
-      fetchHistoryDiagnostics(operatorToken),
-      fetchRuntimeResources(operatorToken),
-    ]).then(([host, history, resources]) => {
+    async function refreshRuntime() {
+      const [host, history, resources] = await Promise.allSettled([
+        fetchTerminalHostStatus(operatorToken),
+        fetchHistoryDiagnostics(operatorToken),
+        fetchRuntimeResources(operatorToken),
+      ]);
       if (cancelled) return;
       setRuntime({
         terminalHost: host.status === "fulfilled" ? host.value : undefined,
@@ -54,9 +59,11 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
         resources: resources.status === "fulfilled" ? resources.value : undefined,
         loaded: true,
       });
-    });
-    return () => { cancelled = true; };
-  }, [operatorToken]);
+    }
+    void refreshRuntime();
+    const timer = window.setInterval(() => void refreshRuntime(), 10_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [operatorToken, runtimeRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,7 +88,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
     .filter(({ session }) => session?.resources?.process_tree_resident_memory_bytes != null);
 
   function buildPreview() {
-    const serialized = serializeDiagnosticReport({ health, hiveIdentity, liveFeedState, recentEvents, runtime, sessions, workers });
+    const serialized = serializeDiagnosticReport({ health, hiveIdentity, liveFeedState, recentEvents, runtime, sessions, workers, jiraReadiness, jiraUnavailable });
     setPreview(serialized);
     setCopyState("idle");
     return serialized;
@@ -131,6 +138,10 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
     <section id="settings-diagnostics" className="settings-card diagnostics-card" aria-labelledby="diagnostics-heading">
       <div><p className="eyebrow">Diagnostics</p><h3 id="diagnostics-heading">Know which layer needs attention</h3></div>
       <p>The report is previewed before copying and never includes terminal text, task content, workspace paths, credentials, or raw errors.</p>
+      <div className="diagnostic-live-status" role="status">
+        <span><span className={`presence ${runtime.loaded ? "online" : ""}`} /><span><strong>{runtime.loaded ? "Live metrics" : "Checking metrics"}</strong><small>{runtime.resources ? `Sampled ${formatSampleTime(runtime.resources.sampled_at)} · refreshes every 10 seconds` : "Waiting for the runtime and terminal host"}</small></span></span>
+        <button type="button" className="secondary-button" onClick={() => setRuntimeRevision((current) => current + 1)}>Refresh now</button>
+      </div>
       <dl className="diagnostic-list">
         <div><dt>Browser</dt><dd>{navigator.onLine ? "Online" : "Offline"}</dd></div>
         <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
@@ -144,7 +155,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
         <div><dt>Compute load</dt><dd>{loadLabel(machine?.load_average, machine?.logical_cpus)}</dd></div>
         <div><dt>Standing swap</dt><dd>{swapLabel(machine?.swap_used_bytes, machine?.swap_total_bytes, machine?.swap_used_percent)}</dd></div>
         <div><dt>Provider</dt><dd>{providerStatus}</dd></div>
-        <div><dt>Integrations</dt><dd>Not configured</dd></div>
+        <div><dt>Jira</dt><dd>{jiraStatusLabel(jiraReadiness, jiraUnavailable)}</dd></div>
       </dl>
       {measuredWorkers.length ? (
         <details className="worker-resource-breakdown">
@@ -237,4 +248,19 @@ function swapLabel(used: number | null | undefined, total: number | null | undef
 
 function formatReportDate(timestamp: number) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp * 1000));
+}
+
+function formatSampleTime(timestamp: number) {
+  return new Intl.DateTimeFormat(undefined, { timeStyle: "medium" }).format(new Date(timestamp * 1000));
+}
+
+export function jiraStatusLabel(readiness: JiraReadiness | undefined, unavailable: boolean) {
+  if (unavailable) return "Unavailable";
+  if (!readiness) return "Checking…";
+  if (!readiness.configured) return "Not connected";
+  if (readiness.connection === "ready") return readiness.account_name ? `Connected · ${readiness.account_name}` : "Connected";
+  if (readiness.connection === "network_unavailable") return "Network unavailable";
+  if (readiness.connection === "credentials_invalid") return "Credentials need attention";
+  if (readiness.connection === "permission_denied") return "Permission needs attention";
+  return "Not connected";
 }
