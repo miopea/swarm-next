@@ -99,6 +99,9 @@ grep -q 'swarm-next-host-reconcile.timer' "$SWARM_SYSTEMD_USER_ROOT/swarm-next.t
 grep -q "SWARM_ASSET_ROOT=$SWARM_INSTALL_ROOT/assets" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "SWARM_DATABASE_PATH=$SWARM_STATE_ROOT/swarm-next.sqlite3" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "SWARM_MAINTENANCE_REQUEST_PATH=$SWARM_STATE_ROOT/worker-engine-maintenance.request" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
+grep -q "EnvironmentFile=-$SWARM_CONFIG_ROOT/swarm-next-dev.env" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
+grep -q "PathExists=$SWARM_STATE_ROOT/development-reload.request" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-development-reload.path"
+grep -q "ReadWritePaths=$SWARM_INSTALL_ROOT $SWARM_STATE_ROOT $SWARM_WORKSPACE_ROOT" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-development-reload.service"
 [ -f "$SWARM_INSTALL_ROOT/assets/app-1.0.0.js" ]
 [ -d "$SWARM_WORKSPACE_ROOT/queen" ]
 grep -q "ReadWritePaths=$SWARM_STATE_ROOT" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
@@ -111,6 +114,48 @@ if grep -q '^RuntimeDirectory=' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service
 fi
 [ -x "$SWARM_INSTALL_ROOT/current/swarm-next-package" ]
 [ -d "$SWARM_STATE_ROOT/providers/claude" ]
+
+# Development mode is explicit, checkout-scoped, same-port, and restarts only
+# the replaceable API when it is enabled or disabled.
+dev_checkout="$HOME/projects/swarm-next"
+mkdir -p "$dev_checkout/.git" "$dev_checkout/packaging/linux"
+cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
+: > "$HOME/systemctl.log"
+"$package" enable-development "$dev_checkout"
+grep -q "^SWARM_DEV_CHECKOUT=$dev_checkout$" "$SWARM_CONFIG_ROOT/swarm-next-dev.env"
+grep -q "^SWARM_DEV_RELOAD_REQUEST_PATH=$SWARM_STATE_ROOT/development-reload.request$" "$SWARM_CONFIG_ROOT/swarm-next-dev.env"
+grep -q "^SWARM_DEV_RELOAD_STATUS_PATH=$SWARM_STATE_ROOT/development-reload.status$" "$SWARM_CONFIG_ROOT/swarm-next-dev.env"
+[ "$(cat "$SWARM_STATE_ROOT/development-reload.status")" = "state=idle" ]
+grep -q "ReadWritePaths=$SWARM_INSTALL_ROOT $SWARM_STATE_ROOT $dev_checkout" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-development-reload.service"
+grep -q '^--user enable --now swarm-next-development-reload.path$' "$HOME/systemctl.log"
+grep -q '^--user restart swarm-next-api.service$' "$HOME/systemctl.log"
+if grep -q 'restart swarm-next-terminal-host.service' "$HOME/systemctl.log"; then
+  echo "development enable touched the terminal host" >&2
+  exit 1
+fi
+printf 'state=requested\n' > "$SWARM_STATE_ROOT/development-reload.status"
+printf 'request\n' > "$SWARM_STATE_ROOT/development-reload.request"
+if "$package" reload-development; then
+  echo "failing development build unexpectedly succeeded" >&2
+  exit 1
+fi
+[ "$(cat "$SWARM_STATE_ROOT/development-reload.status")" = "state=failed" ]
+[ ! -e "$SWARM_STATE_ROOT/development-reload.request" ]
+[ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "1.0.0" ]
+: > "$HOME/systemctl.log"
+"$package" disable-development
+[ ! -e "$SWARM_CONFIG_ROOT/swarm-next-dev.env" ]
+[ ! -e "$SWARM_STATE_ROOT/development-reload.status" ]
+grep -q '^--user disable --now swarm-next-development-reload.path$' "$HOME/systemctl.log"
+grep -q '^--user restart swarm-next-api.service$' "$HOME/systemctl.log"
+if grep -q 'restart swarm-next-terminal-host.service' "$HOME/systemctl.log"; then
+  echo "development disable touched the terminal host" >&2
+  exit 1
+fi
 if command -v systemd-analyze >/dev/null 2>&1; then
   systemd-analyze --user verify \
     "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service" \

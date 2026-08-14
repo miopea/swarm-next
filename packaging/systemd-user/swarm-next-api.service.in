@@ -7,6 +7,7 @@ Requires=swarm-next-terminal-host.service
 [Service]
 Type=simple
 EnvironmentFile=@CONFIG_ROOT@/swarm-next.env
+EnvironmentFile=-@CONFIG_ROOT@/swarm-next-dev.env
 Environment=SWARM_TERMINAL_SOCKET=%t/swarm-next/terminal.sock
 Environment=SWARM_WEB_ROOT=@INSTALL_ROOT@/current/web
 Environment=SWARM_ASSET_ROOT=@INSTALL_ROOT@/assets

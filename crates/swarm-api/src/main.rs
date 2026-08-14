@@ -34,6 +34,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_workspace_roots(workspace_roots)
         .with_task_store(store)
         .with_notifications(vapid_subject_from_env())?;
+    if let Some((request, status)) = development_reload_paths_from_env()? {
+        state = state.with_development_reload_paths(request, status);
+    }
     if let Ok(public_base_url) = env::var("SWARM_PUBLIC_BASE_URL") {
         state = state.with_public_base_url(&public_base_url)?;
     }
@@ -245,6 +248,17 @@ fn maintenance_request_path_from_env(database_path: &std::path::Path) -> PathBuf
         },
         PathBuf::from,
     )
+}
+
+fn development_reload_paths_from_env() -> Result<Option<(PathBuf, PathBuf)>, &'static str> {
+    match (
+        env::var_os("SWARM_DEV_RELOAD_REQUEST_PATH"),
+        env::var_os("SWARM_DEV_RELOAD_STATUS_PATH"),
+    ) {
+        (None, None) => Ok(None),
+        (Some(request), Some(status)) => Ok(Some((PathBuf::from(request), PathBuf::from(status)))),
+        _ => Err("development reload request and status paths must be configured together"),
+    }
 }
 
 fn mcp_url_from_env(address: SocketAddr) -> String {

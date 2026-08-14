@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { downloadDatabaseBackup, fetchJiraReadiness, fetchTerminalHostStatus, type ControlRoomEvent, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, fetchDevelopmentRuntime, fetchJiraReadiness, fetchTerminalHostStatus, type ControlRoomEvent, type DevelopmentRuntime, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
 import { downloadBlob } from "../shared/download";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
@@ -8,6 +8,7 @@ import type { LockDetectionState } from "../presence/PresenceController";
 import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
 import ApiarySettings from "./ApiarySettings";
+import DevelopmentReloadAction from "./DevelopmentReloadAction";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import JiraSettings from "./JiraSettings";
 import WorkerSettings from "./WorkerSettings";
@@ -42,12 +43,14 @@ type Props = {
   onUpdateWorker: (workerId: string, name: string, autostart: boolean) => Promise<void>;
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
   onUpdateWorkerEngine: () => Promise<void>;
+  onReloadDevelopment: () => Promise<void>;
   onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
-export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers, onUpdateWorkerEngine, onHiveIdentityChange }: Props) {
+export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
+  const [developmentRuntime, setDevelopmentRuntime] = useState<DevelopmentRuntime>();
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
@@ -59,6 +62,13 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
       .catch(() => { if (!cancelled) setTerminalHostStatus(undefined); });
     return () => { cancelled = true; };
   }, [operatorToken, providers]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchDevelopmentRuntime(operatorToken)
+      .then((runtime) => { if (!cancelled) setDevelopmentRuntime(runtime); })
+      .catch(() => { if (!cancelled) setDevelopmentRuntime(undefined); });
+    return () => { cancelled = true; };
+  }, [operatorToken, health?.version]);
   useEffect(() => {
     let cancelled = false;
     void fetchJiraReadiness(operatorToken)
@@ -243,6 +253,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
             )}
           </div>
         ) : null}
+        <DevelopmentReloadAction busy={busy} enabled={developmentRuntime?.enabled === true} onReload={onReloadDevelopment} />
       </section>
 
       <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} />

@@ -1,0 +1,16 @@
+[Unit]
+Description=Build and activate the configured Swarm Next development checkout
+After=swarm-next-terminal-host.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=@CONFIG_ROOT@/swarm-next-dev.env
+ExecStart=@INSTALL_ROOT@/current/swarm-next-package reload-development
+TimeoutStartSec=45min
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=@INSTALL_ROOT@ @STATE_ROOT@ @DEV_CHECKOUT@
+ReadWritePaths=-%h/.cargo -%h/.cache -%h/.local/share/pnpm
+UMask=0077

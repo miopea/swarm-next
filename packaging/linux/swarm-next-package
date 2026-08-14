@@ -22,6 +22,9 @@ rollback_host_release=
 restore_rollback=
 restore_auth=
 restore_incoming=
+dev_config="$config_root/swarm-next-dev.env"
+dev_reload_started=
+dev_status_path=
 
 die() { printf 'swarm-next-package: %s\n' "$*" >&2; exit 1; }
 run_systemctl() { "$systemctl_bin" --user "$@"; }
@@ -52,6 +55,13 @@ on_exit() {
   if [ -n "$drain_release" ]; then
     SWARM_TERMINAL_SOCKET=$(terminal_socket) \
       "$drain_release/bin/swarmctl" cancel-drain >/dev/null 2>&1 || true
+  fi
+  if [ -n "$dev_reload_started" ] && [ -n "$dev_status_path" ]; then
+    if [ "$result" -eq 0 ]; then
+      printf 'state=ready\n' > "$dev_status_path" 2>/dev/null || true
+    else
+      printf 'state=failed\n' > "$dev_status_path" 2>/dev/null || true
+    fi
   fi
   exit "$result"
 }
@@ -130,12 +140,18 @@ validate_config() {
 render_unit() {
   source_file=$1
   destination=$2
+  unit_dev_checkout=$workspace_root
+  if [ -f "$dev_config" ]; then
+    configured_checkout=$(sed -n 's/^SWARM_DEV_CHECKOUT=//p' "$dev_config")
+    [ -z "$configured_checkout" ] || unit_dev_checkout=$configured_checkout
+  fi
   sed \
     -e "s|@INSTALL_ROOT@|$install_root|g" \
     -e "s|@CONFIG_ROOT@|$config_root|g" \
     -e "s|@STATE_ROOT@|$state_root|g" \
     -e "s|@UNIT_ROOT@|$unit_root|g" \
     -e "s|@WORKSPACE_ROOT@|$workspace_root|g" \
+    -e "s|@DEV_CHECKOUT@|$unit_dev_checkout|g" \
     "$source_file" > "$destination.tmp"
   mv -f "$destination.tmp" "$destination"
 }
@@ -197,10 +213,67 @@ activate_host_link() {
 
 install_units() {
   unit_release=$1
-  for name in swarm-next-terminal-host.service swarm-next-api.service swarm-next-host-reconcile.service swarm-next-host-reconcile.path swarm-next-host-reconcile.timer swarm-next.target; do
+  for name in swarm-next-terminal-host.service swarm-next-api.service swarm-next-host-reconcile.service swarm-next-host-reconcile.path swarm-next-host-reconcile.timer swarm-next-development-reload.service swarm-next-development-reload.path swarm-next.target; do
     render_unit "$unit_release/systemd-user/$name.in" "$unit_root/$name"
   done
   run_systemctl daemon-reload
+}
+
+validate_dev_checkout() {
+  requested_checkout=$1
+  case "$requested_checkout" in *[!A-Za-z0-9_./-]*) die "development checkout contains unsupported characters";; esac
+  dev_checkout=$(readlink -f -- "$requested_checkout") || die "development checkout could not be resolved"
+  case "$dev_checkout" in "$home_dir"/*) :;; *) die "development checkout must remain below HOME";; esac
+  [ -e "$dev_checkout/.git" ] || die "development checkout must be a Git worktree"
+  [ -x "$dev_checkout/packaging/linux/build-development-release.sh" ] || die "development checkout does not contain the reload builder"
+}
+
+enable_development() {
+  dev_checkout=$bundle
+  validate_dev_checkout "$dev_checkout"
+  current=$(release_from_link "$install_root/current")
+  [ -n "$current" ] || die "no current release is installed"
+  umask 077
+  {
+    printf 'SWARM_DEV_CHECKOUT=%s\n' "$dev_checkout"
+    printf 'SWARM_DEV_RELOAD_REQUEST_PATH=%s/development-reload.request\n' "$state_root"
+    printf 'SWARM_DEV_RELOAD_STATUS_PATH=%s/development-reload.status\n' "$state_root"
+  } > "$dev_config.tmp"
+  mv -f "$dev_config.tmp" "$dev_config"
+  rm -f "$state_root/development-reload.request"
+  printf 'state=idle\n' > "$state_root/development-reload.status"
+  install_units "$current"
+  run_systemctl enable --now swarm-next-development-reload.path
+  run_systemctl restart swarm-next-api.service
+  wait_for_health || die "development mode could not restart the API"
+  printf 'Development reload enabled for %s on %s\n' "$dev_checkout" "$health_url"
+}
+
+disable_development() {
+  current=$(release_from_link "$install_root/current")
+  [ -n "$current" ] || die "no current release is installed"
+  run_systemctl disable --now swarm-next-development-reload.path >/dev/null 2>&1 || true
+  rm -f "$dev_config" "$state_root/development-reload.request" "$state_root/development-reload.status"
+  install_units "$current"
+  run_systemctl restart swarm-next-api.service
+  wait_for_health || die "API did not recover after disabling development mode"
+  printf 'Development reload disabled; the current release remains active.\n'
+}
+
+reload_development() {
+  [ -f "$dev_config" ] || die "development mode is not configured"
+  dev_checkout=$(sed -n 's/^SWARM_DEV_CHECKOUT=//p' "$dev_config")
+  dev_status_path=$(sed -n 's/^SWARM_DEV_RELOAD_STATUS_PATH=//p' "$dev_config")
+  validate_dev_checkout "$dev_checkout"
+  [ "$dev_status_path" = "$state_root/development-reload.status" ] || die "development status path is invalid"
+  dev_reload_started=1
+  printf 'state=building\n' > "$dev_status_path"
+  rm -f "$state_root/development-reload.request"
+  output="$state_root/development-build"
+  mkdir -p "$output"
+  bundle_path=$("$dev_checkout/packaging/linux/build-development-release.sh" "$output")
+  [ -d "$bundle_path" ] || die "development builder did not return a release directory"
+  "$bundle_path/swarm-next-package" update "$bundle_path"
 }
 
 wait_for_health() {
@@ -399,11 +472,14 @@ uninstall_product() {
 validate_roots
 case "$action" in
   install|update) install_or_update;;
+  enable-development) enable_development;;
+  disable-development) disable_development;;
+  reload-development) reload_development;;
   rollback) rollback;;
   reconcile-host) reconcile_host;;
   reconcile-host-if-idle) reconcile_host if-idle;;
   migrate-protocol) migrate_protocol;;
   uninstall) uninstall_product;;
   restore) restore_database;;
-  *) die "usage: swarm-next-package <install|update|migrate-protocol> RELEASE_DIR | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | uninstall";;
+  *) die "usage: swarm-next-package <install|update|migrate-protocol> RELEASE_DIR | enable-development CHECKOUT | disable-development | reload-development | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | uninstall";;
 esac

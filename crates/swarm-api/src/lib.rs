@@ -87,6 +87,7 @@ pub struct AppState {
     task_store: Option<TaskStore>,
     agent_bridge: Option<agent::AgentBridge>,
     worker_lifecycle: Arc<Mutex<()>>,
+    development_reload: Arc<Mutex<()>>,
     coordination_delivery: Arc<Mutex<()>>,
     jira_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
@@ -97,6 +98,8 @@ pub struct AppState {
     attachment_store: Option<AttachmentStore>,
     workspace_roots: Arc<Vec<PathBuf>>,
     maintenance_request_path: Option<Arc<PathBuf>>,
+    development_reload_request_path: Option<Arc<PathBuf>>,
+    development_reload_status_path: Option<Arc<PathBuf>>,
     maintenance_timeout: Duration,
     jira_readiness: jira::JiraReadinessProbe,
     public_base_url: Option<Arc<str>>,
@@ -114,6 +117,7 @@ impl AppState {
             task_store: None,
             agent_bridge: None,
             worker_lifecycle: Arc::new(Mutex::new(())),
+            development_reload: Arc::new(Mutex::new(())),
             coordination_delivery: Arc::new(Mutex::new(())),
             jira_delivery: Arc::new(Mutex::new(())),
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
@@ -124,6 +128,8 @@ impl AppState {
             attachment_store: None,
             workspace_roots: Arc::new(Vec::new()),
             maintenance_request_path: None,
+            development_reload_request_path: None,
+            development_reload_status_path: None,
             maintenance_timeout: Duration::from_secs(45),
             jira_readiness: jira::JiraReadinessProbe::default(),
             public_base_url: None,
@@ -218,6 +224,13 @@ impl AppState {
     #[must_use]
     pub fn with_maintenance_request_path(mut self, path: PathBuf) -> Self {
         self.maintenance_request_path = Some(Arc::new(path));
+        self
+    }
+
+    #[must_use]
+    pub fn with_development_reload_paths(mut self, request: PathBuf, status: PathBuf) -> Self {
+        self.development_reload_request_path = Some(Arc::new(request));
+        self.development_reload_status_path = Some(Arc::new(status));
         self
     }
 
@@ -1011,6 +1024,13 @@ struct WorkerEngineMaintenanceResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct DevelopmentRuntimeResponse {
+    enabled: bool,
+    version: &'static str,
+    state: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 struct RuntimeResourcesResponse {
     sampled_at: i64,
     policy: ResourcePolicyResponse,
@@ -1656,6 +1676,11 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/resources", get(runtime_resources))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
+        .route("/api/v1/runtime/development", get(development_runtime))
+        .route(
+            "/api/v1/runtime/development/reload",
+            post(request_development_reload),
+        )
         .route(
             "/api/v1/runtime/terminal-host/maintenance",
             post(maintain_terminal_host),
@@ -2908,6 +2933,91 @@ async fn maintain_terminal_host(
         .filter(|worker| worker.active_session_id.is_some())
         .count();
     Ok(Json(response).into_response())
+}
+
+async fn development_runtime(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(DevelopmentRuntimeResponse {
+            enabled: state.development_reload_request_path.is_some(),
+            version: build_version(),
+            state: development_reload_state(&state),
+        }),
+    )
+        .into_response())
+}
+
+fn development_reload_state(state: &AppState) -> &'static str {
+    let Some(path) = &state.development_reload_status_path else {
+        return "disabled";
+    };
+    let Ok(value) = std::fs::read_to_string(path.as_ref()) else {
+        return "idle";
+    };
+    match value.lines().find_map(|line| line.strip_prefix("state=")) {
+        Some("requested") => "requested",
+        Some("building") => "building",
+        Some("failed") => "failed",
+        Some("ready") => "ready",
+        _ => "idle",
+    }
+}
+
+async fn request_development_reload(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let _guard = state.development_reload.lock().await;
+    if matches!(development_reload_state(&state), "requested" | "building") {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "development_reload_in_progress",
+            "a development build is already in progress",
+        ));
+    }
+    let request_path = state
+        .development_reload_request_path
+        .as_ref()
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "development_reload_unavailable",
+                "this installation is not connected to a development checkout",
+            )
+        })?;
+    let status_path = state
+        .development_reload_status_path
+        .as_ref()
+        .expect("development reload paths are configured together");
+    std::fs::write(status_path.as_ref(), "state=requested\n").map_err(|error| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "development_reload_unavailable",
+            format!("the development reload status could not be recorded: {error}"),
+        )
+    })?;
+    std::fs::write(
+        request_path.as_ref(),
+        format!(
+            "requested_at={}\nsource_version={}\n",
+            unix_timestamp(),
+            build_version()
+        ),
+    )
+    .map_err(|error| {
+        let _ = std::fs::write(status_path.as_ref(), "state=failed\n");
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "development_reload_unavailable",
+            format!("the development reload request could not be recorded: {error}"),
+        )
+    })?;
+    Ok(StatusCode::ACCEPTED.into_response())
 }
 
 async fn maintain_terminal_host_locked(
@@ -5454,6 +5564,103 @@ mod tests {
         let json = response_json(response).await;
         assert_eq!(json["status"], "ok");
         assert_eq!(json["version"], build_version());
+    }
+
+    #[tokio::test]
+    async fn development_reload_is_authenticated_explicit_and_content_free() {
+        let runtime = tempfile::tempdir().unwrap();
+        let request_path = runtime.path().join("development-reload.request");
+        let status_path = runtime.path().join("development-reload.status");
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_development_reload_paths(request_path.clone(), status_path.clone()),
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/runtime/development")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let status = authorized_get(app.clone(), "/api/v1/runtime/development").await;
+        assert_eq!(status.status(), StatusCode::OK);
+        assert_eq!(status.headers()[header::CACHE_CONTROL], "no-store");
+        let status = response_json(status).await;
+        assert_eq!(status["enabled"], true);
+        assert_eq!(status["version"], build_version());
+
+        let requested = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/runtime/development/reload")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(requested.status(), StatusCode::ACCEPTED);
+        let request = std::fs::read_to_string(request_path).unwrap();
+        assert!(request.contains("requested_at="));
+        assert!(request.contains(&format!("source_version={}", build_version())));
+        assert!(!request.contains("secret"));
+        assert_eq!(
+            std::fs::read_to_string(status_path).unwrap(),
+            "state=requested\n"
+        );
+
+        let duplicate = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/runtime/development/reload")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response_json(duplicate).await["code"],
+            "development_reload_in_progress"
+        );
+    }
+
+    #[tokio::test]
+    async fn development_reload_fails_closed_when_not_enabled() {
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret"),
+        );
+        let status = authorized_get(app.clone(), "/api/v1/runtime/development").await;
+        assert_eq!(response_json(status).await["enabled"], false);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/runtime/development/reload")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response_json(response).await["code"],
+            "development_reload_unavailable"
+        );
     }
 
     #[test]

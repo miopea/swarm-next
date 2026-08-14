@@ -6,6 +6,7 @@ import {
   createBrowserSession,
   createTask,
   fetchDecisions,
+  fetchDevelopmentRuntime,
   resolveDecision,
   createWorker,
   fetchHive,
@@ -28,6 +29,8 @@ import {
   reorderWorkers,
   reconcileJira,
   recoverTransientRuntime,
+  requestDevelopmentReload,
+  RuntimeRequestError,
   releaseWorkerEngagement,
   revokeBrowserSession,
   setManualPresence,
@@ -638,6 +641,39 @@ export function App() {
     });
   }
 
+  async function reloadDevelopmentBuild() {
+    if (!operatorToken || loadState.kind !== "ready") return;
+    const previousVersion = loadState.health.version;
+    await perform(async () => {
+      await requestDevelopmentReload(operatorToken);
+      for (let attempt = 0; attempt < 600; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        let next;
+        let development;
+        try {
+          [next, development] = await Promise.all([
+            fetchHealth(),
+            fetchDevelopmentRuntime(operatorToken),
+          ]);
+        } catch (error) {
+          if (error instanceof RuntimeRequestError && ![502, 503, 504].includes(error.status)) {
+            throw error;
+          }
+          // The API is expected to disappear briefly only after the build succeeds.
+          continue;
+        }
+        if (next.version !== previousVersion) {
+          window.location.reload();
+          return;
+        }
+        if (development.state === "failed") {
+          throw new Error("The development working copy did not compile. The current release is still running; check the development reload service log for the build error.");
+        }
+      }
+      throw new Error("The development build did not become healthy within 20 minutes");
+    });
+  }
+
   function releaseEngagementWhenSwitching(
     currentSessionId: string | undefined,
     nextSessionId: string,
@@ -971,6 +1007,7 @@ export function App() {
             onUpdateWorker={maintainWorkerProfile}
             onReorderWorkers={reorderWorkerProfiles}
             onUpdateWorkerEngine={maintainWorkerEngine}
+            onReloadDevelopment={reloadDevelopmentBuild}
             onHiveIdentityChange={setHiveIdentity}
           />
         ) : activeSession ? (

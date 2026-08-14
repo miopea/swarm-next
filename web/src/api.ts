@@ -48,6 +48,11 @@ export type WorkerEngineMaintenanceResult = {
   stopped_sessions: number;
   restarted_workers: number;
 };
+export type DevelopmentRuntime = {
+  enabled: boolean;
+  version: string;
+  state: "disabled" | "idle" | "requested" | "building" | "failed" | "ready";
+};
 export type ResourcePressure = "normal" | "advisory" | "critical" | "unavailable";
 export type RuntimeResources = {
   sampled_at: number;
@@ -1195,6 +1200,15 @@ export async function updateWorkerEngine(operatorToken: string): Promise<WorkerE
     { method: "POST" },
   );
   return response.json() as Promise<WorkerEngineMaintenanceResult>;
+}
+
+export async function fetchDevelopmentRuntime(operatorToken: string): Promise<DevelopmentRuntime> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/development");
+  return response.json() as Promise<DevelopmentRuntime>;
+}
+
+export async function requestDevelopmentReload(operatorToken: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/runtime/development/reload", { method: "POST" });
 }
 
 export async function fetchProviderCapabilities(operatorToken: string): Promise<ProviderCapabilities> {

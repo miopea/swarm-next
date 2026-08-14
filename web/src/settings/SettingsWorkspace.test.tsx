@@ -83,6 +83,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       onUpdateWorker={vi.fn().mockResolvedValue(undefined)}
       onReorderWorkers={vi.fn().mockResolvedValue(undefined)}
       onUpdateWorkerEngine={onUpdateWorkerEngine}
+      onReloadDevelopment={vi.fn().mockResolvedValue(undefined)}
       onHiveIdentityChange={vi.fn()}
     />,
   );
@@ -212,6 +213,31 @@ test("downloads a consistent Hive database snapshot", async () => {
   expect(screen.getByText(/creates a rollback snapshot/)).toBeInTheDocument();
 });
 
+test("confirms an opt-in development reload without implying worker loss", async () => {
+  const onReloadDevelopment = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("runtime/development")) return ok({ enabled: true, version: "0.1.0-dev", state: "idle" });
+    if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("integrations/jira/bindings")) return ok([]);
+    if (url.includes("feedback/reports")) return ok([]);
+    if (url.includes("runtime/resources")) return ok({
+      sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 268_435_456, critical_bytes: 536_870_912 },
+      api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" },
+    });
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 7, host_version: "0.1.0", draining: false, running_sessions: 2, retained_sessions: 2 } });
+    return ok({ type: "history_diagnostics", diagnostics: { retained_bytes: 0, session_count: 0, segment_count: 0, dropped_records: 0, dropped_bytes: 0, recovered_truncated_bytes: 0, recovered_corrupt_segments: 0 } });
+  }));
+
+  render(<SettingsWorkspace {...minimalProps()} onReloadDevelopment={onReloadDevelopment} />);
+  expect(await screen.findByText("Development checkout connected.")).toBeInTheDocument();
+  expect(screen.getByText(/active worker terminals stay attached/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Reload development build" }));
+  expect(screen.getByRole("group", { name: "Confirm development reload" })).toHaveTextContent("Build and activate the working copy?");
+  fireEvent.click(screen.getByRole("button", { name: "Build and reload" }));
+  expect(onReloadDevelopment).toHaveBeenCalledOnce();
+});
+
 function minimalProps() {
   return {
     busy: false, colorTheme: "light" as const, feedbackRevision: 0, liveFeedState: "connected" as const, operatorToken: "secret-token",
@@ -220,7 +246,7 @@ function minimalProps() {
     recentEvents: [], sessions: [], workers: [], workspaces: [], providers: { claude_code: true, codex: false }, health: { status: "ok" as const, version: "0.1.0" },
     hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
     onThemeChange: vi.fn(), onPresenceChange: vi.fn(), onEnableLockDetection: vi.fn(), onNotificationPolicyChange: vi.fn(),
-    onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(), onUpdateWorkerEngine: vi.fn(), onHiveIdentityChange: vi.fn(),
+    onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(), onUpdateWorkerEngine: vi.fn(), onReloadDevelopment: vi.fn(), onHiveIdentityChange: vi.fn(),
   };
 }
 function ok(body: unknown) {

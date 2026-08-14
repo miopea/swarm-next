@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for an operator-requested Swarm Next development reload
+
+[Path]
+PathExists=@STATE_ROOT@/development-reload.request
+Unit=swarm-next-development-reload.service
+
+[Install]
+WantedBy=default.target
