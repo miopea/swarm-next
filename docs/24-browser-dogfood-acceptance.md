@@ -531,3 +531,16 @@ the independently updated terminal host through the API to worker settings:
   proof caught and fixed a clipped half-width form before handoff. The final
   1,440 by 900 and 412 by 915 layouts expose every field and action with zero
   document overflow, without submitting real Microsoft credentials.
+- Release `0.1.0-531e76b00ac1` turns the advanced Apiary file exchange into an
+  explicit three-step handoff. A personal Hive first shares only its signed
+  public connection card, the Keeper verifies that exact Hive/operator and
+  returns one bounded invitation file, and the invited operator reviews Keeper,
+  policy, projects, and local readiness before preparing a join. The two file
+  pickers now share one accessible drop-target component with a visible drag
+  state. Playwright is a declared root development dependency, and the live
+  acceptance gate now opens Apiary and captures dedicated evidence at 1,440 by
+  900 and Android 412 by 915. Both profiles rendered exactly three steps, both
+  controls, zero overflowing steps or drop targets, zero page/card overflow,
+  and preserved authentication across complete browser restarts. The gate made
+  no Jira selection or mutation and no Apiary state change. Deployment retained
+  terminal-host PID `1528937` and the exact same 20 Claude processes.
