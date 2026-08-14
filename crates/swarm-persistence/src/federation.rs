@@ -8,13 +8,13 @@ use swarm_domain::{
     ApiaryHiveCandidate, ApiaryId, ApiaryInvitationBundle, ApiaryInvitationEnvelope,
     ApiaryInvitationEnvelopePayload, ApiaryInvitationId, FEDERATION_CATALOG_SCHEMA_VERSION,
     FEDERATION_CONNECTION_CARD_SCHEMA_VERSION, FEDERATION_INVITATION_SCHEMA_VERSION,
-    FEDERATION_MEMBERSHIP_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION, FederationCatalogSnapshot,
-    FederationCatalogSnapshotPayload, FederationJoinAcceptance, FederationJoinInvitation,
-    FederationJoinInvitationState, FederationJoinReadiness, FederationJoinSubmission,
-    FederationJoinSubmissionPayload, FederationMembershipReceipt, FederationMembershipReceiptId,
-    FederationMembershipReceiptPayload, FederationNodeId, FederationProjectManifestEntry,
-    FederationProjectReadiness, HiveConnectionCard, HiveConnectionCardPayload, HiveId,
-    JiraProjectBindingId, SharedWorkBackend,
+    FEDERATION_MEMBERSHIP_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION,
+    FederationCatalogAcknowledgement, FederationCatalogSnapshot, FederationCatalogSnapshotPayload,
+    FederationJoinAcceptance, FederationJoinInvitation, FederationJoinInvitationState,
+    FederationJoinReadiness, FederationJoinSubmission, FederationJoinSubmissionPayload,
+    FederationMembershipReceipt, FederationMembershipReceiptId, FederationMembershipReceiptPayload,
+    FederationNodeId, FederationProjectManifestEntry, FederationProjectReadiness,
+    HiveConnectionCard, HiveConnectionCardPayload, HiveId, JiraProjectBindingId, SharedWorkBackend,
 };
 use url::Url;
 
@@ -74,6 +74,138 @@ struct InvitedJoinApplicationContext {
 }
 
 impl TaskStore {
+    /// Verifies and atomically acknowledges one Keeper-signed catalog on the
+    /// exact joined Member Hive. Exact retries are idempotent; older snapshots
+    /// cannot replace newer evidence.
+    ///
+    /// # Errors
+    /// Rejects Keepers and personal Hives, invalid or expired membership,
+    /// wrong-federation signatures, stale snapshots, and persistence failures.
+    pub fn acknowledge_federation_catalog(
+        &self,
+        snapshot: &FederationCatalogSnapshot,
+        now: i64,
+    ) -> Result<FederationCatalogAcknowledgement, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationCatalog);
+        }
+        let identity = self.local_hive_identity()?;
+        let context = self.local_apiary_context()?;
+        let swarm_domain::LocalApiaryContext::Federated { apiary, .. } = context else {
+            return Err(TaskStoreError::InvalidFederationCatalog);
+        };
+        if apiary.keeper_operator_id == identity.operator.id {
+            return Err(TaskStoreError::InvalidFederationCatalog);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let (receipt_json, keeper_public_key, credential_expires_at) = transaction
+            .query_row(
+                "SELECT m.receipt_json, i.keeper_public_key, m.credential_expires_at
+                 FROM local_federation_membership m
+                 JOIN apiary_join_invitations i ON i.id = m.invitation_id
+                 WHERE m.singleton = 1 AND m.apiary_id = ?1",
+                [apiary.id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(TaskStoreError::InvalidFederationCatalog)?;
+        if credential_expires_at <= now {
+            return Err(TaskStoreError::InvalidFederationCatalog);
+        }
+        let receipt: FederationMembershipReceipt = serde_json::from_str(&receipt_json)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        verify_federation_membership_receipt(&receipt, &keeper_public_key, now)?;
+        verify_federation_catalog_snapshot(snapshot, &keeper_public_key, &receipt, now)?;
+        let serialized = serde_json::to_string(snapshot)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        let existing = transaction
+            .query_row(
+                "SELECT snapshot_json, snapshot_issued_at, acknowledged_at
+                 FROM local_federation_catalog WHERE singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((existing_json, issued_at, acknowledged_at)) = existing {
+            if existing_json == serialized {
+                return Ok(catalog_acknowledgement(snapshot, acknowledged_at));
+            }
+            if snapshot.payload.issued_at <= issued_at {
+                return Err(TaskStoreError::InvalidFederationCatalog);
+            }
+        }
+        transaction.execute(
+            "INSERT INTO local_federation_catalog
+                (singleton, apiary_id, policy_revision, catalog_digest,
+                 project_count, snapshot_json, snapshot_issued_at,
+                 snapshot_expires_at, acknowledged_at)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(singleton) DO UPDATE SET
+                 apiary_id = excluded.apiary_id,
+                 policy_revision = excluded.policy_revision,
+                 catalog_digest = excluded.catalog_digest,
+                 project_count = excluded.project_count,
+                 snapshot_json = excluded.snapshot_json,
+                 snapshot_issued_at = excluded.snapshot_issued_at,
+                 snapshot_expires_at = excluded.snapshot_expires_at,
+                 acknowledged_at = excluded.acknowledged_at",
+            params![
+                snapshot.payload.apiary_id.to_string(),
+                snapshot.payload.policy_revision,
+                &snapshot.payload.promoted_project_catalog_digest,
+                snapshot.payload.projects.len(),
+                serialized,
+                snapshot.payload.issued_at,
+                snapshot.payload.expires_at,
+                now,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(catalog_acknowledgement(snapshot, now))
+    }
+
+    /// Returns the latest locally verified Keeper catalog acknowledgement.
+    ///
+    /// # Errors
+    /// Returns an error when durable state is unavailable or corrupt.
+    pub fn federation_catalog_acknowledgement(
+        &self,
+    ) -> Result<Option<FederationCatalogAcknowledgement>, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT apiary_id, policy_revision, catalog_digest,
+                        project_count, snapshot_issued_at, acknowledged_at
+                 FROM local_federation_catalog WHERE singleton = 1",
+                [],
+                |row| {
+                    Ok(FederationCatalogAcknowledgement {
+                        apiary_id: parse_domain_id(&row.get::<_, String>(0)?)?,
+                        policy_revision: row.get(1)?,
+                        promoted_project_catalog_digest: row.get(2)?,
+                        project_count: row.get(3)?,
+                        snapshot_issued_at: row.get(4)?,
+                        acknowledged_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     /// Returns a short-lived Keeper-signed public project catalog bound to the
     /// exact joined member node authenticated by `node_credential`.
     ///
@@ -1050,6 +1182,20 @@ fn canonical_catalog_snapshot_payload(
     serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
 }
 
+fn catalog_acknowledgement(
+    snapshot: &FederationCatalogSnapshot,
+    acknowledged_at: i64,
+) -> FederationCatalogAcknowledgement {
+    FederationCatalogAcknowledgement {
+        apiary_id: snapshot.payload.apiary_id,
+        policy_revision: snapshot.payload.policy_revision,
+        promoted_project_catalog_digest: snapshot.payload.promoted_project_catalog_digest.clone(),
+        project_count: snapshot.payload.projects.len(),
+        snapshot_issued_at: snapshot.payload.issued_at,
+        acknowledged_at,
+    }
+}
+
 fn verify_join_submission(
     submission: &FederationJoinSubmission,
     expected_public_key: &str,
@@ -1998,6 +2144,26 @@ pub(super) fn migrate_local_federation_membership(
     )
 }
 
+pub(super) fn migrate_local_federation_catalog(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS local_federation_catalog (
+             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             policy_revision INTEGER NOT NULL CHECK (policy_revision > 0),
+             catalog_digest TEXT NOT NULL,
+             project_count INTEGER NOT NULL CHECK (project_count >= 0),
+             snapshot_json TEXT NOT NULL,
+             snapshot_issued_at INTEGER NOT NULL CHECK (snapshot_issued_at >= 0),
+             snapshot_expires_at INTEGER NOT NULL
+                 CHECK (snapshot_expires_at > snapshot_issued_at),
+             acknowledged_at INTEGER NOT NULL CHECK (acknowledged_at >= 0)
+         );
+         PRAGMA user_version = 37;",
+    )
+}
+
 fn map_candidate_insert_error(error: rusqlite::Error) -> TaskStoreError {
     match error {
         rusqlite::Error::SqliteFailure(_, Some(message))
@@ -2785,6 +2951,7 @@ mod tests {
                 .unwrap(),
             joined
         );
+        assert_member_acknowledges_catalog(&invited, &keeper, &accepted, apiary.id, now + 7);
 
         assert_tampered_submission_is_rejected(&keeper, submission, now + 6);
     }
@@ -2798,6 +2965,38 @@ mod tests {
         assert!(matches!(
             keeper.consume_federation_join_submission(&submission, now),
             Err(TaskStoreError::InvalidFederationInvitation)
+        ));
+    }
+
+    fn assert_member_acknowledges_catalog(
+        member: &TaskStore,
+        keeper: &TaskStore,
+        acceptance: &FederationJoinAcceptance,
+        apiary_id: ApiaryId,
+        now: i64,
+    ) {
+        let catalog = keeper
+            .signed_federation_catalog(&acceptance.node_credential, now)
+            .unwrap();
+        let acknowledgement = member
+            .acknowledge_federation_catalog(&catalog, now)
+            .unwrap();
+        assert_eq!(acknowledgement.apiary_id, apiary_id);
+        assert_eq!(
+            member.federation_catalog_acknowledgement().unwrap(),
+            Some(acknowledgement.clone())
+        );
+        assert_eq!(
+            member
+                .acknowledge_federation_catalog(&catalog, now + 1)
+                .unwrap(),
+            acknowledgement
+        );
+        let mut altered = catalog;
+        altered.payload.policy_revision += 1;
+        assert!(matches!(
+            member.acknowledge_federation_catalog(&altered, now + 1),
+            Err(TaskStoreError::InvalidFederationCredential)
         ));
     }
 
@@ -2887,6 +3086,37 @@ mod tests {
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
                      WHERE type = 'table' AND name = 'local_federation_membership'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn schema_v36_migrates_to_local_federation_catalog() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE local_federation_catalog;
+                 PRAGMA user_version = 36;",
+            )
+            .unwrap();
+        drop(store);
+
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'local_federation_catalog'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )

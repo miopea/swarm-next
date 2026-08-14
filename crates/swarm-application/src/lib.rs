@@ -2,12 +2,13 @@ use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks,
     ApiaryJoinReadiness, ApiaryMemberSummary, DecisionRequest, DecisionRequestId,
-    DecisionRequestKind, DecisionUrgency, FederationCatalogSnapshot, FederationJoinAcceptance,
-    FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
-    HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
-    OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
-    PresenceObservationState, SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId,
-    WorkerProfile, WorkerRole, WorkerSessionId,
+    DecisionRequestKind, DecisionUrgency, FederationCatalogAcknowledgement,
+    FederationCatalogSnapshot, FederationJoinAcceptance, FederationJoinInvitation,
+    FederationJoinReadiness, FederationJoinSubmission, HiveConnectionCard, HiveId,
+    JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
+    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
+    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
+    WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -81,6 +82,34 @@ impl ApiaryService {
     ) -> Result<FederationCatalogSnapshot, ApplicationError> {
         self.store
             .signed_federation_catalog(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Verifies and durably acknowledges one signed Keeper catalog locally.
+    /// This does not contact Jira or claim project readiness.
+    ///
+    /// # Errors
+    /// Rejects non-Members, invalid or stale snapshots, expired membership,
+    /// identity mismatch, and unavailable persistence.
+    pub fn acknowledge_federation_catalog(
+        &self,
+        snapshot: &FederationCatalogSnapshot,
+        now: i64,
+    ) -> Result<FederationCatalogAcknowledgement, ApplicationError> {
+        self.store
+            .acknowledge_federation_catalog(snapshot, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns the latest locally verified catalog evidence, if any.
+    ///
+    /// # Errors
+    /// Returns an error when durable state is unavailable or corrupt.
+    pub fn federation_catalog_acknowledgement(
+        &self,
+    ) -> Result<Option<FederationCatalogAcknowledgement>, ApplicationError> {
+        self.store
+            .federation_catalog_acknowledgement()
             .map_err(Into::into)
     }
 

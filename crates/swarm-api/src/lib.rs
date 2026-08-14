@@ -33,12 +33,13 @@ use swarm_application::{
 };
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinReadiness,
-    ControlRoomEventKind, DecisionRequestId, FederationJoinSubmission, HiveConnectionCard, HiveId,
-    HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
-    LocalApiaryContext, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
-    PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
-    QueenAutonomyPolicy, SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
-    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    ControlRoomEventKind, DecisionRequestId, FederationCatalogSnapshot, FederationJoinSubmission,
+    HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId,
+    JiraProjectScope, JiraStatusMapping, LocalApiaryContext, NotificationPolicy,
+    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
+    ProviderConversationId, ProviderKind, QueenAutonomyLevel, QueenAutonomyPolicy,
+    SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState,
+    WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
@@ -1552,6 +1553,10 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/federation/join", post(consume_federation_join))
         .route("/api/v1/federation/catalog", get(federation_catalog))
         .route(
+            "/api/v1/apiary/catalog-acknowledgement",
+            get(get_federation_catalog_acknowledgement).post(acknowledge_federation_catalog),
+        )
+        .route(
             "/api/v1/apiary/collapse-readiness",
             get(apiary_collapse_readiness),
         )
@@ -2026,6 +2031,34 @@ async fn federation_catalog(
         .federation_catalog(credential, unix_timestamp())
         .map_err(federation_catalog_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
+}
+
+async fn acknowledge_federation_catalog(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(snapshot): Json<FederationCatalogSnapshot>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let acknowledgement = apiary_service(&state)?
+        .acknowledge_federation_catalog(&snapshot, unix_timestamp())
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(acknowledgement),
+    )
+        .into_response())
+}
+
+async fn get_federation_catalog_acknowledgement(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let acknowledgement = apiary_service(&state)?
+        .federation_catalog_acknowledgement()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(acknowledgement)).into_response())
 }
 
 async fn create_apiary(
@@ -4659,6 +4692,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "invalid_federation_credential",
             error.to_string(),
         ),
+        TaskStoreError::InvalidFederationCatalog => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_federation_catalog",
+            error.to_string(),
+        ),
         TaskStoreError::FederationInvitationConflict => ApiError::new(
             StatusCode::CONFLICT,
             "federation_invitation_conflict",
@@ -5703,6 +5741,20 @@ mod tests {
             invited_card.payload.node_id,
         )
         .await;
+        let acceptance: swarm_domain::FederationJoinAcceptance =
+            serde_json::from_value(first_json).unwrap();
+        assert_member_catalog_acknowledgement_endpoint(
+            invited,
+            &keeper,
+            imported.invitation_id,
+            &acceptance,
+            now,
+        )
+        .await;
+        assert_keeper_has_two_hives(&keeper);
+    }
+
+    fn assert_keeper_has_two_hives(keeper: &TaskStore) {
         let apiary_id = keeper
             .local_hive_identity()
             .unwrap()
@@ -5754,6 +5806,61 @@ mod tests {
         let serialized = json.to_string();
         assert!(!serialized.contains("node_credential"));
         assert!(!serialized.contains("receipt"));
+    }
+
+    async fn assert_member_catalog_acknowledgement_endpoint(
+        invited: TaskStore,
+        keeper: &TaskStore,
+        invitation_id: ApiaryInvitationId,
+        acceptance: &swarm_domain::FederationJoinAcceptance,
+        now: i64,
+    ) {
+        invited
+            .apply_federation_join_acceptance(invitation_id, acceptance, now)
+            .unwrap();
+        let snapshot = keeper
+            .signed_federation_catalog(&acceptance.node_credential, now)
+            .unwrap();
+        let body = serde_json::to_string(&snapshot).unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(invited),
+        );
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/catalog-acknowledgement")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let acknowledged = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/catalog-acknowledgement")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(acknowledged.status(), StatusCode::ACCEPTED);
+        assert_eq!(acknowledged.headers()[header::CACHE_CONTROL], "no-store");
+        let acknowledged_json = response_json(acknowledged).await;
+        assert_eq!(acknowledged_json["project_count"], 0);
+        let current = authorized_get(app, "/api/v1/apiary/catalog-acknowledgement").await;
+        assert_eq!(current.status(), StatusCode::OK);
+        assert_eq!(current.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(current).await, acknowledged_json);
     }
 
     async fn assert_imported_policy_acceptance(app: Router, invitation_id: ApiaryInvitationId) {

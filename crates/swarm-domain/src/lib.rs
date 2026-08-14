@@ -351,6 +351,18 @@ pub struct FederationCatalogSnapshot {
     pub signature: String,
 }
 
+/// Durable Member-side evidence that one exact Keeper catalog was verified.
+/// This does not claim local Jira readiness or policy acceptance.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationCatalogAcknowledgement {
+    pub apiary_id: ApiaryId,
+    pub policy_revision: u64,
+    pub promoted_project_catalog_digest: String,
+    pub project_count: usize,
+    pub snapshot_issued_at: i64,
+    pub acknowledged_at: i64,
+}
+
 /// A one-time handoff bundle. The secret is shown only in this response and is
 /// never recoverable from Keeper storage. The Keeper card lets the invited
 /// operator deliberately pin the signing identity before accepting policy.

@@ -52,7 +52,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 36;
+const CURRENT_SCHEMA_VERSION: i64 = 37;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -105,6 +105,8 @@ pub enum TaskStoreError {
     InvalidFederationInvitation,
     #[error("The federation node credential is invalid or expired")]
     InvalidFederationCredential,
+    #[error("The federation project catalog is invalid, stale, or misaddressed")]
+    InvalidFederationCatalog,
     #[error("A current invitation already exists for this pinned Hive")]
     FederationInvitationConflict,
     #[error("task was not found")]
@@ -1339,6 +1341,9 @@ fn migrate_federation_schema(
     }
     if schema_version < 36 {
         federation::migrate_local_federation_membership(transaction)?;
+    }
+    if schema_version < 37 {
+        federation::migrate_local_federation_catalog(transaction)?;
     }
     Ok(())
 }

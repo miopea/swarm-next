@@ -128,6 +128,16 @@ not delivery: Member-side acknowledgement, offline reconciliation, and
 outbound polling remain later slices, and this endpoint performs no Jira or
 membership mutation.
 
+The joined Member can now verify and durably acknowledge one of those signed
+snapshots through a private local command. Verification is bound to every
+Keeper, Apiary, and member identity in the stored membership receipt, requires
+an unexpired membership credential, validates the canonical project digest,
+and rejects altered, stale, or rollback snapshots. Exact retries are
+idempotent. The acknowledgement records the digest, policy revision, project
+count, and timestamps but deliberately does not claim local Jira access,
+workflow readiness, or policy acceptance. Automatic polling and the per-project
+readiness/reconciliation loop remain separate adapter work.
+
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
 reject Jira promotion, and a joining Hive passes project readiness only when
