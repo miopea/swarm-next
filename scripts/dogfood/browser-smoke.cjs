@@ -311,6 +311,31 @@ async function checkSurface(browser, surface) {
     if (settingsNavigationSize.clientHeight < 40) {
       throw new Error(`${surface.name}: Settings section navigation collapsed: ${JSON.stringify(settingsNavigationSize)}`);
     }
+    const apiaryJump = settingsNavigation.getByRole("button", { name: "Apiary", exact: true });
+    await apiaryJump.click();
+    const apiaryGuide = page.getByRole("list", { name: "How to join an Apiary" });
+    await apiaryGuide.waitFor();
+    const apiaryGuideSteps = await apiaryGuide.locator(":scope > li").count();
+    const connectionCardControl = page.getByRole("button", { name: "Download connection card" });
+    const invitationControl = page.getByLabel("Choose Apiary invitation");
+    const apiaryOverflow = await page.locator("#settings-apiary").evaluate((section) => ({
+      scrollWidth: section.scrollWidth,
+      clientWidth: section.clientWidth,
+      overflowingSteps: [...section.querySelectorAll(".apiary-exchange-guide > li")]
+        .filter((step) => step.scrollWidth > step.clientWidth + 1).length,
+      overflowingDrops: [...section.querySelectorAll(".apiary-card-drop")]
+        .filter((drop) => drop.scrollWidth > drop.clientWidth + 1).length,
+    }));
+    if (apiaryGuideSteps !== 3 || !await connectionCardControl.isVisible() || !await invitationControl.isVisible()) {
+      throw new Error(`${surface.name}: Apiary invitation exchange is incomplete`);
+    }
+    if (apiaryOverflow.scrollWidth > apiaryOverflow.clientWidth + 1 || apiaryOverflow.overflowingSteps > 0 || apiaryOverflow.overflowingDrops > 0) {
+      throw new Error(`${surface.name}: Apiary invitation exchange overflows its layout`);
+    }
+    await page.screenshot({
+      path: path.join(outputRoot, `${surface.name}-settings-apiary.png`),
+      fullPage: true,
+    });
     const diagnosticsJump = settingsNavigation.getByRole("button", { name: "Diagnostics", exact: true });
     await diagnosticsJump.click();
     if (await diagnosticsJump.getAttribute("aria-current") !== "location") {
@@ -394,7 +419,7 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
     accessibleControlCount += await verifyAccessibleControls(page, `${surface.name}/settings-detail`);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, jiraIssueFilter, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, apiaryGuideSteps, apiaryOverflow, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, jiraIssueFilter, backup, status: "passed" };
   } finally {
     await context.close();
   }
