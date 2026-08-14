@@ -139,6 +139,22 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Lists only active reservations and confirmed home-Hive ownership for
+    /// the Keeper's low-noise shared-work rollup. No remote system is read or
+    /// mutated by this command.
+    ///
+    /// # Errors
+    /// Rejects personal and Member Hives, invalid time, corrupt state, and
+    /// unavailable persistence.
+    pub fn active_federation_claims(
+        &self,
+        now: i64,
+    ) -> Result<Vec<FederationSharedClaim>, ApplicationError> {
+        self.store
+            .list_active_federation_claims(now)
+            .map_err(Into::into)
+    }
+
     /// Verifies and durably acknowledges one signed Keeper catalog locally.
     /// This does not contact Jira or claim project readiness.
     ///

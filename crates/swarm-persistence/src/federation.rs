@@ -31,6 +31,7 @@ const MAX_PROMOTED_PROJECTS_PER_INVITATION: usize = 1_000;
 const FEDERATION_NODE_CREDENTIAL_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
 const FEDERATION_CATALOG_LIFETIME_SECONDS: i64 = 5 * 60;
 const FEDERATION_CLAIM_RESERVATION_SECONDS: i64 = 2 * 60;
+const MAX_ACTIVE_FEDERATION_CLAIMS: usize = 1_000;
 
 struct LocalFederationIdentity {
     node_id: FederationNodeId,
@@ -83,6 +84,51 @@ struct MemberCredentialContext {
 }
 
 impl TaskStore {
+    /// Lists the current Apiary's active shared-work reservations and durable
+    /// home-Hive claims for the Keeper control room. Expired reservations and
+    /// released history are deliberately omitted so routine reconciliation
+    /// noise does not enter the operator rollup.
+    ///
+    /// # Errors
+    /// Rejects personal and Member Hives, invalid time, corrupt records, and
+    /// unavailable persistence.
+    pub fn list_active_federation_claims(
+        &self,
+        now: i64,
+    ) -> Result<Vec<FederationSharedClaim>, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationClaim);
+        }
+        let identity = self.local_hive_identity()?;
+        let context = self.local_apiary_context()?;
+        let swarm_domain::LocalApiaryContext::Federated { apiary, local_role } = context else {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        };
+        if local_role != swarm_domain::LocalApiaryRole::Keeper
+            || apiary.keeper_operator_id != identity.operator.id
+        {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT id, apiary_id, project_id, issue_id, issue_key,
+                    home_node_id, home_hive_id, home_operator_id, state,
+                    reserved_at, reservation_expires_at, confirmed_at, released_at
+             FROM apiary_federation_claims
+             WHERE apiary_id = ?1
+               AND (state = 'confirmed'
+                    OR (state = 'reserved' AND reservation_expires_at > ?2))
+             ORDER BY CASE state WHEN 'reserved' THEN 0 ELSE 1 END,
+                      COALESCE(confirmed_at, reserved_at) DESC, issue_key ASC
+             LIMIT ?3",
+        )?;
+        let rows = statement.query_map(
+            params![apiary.id.to_string(), now, MAX_ACTIVE_FEDERATION_CLAIMS],
+            federation_claim_from_row,
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Atomically reserves one promoted Jira issue for the authenticated member
     /// Hive. Exact retries by that Hive return the same claim; another Hive
     /// fails closed until an unconfirmed reservation expires or is released.
@@ -3464,6 +3510,14 @@ mod tests {
             ),
             Err(TaskStoreError::FederationClaimConflict)
         ));
+        assert_eq!(
+            keeper.list_active_federation_claims(now + 24).unwrap(),
+            vec![confirmed]
+        );
+        assert!(matches!(
+            first_member.list_active_federation_claims(now + 24),
+            Err(TaskStoreError::ApiaryKeeperRequired)
+        ));
     }
 
     #[test]
@@ -3551,6 +3605,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(prior_state, "expired");
+        let visible = keeper.list_active_federation_claims(after_expiry).unwrap();
+        assert_eq!(
+            visible.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+            vec![recovered.id]
+        );
     }
 
     fn register_remote_member(

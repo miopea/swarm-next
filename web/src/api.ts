@@ -97,6 +97,25 @@ export type ApiaryMember = {
   role: "keeper" | "member";
   is_local: boolean;
 };
+export type ApiarySharedWorkClaim = {
+  id: string;
+  apiary_id: string;
+  project_id: string;
+  issue_id: string;
+  issue_key: string;
+  home_node_id: string;
+  home_hive_id: string;
+  home_operator_id: string;
+  state: "reserved" | "confirmed";
+  reserved_at: number;
+  reservation_expires_at: number;
+  confirmed_at: number | null;
+  released_at: null;
+  project_key: string;
+  project_name: string;
+  home_hive_name: string;
+  home_operator_display_name: string;
+};
 export type ApiaryCollapseReadiness = {
   active_hive_count: number;
   pending_invitation_count: number;
@@ -522,6 +541,13 @@ export async function createApiary(
 export async function fetchApiaryMembers(operatorToken: string): Promise<ApiaryMember[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/members");
   return response.json() as Promise<ApiaryMember[]>;
+}
+
+export async function fetchApiarySharedWork(
+  operatorToken: string,
+): Promise<ApiarySharedWorkClaim[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/shared-work");
+  return response.json() as Promise<ApiarySharedWorkClaim[]>;
 }
 
 export async function fetchHiveConnectionCard(

@@ -521,6 +521,17 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-promotion-list .readiness-ready { color: var(--good); }
 .apiary-promotion-list .readiness-blocked { color: var(--bad); }
 .apiary-projects .empty-copy { margin: 0; color: var(--muted); font-size: .76rem; }
+.apiary-shared-work { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
+.apiary-shared-work > div:first-child { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.apiary-shared-work > div:first-child > span:first-child { display: grid; gap: 2px; }
+.apiary-shared-work-count { display: grid; min-width: 24px; height: 24px; place-items: center; border-radius: 8px; color: var(--muted); background: var(--panel-soft); font-size: .7rem; font-weight: 700; }
+.apiary-shared-work ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.apiary-shared-work li { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto; align-items: center; gap: 12px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.apiary-shared-work li > span { display: grid; gap: 2px; }
+.apiary-shared-work li small { color: var(--muted); }
+.apiary-claim-issue > strong { color: var(--accent-strong); }
+.apiary-claim-pending { color: var(--warning); font-size: .7rem; font-weight: 700; }
+.apiary-shared-work .empty-copy { margin: 0; color: var(--muted); font-size: .76rem; }
 .apiary-readiness { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; margin: 0; }
 .apiary-readiness > div { display: grid; gap: 3px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
 .apiary-readiness dt { color: var(--muted); font-size: .65rem; }
@@ -737,6 +748,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-candidate-state { width: 100%; align-items: stretch; flex-direction: column; }
   .apiary-candidate-state .secondary-button { width: 100%; }
   .apiary-project-list li, .apiary-promotion-list > div { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .apiary-shared-work li { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .apiary-project-list li > small { text-align: left; }
   .apiary-promotion-list button { width: 100%; }
   .apiary-confirmation .settings-actions { display: grid; grid-template-columns: minmax(0, 1fr); }

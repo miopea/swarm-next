@@ -8,6 +8,7 @@ import {
   fetchApiaryHiveCandidates,
   fetchApiaryJiraProjects,
   fetchApiaryMembers,
+  fetchApiarySharedWork,
   fetchFederationJoinInvitations,
   fetchHive,
   fetchHiveConnectionCard,
@@ -22,6 +23,7 @@ import {
   type ApiaryInvitationBundle,
   type ApiaryJiraProject,
   type ApiaryMember,
+  type ApiarySharedWorkClaim,
   type FederationJoinInvitationOverview,
   type HiveConnectionCard,
   type HiveIdentity,
@@ -45,12 +47,14 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [readiness, setReadiness] = useState<ApiaryCollapseReadiness>();
   const [promotedProjects, setPromotedProjects] = useState<ApiaryJiraProject[]>([]);
   const [members, setMembers] = useState<ApiaryMember[]>([]);
+  const [sharedWork, setSharedWork] = useState<ApiarySharedWorkClaim[]>([]);
   const [hiveCandidates, setHiveCandidates] = useState<ApiaryHiveCandidate[]>([]);
   const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
   const [jiraBindings, setJiraBindings] = useState<JiraProjectBinding[]>([]);
   const [projectLoadError, setProjectLoadError] = useState(false);
   const [candidateLoadError, setCandidateLoadError] = useState(false);
+  const [sharedWorkLoadError, setSharedWorkLoadError] = useState(false);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -100,6 +104,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       setJiraBindings([]);
       setProjectLoadError(false);
       setCandidateLoadError(false);
+      setSharedWork([]);
+      setSharedWorkLoadError(false);
       return;
     }
     let cancelled = false;
@@ -107,14 +113,17 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       fetchApiaryJiraProjects(operatorToken),
       fetchJiraBindings(operatorToken),
       fetchApiaryHiveCandidates(operatorToken),
+      fetchApiarySharedWork(operatorToken),
     ])
-      .then(([projects, bindings, candidates]) => {
+      .then(([projects, bindings, candidates, claims]) => {
         if (cancelled) return;
         setPromotedProjects(projects.status === "fulfilled" ? projects.value : []);
         setJiraBindings(bindings.status === "fulfilled" ? bindings.value : []);
         setHiveCandidates(candidates.status === "fulfilled" ? candidates.value : []);
         setProjectLoadError(projects.status === "rejected" || bindings.status === "rejected");
         setCandidateLoadError(candidates.status === "rejected");
+        setSharedWork(claims.status === "fulfilled" ? claims.value : []);
+        setSharedWorkLoadError(claims.status === "rejected");
       });
     return () => { cancelled = true; };
   }, [keeper, operatorToken, hiveIdentity?.hive.apiary_id]);
@@ -517,6 +526,27 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                   })}
                 </div>
               ) : null}
+            </div>
+            <div className="apiary-shared-work">
+              <div>
+                <span><strong>Shared work ownership</strong><small>Only active reservations and durable home-Hive ownership appear here. Routine worker activity stays inside each Hive.</small></span>
+                <span className="apiary-shared-work-count">{sharedWork.length}</span>
+              </div>
+              {sharedWorkLoadError ? (
+                <p className="apiary-blockers">Shared ownership could not be refreshed. No claim or Jira state changed.</p>
+              ) : sharedWork.length > 0 ? (
+                <ul aria-label="Apiary shared work ownership">
+                  {sharedWork.map((claim) => (
+                    <li key={claim.id}>
+                      <span className="apiary-claim-issue"><strong>{claim.issue_key}</strong><small>{claim.project_name}</small></span>
+                      <span><strong>{claim.home_hive_name}</strong><small>{claim.home_operator_display_name}</small></span>
+                      <span className={claim.state === "confirmed" ? "readiness-ready" : "apiary-claim-pending"}>
+                        {claim.state === "confirmed" ? "Owned" : "Claiming"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : <p className="empty-copy">No shared Jira work is currently claimed by an Apiary Hive.</p>}
             </div>
             <div className="apiary-collapse">
               <div><strong>Return to a personal Hive</strong><small>Available only while this is the sole Hive and no federation state remains.</small></div>

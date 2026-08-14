@@ -159,6 +159,14 @@ credential, disable caching, and never receive or expose Jira credentials.
 This is the Keeper serialization primitive, not yet the complete Member-side
 Jira claim saga or background reconciliation loop.
 
+Keeper can now inspect a bounded, operator-authenticated ownership rollup built
+from that same authoritative claim ledger. It includes only unexpired
+reservations and confirmed home-Hive ownership, enriched with public Hive,
+operator, and promoted-project names. Released and expired attempts, node
+credentials, receipts, Jira credentials, task content, repositories, terminals,
+and routine worker activity are omitted. This is an on-demand control-room read,
+not presence or a background polling claim.
+
 The outbound adapter foundation is also bounded independently of any browser:
 remote endpoints require HTTPS and may not embed credentials, queries, or
 fragments; redirects are rejected; each request has a five-second connection

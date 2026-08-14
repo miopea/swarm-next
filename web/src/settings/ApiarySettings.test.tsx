@@ -398,6 +398,45 @@ test("prepares a ready join durably without claiming it was delivered", async ()
   expect(invitations).toHaveTextContent("Delivery to the Keeper is not enabled yet");
 });
 
+test("shows a low-noise Keeper rollup of reservations and durable ownership", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/members") return ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false },
+    ]);
+    if (url === "/api/v1/apiary/collapse-readiness") {
+      return ok({ active_hive_count: 2, pending_invitation_count: 0, active_stewardship_count: 0, open_cross_hive_work_count: 2, departed_node_count: 0 });
+    }
+    if (url === "/api/v1/apiary/jira-projects") return ok([]);
+    if (url === "/api/v1/integrations/jira/bindings") return ok([]);
+    if (url === "/api/v1/apiary/hive-candidates") return ok([]);
+    if (url === "/api/v1/apiary/shared-work") return ok([
+      {
+        id: "claim-1", apiary_id: "apiary-1", project_id: "10001", issue_id: "20001", issue_key: "WWD-101",
+        home_node_id: "node-2", home_hive_id: "hive-2", home_operator_id: "operator-2", state: "reserved",
+        reserved_at: 100, reservation_expires_at: 220, confirmed_at: null, released_at: null,
+        project_key: "WWD", project_name: "Website Development", home_hive_name: "Clover Hive", home_operator_display_name: "Cora",
+      },
+      {
+        id: "claim-2", apiary_id: "apiary-1", project_id: "10001", issue_id: "20002", issue_key: "WWD-102",
+        home_node_id: "node-1", home_hive_id: "hive-1", home_operator_id: "operator-1", state: "confirmed",
+        reserved_at: 90, reservation_expires_at: 210, confirmed_at: 110, released_at: null,
+        project_key: "WWD", project_name: "Website Development", home_hive_name: "Meadow Hive", home_operator_display_name: "Bea",
+      },
+    ]);
+    throw new Error(`unexpected request ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  const rollup = await screen.findByRole("list", { name: "Apiary shared work ownership" });
+  expect(rollup).toHaveTextContent("WWD-101Website DevelopmentClover HiveCoraClaiming");
+  expect(rollup).toHaveTextContent("WWD-102Website DevelopmentMeadow HiveBeaOwned");
+  expect(screen.getByText(/Routine worker activity stays inside each Hive/)).toBeVisible();
+  expect(rollup).not.toHaveTextContent("credential");
+});
+
 function personalIdentity(): HiveIdentity {
   return {
     operator: { id: "operator-1", display_name: "Bea" },

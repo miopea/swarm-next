@@ -35,9 +35,9 @@ use swarm_application::{
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinReadiness,
     ControlRoomEventKind, DecisionRequestId, FederationCatalogSnapshot, FederationClaimId,
-    FederationJoinSubmission, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
-    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext,
-    NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard, HiveId, HiveIdentity,
+    JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
+    LocalApiaryContext, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
     PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
     QueenAutonomyPolicy, SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
     WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
@@ -1201,6 +1201,16 @@ struct ReserveFederationClaimRequest {
     issue_key: String,
 }
 
+#[derive(Debug, Serialize)]
+struct FederationClaimRollupView {
+    #[serde(flatten)]
+    claim: FederationSharedClaim,
+    project_key: String,
+    project_name: String,
+    home_hive_name: String,
+    home_operator_display_name: String,
+}
+
 impl From<FederationJoinInvitationOverview> for FederationJoinInvitationView {
     fn from(value: FederationJoinInvitationOverview) -> Self {
         Self {
@@ -1534,6 +1544,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/hive", get(local_hive))
         .route("/api/v1/apiary", post(create_apiary))
         .route("/api/v1/apiary/members", get(apiary_members))
+        .route("/api/v1/apiary/shared-work", get(apiary_shared_work))
         .route(
             "/api/v1/apiary/connection-card",
             get(download_hive_connection_card),
@@ -1852,6 +1863,65 @@ async fn apiary_members(
         .members()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(members)).into_response())
+}
+
+async fn apiary_shared_work(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let service = apiary_service(&state)?;
+    let claims = service
+        .active_federation_claims(unix_timestamp())
+        .map_err(application_error)?;
+    let members = service.members().map_err(application_error)?;
+    let projects = service
+        .promoted_jira_projects()
+        .map_err(application_error)?;
+    let member_names = members
+        .into_iter()
+        .map(|member| {
+            (
+                member.hive_id,
+                (member.hive_name, member.operator_display_name),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let project_names = projects
+        .into_iter()
+        .map(|project| {
+            (
+                project.project_id,
+                (project.project_key, project.project_name),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let rollup = claims
+        .into_iter()
+        .map(|claim| {
+            let (home_hive_name, home_operator_display_name) = member_names
+                .get(&claim.home_hive_id)
+                .cloned()
+                .unwrap_or_else(|| ("Unknown Hive".into(), "Unknown operator".into()));
+            let (project_key, project_name) = project_names
+                .get(&claim.project_id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    (
+                        claim.issue_key.split('-').next().unwrap_or("Jira").into(),
+                        "Promoted Jira project".into(),
+                    )
+                });
+            FederationClaimRollupView {
+                claim,
+                project_key,
+                project_name,
+                home_hive_name,
+                home_operator_display_name,
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(rollup)).into_response())
 }
 
 async fn apiary_invitations(
@@ -5997,6 +6067,8 @@ mod tests {
         assert_eq!(confirmed.headers()[header::CACHE_CONTROL], "no-store");
         assert_eq!(response_json(confirmed).await["state"], "confirmed");
 
+        assert_keeper_shared_work_rollup(app.clone()).await;
+
         let release_confirmed = app
             .oneshot(
                 Request::builder()
@@ -6009,6 +6081,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(release_confirmed.status(), StatusCode::BAD_REQUEST);
+    }
+
+    async fn assert_keeper_shared_work_rollup(app: Router) {
+        let unauthenticated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/apiary/shared-work")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        let response = authorized_get(app, "/api/v1/apiary/shared-work").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let json = response_json(response).await;
+        assert_eq!(json.as_array().unwrap().len(), 1);
+        assert_eq!(json[0]["issue_key"], "WWD-101");
+        assert_eq!(json[0]["project_name"], "Website Development");
+        assert_eq!(json[0]["state"], "confirmed");
+        assert!(json[0]["home_hive_name"].as_str().is_some());
+        assert!(json[0]["home_operator_display_name"].as_str().is_some());
+        let serialized = json.to_string();
+        assert!(!serialized.contains("credential"));
+        assert!(!serialized.contains("receipt"));
     }
 
     async fn assert_member_catalog_acknowledgement_endpoint(
