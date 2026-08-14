@@ -6,6 +6,7 @@ import type { TerminalSnapshot } from "./TerminalConnection";
 import type { Disposable, TerminalSurface } from "./TerminalController";
 
 const MAX_FIT_FRAMES = 60;
+const RESIZE_SETTLE_MS = 120;
 export const MIN_TERMINAL_ROWS = 4;
 export const MIN_TERMINAL_COLUMNS = 20;
 
@@ -14,6 +15,7 @@ export class XtermSurface implements TerminalSurface {
   readonly #fit = new FitAddon();
   readonly #themeObserver: MutationObserver | undefined;
   #resizeObserver: ResizeObserver | undefined;
+  #resizeTimer: ReturnType<typeof setTimeout> | undefined;
   #element: HTMLElement | undefined;
   #restorePending = false;
   #disposed = false;
@@ -38,7 +40,7 @@ export class XtermSurface implements TerminalSurface {
   open(element: HTMLElement): void {
     this.#element = element;
     this.#terminal.open(element);
-    this.#resizeObserver = new ResizeObserver(() => this.#fitIfUsable());
+    this.#resizeObserver = new ResizeObserver(() => this.#scheduleFit());
     this.#resizeObserver.observe(element);
   }
 
@@ -49,6 +51,7 @@ export class XtermSurface implements TerminalSurface {
   async fit(): Promise<{ rows: number; columns: number }> {
     try {
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
+      this.#cancelScheduledFit();
       await document.fonts?.ready;
       for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {
         await nextAnimationFrame();
@@ -113,6 +116,7 @@ export class XtermSurface implements TerminalSurface {
 
   dispose(): void {
     this.#disposed = true;
+    this.#cancelScheduledFit();
     this.#themeObserver?.disconnect();
     this.#resizeObserver?.disconnect();
     this.#terminal.dispose();
@@ -131,6 +135,20 @@ export class XtermSurface implements TerminalSurface {
     if (!usable) return;
     if (usable.rows === this.#terminal.rows && usable.columns === this.#terminal.cols) return;
     this.#terminal.resize(usable.columns, usable.rows);
+  }
+
+  #scheduleFit(): void {
+    this.#cancelScheduledFit();
+    this.#resizeTimer = setTimeout(() => {
+      this.#resizeTimer = undefined;
+      this.#fitIfUsable();
+    }, RESIZE_SETTLE_MS);
+  }
+
+  #cancelScheduledFit(): void {
+    if (this.#resizeTimer === undefined) return;
+    clearTimeout(this.#resizeTimer);
+    this.#resizeTimer = undefined;
   }
 }
 

@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 const xterm = vi.hoisted(() => ({
   fit: vi.fn(),
@@ -7,6 +7,7 @@ const xterm = vi.hoisted(() => ({
   terminal: undefined as { rows: number; cols: number } | undefined,
   options: undefined as Record<string, unknown> | undefined,
   focus: vi.fn(),
+  resize: vi.fn(),
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
@@ -43,6 +44,7 @@ vi.mock("@xterm/xterm", () => ({
     focus(): void { xterm.focus(); }
     reset(): void {}
     resize(columns: number, rows: number): void {
+      xterm.resize(columns, rows);
       this.cols = columns;
       this.rows = rows;
     }
@@ -61,6 +63,8 @@ vi.mock("@xterm/xterm", () => ({
 }));
 
 import { XtermSurface } from "./XtermSurface";
+
+afterEach(() => vi.useRealTimers());
 
 test("uses the complete botanical ANSI palette", () => {
   document.documentElement.dataset.theme = "dark";
@@ -199,6 +203,38 @@ test("hidden or collapsing layouts cannot resize the canonical terminal", () => 
   observed?.();
 
   expect(xterm.terminal).toMatchObject(before);
+  surface.dispose();
+  element.remove();
+});
+
+test("continuous container movement produces one settled terminal resize", async () => {
+  vi.useFakeTimers();
+  let observed: (() => void) | undefined;
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) { observed = callback; }
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const element = document.createElement("div");
+  document.body.append(element);
+  xterm.propose.mockReset().mockReturnValue({ rows: 38, cols: 132 });
+  xterm.resize.mockClear();
+  const surface = new XtermSurface();
+  surface.open(element);
+
+  observed?.();
+  await vi.advanceTimersByTimeAsync(80);
+  observed?.();
+  await vi.advanceTimersByTimeAsync(119);
+  expect(xterm.resize).not.toHaveBeenCalled();
+
+  await vi.advanceTimersByTimeAsync(1);
+  expect(xterm.resize).toHaveBeenCalledOnce();
+  expect(xterm.resize).toHaveBeenCalledWith(132, 38);
+
   surface.dispose();
   element.remove();
 });
