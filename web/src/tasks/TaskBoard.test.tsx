@@ -143,6 +143,7 @@ test("shares Jira project navigation and manual sync with the board controls", (
   });
 
   expect(screen.getByRole("link", { name: "Open Website Development in Jira" })).toHaveAttribute("href", "https://jira.example.test/issues/?jql=project");
+  expect(screen.getByText(/Jira refreshes every minute/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
   expect(onJiraSync).toHaveBeenCalledOnce();
 });

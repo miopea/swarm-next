@@ -178,7 +178,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
                 <span><strong>Shared with this Hive</strong><small>{binding.workflow_mapped ? "Workflow mapped" : "Mapping needed"}</small></span>
                 <label className="jira-binding-destination worker-autostart">
                   <input type="checkbox" checked={binding.auto_sync_assigned} disabled={busy || !binding.workflow_mapped} onChange={(event) => void changeAssignedSync(binding, event.target.checked)} />
-                  <span><strong>Automatically sync my assigned work</strong><small>Open issues assigned to you appear on the task board</small></span>
+                  <span><strong>Automatically sync my assigned work</strong><small>Open issues assigned to you appear within a minute. Jira closures move linked work to Completed.</small></span>
                 </label>
               </div>
           ))}

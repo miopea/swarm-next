@@ -293,10 +293,11 @@ impl AppState {
                 continue;
             }
             let imported = links
-                .into_iter()
-                .map(|link| link.issue_id)
+                .iter()
+                .map(|link| link.issue_id.clone())
                 .collect::<HashSet<_>>();
-            let issues = match self.jira_readiness.issues(&binding.project_id).await {
+            let imported_ids = imported.iter().cloned().collect::<Vec<_>>();
+            let issues = match self.jira_readiness.linked_issues(&imported_ids).await {
                 Ok(issues) => issues,
                 Err(error) => {
                     tracing::warn!(%error, project = %binding.project_key, "Jira reconciliation is temporarily unavailable");
@@ -5027,30 +5028,37 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let jira_server = axum::Router::new().route(
             "/rest/api/3/search/jql",
-            get(|| async {
-                Json(serde_json::json!({
-                    "isLast": true,
-                    "issues": [{
-                        "id": "20001",
-                        "key": "WEB-42",
-                        "fields": {
-                            "summary": "Updated remotely",
-                            "status": { "id": "4", "name": "In Review" },
-                            "assignee": { "accountId": "account-2", "displayName": "Fern" },
-                            "updated": "2026-08-13T14:00:00.000+0000"
-                        }
-                    }, {
-                        "id": "20002",
-                        "key": "WEB-43",
-                        "fields": {
-                            "summary": "Never implicitly import this issue",
-                            "status": { "id": "3", "name": "In Progress" },
-                            "assignee": null,
-                            "updated": "2026-08-13T14:01:00.000+0000"
-                        }
-                    }]
-                }))
-            }),
+            get(
+                |axum::extract::Query(query): axum::extract::Query<
+                    std::collections::HashMap<String, String>,
+                >| async move {
+                    let jql = query.get("jql").map(String::as_str).unwrap_or_default();
+                    assert!(jql.contains("id in (\"20001\")"));
+                    assert!(!jql.contains("statusCategory != Done"));
+                    Json(serde_json::json!({
+                        "isLast": true,
+                        "issues": [{
+                            "id": "20001",
+                            "key": "WEB-42",
+                            "fields": {
+                                "summary": "Closed remotely",
+                                "status": { "id": "5", "name": "Done" },
+                                "assignee": { "accountId": "account-2", "displayName": "Fern" },
+                                "updated": "2026-08-13T14:00:00.000+0000"
+                            }
+                        }, {
+                            "id": "20002",
+                            "key": "WEB-43",
+                            "fields": {
+                                "summary": "Never implicitly import this issue",
+                                "status": { "id": "3", "name": "In Progress" },
+                                "assignee": null,
+                                "updated": "2026-08-13T14:01:00.000+0000"
+                            }
+                        }]
+                    }))
+                },
+            ),
         );
         tokio::spawn(async move { axum::serve(listener, jira_server).await.unwrap() });
 
@@ -5074,9 +5082,9 @@ mod tests {
                         task_state: TaskState::Active,
                     },
                     JiraStatusMapping {
-                        jira_status_id: "4".into(),
-                        jira_status_name: "In Review".into(),
-                        task_state: TaskState::Review,
+                        jira_status_id: "5".into(),
+                        jira_status_name: "Done".into(),
+                        task_state: TaskState::Completed,
                     },
                 ],
             )
@@ -5113,12 +5121,12 @@ mod tests {
 
         let tasks = store.list_tasks().unwrap();
         assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].title, "Updated remotely");
-        assert_eq!(tasks[0].state, TaskState::Review);
+        assert_eq!(tasks[0].title, "Closed remotely");
+        assert_eq!(tasks[0].state, TaskState::Completed);
         let links = store.list_jira_issue_links(binding.id).unwrap();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].jira_assignee_name.as_deref(), Some("Fern"));
-        assert_eq!(links[0].jira_status_id, "4");
+        assert_eq!(links[0].jira_status_id, "5");
     }
 
     #[tokio::test]

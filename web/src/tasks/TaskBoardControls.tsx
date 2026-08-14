@@ -39,7 +39,7 @@ export default function TaskBoardControls({ query, filter, sort, project, worker
           {choice.url && <a href={choice.url} target="_blank" rel="noreferrer" aria-label={`Open ${choice.name} in Jira`}>↗</a>}
         </div>)}
       </div>}
-      <small>{openCount} open · drag ordering is available in Queue order</small>
+      <small>{openCount} open{projects.length ? " · Jira refreshes every minute" : ""} · drag ordering is available in Queue order</small>
     </div>
   );
 }

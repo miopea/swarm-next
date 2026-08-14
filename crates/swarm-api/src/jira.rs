@@ -484,12 +484,42 @@ impl JiraReadinessProbe {
             .await
     }
 
+    /// Fetches the exact set of already-linked issues, including terminal Jira states.
+    /// This avoids losing an older or closed linked issue behind a project's bounded
+    /// newest-first catalog window.
+    pub(crate) async fn linked_issues(
+        &self,
+        issue_ids: &[String],
+    ) -> Result<Vec<JiraIssue>, JiraAdapterError> {
+        if issue_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if issue_ids.len() > MAX_ISSUES
+            || issue_ids.iter().any(|id| {
+                id.trim().is_empty() || id.len() > 128 || id.chars().any(char::is_control)
+            })
+        {
+            return Err(JiraAdapterError::InvalidResponse);
+        }
+        let quoted_ids = issue_ids
+            .iter()
+            .map(|id| {
+                format!(
+                    "\"{}\"",
+                    id.trim().replace('\\', "\\\\").replace('"', "\\\"")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.search_issues(&format!("id in ({quoted_ids}) ORDER BY updated DESC"))
+            .await
+    }
+
     async fn issues_with_scope(
         &self,
         project_id: &str,
         scope: JiraIssueScope,
     ) -> Result<Vec<JiraIssue>, JiraAdapterError> {
-        let access = self.access().await?;
         let project_id = project_id.trim();
         if project_id.is_empty()
             || project_id.len() > 128
@@ -517,13 +547,18 @@ impl JiraReadinessProbe {
                 "project = {jql_project} AND assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
             ),
         };
+        self.search_issues(&jql).await
+    }
+
+    async fn search_issues(&self, jql: &str) -> Result<Vec<JiraIssue>, JiraAdapterError> {
+        let access = self.access().await?;
         let mut issues = Vec::new();
         let mut next_page_token: Option<String> = None;
         for _ in 0..(MAX_ISSUES / PAGE_SIZE) {
             let mut url = endpoint(&access.base_url, "/rest/api/3/search/jql")?;
             {
                 let mut pairs = url.query_pairs_mut();
-                pairs.append_pair("jql", &jql);
+                pairs.append_pair("jql", jql);
                 pairs.append_pair("maxResults", &PAGE_SIZE.to_string());
                 pairs.append_pair("fields", "summary,description,status,assignee,updated");
                 if let Some(token) = next_page_token.as_deref() {
@@ -1280,6 +1315,36 @@ mod tests {
         assert!(
             adapter
                 .assigned_open_issues("10001")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn linked_sync_requests_exact_issues_without_excluding_done() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/rest/api/3/search/jql",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                let jql = query.get("jql").map(String::as_str).unwrap_or_default();
+                assert!(jql.contains("id in (\"20001\", \"20002\")"));
+                assert!(!jql.contains("statusCategory != Done"));
+                Json(json!({ "isLast": true, "issues": [] }))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let adapter = JiraReadinessProbe::configured(
+            &format!("http://{address}"),
+            "operator@example.test",
+            "token",
+        )
+        .unwrap();
+
+        assert!(
+            adapter
+                .linked_issues(&["20001".to_owned(), "20002".to_owned()])
                 .await
                 .unwrap()
                 .is_empty()
