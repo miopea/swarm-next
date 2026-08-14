@@ -34,6 +34,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_workspace_roots(workspace_roots)
         .with_task_store(store)
         .with_notifications(vapid_subject_from_env())?;
+    if let Ok(public_base_url) = env::var("SWARM_PUBLIC_BASE_URL") {
+        state = state.with_public_base_url(&public_base_url)?;
+    }
     state = configure_jira(state, &database_path)?;
     state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
     recover_interrupted_deliveries(&state)?;
@@ -196,11 +199,12 @@ fn configure_jira(
     let oauth = (
         env::var("SWARM_JIRA_OAUTH_CLIENT_ID").ok(),
         env::var("SWARM_JIRA_OAUTH_CLIENT_SECRET").ok(),
-        env::var("SWARM_PUBLIC_BASE_URL").ok(),
     );
+    let public_url = env::var("SWARM_PUBLIC_BASE_URL").ok();
     match (api_token, oauth) {
-        ((None, None, None), (None, None, None)) => {}
-        ((None, None, None), (Some(client_id), Some(client_secret), Some(public_url))) => {
+        ((None, None, None), (None, None)) => {}
+        ((None, None, None), (Some(client_id), Some(client_secret))) => {
+            let public_url = public_url.ok_or("Jira OAuth requires SWARM_PUBLIC_BASE_URL")?;
             state = state.with_jira_oauth(
                 client_id,
                 client_secret,
@@ -208,16 +212,16 @@ fn configure_jira(
                 jira_token_path(database_path),
             )?;
         }
-        ((Some(base_url), Some(email), Some(api_token)), (None, None, None)) => {
+        ((Some(base_url), Some(email), Some(api_token)), (None, None)) => {
             state = state.with_jira_configuration(&base_url, email, api_token)?;
         }
-        ((Some(_), Some(_), Some(_)), (Some(_), Some(_), Some(_))) => {
+        ((Some(_), Some(_), Some(_)), (Some(_), Some(_))) => {
             return Err(
                 "configure either Jira OAuth or Jira API-token authentication, not both".into(),
             );
         }
         ((None, None, None), _) => return Err("Jira OAuth settings are incomplete".into()),
-        (_, (None, None, None)) => return Err("Jira API-token settings are incomplete".into()),
+        (_, (None, None)) => return Err("Jira API-token settings are incomplete".into()),
         _ => return Err("Jira authentication settings are incomplete".into()),
     }
     Ok(state)

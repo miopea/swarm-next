@@ -27,15 +27,18 @@ use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
-use swarm_application::{ApiaryInvitationOverview, ApiaryService, ApplicationError, TaskService};
+use swarm_application::{
+    ApiaryHiveCandidateOverview, ApiaryInvitationOverview, ApiaryService, ApplicationError,
+    TaskService,
+};
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationId, ApiaryJoinReadiness, ControlRoomEventKind,
-    DecisionRequestId, HiveConnectionCard, HiveIdentity, JiraConnectionState, JiraProjectBindingId,
-    JiraProjectScope, JiraStatusMapping, LocalApiaryContext, NotificationPolicy,
-    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
-    ProviderConversationId, ProviderKind, QueenAutonomyLevel, QueenAutonomyPolicy,
-    SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState,
-    WorkerId, WorkerProfile, WorkerSessionId,
+    DecisionRequestId, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
+    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext,
+    NotificationPolicy, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    PresenceObservationState, ProviderConversationId, ProviderKind, QueenAutonomyLevel,
+    QueenAutonomyPolicy, SharedWorkBackend, TaskDetailsUpdate, TaskId, TaskPriority, TaskState,
+    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
@@ -93,6 +96,7 @@ pub struct AppState {
     maintenance_request_path: Option<Arc<PathBuf>>,
     maintenance_timeout: Duration,
     jira_readiness: jira::JiraReadinessProbe,
+    public_base_url: Option<Arc<str>>,
 }
 
 impl AppState {
@@ -119,6 +123,7 @@ impl AppState {
             maintenance_request_path: None,
             maintenance_timeout: Duration::from_secs(45),
             jira_readiness: jira::JiraReadinessProbe::default(),
+            public_base_url: None,
         }
     }
 
@@ -159,6 +164,33 @@ impl AppState {
             token_path,
         )?;
         self.jira_readiness = jira::JiraReadinessProbe::oauth(oauth);
+        Ok(self)
+    }
+
+    /// Configures the HTTPS endpoint placed in signed federation invitations.
+    /// Loopback HTTP is accepted only for isolated local testing.
+    ///
+    /// # Errors
+    /// Rejects credentials, query/fragment data, missing hosts, and insecure
+    /// non-loopback transport.
+    pub fn with_public_base_url(mut self, public_base_url: &str) -> Result<Self, String> {
+        let parsed = reqwest::Url::parse(public_base_url.trim())
+            .map_err(|_| "SWARM_PUBLIC_BASE_URL must be a valid URL")?;
+        let local_http = parsed.scheme() == "http"
+            && matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+        if (parsed.scheme() != "https" && !local_http)
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || parsed.host_str().is_none()
+        {
+            return Err(
+                "SWARM_PUBLIC_BASE_URL must be HTTPS without credentials, query, or fragment"
+                    .into(),
+            );
+        }
+        self.public_base_url = Some(Arc::from(public_base_url.trim().trim_end_matches('/')));
         Ok(self)
     }
 
@@ -1146,6 +1178,22 @@ struct ApiaryInvitationView {
     jira_connection: JiraConnectionState,
 }
 
+#[derive(Debug, Serialize)]
+struct ApiaryHiveCandidateView {
+    #[serde(flatten)]
+    candidate: swarm_domain::ApiaryHiveCandidate,
+    invitation_pending: bool,
+}
+
+impl From<ApiaryHiveCandidateOverview> for ApiaryHiveCandidateView {
+    fn from(value: ApiaryHiveCandidateOverview) -> Self {
+        Self {
+            candidate: value.candidate,
+            invitation_pending: value.invitation_pending,
+        }
+    }
+}
+
 impl From<ApiaryInvitationOverview> for ApiaryInvitationView {
     fn from(value: ApiaryInvitationOverview) -> Self {
         Self {
@@ -1469,6 +1517,10 @@ fn api_router(state: AppState) -> Router {
             get(apiary_hive_candidates).post(pin_apiary_hive_candidate),
         )
         .route(
+            "/api/v1/apiary/hive-candidates/{hive_id}/invitation",
+            post(invite_apiary_hive_candidate),
+        )
+        .route(
             "/api/v1/apiary/collapse-readiness",
             get(apiary_collapse_readiness),
         )
@@ -1772,8 +1824,11 @@ async fn apiary_hive_candidates(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let candidates = apiary_service(&state)?
-        .hive_candidates()
-        .map_err(application_error)?;
+        .hive_candidate_overviews(unix_timestamp())
+        .map_err(application_error)?
+        .into_iter()
+        .map(ApiaryHiveCandidateView::from)
+        .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(candidates)).into_response())
 }
 
@@ -1792,6 +1847,31 @@ async fn pin_apiary_hive_candidate(
         Json(candidate),
     )
         .into_response())
+}
+
+async fn invite_apiary_hive_candidate(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(hive_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let endpoint = state.public_base_url.as_deref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "federation_endpoint_unavailable",
+            "configure SWARM_PUBLIC_BASE_URL before inviting another Hive",
+        )
+    })?;
+    let bundle = apiary_service(&state)?
+        .invite_hive_candidate(parse_hive_id(&hive_id)?, endpoint, unix_timestamp())
+        .map_err(application_error)?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=swarm-next-apiary-invitation.json"),
+    );
+    Ok((StatusCode::CREATED, response_headers, Json(bundle)).into_response())
 }
 
 async fn create_apiary(
@@ -4395,6 +4475,21 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "hive_identity_conflict",
             error.to_string(),
         ),
+        TaskStoreError::HiveCandidateNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "hive_candidate_not_found",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidFederationInvitation => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_federation_invitation",
+            error.to_string(),
+        ),
+        TaskStoreError::FederationInvitationConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "federation_invitation_conflict",
+            error.to_string(),
+        ),
         TaskStoreError::DecisionNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "decision_not_found",
@@ -4729,6 +4824,16 @@ fn parse_apiary_invitation_id(value: &str) -> Result<ApiaryInvitationId, ApiErro
     })
 }
 
+fn parse_hive_id(value: &str) -> Result<HiveId, ApiError> {
+    HiveId::from_str(value).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_hive_id",
+            "Hive ID must be a UUID",
+        )
+    })
+}
+
 fn require_valid_size(rows: u16, columns: u16) -> Result<(), ApiError> {
     let cells = usize::from(rows) * usize::from(columns);
     if rows < MIN_TERMINAL_ROWS
@@ -5010,6 +5115,82 @@ mod tests {
                 .apiary_collapse_readiness(apiary_id)
                 .unwrap()
                 .active_hive_count,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn keeper_downloads_one_authenticated_invitation_for_the_pinned_hive() {
+        let now = unix_timestamp();
+        let remote = TaskStore::in_memory().unwrap();
+        let card = remote.issue_hive_connection_card(now, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        let candidate = keeper.pin_hive_candidate(&card, now).unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(keeper.clone())
+            .with_public_base_url("https://keeper.example.test/swarm")
+            .unwrap();
+        let app = router(state);
+        let uri = format!(
+            "/api/v1/apiary/hive-candidates/{}/invitation",
+            candidate.hive_id
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response.headers()[header::CONTENT_DISPOSITION],
+            "attachment; filename=swarm-next-apiary-invitation.json"
+        );
+        let bundle: swarm_domain::ApiaryInvitationBundle =
+            serde_json::from_value(response_json(response).await).unwrap();
+        assert_eq!(bundle.invitation.payload.invited_hive_id, candidate.hive_id);
+        assert_eq!(
+            bundle.invitation.payload.keeper_endpoint,
+            "https://keeper.example.test/swarm"
+        );
+        swarm_persistence::verify_apiary_invitation_envelope(
+            &bundle.invitation,
+            &bundle.keeper_connection_card.payload.public_key,
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            keeper
+                .pending_federation_invitation_count(candidate.hive_id, now)
+                .unwrap(),
             1
         );
     }

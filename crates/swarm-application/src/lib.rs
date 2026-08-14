@@ -1,11 +1,11 @@
 use swarm_domain::{
-    Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationId,
-    ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinReadiness,
-    DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency, HiveConnectionCard,
-    JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
-    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
-    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
-    WorkerSessionId,
+    Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
+    ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks,
+    ApiaryJoinReadiness, DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency,
+    HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
+    OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    PresenceObservationState, SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId,
+    WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -48,6 +48,12 @@ pub struct ApiaryInvitationOverview {
     pub jira_connection: JiraConnectionState,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApiaryHiveCandidateOverview {
+    pub candidate: ApiaryHiveCandidate,
+    pub invitation_pending: bool,
+}
+
 impl ApiaryService {
     #[must_use]
     pub const fn new(store: TaskStore) -> Self {
@@ -87,6 +93,48 @@ impl ApiaryService {
     /// Rejects personal/member Hives and unavailable persistence.
     pub fn hive_candidates(&self) -> Result<Vec<ApiaryHiveCandidate>, ApplicationError> {
         self.store.list_hive_candidates().map_err(Into::into)
+    }
+
+    /// Lists pinned identities together with the durable invitation state that
+    /// determines whether another one-time bundle may be issued.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers and unavailable persistence.
+    pub fn hive_candidate_overviews(
+        &self,
+        now: i64,
+    ) -> Result<Vec<ApiaryHiveCandidateOverview>, ApplicationError> {
+        self.store
+            .list_hive_candidates()?
+            .into_iter()
+            .map(|candidate| {
+                let invitation_pending = self
+                    .store
+                    .pending_federation_invitation_count(candidate.hive_id, now)?
+                    > 0;
+                Ok(ApiaryHiveCandidateOverview {
+                    candidate,
+                    invitation_pending,
+                })
+            })
+            .collect()
+    }
+
+    /// Issues one signed, one-time invitation for a Keeper-pinned Hive. The
+    /// bearer secret is returned only once and only its digest remains durable.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown candidates, invalid endpoint configuration,
+    /// duplicate pending invitations, and persistence failures.
+    pub fn invite_hive_candidate(
+        &self,
+        invited_hive_id: HiveId,
+        keeper_endpoint: &str,
+        now: i64,
+    ) -> Result<ApiaryInvitationBundle, ApplicationError> {
+        self.store
+            .issue_apiary_invitation_bundle(invited_hive_id, keeper_endpoint, now, 24 * 60 * 60)
+            .map_err(Into::into)
     }
 
     /// Creates one Apiary around the current personal Hive. The local operator
@@ -686,6 +734,37 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(keeper.collapse_readiness().unwrap().active_hive_count, 1);
+    }
+
+    #[test]
+    fn keeper_invitation_is_bound_to_a_pinned_independent_hive() {
+        let remote_service = ApiaryService::new(TaskStore::in_memory().unwrap());
+        let card = remote_service.connection_card(10_000).unwrap();
+        let keeper_store = TaskStore::in_memory().unwrap();
+        let keeper = ApiaryService::new(keeper_store.clone());
+        keeper
+            .create_from_personal_hive("Garden", SharedWorkBackend::Jira, 9_000)
+            .unwrap();
+        let candidate = keeper.pin_hive_candidate(&card, 10_001).unwrap();
+
+        let bundle = keeper
+            .invite_hive_candidate(candidate.hive_id, "https://keeper.example.test", 10_100)
+            .unwrap();
+
+        assert_eq!(bundle.invitation.payload.invited_hive_id, candidate.hive_id);
+        assert_eq!(bundle.invitation.payload.invited_node_id, candidate.node_id);
+        assert_eq!(keeper.collapse_readiness().unwrap().active_hive_count, 1);
+        assert_eq!(
+            keeper
+                .collapse_readiness()
+                .unwrap()
+                .pending_invitation_count,
+            1
+        );
+        assert_eq!(
+            keeper_store.local_hive_identity().unwrap().hive.apiary_id,
+            Some(candidate.apiary_id)
+        );
     }
 
     #[test]

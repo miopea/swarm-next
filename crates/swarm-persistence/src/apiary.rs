@@ -802,7 +802,11 @@ fn collapse_readiness(
     Ok(ApiaryCollapseReadiness {
         active_hive_count: count("SELECT COUNT(*) FROM hives WHERE apiary_id = ?1")?,
         pending_invitation_count: count(
-            "SELECT COUNT(*) FROM apiary_invitations WHERE apiary_id = ?1 AND state = 'pending'",
+            "SELECT
+                 (SELECT COUNT(*) FROM apiary_invitations
+                  WHERE apiary_id = ?1 AND state = 'pending') +
+                 (SELECT COUNT(*) FROM apiary_federation_invitations
+                  WHERE apiary_id = ?1 AND state = 'pending')",
         )?,
         active_stewardship_count: count(
             "SELECT COUNT(*) FROM stewardships WHERE apiary_id = ?1 AND revoked_at IS NULL",

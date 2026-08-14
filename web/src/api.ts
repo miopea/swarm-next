@@ -132,6 +132,34 @@ export type ApiaryHiveCandidate = {
   pinned_by_operator_id: string;
   pinned_at: number;
   last_verified_at: number;
+  invitation_pending?: boolean;
+};
+export type ApiaryInvitationBundle = {
+  keeper_connection_card: HiveConnectionCard;
+  invitation: {
+    payload: {
+      schema_version: number;
+      protocol_version: number;
+      invitation_id: string;
+      apiary_id: string;
+      apiary_name: string;
+      shared_work_backend: "jira" | "native";
+      required_policy_revision: number;
+      promoted_project_catalog_digest: string;
+      keeper_node_id: string;
+      keeper_hive_id: string;
+      keeper_operator_id: string;
+      invited_node_id: string;
+      invited_hive_id: string;
+      invited_operator_id: string;
+      keeper_endpoint: string;
+      issued_at: number;
+      expires_at: number;
+      nonce: string;
+    };
+    signature: string;
+  };
+  one_time_secret: string;
 };
 export type HiveIdentity = {
   operator: { id: string; display_name: string };
@@ -460,6 +488,18 @@ export async function pinApiaryHiveCandidate(
     body: JSON.stringify(card),
   });
   return response.json() as Promise<ApiaryHiveCandidate>;
+}
+
+export async function inviteApiaryHiveCandidate(
+  operatorToken: string,
+  hiveId: string,
+): Promise<ApiaryInvitationBundle> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/hive-candidates/${encodeURIComponent(hiveId)}/invitation`,
+    { method: "POST" },
+  );
+  return response.json() as Promise<ApiaryInvitationBundle>;
 }
 
 export async function fetchApiaryCollapseReadiness(

@@ -3,21 +3,33 @@ use std::str::FromStr;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rusqlite::{OptionalExtension, params};
+use sha2::{Digest, Sha256};
 use swarm_domain::{
-    ApiaryHiveCandidate, ApiaryId, FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
-    FEDERATION_PROTOCOL_VERSION, FederationNodeId, HiveConnectionCard, HiveConnectionCardPayload,
-    HiveId,
+    ApiaryHiveCandidate, ApiaryId, ApiaryInvitationBundle, ApiaryInvitationEnvelope,
+    ApiaryInvitationEnvelopePayload, ApiaryInvitationId, FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
+    FEDERATION_INVITATION_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION, FederationNodeId,
+    HiveConnectionCard, HiveConnectionCardPayload, HiveId, SharedWorkBackend,
 };
+use url::Url;
 
 use crate::{TaskStore, TaskStoreError, parse_domain_id};
 
 pub const MIN_CONNECTION_CARD_LIFETIME_SECONDS: i64 = 5 * 60;
 pub const MAX_CONNECTION_CARD_LIFETIME_SECONDS: i64 = 7 * 24 * 60 * 60;
+pub const MIN_FEDERATION_INVITATION_LIFETIME_SECONDS: i64 = 5 * 60;
+pub const MAX_FEDERATION_INVITATION_LIFETIME_SECONDS: i64 = 7 * 24 * 60 * 60;
 const MAX_CLOCK_SKEW_SECONDS: i64 = 5 * 60;
+const MAX_KEEPER_ENDPOINT_BYTES: usize = 2_048;
 
 struct LocalFederationIdentity {
     node_id: FederationNodeId,
     signing_key: SigningKey,
+}
+
+struct KeeperInvitationContext {
+    apiary_name: String,
+    backend: SharedWorkBackend,
+    policy_revision: u64,
 }
 
 impl TaskStore {
@@ -41,27 +53,150 @@ impl TaskStore {
         }
         let identity = self.local_hive_identity()?;
         let local_node = self.local_federation_identity(now)?;
-        let payload = HiveConnectionCardPayload {
-            schema_version: FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
+        connection_card_for(&identity, &local_node, now, lifetime_seconds)
+    }
+
+    /// Creates a signed, bounded invitation for one already pinned Hive. The
+    /// returned bearer secret exists only in this response; Keeper storage
+    /// receives its SHA-256 digest in the same transaction as the envelope.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown candidates, invalid endpoints or bounds,
+    /// duplicate pending invitations, corrupt identity state, and persistence
+    /// failures.
+    pub fn issue_apiary_invitation_bundle(
+        &self,
+        invited_hive_id: HiveId,
+        keeper_endpoint: &str,
+        now: i64,
+        lifetime_seconds: i64,
+    ) -> Result<ApiaryInvitationBundle, TaskStoreError> {
+        validate_invitation_endpoint(keeper_endpoint)?;
+        if now < 0
+            || !(MIN_FEDERATION_INVITATION_LIFETIME_SECONDS
+                ..=MAX_FEDERATION_INVITATION_LIFETIME_SECONDS)
+                .contains(&lifetime_seconds)
+        {
+            return Err(TaskStoreError::InvalidFederationInvitation);
+        }
+        let identity = self.local_hive_identity()?;
+        let apiary_id = identity
+            .hive
+            .apiary_id
+            .ok_or(TaskStoreError::ApiaryKeeperRequired)?;
+        let local_node = self.local_federation_identity(now)?;
+        let keeper_connection_card =
+            connection_card_for(&identity, &local_node, now, lifetime_seconds)?;
+        let (secret, one_time_secret, nonce) = invitation_material()?;
+        let secret_digest = invitation_secret_digest(&secret);
+
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let context =
+            keeper_invitation_context(&transaction, apiary_id, &identity.operator.id.to_string())?;
+        let candidate = candidate_by_hive(&transaction, apiary_id, invited_hive_id)?
+            .ok_or(TaskStoreError::HiveCandidateNotFound)?;
+        let invitation_id = ApiaryInvitationId::new();
+        let expires_at = now
+            .checked_add(lifetime_seconds)
+            .ok_or(TaskStoreError::InvalidFederationInvitation)?;
+        let payload = ApiaryInvitationEnvelopePayload {
+            schema_version: FEDERATION_INVITATION_SCHEMA_VERSION,
             protocol_version: FEDERATION_PROTOCOL_VERSION,
-            node_id: local_node.node_id,
-            hive_id: identity.hive.id,
-            hive_name: identity.hive.name,
-            operator_id: identity.operator.id,
-            operator_display_name: identity.operator.display_name,
-            public_key: Base64UrlUnpadded::encode_string(
-                local_node.signing_key.verifying_key().as_bytes(),
-            ),
+            invitation_id,
+            apiary_id,
+            apiary_name: context.apiary_name,
+            shared_work_backend: context.backend,
+            required_policy_revision: context.policy_revision,
+            promoted_project_catalog_digest: promoted_project_catalog_digest(
+                &transaction,
+                apiary_id,
+            )?,
+            keeper_node_id: local_node.node_id,
+            keeper_hive_id: identity.hive.id,
+            keeper_operator_id: identity.operator.id,
+            invited_node_id: candidate.node_id,
+            invited_hive_id: candidate.hive_id,
+            invited_operator_id: candidate.operator_id,
+            keeper_endpoint: keeper_endpoint.trim().trim_end_matches('/').to_owned(),
             issued_at: now,
-            expires_at: now
-                .checked_add(lifetime_seconds)
-                .ok_or(TaskStoreError::InvalidFederationConnectionCard)?,
+            expires_at,
+            nonce,
         };
-        let signature = local_node.signing_key.sign(&canonical_payload(&payload)?);
-        Ok(HiveConnectionCard {
+        let signature = local_node
+            .signing_key
+            .sign(&canonical_invitation_payload(&payload)?);
+        let invitation = ApiaryInvitationEnvelope {
             payload,
             signature: Base64UrlUnpadded::encode_string(&signature.to_bytes()),
+        };
+        transaction
+            .execute(
+                "INSERT INTO apiary_federation_invitations
+                    (id, apiary_id, candidate_hive_id, candidate_node_id,
+                     candidate_operator_id, invited_by_operator_id, secret_digest,
+                     nonce, envelope_json, state, created_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11)",
+                params![
+                    invitation_id.to_string(),
+                    apiary_id.to_string(),
+                    candidate.hive_id.to_string(),
+                    candidate.node_id.to_string(),
+                    candidate.operator_id.to_string(),
+                    identity.operator.id.to_string(),
+                    secret_digest.as_slice(),
+                    &invitation.payload.nonce,
+                    serde_json::to_string(&invitation)
+                        .map_err(|error| { TaskStoreError::IntegrityFailure(error.to_string()) })?,
+                    now,
+                    expires_at,
+                ],
+            )
+            .map_err(map_federation_invitation_insert_error)?;
+        transaction.commit()?;
+        Ok(ApiaryInvitationBundle {
+            keeper_connection_card,
+            invitation,
+            one_time_secret,
         })
+    }
+
+    /// Reports the number of current distributed invitations for one pinned
+    /// candidate without exposing their secret digests or envelopes.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers and unavailable persistence.
+    pub fn pending_federation_invitation_count(
+        &self,
+        invited_hive_id: HiveId,
+        now: i64,
+    ) -> Result<usize, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let apiary_id = identity
+            .hive
+            .apiary_id
+            .ok_or(TaskStoreError::ApiaryKeeperRequired)?;
+        let connection = self.connection()?;
+        let keeper = connection
+            .query_row(
+                "SELECT keeper_operator_id FROM apiaries
+                 WHERE id = ?1 AND collapsed_at IS NULL",
+                [apiary_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryKeeperRequired)?;
+        if keeper != identity.operator.id.to_string() {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        }
+        let count = connection.query_row(
+            "SELECT COUNT(*) FROM apiary_federation_invitations
+             WHERE apiary_id = ?1 AND candidate_hive_id = ?2
+               AND state = 'pending' AND expires_at > ?3",
+            params![apiary_id.to_string(), invited_hive_id.to_string(), now],
+            |row| row.get::<_, usize>(0),
+        )?;
+        Ok(count)
     }
 
     /// Verifies and pins one remote Hive identity for the current Keeper's
@@ -229,6 +364,179 @@ impl TaskStore {
     }
 }
 
+fn connection_card_for(
+    identity: &swarm_domain::HiveIdentity,
+    local_node: &LocalFederationIdentity,
+    now: i64,
+    lifetime_seconds: i64,
+) -> Result<HiveConnectionCard, TaskStoreError> {
+    let payload = HiveConnectionCardPayload {
+        schema_version: FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
+        protocol_version: FEDERATION_PROTOCOL_VERSION,
+        node_id: local_node.node_id,
+        hive_id: identity.hive.id,
+        hive_name: identity.hive.name.clone(),
+        operator_id: identity.operator.id,
+        operator_display_name: identity.operator.display_name.clone(),
+        public_key: Base64UrlUnpadded::encode_string(
+            local_node.signing_key.verifying_key().as_bytes(),
+        ),
+        issued_at: now,
+        expires_at: now
+            .checked_add(lifetime_seconds)
+            .ok_or(TaskStoreError::InvalidFederationConnectionCard)?,
+    };
+    let signature = local_node.signing_key.sign(&canonical_payload(&payload)?);
+    Ok(HiveConnectionCard {
+        payload,
+        signature: Base64UrlUnpadded::encode_string(&signature.to_bytes()),
+    })
+}
+
+fn validate_invitation_endpoint(endpoint: &str) -> Result<(), TaskStoreError> {
+    let endpoint = endpoint.trim();
+    let parsed = Url::parse(endpoint).map_err(|_| TaskStoreError::InvalidFederationInvitation)?;
+    let local_http = parsed.scheme() == "http"
+        && matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if endpoint.is_empty()
+        || endpoint.len() > MAX_KEEPER_ENDPOINT_BYTES
+        || (parsed.scheme() != "https" && !local_http)
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.host_str().is_none()
+    {
+        return Err(TaskStoreError::InvalidFederationInvitation);
+    }
+    Ok(())
+}
+
+fn invitation_material() -> Result<([u8; 32], String, String), TaskStoreError> {
+    let mut secret = [0_u8; 32];
+    let mut nonce = [0_u8; 24];
+    getrandom::fill(&mut secret).map_err(|_| TaskStoreError::FederationEntropyUnavailable)?;
+    getrandom::fill(&mut nonce).map_err(|_| TaskStoreError::FederationEntropyUnavailable)?;
+    let one_time_secret = Base64UrlUnpadded::encode_string(&secret);
+    let nonce = Base64UrlUnpadded::encode_string(&nonce);
+    Ok((secret, one_time_secret, nonce))
+}
+
+fn keeper_invitation_context(
+    connection: &rusqlite::Connection,
+    apiary_id: ApiaryId,
+    expected_keeper_operator_id: &str,
+) -> Result<KeeperInvitationContext, TaskStoreError> {
+    let (apiary_name, backend, policy_revision, keeper_operator_id) = connection
+        .query_row(
+            "SELECT name, shared_work_backend, policy_revision, keeper_operator_id
+             FROM apiaries WHERE id = ?1 AND collapsed_at IS NULL",
+            [apiary_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(TaskStoreError::ApiaryKeeperRequired)?;
+    if keeper_operator_id != expected_keeper_operator_id {
+        return Err(TaskStoreError::ApiaryKeeperRequired);
+    }
+    Ok(KeeperInvitationContext {
+        apiary_name,
+        backend: backend
+            .parse::<SharedWorkBackend>()
+            .map_err(|_| TaskStoreError::InvalidApiary)?,
+        policy_revision,
+    })
+}
+
+fn invitation_secret_digest(secret: &[u8; 32]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"swarm-next.apiary-invitation-secret.v1\0");
+    digest.update(secret);
+    digest.finalize().into()
+}
+
+fn promoted_project_catalog_digest(
+    connection: &rusqlite::Connection,
+    apiary_id: ApiaryId,
+) -> Result<String, TaskStoreError> {
+    let mut statement = connection.prepare(
+        "SELECT project_id, project_key, project_name
+         FROM apiary_jira_projects WHERE apiary_id = ?1
+         ORDER BY project_key COLLATE NOCASE, project_id",
+    )?;
+    let projects = statement
+        .query_map([apiary_id.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let canonical = serde_json::to_vec(&projects)
+        .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+    let mut digest = Sha256::new();
+    digest.update(b"swarm-next.apiary-project-catalog.v1\0");
+    digest.update(canonical);
+    Ok(Base64UrlUnpadded::encode_string(&digest.finalize()))
+}
+
+/// Verifies a Keeper invitation against a public key already pinned by the
+/// invited Hive. A key carried only inside an untrusted bundle is not enough.
+///
+/// # Errors
+/// Rejects unsupported versions, malformed bounds or endpoint data, expired
+/// envelopes, encoding failures, and invalid signatures.
+pub fn verify_apiary_invitation_envelope(
+    envelope: &ApiaryInvitationEnvelope,
+    expected_keeper_public_key: &str,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let payload = &envelope.payload;
+    if now < 0
+        || payload.schema_version != FEDERATION_INVITATION_SCHEMA_VERSION
+        || payload.protocol_version != FEDERATION_PROTOCOL_VERSION
+        || payload.apiary_name.trim().is_empty()
+        || payload.required_policy_revision == 0
+        || payload.issued_at < 0
+        || payload.issued_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
+        || payload.expires_at <= now
+        || payload.expires_at <= payload.issued_at
+        || payload.expires_at - payload.issued_at > MAX_FEDERATION_INVITATION_LIFETIME_SECONDS
+        || !Base64UrlUnpadded::decode_vec(&payload.promoted_project_catalog_digest)
+            .is_ok_and(|digest| digest.len() == 32)
+        || !Base64UrlUnpadded::decode_vec(&payload.nonce).is_ok_and(|nonce| nonce.len() == 24)
+        || validate_invitation_endpoint(&payload.keeper_endpoint).is_err()
+    {
+        return Err(TaskStoreError::InvalidFederationInvitation);
+    }
+    let public_key: [u8; 32] = Base64UrlUnpadded::decode_vec(expected_keeper_public_key)
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?;
+    let signature: [u8; 64] = Base64UrlUnpadded::decode_vec(&envelope.signature)
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)?;
+    let canonical = canonical_invitation_payload(payload)?;
+    VerifyingKey::from_bytes(&public_key)
+        .and_then(|key| key.verify(&canonical, &Signature::from_bytes(&signature)))
+        .map_err(|_| TaskStoreError::InvalidFederationInvitation)
+}
+
+fn canonical_invitation_payload(
+    payload: &ApiaryInvitationEnvelopePayload,
+) -> Result<Vec<u8>, TaskStoreError> {
+    serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
+}
+
 /// Verifies the card's canonical signature, versions, and bounded validity
 /// window without trusting any identity asserted inside it.
 ///
@@ -344,12 +652,67 @@ pub(super) fn migrate_federation_candidates(
     )
 }
 
+pub(super) fn migrate_federation_invitations(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS apiary_federation_invitations (
+             id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             candidate_hive_id TEXT NOT NULL,
+             candidate_node_id TEXT NOT NULL,
+             candidate_operator_id TEXT NOT NULL,
+             invited_by_operator_id TEXT NOT NULL REFERENCES operators(id),
+             secret_digest BLOB NOT NULL UNIQUE CHECK (length(secret_digest) = 32),
+             nonce TEXT NOT NULL UNIQUE,
+             envelope_json TEXT NOT NULL,
+             state TEXT NOT NULL CHECK (state IN ('pending', 'consumed', 'revoked', 'expired')),
+             created_at INTEGER NOT NULL CHECK (created_at >= 0),
+             expires_at INTEGER NOT NULL CHECK (expires_at > created_at),
+             consumed_at INTEGER,
+             FOREIGN KEY (apiary_id, candidate_hive_id)
+                 REFERENCES apiary_hive_candidates(apiary_id, hive_id)
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS one_pending_federation_invitation_per_candidate
+             ON apiary_federation_invitations(apiary_id, candidate_hive_id)
+             WHERE state = 'pending';
+         CREATE TRIGGER IF NOT EXISTS apiary_federation_invitation_keeper_insert
+             BEFORE INSERT ON apiary_federation_invitations
+             WHEN NOT EXISTS (
+                 SELECT 1 FROM apiaries a
+                 WHERE a.id = NEW.apiary_id
+                   AND a.collapsed_at IS NULL
+                   AND a.keeper_operator_id = NEW.invited_by_operator_id
+             )
+             BEGIN SELECT RAISE(ABORT, 'Only an active Keeper can invite a Hive'); END;
+         CREATE TRIGGER IF NOT EXISTS immutable_apiary_federation_invitation_identity
+             BEFORE UPDATE OF id, apiary_id, candidate_hive_id,
+                              candidate_node_id, candidate_operator_id,
+                              invited_by_operator_id, secret_digest, nonce,
+                              envelope_json, created_at, expires_at
+             ON apiary_federation_invitations
+             BEGIN SELECT RAISE(ABORT, 'Federation invitation identity is immutable'); END;
+         PRAGMA user_version = 32;",
+    )
+}
+
 fn map_candidate_insert_error(error: rusqlite::Error) -> TaskStoreError {
     match error {
         rusqlite::Error::SqliteFailure(_, Some(message))
             if message.contains("UNIQUE constraint failed") =>
         {
             TaskStoreError::HiveCandidateIdentityConflict
+        }
+        other => TaskStoreError::Sql(other),
+    }
+}
+
+fn map_federation_invitation_insert_error(error: rusqlite::Error) -> TaskStoreError {
+    match error {
+        rusqlite::Error::SqliteFailure(_, Some(message))
+            if message.contains("UNIQUE constraint failed") =>
+        {
+            TaskStoreError::FederationInvitationConflict
         }
         other => TaskStoreError::Sql(other),
     }
@@ -542,6 +905,137 @@ mod tests {
     }
 
     #[test]
+    fn keeper_issues_one_signed_secret_once_for_an_exact_pinned_hive() {
+        let remote = TaskStore::in_memory().unwrap();
+        let remote_card = remote.issue_hive_connection_card(10_000, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, 9_000)
+            .unwrap();
+        let candidate = keeper.pin_hive_candidate(&remote_card, 10_001).unwrap();
+
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                candidate.hive_id,
+                "https://keeper.example.test/swarm",
+                10_100,
+                3_600,
+            )
+            .unwrap();
+        verify_apiary_invitation_envelope(
+            &bundle.invitation,
+            &bundle.keeper_connection_card.payload.public_key,
+            10_101,
+        )
+        .unwrap();
+        assert_eq!(bundle.invitation.payload.invited_hive_id, candidate.hive_id);
+        assert_eq!(bundle.invitation.payload.invited_node_id, candidate.node_id);
+        assert_eq!(
+            bundle.invitation.payload.invited_operator_id,
+            candidate.operator_id
+        );
+        assert_eq!(
+            bundle.invitation.payload.shared_work_backend,
+            SharedWorkBackend::Jira
+        );
+        assert_eq!(bundle.invitation.payload.required_policy_revision, 1);
+        assert_eq!(
+            Base64UrlUnpadded::decode_vec(&bundle.one_time_secret)
+                .unwrap()
+                .len(),
+            32
+        );
+        let stored: (usize, usize, String) = keeper
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT length(secret_digest), length(nonce), envelope_json
+                 FROM apiary_federation_invitations WHERE id = ?1",
+                [bundle.invitation.payload.invitation_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(stored.0, 32);
+        assert!(!stored.2.contains(&bundle.one_time_secret));
+        assert_eq!(
+            keeper
+                .pending_federation_invitation_count(candidate.hive_id, 10_101)
+                .unwrap(),
+            1
+        );
+        assert!(matches!(
+            keeper.issue_apiary_invitation_bundle(
+                candidate.hive_id,
+                "https://keeper.example.test/swarm",
+                10_102,
+                3_600,
+            ),
+            Err(TaskStoreError::FederationInvitationConflict)
+        ));
+        assert_eq!(
+            keeper
+                .apiary_collapse_readiness(candidate.apiary_id)
+                .unwrap()
+                .pending_invitation_count,
+            1
+        );
+    }
+
+    #[test]
+    fn invitation_envelope_rejects_wrong_keys_tampering_expiry_and_insecure_endpoints() {
+        let remote = TaskStore::in_memory().unwrap();
+        let remote_card = remote.issue_hive_connection_card(10_000, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, 9_000)
+            .unwrap();
+        let candidate = keeper.pin_hive_candidate(&remote_card, 10_001).unwrap();
+        assert!(matches!(
+            keeper.issue_apiary_invitation_bundle(
+                candidate.hive_id,
+                "http://keeper.example.test",
+                10_100,
+                3_600,
+            ),
+            Err(TaskStoreError::InvalidFederationInvitation)
+        ));
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                candidate.hive_id,
+                "http://127.0.0.1:8766",
+                10_100,
+                3_600,
+            )
+            .unwrap();
+        assert!(
+            verify_apiary_invitation_envelope(
+                &bundle.invitation,
+                &remote_card.payload.public_key,
+                10_101,
+            )
+            .is_err()
+        );
+        let mut tampered = bundle.invitation.clone();
+        tampered.payload.apiary_name = "Impostor Garden".into();
+        assert!(
+            verify_apiary_invitation_envelope(
+                &tampered,
+                &bundle.keeper_connection_card.payload.public_key,
+                10_101,
+            )
+            .is_err()
+        );
+        assert!(
+            verify_apiary_invitation_envelope(
+                &bundle.invitation,
+                &bundle.keeper_connection_card.payload.public_key,
+                bundle.invitation.payload.expires_at,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn schema_v30_migrates_to_separate_hive_candidates() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("swarm-next.sqlite3");
@@ -564,6 +1058,37 @@ mod tests {
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
                      WHERE type = 'table' AND name = 'apiary_hive_candidates'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn schema_v31_migrates_to_one_time_federation_invitations() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE apiary_federation_invitations;
+                 PRAGMA user_version = 31;",
+            )
+            .unwrap();
+        drop(store);
+
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'apiary_federation_invitations'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )

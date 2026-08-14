@@ -79,7 +79,7 @@ self-signed card never silently replaces a pinned key.
 
 ## Validation
 
-The connection-card and Keeper-pinning slices now prove that a fresh or
+The connection-card, Keeper-pinning, and invitation-issuance slices now prove that a fresh or
 migrated Hive lazily creates one stable keypair, repeated cards retain the same
 node/public identity, every card is signed and bounded, and
 tampering/expiry/corrupt key material fails closed. Download and import require
@@ -87,8 +87,14 @@ operator authentication and disable caching. A Keeper can pin a card issued by
 an independent database, while personal/member Hives, self-pinning, identity
 collisions, and silent key replacement fail closed. Candidate persistence does
 not create a Hive member or invitation, and the UI states that no access was
-granted.
+granted. An active Keeper can now issue one signed invitation bundle for an
+exact pinned candidate. The envelope binds Apiary identity, immutable backend,
+policy revision, promoted-project catalog digest, Keeper HTTPS endpoint, both
+node identities, expiry, and nonce. The 256-bit bearer secret is returned once;
+only a domain-separated SHA-256 digest is retained. Duplicate pending
+invitations, insecure remote endpoints, tampering, expiry, wrong verification
+keys, and Apiary collapse with a pending distributed invitation all fail closed.
 
-Later slices must prove signed one-time invitation consumption, replay
-rejection, protocol negotiation, and a complete join handshake between two
-independent processes.
+Later slices must prove invited-Hive Keeper-key pinning, one-time invitation
+consumption, replay rejection, protocol negotiation, and a complete join
+handshake between two independent processes.

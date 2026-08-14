@@ -9,6 +9,7 @@ import {
   fetchHive,
   fetchHiveConnectionCard,
   fetchJiraBindings,
+  inviteApiaryHiveCandidate,
   pinApiaryHiveCandidate,
   promoteApiaryJiraProject,
   type ApiaryCollapseReadiness,
@@ -179,6 +180,23 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
+  async function createInvitation(candidate: ApiaryHiveCandidate) {
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      const bundle = await inviteApiaryHiveCandidate(operatorToken, candidate.hive_id);
+      downloadJson(bundle, `swarm-next-${safeFilename(candidate.hive_name)}-invitation.json`);
+      setHiveCandidates(await fetchApiaryHiveCandidates(operatorToken));
+      setReadiness(await fetchApiaryCollapseReadiness(operatorToken));
+      setMessage(`Invitation for ${candidate.hive_name} downloaded. This is the only copy of its one-time secret; share it privately.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The one-time invitation could not be created.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <section id="settings-apiary" className="settings-card apiary-settings" aria-labelledby="apiary-heading">
       <div><p className="eyebrow">Collaboration</p><h3 id="apiary-heading">Your Apiary</h3></div>
@@ -241,7 +259,14 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                   {hiveCandidates.map((candidate) => (
                     <li key={candidate.hive_id}>
                       <span><strong>{candidate.hive_name}</strong><small>{candidate.operator_display_name}</small></span>
-                      <span className="readiness-ready">Identity pinned</span>
+                      <span className="apiary-candidate-state">
+                        <span className="readiness-ready">{candidate.invitation_pending ? "Invitation pending" : "Identity pinned"}</span>
+                        <button
+                          className="secondary-button"
+                          disabled={working || candidate.invitation_pending}
+                          onClick={() => void createInvitation(candidate)}
+                        >{candidate.invitation_pending ? "Invitation created" : "Create invitation"}</button>
+                      </span>
                     </li>
                   ))}
                 </ul>

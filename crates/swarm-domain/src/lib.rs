@@ -239,6 +239,7 @@ pub struct HiveIdentity {
 }
 
 pub const FEDERATION_CONNECTION_CARD_SCHEMA_VERSION: u16 = 1;
+pub const FEDERATION_INVITATION_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_PROTOCOL_VERSION: u16 = 1;
 
 /// Public, signed identity material that one Hive can deliberately share with
@@ -279,6 +280,47 @@ pub struct ApiaryHiveCandidate {
     pub pinned_by_operator_id: OperatorId,
     pub pinned_at: i64,
     pub last_verified_at: i64,
+}
+
+/// The signed, immutable invitation facts a Keeper gives to one specifically
+/// pinned Hive. The bearer secret is deliberately outside this payload; only
+/// its digest is retained by the Keeper.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryInvitationEnvelopePayload {
+    pub schema_version: u16,
+    pub protocol_version: u16,
+    pub invitation_id: ApiaryInvitationId,
+    pub apiary_id: ApiaryId,
+    pub apiary_name: String,
+    pub shared_work_backend: SharedWorkBackend,
+    pub required_policy_revision: u64,
+    pub promoted_project_catalog_digest: String,
+    pub keeper_node_id: FederationNodeId,
+    pub keeper_hive_id: HiveId,
+    pub keeper_operator_id: OperatorId,
+    pub invited_node_id: FederationNodeId,
+    pub invited_hive_id: HiveId,
+    pub invited_operator_id: OperatorId,
+    pub keeper_endpoint: String,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub nonce: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryInvitationEnvelope {
+    pub payload: ApiaryInvitationEnvelopePayload,
+    pub signature: String,
+}
+
+/// A one-time handoff bundle. The secret is shown only in this response and is
+/// never recoverable from Keeper storage. The Keeper card lets the invited
+/// operator deliberately pin the signing identity before accepting policy.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryInvitationBundle {
+    pub keeper_connection_card: HiveConnectionCard,
+    pub invitation: ApiaryInvitationEnvelope,
+    pub one_time_secret: String,
 }
 
 impl Hive {

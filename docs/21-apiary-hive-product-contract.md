@@ -67,7 +67,15 @@ candidate. Re-import may refresh display metadata and validity evidence but can
 never replace a pinned key. Candidates remain visibly separate from members and
 invitations. The full signed-envelope and one-time-secret transport is specified
 by ADR 0025; candidate pinning does not pretend that distributed invitation
-delivery already exists.
+delivery already exists. Keeper-side invitation issuance is now executable: the
+operator explicitly chooses a pinned candidate and downloads one signed,
+24-hour invitation bundle. It contains the exact Apiary/backend/policy/catalog
+and endpoint facts plus a bearer secret shown only once; Keeper storage retains
+only its digest. A pending bundle is visible beside that Hive, blocks duplicate
+issuance, and blocks collapsing the Apiary. Downloading the bundle still grants
+no membership or execution authority. Import, policy acceptance, readiness
+submission, atomic consumption, and a signed membership receipt remain later
+handshake slices.
 
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries

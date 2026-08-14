@@ -202,6 +202,49 @@ test("pins an imported Hive identity without implying membership or access", asy
   expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/invitations"))).toBe(false);
 });
 
+test("downloads one invitation secret for a pinned Hive and then shows it pending", async () => {
+  const createObjectUrl = vi.fn(() => "blob:invitation");
+  const revokeObjectUrl = vi.fn();
+  vi.stubGlobal("URL", { ...URL, createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  let invited = false;
+  const candidate = {
+    apiary_id: "apiary-1", node_id: "node-2", hive_id: "hive-2", hive_name: "Clover Hive",
+    operator_id: "operator-2", operator_display_name: "Cora", public_key: "public",
+    card_issued_at: 10, card_expires_at: 86_410,
+    pinned_by_operator_id: "operator-1", pinned_at: 20, last_verified_at: 20,
+    invitation_pending: invited,
+  };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/collapse-readiness") {
+      return ok({ active_hive_count: 1, pending_invitation_count: invited ? 1 : 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
+    }
+    if (url === "/api/v1/apiary/jira-projects") return ok([]);
+    if (url === "/api/v1/integrations/jira/bindings") return ok([]);
+    if (url === "/api/v1/apiary/hive-candidates/hive-2/invitation") {
+      expect(init?.method).toBe("POST");
+      invited = true;
+      return ok({
+        keeper_connection_card: { payload: { hive_name: "Meadow Hive" }, signature: "keeper" },
+        invitation: { payload: { invitation_id: "invite-1", invited_hive_id: "hive-2" }, signature: "signed" },
+        one_time_secret: "shown-once",
+      }, 201);
+    }
+    if (url === "/api/v1/apiary/hive-candidates") return ok([{ ...candidate, invitation_pending: invited }]);
+    throw new Error(`unexpected request ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Create invitation" }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent("only copy of its one-time secret");
+  expect(screen.getByRole("button", { name: "Invitation created" })).toBeDisabled();
+  expect(createObjectUrl).toHaveBeenCalledWith(expect.any(Blob));
+  expect(click).toHaveBeenCalledOnce();
+  expect(revokeObjectUrl).toHaveBeenCalledWith("blob:invitation");
+});
+
 function personalIdentity(): HiveIdentity {
   return {
     operator: { id: "operator-1", display_name: "Bea" },

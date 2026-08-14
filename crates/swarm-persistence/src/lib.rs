@@ -21,8 +21,9 @@ mod decisions;
 mod federation;
 mod feedback;
 pub use federation::{
-    MAX_CONNECTION_CARD_LIFETIME_SECONDS, MIN_CONNECTION_CARD_LIFETIME_SECONDS,
-    verify_hive_connection_card,
+    MAX_CONNECTION_CARD_LIFETIME_SECONDS, MAX_FEDERATION_INVITATION_LIFETIME_SECONDS,
+    MIN_CONNECTION_CARD_LIFETIME_SECONDS, MIN_FEDERATION_INVITATION_LIFETIME_SECONDS,
+    verify_apiary_invitation_envelope, verify_hive_connection_card,
 };
 mod jira;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
@@ -50,7 +51,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 31;
+const CURRENT_SCHEMA_VERSION: i64 = 32;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -97,6 +98,12 @@ pub enum TaskStoreError {
     ApiaryKeeperRequired,
     #[error("The Hive identity conflicts with a previously pinned key")]
     HiveCandidateIdentityConflict,
+    #[error("The pinned Hive identity was not found")]
+    HiveCandidateNotFound,
+    #[error("The Apiary invitation envelope is invalid or expired")]
+    InvalidFederationInvitation,
+    #[error("A current invitation already exists for this pinned Hive")]
+    FederationInvitationConflict,
     #[error("task was not found")]
     NotFound,
     #[error("decision request was not found")]
@@ -1265,6 +1272,9 @@ fn migrate_schema(
     }
     if schema_version < 31 {
         federation::migrate_federation_candidates(transaction)?;
+    }
+    if schema_version < 32 {
+        federation::migrate_federation_invitations(transaction)?;
     }
     Ok(())
 }
