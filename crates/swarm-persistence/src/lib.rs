@@ -45,7 +45,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 26;
+const CURRENT_SCHEMA_VERSION: i64 = 27;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -1226,6 +1226,9 @@ fn migrate_schema(
     }
     if schema_version < 26 {
         apiary::migrate_apiary_invitations(transaction)?;
+    }
+    if schema_version < 27 {
+        apiary::migrate_apiary_jira_projects(transaction)?;
     }
     Ok(())
 }

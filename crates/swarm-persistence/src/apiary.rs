@@ -1,12 +1,15 @@
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     Apiary, ApiaryId, ApiaryInvitation, ApiaryInvitationId, ApiaryInvitationState,
-    ApiaryJoinReadiness, HiveId, OperatorId,
+    ApiaryJiraProject, ApiaryJoinReadiness, HiveId, OperatorId,
 };
 
 use crate::{TaskStore, TaskStoreError, parse_domain_id};
 
 const MAX_INVITATION_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
+const MAX_PROJECT_ID_BYTES: usize = 128;
+const MAX_PROJECT_KEY_BYTES: usize = 64;
+const MAX_PROJECT_NAME_BYTES: usize = 240;
 
 impl TaskStore {
     /// Returns one durable Apiary by identity without exposing membership or credentials.
@@ -33,6 +36,108 @@ impl TaskStore {
             )
             .optional()?
             .ok_or(TaskStoreError::ApiaryNotFound)
+    }
+
+    /// Adds or refreshes one Jira project in the Keeper-owned Apiary catalog.
+    /// Database constraints reject Native Apiaries and non-Keeper promoters.
+    ///
+    /// # Errors
+    /// Returns an error for invalid project identity, unauthorized promotion, or persistence.
+    pub fn promote_apiary_jira_project(
+        &self,
+        apiary_id: ApiaryId,
+        project_id: &str,
+        project_key: &str,
+        project_name: &str,
+        promoted_by_operator_id: OperatorId,
+        now: i64,
+    ) -> Result<ApiaryJiraProject, TaskStoreError> {
+        let project_id = project_id.trim();
+        let project_key = project_key.trim();
+        let project_name = project_name.trim();
+        if now < 0
+            || project_id.is_empty()
+            || project_id.len() > MAX_PROJECT_ID_BYTES
+            || project_key.is_empty()
+            || project_key.len() > MAX_PROJECT_KEY_BYTES
+            || project_name.is_empty()
+            || project_name.len() > MAX_PROJECT_NAME_BYTES
+        {
+            return Err(TaskStoreError::InvalidJiraProject);
+        }
+        let connection = self.connection()?;
+        connection.execute(
+            "INSERT INTO apiary_jira_projects
+                (apiary_id, project_id, project_key, project_name,
+                 promoted_by_operator_id, promoted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(apiary_id, project_id) DO UPDATE SET
+                 project_key = excluded.project_key,
+                 project_name = excluded.project_name,
+                 updated_at = unixepoch()",
+            params![
+                apiary_id.to_string(),
+                project_id,
+                project_key,
+                project_name,
+                promoted_by_operator_id.to_string(),
+                now
+            ],
+        )?;
+        apiary_jira_project(&connection, apiary_id, project_id)?
+            .ok_or(TaskStoreError::JiraProjectBindingNotFound)
+    }
+
+    /// Lists the authoritative promoted Jira catalog for one Apiary.
+    ///
+    /// # Errors
+    /// Returns an error when persisted catalog data cannot be read.
+    pub fn list_apiary_jira_projects(
+        &self,
+        apiary_id: ApiaryId,
+    ) -> Result<Vec<ApiaryJiraProject>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT apiary_id, project_id, project_key, project_name,
+                    promoted_by_operator_id, promoted_at
+             FROM apiary_jira_projects WHERE apiary_id = ?1
+             ORDER BY project_name COLLATE NOCASE, project_key",
+        )?;
+        Ok(statement
+            .query_map([apiary_id.to_string()], apiary_jira_project_from_row)?
+            .collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Returns true only when every promoted project has a matching local,
+    /// access-verified, fully mapped Apiary binding for the invited Hive.
+    ///
+    /// # Errors
+    /// Returns an error when the local Hive or catalog cannot be read.
+    pub fn apiary_jira_project_access_ready(
+        &self,
+        apiary_id: ApiaryId,
+    ) -> Result<bool, TaskStoreError> {
+        let hive_id = self.local_hive_identity()?.hive.id;
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT NOT EXISTS (
+                     SELECT 1 FROM apiary_jira_projects p
+                     WHERE p.apiary_id = ?1
+                       AND NOT EXISTS (
+                           SELECT 1 FROM jira_project_bindings b
+                           WHERE b.hive_id = ?2
+                             AND b.project_id = p.project_id
+                             AND b.scope = 'apiary'
+                             AND b.apiary_id = p.apiary_id
+                             AND b.access_verified = 1
+                             AND b.workflow_mapped = 1
+                       )
+                 )",
+                params![apiary_id.to_string(), hive_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
     }
 
     /// Creates one bounded Keeper invitation for a currently personal Hive.
@@ -217,6 +322,37 @@ pub(super) fn migrate_apiary_invitations(
     )
 }
 
+pub(super) fn migrate_apiary_jira_projects(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS apiary_jira_projects (
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             project_id TEXT NOT NULL,
+             project_key TEXT NOT NULL,
+             project_name TEXT NOT NULL,
+             promoted_by_operator_id TEXT NOT NULL REFERENCES operators(id),
+             promoted_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             PRIMARY KEY (apiary_id, project_id)
+         );
+         CREATE TRIGGER IF NOT EXISTS apiary_jira_project_keeper_insert
+             BEFORE INSERT ON apiary_jira_projects
+             WHEN NOT EXISTS (
+                 SELECT 1 FROM apiaries a
+                 WHERE a.id = NEW.apiary_id
+                   AND a.shared_work_backend = 'jira'
+                   AND a.keeper_operator_id = NEW.promoted_by_operator_id
+             )
+             BEGIN SELECT RAISE(ABORT, 'Only a Jira Apiary Keeper can promote a project'); END;
+         CREATE TRIGGER IF NOT EXISTS immutable_apiary_jira_project_identity
+             BEFORE UPDATE OF apiary_id, project_id, promoted_by_operator_id, promoted_at
+             ON apiary_jira_projects
+             BEGIN SELECT RAISE(ABORT, 'Promoted Apiary project identity is immutable'); END;
+         PRAGMA user_version = 27;",
+    )
+}
+
 fn invitation_by_id(
     connection: &rusqlite::Connection,
     invitation_id: ApiaryInvitationId,
@@ -248,16 +384,53 @@ fn invitation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiaryInvita
     })
 }
 
+fn apiary_jira_project(
+    connection: &rusqlite::Connection,
+    apiary_id: ApiaryId,
+    project_id: &str,
+) -> rusqlite::Result<Option<ApiaryJiraProject>> {
+    connection
+        .query_row(
+            "SELECT apiary_id, project_id, project_key, project_name,
+                    promoted_by_operator_id, promoted_at
+             FROM apiary_jira_projects WHERE apiary_id = ?1 AND project_id = ?2",
+            params![apiary_id.to_string(), project_id],
+            apiary_jira_project_from_row,
+        )
+        .optional()
+}
+
+fn apiary_jira_project_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiaryJiraProject> {
+    Ok(ApiaryJiraProject {
+        apiary_id: parse_domain_id(&row.get::<_, String>(0)?)?,
+        project_id: row.get(1)?,
+        project_key: row.get(2)?,
+        project_name: row.get(3)?,
+        promoted_by_operator_id: parse_domain_id(&row.get::<_, String>(4)?)?,
+        promoted_at: row.get(5)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::JiraProjectBindingInput;
     use swarm_domain::{
-        Apiary, ApiaryJoinCheckState, ApiaryJoinChecks, HiveIdentity, SharedWorkBackend,
+        Apiary, ApiaryJoinCheckState, ApiaryJoinChecks, HiveIdentity, JiraProjectScope,
+        JiraStatusMapping, SharedWorkBackend, TaskState,
     };
 
     fn add_apiary(store: &TaskStore, name: &str) -> (Apiary, OperatorId) {
+        add_apiary_with_backend(store, name, SharedWorkBackend::Jira)
+    }
+
+    fn add_apiary_with_backend(
+        store: &TaskStore,
+        name: &str,
+        backend: SharedWorkBackend,
+    ) -> (Apiary, OperatorId) {
         let keeper_id = OperatorId::new();
-        let apiary = Apiary::new(name, keeper_id, SharedWorkBackend::Jira);
+        let apiary = Apiary::new(name, keeper_id, backend);
         let connection = store.connection().unwrap();
         connection
             .execute(
@@ -268,8 +441,13 @@ mod tests {
         connection
             .execute(
                 "INSERT INTO apiaries (id, name, keeper_operator_id, shared_work_backend)
-                 VALUES (?1, ?2, ?3, 'jira')",
-                params![apiary.id.to_string(), name, keeper_id.to_string()],
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    apiary.id.to_string(),
+                    name,
+                    keeper_id.to_string(),
+                    backend.to_string()
+                ],
             )
             .unwrap();
         (apiary, keeper_id)
@@ -412,6 +590,78 @@ mod tests {
     }
 
     #[test]
+    fn promoted_jira_catalog_requires_keeper_and_complete_local_readiness() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        let (apiary, keeper_id) = add_apiary(&store, "Garden");
+        assert!(store.apiary_jira_project_access_ready(apiary.id).unwrap());
+        assert!(
+            store
+                .promote_apiary_jira_project(
+                    apiary.id,
+                    "10001",
+                    "WEB",
+                    "Website Services",
+                    identity.operator.id,
+                    10,
+                )
+                .is_err()
+        );
+        let promoted = store
+            .promote_apiary_jira_project(
+                apiary.id,
+                "10001",
+                "WEB",
+                "Website Services",
+                keeper_id,
+                10,
+            )
+            .unwrap();
+        assert_eq!(
+            store.list_apiary_jira_projects(apiary.id).unwrap(),
+            vec![promoted]
+        );
+        assert!(!store.apiary_jira_project_access_ready(apiary.id).unwrap());
+
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Apiary,
+                apiary_id: Some(apiary.id),
+            })
+            .unwrap();
+        assert!(!store.apiary_jira_project_access_ready(apiary.id).unwrap());
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "3".into(),
+                    jira_status_name: "In Progress".into(),
+                    task_state: TaskState::Active,
+                }],
+            )
+            .unwrap();
+        assert!(store.apiary_jira_project_access_ready(apiary.id).unwrap());
+
+        let (native, native_keeper) =
+            add_apiary_with_backend(&store, "Orchard", SharedWorkBackend::Native);
+        assert!(
+            store
+                .promote_apiary_jira_project(
+                    native.id,
+                    "10002",
+                    "OPS",
+                    "Operations",
+                    native_keeper,
+                    10,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn migrates_schema_v25_to_durable_apiary_invitations() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("swarm-next.sqlite3");
@@ -438,6 +688,45 @@ mod tests {
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
                      WHERE type = 'table' AND name = 'apiary_invitations'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            crate::CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn migrates_schema_v26_to_promoted_apiary_jira_catalog() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        {
+            let store = TaskStore::open(&path).unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "DROP TRIGGER apiary_jira_project_keeper_insert;
+                     DROP TRIGGER immutable_apiary_jira_project_identity;
+                     DROP TABLE apiary_jira_projects;
+                     PRAGMA user_version = 26;",
+                )
+                .unwrap();
+        }
+
+        let migrated = TaskStore::open(path).unwrap();
+        let connection = migrated.connection().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'apiary_jira_projects'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )

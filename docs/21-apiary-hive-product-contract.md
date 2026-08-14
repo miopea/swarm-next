@@ -40,6 +40,14 @@ own readiness. Distribution transport and operator UI remain separate later
 slices; Native Apiary joining stays unavailable until its real distributed
 backend can satisfy the same contract.
 
+For Jira-backed Apiaries, promoted projects now have a separate durable catalog
+owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
+reject Jira promotion, and a joining Hive passes project readiness only when
+every promoted project has a matching access-verified, fully mapped local
+Apiary binding. An empty catalog is valid; a partially received or partially
+mapped catalog fails closed. This is distinct from the Hive-owned Jira projects
+that remain private to one operator.
+
 Every Apiary permanently chooses one canonical shared-work backend:
 
 - **Jira-backed Apiary**: Jira is canonical and every active Hive connects its

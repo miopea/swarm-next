@@ -406,6 +406,16 @@ pub struct ApiaryInvitation {
     pub resolved_at: Option<i64>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryJiraProject {
+    pub apiary_id: ApiaryId,
+    pub project_id: String,
+    pub project_key: String,
+    pub project_name: String,
+    pub promoted_by_operator_id: OperatorId,
+    pub promoted_at: i64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiaryJoinBlocker {

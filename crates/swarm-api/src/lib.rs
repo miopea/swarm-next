@@ -1703,11 +1703,14 @@ async fn apiary_invitations(
         let apiary = store
             .get_apiary(invitation.apiary_id)
             .map_err(|error| task_store_error(&error))?;
+        let project_access = store
+            .apiary_jira_project_access_ready(apiary.id)
+            .map_err(|error| task_store_error(&error))?;
         let readiness = ApiaryJoinReadiness::evaluate(
             &identity.hive,
             &apiary,
             Some(&invitation),
-            apiary_join_checks(&apiary, jira.connection),
+            apiary_join_checks(&apiary, jira.connection, project_access),
             unix_timestamp(),
         );
         views.push(ApiaryInvitationView {
@@ -1720,7 +1723,11 @@ async fn apiary_invitations(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(views)).into_response())
 }
 
-fn apiary_join_checks(apiary: &Apiary, jira_connection: JiraConnectionState) -> ApiaryJoinChecks {
+fn apiary_join_checks(
+    apiary: &Apiary,
+    jira_connection: JiraConnectionState,
+    project_access: bool,
+) -> ApiaryJoinChecks {
     let integration = if apiary.shared_work_backend() == SharedWorkBackend::Jira
         && jira_connection == JiraConnectionState::Ready
     {
@@ -1731,10 +1738,12 @@ fn apiary_join_checks(apiary: &Apiary, jira_connection: JiraConnectionState) -> 
     ApiaryJoinChecks {
         identity: ApiaryJoinCheckState::Ready,
         integration,
-        // Promoted-project catalog receipt/access and explicit policy acceptance
-        // are not durable yet. Keep both blocked rather than inferring readiness
-        // from an empty local binding list.
-        project_access: ApiaryJoinCheckState::Blocked,
+        project_access: if project_access {
+            ApiaryJoinCheckState::Ready
+        } else {
+            ApiaryJoinCheckState::Blocked
+        },
+        // Explicit policy acceptance is not durable yet, so it remains blocked.
         policy: ApiaryJoinCheckState::Blocked,
         // Invitations currently originate in this protocol-owning store.
         // Distributed transport will replace this with negotiated evidence.
@@ -4724,23 +4733,24 @@ mod tests {
     }
 
     #[test]
-    fn apiary_join_checks_never_infer_missing_catalog_or_policy_readiness() {
+    fn apiary_join_checks_use_catalog_evidence_and_never_infer_policy_readiness() {
         let identity = TaskStore::in_memory()
             .unwrap()
             .local_hive_identity()
             .unwrap();
         let jira_apiary = Apiary::new("Garden", identity.operator.id, SharedWorkBackend::Jira);
-        let ready_connection = apiary_join_checks(&jira_apiary, JiraConnectionState::Ready);
+        let ready_connection = apiary_join_checks(&jira_apiary, JiraConnectionState::Ready, true);
         assert_eq!(ready_connection.integration, ApiaryJoinCheckState::Ready);
+        assert_eq!(ready_connection.project_access, ApiaryJoinCheckState::Ready);
+        assert_eq!(ready_connection.policy, ApiaryJoinCheckState::Blocked);
         assert_eq!(
-            ready_connection.project_access,
+            apiary_join_checks(&jira_apiary, JiraConnectionState::Ready, false).project_access,
             ApiaryJoinCheckState::Blocked
         );
-        assert_eq!(ready_connection.policy, ApiaryJoinCheckState::Blocked);
 
         let native_apiary = Apiary::new("Orchard", identity.operator.id, SharedWorkBackend::Native);
         assert_eq!(
-            apiary_join_checks(&native_apiary, JiraConnectionState::Ready).integration,
+            apiary_join_checks(&native_apiary, JiraConnectionState::Ready, true).integration,
             ApiaryJoinCheckState::Blocked
         );
     }
