@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -8,8 +8,8 @@ use swarm_domain::{
     ApiaryHiveCandidate, ApiaryId, ApiaryInvitationBundle, ApiaryInvitationEnvelope,
     ApiaryInvitationEnvelopePayload, ApiaryInvitationId, FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
     FEDERATION_INVITATION_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION, FederationJoinInvitation,
-    FederationJoinInvitationState, FederationNodeId, HiveConnectionCard, HiveConnectionCardPayload,
-    HiveId, SharedWorkBackend,
+    FederationJoinInvitationState, FederationNodeId, FederationProjectManifestEntry,
+    HiveConnectionCard, HiveConnectionCardPayload, HiveId, SharedWorkBackend,
 };
 use url::Url;
 
@@ -21,6 +21,7 @@ pub const MIN_FEDERATION_INVITATION_LIFETIME_SECONDS: i64 = 5 * 60;
 pub const MAX_FEDERATION_INVITATION_LIFETIME_SECONDS: i64 = 7 * 24 * 60 * 60;
 const MAX_CLOCK_SKEW_SECONDS: i64 = 5 * 60;
 const MAX_KEEPER_ENDPOINT_BYTES: usize = 2_048;
+const MAX_PROMOTED_PROJECTS_PER_INVITATION: usize = 1_000;
 
 struct LocalFederationIdentity {
     node_id: FederationNodeId,
@@ -101,6 +102,7 @@ impl TaskStore {
         let expires_at = now
             .checked_add(lifetime_seconds)
             .ok_or(TaskStoreError::InvalidFederationInvitation)?;
+        let promoted_projects = promoted_project_manifest(&transaction, apiary_id)?;
         let payload = ApiaryInvitationEnvelopePayload {
             schema_version: FEDERATION_INVITATION_SCHEMA_VERSION,
             protocol_version: FEDERATION_PROTOCOL_VERSION,
@@ -109,10 +111,7 @@ impl TaskStore {
             apiary_name: context.apiary_name,
             shared_work_backend: context.backend,
             required_policy_revision: context.policy_revision,
-            promoted_project_catalog_digest: promoted_project_catalog_digest(
-                &transaction,
-                apiary_id,
-            )?,
+            promoted_project_catalog_digest: promoted_project_manifest_digest(&promoted_projects)?,
             keeper_node_id: local_node.node_id,
             keeper_hive_id: identity.hive.id,
             keeper_operator_id: identity.operator.id,
@@ -158,6 +157,7 @@ impl TaskStore {
         Ok(ApiaryInvitationBundle {
             keeper_connection_card,
             invitation,
+            promoted_projects,
             one_time_secret,
         })
     }
@@ -237,6 +237,19 @@ impl TaskStore {
                 ],
             )
             .map_err(map_join_invitation_insert_error)?;
+        for project in &bundle.promoted_projects {
+            transaction.execute(
+                "INSERT INTO apiary_join_invitation_projects
+                    (invitation_id, project_id, project_key, project_name)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    invitation.invitation_id.to_string(),
+                    &project.project_id,
+                    &project.project_key,
+                    &project.project_name,
+                ],
+            )?;
+        }
         transaction.commit()?;
         Ok(invitation)
     }
@@ -262,10 +275,16 @@ impl TaskStore {
                AND expires_at > ?1
              ORDER BY imported_at DESC, id",
         )?;
-        statement
+        let mut invitations = statement
             .query_map([now], federation_join_invitation_from_row)?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(Into::into)
+            .map_err(TaskStoreError::from)?;
+        drop(statement);
+        for invitation in &mut invitations {
+            invitation.promoted_projects =
+                imported_project_manifest(&connection, invitation.invitation_id)?;
+        }
+        Ok(invitations)
     }
 
     /// Reports the number of current distributed invitations for one pinned
@@ -578,13 +597,43 @@ fn validate_imported_invitation_bindings(
         && invitation.keeper_node_id != local_node_id
         && invitation.keeper_hive_id != local_identity.hive.id
         && invitation.keeper_operator_id != local_identity.operator.id;
-    if !identities_match || invitation.shared_work_backend != SharedWorkBackend::Jira {
+    let manifest_valid = validate_project_manifest(&bundle.promoted_projects)
+        && promoted_project_manifest_digest(&bundle.promoted_projects)
+            .is_ok_and(|digest| digest == invitation.promoted_project_catalog_digest);
+    if !identities_match
+        || invitation.shared_work_backend != SharedWorkBackend::Jira
+        || !manifest_valid
+    {
         return Err(TaskStoreError::InvalidFederationInvitation);
     }
     Base64UrlUnpadded::decode_vec(&bundle.one_time_secret)
         .map_err(|_| TaskStoreError::InvalidFederationInvitation)?
         .try_into()
         .map_err(|_| TaskStoreError::InvalidFederationInvitation)
+}
+
+fn validate_project_manifest(projects: &[FederationProjectManifestEntry]) -> bool {
+    if projects.len() > MAX_PROMOTED_PROJECTS_PER_INVITATION {
+        return false;
+    }
+    let mut ids = HashSet::with_capacity(projects.len());
+    let mut keys = HashSet::with_capacity(projects.len());
+    projects.iter().all(|project| {
+        let project_id = project.project_id.trim();
+        let project_key = project.project_key.trim();
+        let project_name = project.project_name.trim();
+        project_id == project.project_id
+            && project_key == project.project_key
+            && project_name == project.project_name
+            && !project_id.is_empty()
+            && project_id.len() <= 128
+            && !project_key.is_empty()
+            && project_key.len() <= 64
+            && !project_name.is_empty()
+            && project_name.len() <= 256
+            && ids.insert(project_id.to_owned())
+            && keys.insert(project_key.to_ascii_uppercase())
+    })
 }
 
 fn federation_join_invitation(
@@ -600,6 +649,7 @@ fn federation_join_invitation(
         shared_work_backend: invitation.shared_work_backend,
         required_policy_revision: invitation.required_policy_revision,
         promoted_project_catalog_digest: invitation.promoted_project_catalog_digest.clone(),
+        promoted_projects: bundle.promoted_projects.clone(),
         keeper_node_id: invitation.keeper_node_id,
         keeper_hive_id: invitation.keeper_hive_id,
         keeper_hive_name: keeper.hive_name.clone(),
@@ -619,30 +669,58 @@ fn invitation_secret_digest(secret: &[u8; 32]) -> [u8; 32] {
     digest.finalize().into()
 }
 
-fn promoted_project_catalog_digest(
+fn promoted_project_manifest(
     connection: &rusqlite::Connection,
     apiary_id: ApiaryId,
-) -> Result<String, TaskStoreError> {
+) -> Result<Vec<FederationProjectManifestEntry>, TaskStoreError> {
     let mut statement = connection.prepare(
         "SELECT project_id, project_key, project_name
          FROM apiary_jira_projects WHERE apiary_id = ?1
          ORDER BY project_key COLLATE NOCASE, project_id",
     )?;
-    let projects = statement
+    statement
         .query_map([apiary_id.to_string()], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
+            Ok(FederationProjectManifestEntry {
+                project_id: row.get(0)?,
+                project_key: row.get(1)?,
+                project_name: row.get(2)?,
+            })
         })?
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn promoted_project_manifest_digest(
+    projects: &[FederationProjectManifestEntry],
+) -> Result<String, TaskStoreError> {
     let canonical = serde_json::to_vec(&projects)
         .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
     let mut digest = Sha256::new();
     digest.update(b"swarm-next.apiary-project-catalog.v1\0");
     digest.update(canonical);
     Ok(Base64UrlUnpadded::encode_string(&digest.finalize()))
+}
+
+fn imported_project_manifest(
+    connection: &rusqlite::Connection,
+    invitation_id: ApiaryInvitationId,
+) -> Result<Vec<FederationProjectManifestEntry>, TaskStoreError> {
+    let mut statement = connection.prepare(
+        "SELECT project_id, project_key, project_name
+         FROM apiary_join_invitation_projects
+         WHERE invitation_id = ?1
+         ORDER BY project_key COLLATE NOCASE, project_id",
+    )?;
+    statement
+        .query_map([invitation_id.to_string()], |row| {
+            Ok(FederationProjectManifestEntry {
+                project_id: row.get(0)?,
+                project_key: row.get(1)?,
+                project_name: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 /// Verifies a Keeper invitation against a public key already pinned by the
@@ -904,6 +982,26 @@ pub(super) fn migrate_federation_join_invitations(
     )
 }
 
+pub(super) fn migrate_federation_join_invitation_projects(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS apiary_join_invitation_projects (
+             invitation_id TEXT NOT NULL
+                 REFERENCES apiary_join_invitations(id) ON DELETE CASCADE,
+             project_id TEXT NOT NULL,
+             project_key TEXT NOT NULL COLLATE NOCASE,
+             project_name TEXT NOT NULL,
+             PRIMARY KEY (invitation_id, project_id),
+             UNIQUE (invitation_id, project_key)
+         );
+         CREATE TRIGGER IF NOT EXISTS immutable_apiary_join_invitation_projects
+             BEFORE UPDATE ON apiary_join_invitation_projects
+             BEGIN SELECT RAISE(ABORT, 'Imported project manifest is immutable'); END;
+         PRAGMA user_version = 34;",
+    )
+}
+
 fn map_candidate_insert_error(error: rusqlite::Error) -> TaskStoreError {
     match error {
         rusqlite::Error::SqliteFailure(_, Some(message))
@@ -950,6 +1048,7 @@ fn federation_join_invitation_from_row(
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
         required_policy_revision: row.get(4)?,
         promoted_project_catalog_digest: row.get(5)?,
+        promoted_projects: Vec::new(),
         keeper_node_id: parse_domain_id(&row.get::<_, String>(6)?)?,
         keeper_hive_id: parse_domain_id(&row.get::<_, String>(7)?)?,
         keeper_hive_name: row.get(8)?,
@@ -1288,8 +1387,22 @@ mod tests {
         let invited_identity = invited.local_hive_identity().unwrap();
         let invited_card = invited.issue_hive_connection_card(10_000, 3_600).unwrap();
         let keeper = TaskStore::in_memory().unwrap();
-        keeper
+        let context = keeper
             .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, 9_000)
+            .unwrap();
+        let swarm_domain::LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected Keeper Apiary");
+        };
+        let keeper_operator_id = keeper.local_hive_identity().unwrap().operator.id;
+        keeper
+            .promote_apiary_jira_project(
+                apiary.id,
+                "10000",
+                "WWD",
+                "Website Development",
+                keeper_operator_id,
+                10_000,
+            )
             .unwrap();
         let candidate = keeper.pin_hive_candidate(&invited_card, 10_001).unwrap();
         let bundle = keeper
@@ -1307,6 +1420,14 @@ mod tests {
         assert_eq!(imported.apiary_name, "Garden");
         assert_eq!(imported.state, FederationJoinInvitationState::KeeperPinned);
         assert_eq!(imported.keeper_hive_name, "My Hive");
+        assert_eq!(
+            imported.promoted_projects,
+            vec![FederationProjectManifestEntry {
+                project_id: "10000".into(),
+                project_key: "WWD".into(),
+                project_name: "Website Development".into(),
+            }]
+        );
         assert_eq!(invited.local_hive_identity().unwrap().hive.apiary_id, None);
         assert_eq!(
             invited.federation_join_invitations(10_102).unwrap(),
@@ -1324,6 +1445,19 @@ mod tests {
             .unwrap();
         assert_eq!(stored.0, 32);
         assert!(!stored.1.contains(&bundle.one_time_secret));
+        assert_eq!(
+            invited
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM apiary_join_invitation_projects
+                     WHERE invitation_id = ?1 AND project_key = 'WWD'",
+                    [bundle.invitation.payload.invitation_id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
         assert_eq!(invited_identity.hive.id, candidate.hive_id);
         assert!(matches!(
             invited.import_apiary_invitation_bundle(&bundle, 10_102),
@@ -1336,8 +1470,21 @@ mod tests {
         let invited = TaskStore::in_memory().unwrap();
         let invited_card = invited.issue_hive_connection_card(10_000, 3_600).unwrap();
         let keeper = TaskStore::in_memory().unwrap();
-        keeper
+        let context = keeper
             .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, 9_000)
+            .unwrap();
+        let swarm_domain::LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected Keeper Apiary");
+        };
+        keeper
+            .promote_apiary_jira_project(
+                apiary.id,
+                "10000",
+                "WWD",
+                "Website Development",
+                keeper.local_hive_identity().unwrap().operator.id,
+                10_000,
+            )
             .unwrap();
         let candidate = keeper.pin_hive_candidate(&invited_card, 10_001).unwrap();
         let bundle = keeper
@@ -1358,6 +1505,12 @@ mod tests {
         tampered.one_time_secret = Base64UrlUnpadded::encode_string(&[7_u8; 31]);
         assert!(matches!(
             invited.import_apiary_invitation_bundle(&tampered, 10_101),
+            Err(TaskStoreError::InvalidFederationInvitation)
+        ));
+        let mut tampered_manifest = bundle.clone();
+        tampered_manifest.promoted_projects[0].project_name = "Tampered".into();
+        assert!(matches!(
+            invited.import_apiary_invitation_bundle(&tampered_manifest, 10_101),
             Err(TaskStoreError::InvalidFederationInvitation)
         ));
         invited
@@ -1454,6 +1607,37 @@ mod tests {
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master
                      WHERE type = 'table' AND name = 'apiary_join_invitations'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn schema_v33_migrates_to_private_invitation_project_manifests() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE apiary_join_invitation_projects;
+                 PRAGMA user_version = 33;",
+            )
+            .unwrap();
+        drop(store);
+
+        let migrated = TaskStore::open(path).unwrap();
+        assert_eq!(
+            migrated
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'apiary_join_invitation_projects'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )

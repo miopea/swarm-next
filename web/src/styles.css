@@ -468,6 +468,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-invitation-preview > div > span { color: var(--muted); font-size: .65rem; }
 .apiary-invitation-preview > div > strong { overflow: hidden; font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
 .apiary-invitation-preview > p { grid-column: 1 / -1; margin: 2px 0 0; color: var(--muted); font-size: .74rem; line-height: 1.45; }
+.apiary-project-manifest { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 5px; margin: 2px 0; padding: 0; list-style: none; }
+.apiary-project-manifest li { display: flex; align-items: baseline; gap: 7px; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); font-size: .73rem; }
+.apiary-project-manifest li strong { flex: 0 0 auto; color: var(--accent-ink); }
+.apiary-project-manifest li span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .apiary-invitation-preview .settings-actions { grid-column: 1 / -1; }
 .apiary-join-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .apiary-join-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }

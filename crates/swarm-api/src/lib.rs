@@ -5288,6 +5288,7 @@ mod tests {
         let imported_json = response_json(imported).await;
         let serialized = imported_json.to_string();
         assert_eq!(imported_json["state"], "keeper_pinned");
+        assert_eq!(imported_json["promoted_projects"], serde_json::json!([]));
         assert!(!serialized.contains(&bundle.one_time_secret));
         assert!(!serialized.contains(&bundle.keeper_connection_card.payload.public_key));
         assert!(

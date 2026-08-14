@@ -228,6 +228,7 @@ test("downloads one invitation secret for a pinned Hive and then shows it pendin
       return ok({
         keeper_connection_card: { payload: { hive_name: "Meadow Hive" }, signature: "keeper" },
         invitation: { payload: { invitation_id: "invite-1", invited_hive_id: "hive-2" }, signature: "signed" },
+        promoted_projects: [],
         one_time_secret: "shown-once",
       }, 201);
     }
@@ -267,12 +268,16 @@ test("reviews an invitation before explicitly pinning its exact Keeper", async (
       },
       signature: "invitation-signature",
     },
+    promoted_projects: [
+      { project_id: "10000", project_key: "WWD", project_name: "Website Development" },
+    ],
     one_time_secret: "private-secret",
   };
   const imported = {
     invitation_id: "invite-1", apiary_id: "apiary-1", apiary_name: "Wildflower Garden",
     shared_work_backend: "jira", required_policy_revision: 3,
     promoted_project_catalog_digest: "digest", keeper_node_id: "keeper-node",
+    promoted_projects: [{ project_id: "10000", project_key: "WWD", project_name: "Website Development" }],
     keeper_hive_id: "keeper-hive", keeper_hive_name: "Rose Hive",
     keeper_operator_id: "keeper-operator", keeper_operator_display_name: "Rosa",
     keeper_endpoint: "https://keeper.example.test/swarm", state: "keeper_pinned",
@@ -300,6 +305,8 @@ test("reviews an invitation before explicitly pinning its exact Keeper", async (
   expect(review).toHaveTextContent("Rose Hive");
   expect(review).toHaveTextContent("Rosa");
   expect(review).toHaveTextContent("Policy revision3");
+  expect(review).toHaveTextContent("Shared Jira projects1");
+  expect(screen.getByRole("list", { name: "Promoted Jira projects" })).toHaveTextContent("WWDWebsite Development");
   expect(saved).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "Trust Keeper and save invitation" }));
 

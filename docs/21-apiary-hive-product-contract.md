@@ -75,11 +75,14 @@ only its digest. A pending bundle is visible beside that Hive, blocks duplicate
 issuance, and blocks collapsing the Apiary. Downloading the bundle still grants
 no membership or execution authority. On the exact invited personal Hive, the
 operator can now review the Apiary, Keeper Hive/operator, backend, policy
-revision, and expiry before explicitly pinning the Keeper key and saving the
-invitation. Both signatures, every Keeper and invited identity field, expiry,
-HTTPS endpoint, supported backend, and the 256-bit secret are revalidated by the
-private application command. The secret and complete envelope remain private to
-the Hive database; browser reads expose only a sanitized pending-join summary.
+revision, promoted Jira project manifest, and expiry before explicitly pinning
+the Keeper key and saving the invitation. The manifest is bounded and its
+canonical digest is part of the signed envelope, so removal, substitution, and
+renaming fail closed. Both signatures, every Keeper and invited identity field,
+expiry, HTTPS endpoint, supported backend, manifest digest, and the 256-bit
+secret are revalidated by the private application command. The secret and
+complete envelope remain private to the Hive database; browser reads expose
+only a sanitized pending-join summary and public project identities.
 Import does not join, accept policy, share work, or grant terminal access.
 Policy acceptance, readiness submission, atomic remote consumption, and a
 signed membership receipt remain later handshake slices.
@@ -98,9 +101,10 @@ Hive's existing ready binding to Apiary scope without replacing its workflow
 mapping or issue links. The command rejects member Hives, Native Apiaries,
 foreign bindings, and bindings without verified access and a completed workflow
 map. Keeper UI shows both the promoted catalog and which local Hive projects are
-actually ready to share. Cross-Hive distribution and per-Hive acknowledgements
-remain a separate protocol slice; catalog presence alone never claims that a
-remote Hive is ready.
+actually ready to share. Invitation distribution now carries the exact
+signed-digest project manifest into the invited Hive. Per-Hive Jira access and
+workflow acknowledgement remain a separate readiness slice; manifest presence
+alone never claims that a remote Hive is ready.
 
 Every Apiary permanently chooses one canonical shared-work backend:
 

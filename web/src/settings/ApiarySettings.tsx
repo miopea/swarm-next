@@ -221,7 +221,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     setError("");
     setMessage("");
     try {
-      if (file.size > 128 * 1024) throw new Error("That invitation file is unexpectedly large.");
+      if (file.size > 512 * 1024) throw new Error("That invitation file is unexpectedly large.");
       const bundle = JSON.parse(await file.text()) as ApiaryInvitationBundle;
       if (!bundle?.keeper_connection_card?.payload || !bundle?.invitation?.payload || !bundle.one_time_secret) {
         throw new Error("That file is not a Swarm Apiary invitation.");
@@ -283,7 +283,15 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                 <div><span>Keeper operator</span><strong>{invitationPreview.keeper_connection_card.payload.operator_display_name}</strong></div>
                 <div><span>Shared work</span><strong>{invitationPreview.invitation.payload.shared_work_backend === "jira" ? "Jira-backed" : "Native Swarm"}</strong></div>
                 <div><span>Policy revision</span><strong>{invitationPreview.invitation.payload.required_policy_revision}</strong></div>
+                <div><span>Shared Jira projects</span><strong>{invitationPreview.promoted_projects.length}</strong></div>
                 <div><span>Expires</span><strong>{new Date(invitationPreview.invitation.payload.expires_at * 1000).toLocaleString()}</strong></div>
+                {invitationPreview.promoted_projects.length > 0 ? (
+                  <ul className="apiary-project-manifest" aria-label="Promoted Jira projects">
+                    {invitationPreview.promoted_projects.map((project) => (
+                      <li key={project.project_id}><strong>{project.project_key}</strong><span>{project.project_name}</span></li>
+                    ))}
+                  </ul>
+                ) : <p className="empty-copy">This Apiary has no promoted Jira projects yet.</p>}
                 <p>Trusting pins this exact Keeper key and saves the one-time invitation privately. It does not join the Apiary, accept policy, share work, or grant terminal access.</p>
                 <div className="settings-actions">
                   <button className="secondary-button" disabled={working} onClick={() => setInvitationPreview(undefined)}>Choose another</button>
@@ -295,7 +303,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
               <ul className="apiary-join-list" aria-label="Saved Apiary invitations">
                 {joinInvitations.map((invitation) => (
                   <li key={invitation.invitation_id}>
-                    <span><strong>{invitation.apiary_name}</strong><small>{invitation.keeper_hive_name} · {invitation.keeper_operator_display_name}</small></span>
+                    <span><strong>{invitation.apiary_name}</strong><small>{invitation.keeper_hive_name} · {invitation.keeper_operator_display_name} · {invitation.promoted_projects.length} Jira {invitation.promoted_projects.length === 1 ? "project" : "projects"}</small></span>
                     <span className="readiness-ready">Keeper pinned · policy not accepted</span>
                   </li>
                 ))}

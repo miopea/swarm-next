@@ -159,7 +159,13 @@ export type ApiaryInvitationBundle = {
     };
     signature: string;
   };
+  promoted_projects: FederationProjectManifestEntry[];
   one_time_secret: string;
+};
+export type FederationProjectManifestEntry = {
+  project_id: string;
+  project_key: string;
+  project_name: string;
 };
 export type FederationJoinInvitation = {
   invitation_id: string;
@@ -168,6 +174,7 @@ export type FederationJoinInvitation = {
   shared_work_backend: "jira" | "native";
   required_policy_revision: number;
   promoted_project_catalog_digest: string;
+  promoted_projects: FederationProjectManifestEntry[];
   keeper_node_id: string;
   keeper_hive_id: string;
   keeper_hive_name: string;

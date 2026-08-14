@@ -313,6 +313,16 @@ pub struct ApiaryInvitationEnvelope {
     pub signature: String,
 }
 
+/// Public Jira project identity carried in a signed-digest invitation manifest.
+/// Access evidence, workflow mappings, credentials, and issue content remain
+/// local to each Hive.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationProjectManifestEntry {
+    pub project_id: String,
+    pub project_key: String,
+    pub project_name: String,
+}
+
 /// A one-time handoff bundle. The secret is shown only in this response and is
 /// never recoverable from Keeper storage. The Keeper card lets the invited
 /// operator deliberately pin the signing identity before accepting policy.
@@ -320,6 +330,7 @@ pub struct ApiaryInvitationEnvelope {
 pub struct ApiaryInvitationBundle {
     pub keeper_connection_card: HiveConnectionCard,
     pub invitation: ApiaryInvitationEnvelope,
+    pub promoted_projects: Vec<FederationProjectManifestEntry>,
     pub one_time_secret: String,
 }
 
@@ -385,6 +396,7 @@ pub struct FederationJoinInvitation {
     pub shared_work_backend: SharedWorkBackend,
     pub required_policy_revision: u64,
     pub promoted_project_catalog_digest: String,
+    pub promoted_projects: Vec<FederationProjectManifestEntry>,
     pub keeper_node_id: FederationNodeId,
     pub keeper_hive_id: HiveId,
     pub keeper_hive_name: String,

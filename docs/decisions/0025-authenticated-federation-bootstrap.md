@@ -105,5 +105,13 @@ authenticated command explicitly pins the key. Its response and later reads
 exclude the secret, public key, and complete envelope. Membership and policy
 acceptance remain unchanged.
 
+The promoted-project manifest slice now sends the bounded, ordered public Jira
+project identities beside the invitation and verifies their canonical digest
+against the signed envelope before import. The invited Hive stores those rows
+in an immutable normalized table and exposes them for operator review without
+Jira access evidence, workflow mappings, credentials, or issue content.
+Manifest tampering and duplicate identities fail closed. Manifest receipt is
+not readiness; each Hive must still prove local Jira access and mapping.
+
 Later slices must prove one-time remote consumption, replay rejection, protocol
 negotiation, and a complete join handshake between two independent processes.

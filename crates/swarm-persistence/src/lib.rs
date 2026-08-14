@@ -51,7 +51,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 33;
+const CURRENT_SCHEMA_VERSION: i64 = 34;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -1278,6 +1278,9 @@ fn migrate_schema(
     }
     if schema_version < 33 {
         federation::migrate_federation_join_invitations(transaction)?;
+    }
+    if schema_version < 34 {
+        federation::migrate_federation_join_invitation_projects(transaction)?;
     }
     Ok(())
 }
