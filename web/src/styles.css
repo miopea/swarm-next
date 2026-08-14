@@ -456,6 +456,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .settings-section-nav button:hover, .settings-section-nav button:focus-visible { background: var(--soft); color: var(--text); }
 .settings-section-nav button[aria-current="location"] { color: var(--text); background: var(--good-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good) 35%, transparent); }
 .settings-workspace > [id^="settings-"] { scroll-margin-top: 58px; }
+.settings-workspace > #settings-runtime { grid-column: 1 / -1; }
 .settings-card { display: grid; align-content: start; gap: 16px; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 6%, transparent); }
 .settings-card h3 { margin: 0; font-size: 1.08rem; }
 .settings-card > p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.55; }
