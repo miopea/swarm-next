@@ -119,6 +119,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect((await screen.findByText("Worker engine")).parentElement).toHaveTextContent("Worker engine1 update ready");
   expect(screen.getByText("Workers affected").parentElement).toHaveTextContent("1 active worker will briefly stop · conversations retained");
   expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("Worker engine updateBriefly stops active workers");
+  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("a model turn or command running at that moment is interrupted");
   expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("Development reloadWorkers keep running");
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
   expect(screen.getByRole("group", { name: "Confirm worker engine update" })).toHaveTextContent("Restart 1 active worker now?");

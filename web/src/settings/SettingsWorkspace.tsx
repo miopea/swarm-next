@@ -256,7 +256,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
                 <span className="runtime-impact-label">Worker engine update</span>
                 <strong>Briefly stops active workers</strong>
                 <p>All Claude and Codex terminal processes close while the engine is replaced. Queen and always-active workers then resume from their saved conversations. Other workers stay sleeping until you wake them.</p>
-                <small>Durable: worker identities, provider conversation IDs, tasks, ownership, and terminal history.</small>
+                <small><strong>Real risk:</strong> a model turn or command running at that moment is interrupted and may need to be checked or retried. Worker identities, provider conversation IDs, tasks, ownership, and terminal history remain durable.</small>
               </div>
               <div className="runtime-impact-card runtime-impact-reload">
                 <span className="runtime-impact-label">Development reload</span>
