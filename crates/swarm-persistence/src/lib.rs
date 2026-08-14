@@ -16,6 +16,7 @@ use swarm_domain::{
 use thiserror::Error;
 use uuid::Uuid;
 
+mod apiary;
 mod decisions;
 mod feedback;
 mod jira;
@@ -44,7 +45,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 25;
+const CURRENT_SCHEMA_VERSION: i64 = 26;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -63,6 +64,14 @@ pub enum TaskStoreError {
     Sql(#[from] rusqlite::Error),
     #[error("task persistence lock was poisoned")]
     LockPoisoned,
+    #[error("Apiary invitation is invalid")]
+    InvalidApiaryInvitation,
+    #[error("Apiary invitation was not found")]
+    ApiaryInvitationNotFound,
+    #[error("Apiary invitation is no longer pending")]
+    ApiaryInvitationResolved,
+    #[error("Apiary join readiness is incomplete")]
+    ApiaryJoinNotReady,
     #[error("task was not found")]
     NotFound,
     #[error("decision request was not found")]
@@ -1212,6 +1221,9 @@ fn migrate_schema(
     }
     if schema_version < 25 {
         migrate_apiary_stewardships(transaction)?;
+    }
+    if schema_version < 26 {
+        apiary::migrate_apiary_invitations(transaction)?;
     }
     Ok(())
 }

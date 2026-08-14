@@ -40,6 +40,7 @@ macro_rules! domain_id {
 domain_id!(OperatorId);
 domain_id!(HiveId);
 domain_id!(ApiaryId);
+domain_id!(ApiaryInvitationId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
@@ -346,6 +347,183 @@ pub enum LocalApiaryContext {
         apiary: Apiary,
         local_role: LocalApiaryRole,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiaryInvitationState {
+    Pending,
+    Accepted,
+    Revoked,
+    Expired,
+}
+
+impl fmt::Display for ApiaryInvitationState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Pending => "pending",
+            Self::Accepted => "accepted",
+            Self::Revoked => "revoked",
+            Self::Expired => "expired",
+        })
+    }
+}
+
+impl FromStr for ApiaryInvitationState {
+    type Err = ParseApiaryInvitationStateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "accepted" => Ok(Self::Accepted),
+            "revoked" => Ok(Self::Revoked),
+            "expired" => Ok(Self::Expired),
+            _ => Err(ParseApiaryInvitationStateError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseApiaryInvitationStateError;
+
+impl fmt::Display for ParseApiaryInvitationStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown Apiary invitation state")
+    }
+}
+
+impl std::error::Error for ParseApiaryInvitationStateError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryInvitation {
+    pub id: ApiaryInvitationId,
+    pub apiary_id: ApiaryId,
+    pub invited_hive_id: HiveId,
+    pub invited_by_operator_id: OperatorId,
+    pub state: ApiaryInvitationState,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub resolved_at: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiaryJoinBlocker {
+    HiveAlreadyFederated,
+    InvitationRequired,
+    InvitationExpired,
+    IdentityNotVerified,
+    IntegrationNotReady,
+    ProjectAccessNotReady,
+    PolicyNotAccepted,
+    ProtocolMismatch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiaryJoinCheckState {
+    Ready,
+    Blocked,
+}
+
+impl ApiaryJoinCheckState {
+    const fn is_ready(self) -> bool {
+        matches!(self, Self::Ready)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ApiaryJoinChecks {
+    pub identity: ApiaryJoinCheckState,
+    pub integration: ApiaryJoinCheckState,
+    pub project_access: ApiaryJoinCheckState,
+    pub policy: ApiaryJoinCheckState,
+    pub protocol: ApiaryJoinCheckState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryJoinReadiness {
+    apiary_id: ApiaryId,
+    hive_id: HiveId,
+    blockers: Vec<ApiaryJoinBlocker>,
+}
+
+impl ApiaryJoinReadiness {
+    #[must_use]
+    pub fn evaluate(
+        hive: &Hive,
+        apiary: &Apiary,
+        invitation: Option<&ApiaryInvitation>,
+        checks: ApiaryJoinChecks,
+        now: i64,
+    ) -> Self {
+        let mut blockers = Vec::new();
+        if hive.apiary_id.is_some() {
+            blockers.push(ApiaryJoinBlocker::HiveAlreadyFederated);
+        }
+        match invitation.filter(|candidate| {
+            candidate.apiary_id == apiary.id
+                && candidate.invited_hive_id == hive.id
+                && candidate.state == ApiaryInvitationState::Pending
+        }) {
+            None => blockers.push(ApiaryJoinBlocker::InvitationRequired),
+            Some(invitation) if invitation.expires_at <= now => {
+                blockers.push(ApiaryJoinBlocker::InvitationExpired);
+            }
+            Some(_) => {}
+        }
+        for (ready, blocker) in [
+            (
+                checks.identity.is_ready(),
+                ApiaryJoinBlocker::IdentityNotVerified,
+            ),
+            (
+                checks.integration.is_ready(),
+                ApiaryJoinBlocker::IntegrationNotReady,
+            ),
+            (
+                checks.project_access.is_ready(),
+                ApiaryJoinBlocker::ProjectAccessNotReady,
+            ),
+            (
+                checks.policy.is_ready(),
+                ApiaryJoinBlocker::PolicyNotAccepted,
+            ),
+            (
+                checks.protocol.is_ready(),
+                ApiaryJoinBlocker::ProtocolMismatch,
+            ),
+        ] {
+            if !ready {
+                blockers.push(blocker);
+            }
+        }
+        Self {
+            apiary_id: apiary.id,
+            hive_id: hive.id,
+            blockers,
+        }
+    }
+
+    #[must_use]
+    pub fn can_join(&self) -> bool {
+        self.blockers.is_empty()
+    }
+
+    #[must_use]
+    pub const fn apiary_id(&self) -> ApiaryId {
+        self.apiary_id
+    }
+
+    #[must_use]
+    pub const fn hive_id(&self) -> HiveId {
+        self.hive_id
+    }
+
+    #[must_use]
+    pub fn blockers(&self) -> &[ApiaryJoinBlocker] {
+        &self.blockers
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1636,6 +1814,99 @@ mod tests {
         assert_eq!(hive.leave(), Some(first_apiary));
         hive.join(second_apiary).unwrap();
         assert_eq!(hive.apiary_id, Some(second_apiary));
+    }
+
+    #[test]
+    fn apiary_join_readiness_names_every_unmet_boundary() {
+        let operator_id = OperatorId::new();
+        let hive = Hive::personal("Daisy", operator_id);
+        let apiary = Apiary::new("Garden", OperatorId::new(), SharedWorkBackend::Jira);
+        let invitation = ApiaryInvitation {
+            id: ApiaryInvitationId::new(),
+            apiary_id: apiary.id,
+            invited_hive_id: hive.id,
+            invited_by_operator_id: apiary.keeper_operator_id,
+            state: ApiaryInvitationState::Pending,
+            created_at: 10,
+            expires_at: 100,
+            resolved_at: None,
+        };
+
+        let blocked = ApiaryJoinReadiness::evaluate(
+            &hive,
+            &apiary,
+            Some(&invitation),
+            ApiaryJoinChecks {
+                identity: ApiaryJoinCheckState::Blocked,
+                integration: ApiaryJoinCheckState::Blocked,
+                project_access: ApiaryJoinCheckState::Blocked,
+                policy: ApiaryJoinCheckState::Blocked,
+                protocol: ApiaryJoinCheckState::Blocked,
+            },
+            50,
+        );
+        assert_eq!(
+            blocked.blockers,
+            vec![
+                ApiaryJoinBlocker::IdentityNotVerified,
+                ApiaryJoinBlocker::IntegrationNotReady,
+                ApiaryJoinBlocker::ProjectAccessNotReady,
+                ApiaryJoinBlocker::PolicyNotAccepted,
+                ApiaryJoinBlocker::ProtocolMismatch,
+            ]
+        );
+
+        let ready = ApiaryJoinReadiness::evaluate(
+            &hive,
+            &apiary,
+            Some(&invitation),
+            ApiaryJoinChecks {
+                identity: ApiaryJoinCheckState::Ready,
+                integration: ApiaryJoinCheckState::Ready,
+                project_access: ApiaryJoinCheckState::Ready,
+                policy: ApiaryJoinCheckState::Ready,
+                protocol: ApiaryJoinCheckState::Ready,
+            },
+            50,
+        );
+        assert!(ready.can_join());
+    }
+
+    #[test]
+    fn apiary_join_requires_a_current_matching_invitation_and_personal_hive() {
+        let operator_id = OperatorId::new();
+        let mut hive = Hive::personal("Daisy", operator_id);
+        let apiary = Apiary::new("Garden", OperatorId::new(), SharedWorkBackend::Jira);
+        let invitation = ApiaryInvitation {
+            id: ApiaryInvitationId::new(),
+            apiary_id: apiary.id,
+            invited_hive_id: hive.id,
+            invited_by_operator_id: apiary.keeper_operator_id,
+            state: ApiaryInvitationState::Pending,
+            created_at: 10,
+            expires_at: 20,
+            resolved_at: None,
+        };
+        let checks = ApiaryJoinChecks {
+            identity: ApiaryJoinCheckState::Ready,
+            integration: ApiaryJoinCheckState::Ready,
+            project_access: ApiaryJoinCheckState::Ready,
+            policy: ApiaryJoinCheckState::Ready,
+            protocol: ApiaryJoinCheckState::Ready,
+        };
+
+        assert_eq!(
+            ApiaryJoinReadiness::evaluate(&hive, &apiary, Some(&invitation), checks, 20).blockers,
+            vec![ApiaryJoinBlocker::InvitationExpired]
+        );
+        hive.join(ApiaryId::new()).unwrap();
+        assert_eq!(
+            ApiaryJoinReadiness::evaluate(&hive, &apiary, None, checks, 15).blockers,
+            vec![
+                ApiaryJoinBlocker::HiveAlreadyFederated,
+                ApiaryJoinBlocker::InvitationRequired,
+            ]
+        );
     }
 
     #[test]

@@ -29,6 +29,17 @@ Keeper can invite it to another. Joining always runs the destination Apiary's
 identity, integration, project-access, policy, and protocol readiness checks.
 No tasks or authority transfer automatically between Apiaries.
 
+The executable invitation foundation is durable and fail-closed. A Keeper may
+issue one bounded pending invitation per Apiary/Hive pair only while the target
+Hive is personal. Acceptance uses one atomic transaction: the matching current
+invitation is accepted, the Hive joins that Apiary, and competing invitations
+are revoked. Readiness is a sealed domain result covering identity,
+integration, promoted-project access, policy acceptance, protocol compatibility,
+exclusive membership, and expiry. No browser or agent payload may assert its
+own readiness. Distribution transport and operator UI remain separate later
+slices; Native Apiary joining stays unavailable until its real distributed
+backend can satisfy the same contract.
+
 Every Apiary permanently chooses one canonical shared-work backend:
 
 - **Jira-backed Apiary**: Jira is canonical and every active Hive connects its

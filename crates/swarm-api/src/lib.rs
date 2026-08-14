@@ -4106,6 +4106,23 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::NotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "task_not_found", error.to_string())
         }
+        TaskStoreError::InvalidApiaryInvitation => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_apiary_invitation",
+            error.to_string(),
+        ),
+        TaskStoreError::ApiaryInvitationNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "apiary_invitation_not_found",
+            error.to_string(),
+        ),
+        TaskStoreError::ApiaryInvitationResolved | TaskStoreError::ApiaryJoinNotReady => {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "apiary_join_not_ready",
+                error.to_string(),
+            )
+        }
         TaskStoreError::DecisionNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "decision_not_found",
