@@ -457,7 +457,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-backend-choice > div { display: grid; gap: 3px; min-height: 66px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .apiary-backend-choice > div.selected { border-color: var(--good); background: var(--good-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good) 18%, transparent); }
 .apiary-backend-choice > div[aria-disabled="true"] { opacity: .7; }
-.apiary-backend-choice small, .apiary-summary small, .apiary-collapse small, .apiary-projects small { color: var(--muted); line-height: 1.4; }
+.apiary-backend-choice small, .apiary-summary small, .apiary-collapse small, .apiary-projects small, .apiary-connection-card small { color: var(--muted); line-height: 1.4; }
+.apiary-connection-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
+.apiary-connection-card > span { display: grid; gap: 2px; }
+.apiary-connection-card button { flex: 0 0 auto; }
 .apiary-summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--good-soft); }
 .apiary-summary > span:first-child, .apiary-collapse > div:first-child { display: grid; gap: 2px; }
 .apiary-backend-badge { flex: 0 0 auto; padding: 5px 9px; border: 1px solid color-mix(in srgb, var(--good) 42%, var(--line)); border-radius: 999px; color: var(--good); font-size: .7rem; font-weight: 700; }
@@ -678,6 +681,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .settings-card { min-width: 0; }
   .apiary-backend-choice, .apiary-readiness { grid-template-columns: minmax(0, 1fr); }
   .apiary-summary { align-items: flex-start; flex-direction: column; }
+  .apiary-connection-card { align-items: stretch; flex-direction: column; }
+  .apiary-connection-card button { width: 100%; }
   .apiary-project-list li, .apiary-promotion-list > div { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .apiary-project-list li > small { text-align: left; }
   .apiary-promotion-list button { width: 100%; }

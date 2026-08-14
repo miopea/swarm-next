@@ -6,6 +6,7 @@ import {
   fetchApiaryCollapseReadiness,
   fetchApiaryJiraProjects,
   fetchHive,
+  fetchHiveConnectionCard,
   fetchJiraBindings,
   promoteApiaryJiraProject,
   type ApiaryCollapseReadiness,
@@ -13,6 +14,7 @@ import {
   type HiveIdentity,
   type JiraProjectBinding,
 } from "../api";
+import { downloadJson } from "../shared/download";
 
 type Props = {
   busy: boolean;
@@ -89,6 +91,21 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
+  async function downloadConnectionCard() {
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      const card = await fetchHiveConnectionCard(operatorToken);
+      downloadJson(card, `swarm-next-${safeFilename(card.payload.hive_name)}-connection.json`);
+      setMessage("Connection card downloaded. It expires in 24 hours and grants no access by itself.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The connection card could not be created.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function returnToPersonalHive() {
     setWorking(true);
     setError("");
@@ -136,6 +153,10 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       {personal ? (
         <>
           <p>Your personal Hive remains fully independent. Form an Apiary only when separate one-operator Hives should share Jira work and coordination.</p>
+          <div className="apiary-connection-card">
+            <span><strong>Share this Hive with a Keeper</strong><small>Download a signed, short-lived identity card. It contains no repositories, tasks, terminals, Jira access, or credentials.</small></span>
+            <button className="secondary-button" disabled={busy || working} onClick={() => void downloadConnectionCard()}>Download connection card</button>
+          </div>
           <label className="field-stack" htmlFor="apiary-name">
             <span>Apiary name</span>
             <input id="apiary-name" value={name} maxLength={120} placeholder="Wildflower Garden" onChange={(event) => { setName(event.target.value); setConfirmCreate(false); }} />
@@ -235,4 +256,8 @@ function collapseBlockers(readiness: ApiaryCollapseReadiness | undefined) {
   if (readiness.open_cross_hive_work_count) blockers.push(`${readiness.open_cross_hive_work_count} cross-Hive work item${readiness.open_cross_hive_work_count === 1 ? "" : "s"}`);
   if (readiness.departed_node_count) blockers.push(`${readiness.departed_node_count} departed node${readiness.departed_node_count === 1 ? "" : "s"}`);
   return blockers;
+}
+
+function safeFilename(value: string) {
+  return value.trim().toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "hive";
 }

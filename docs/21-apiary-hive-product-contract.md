@@ -58,6 +58,14 @@ invitations, accepting the exact policy revision, and joining. Join always
 re-derives integration and promoted-project readiness at command time; a stale
 browser snapshot is display evidence only and cannot authorize membership.
 
+Separate installations bootstrap trust with a durable signing identity rather
+than a shared browser token. An operator may download a one-day signed Hive
+connection card containing only public identity and version evidence. The card
+expires, grants no membership or access, and becomes the pinned target of a
+later Keeper invitation handshake. The full signed-envelope and one-time-secret
+transport is specified by ADR 0025; the current card slice does not pretend that
+distributed invitation delivery already exists.
+
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
 reject Jira promotion, and a joining Hive passes project readiness only when

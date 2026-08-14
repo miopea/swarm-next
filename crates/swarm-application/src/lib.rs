@@ -1,10 +1,11 @@
 use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryInvitation, ApiaryInvitationId, ApiaryJiraProject,
     ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinReadiness, DecisionRequest,
-    DecisionRequestId, DecisionRequestKind, DecisionUrgency, JiraConnectionState,
-    JiraProjectBindingId, LocalApiaryContext, OperatorPresence, PresenceDeviceClass,
-    PresenceDeviceId, PresenceMode, PresenceObservationState, SharedWorkBackend, Task, TaskId,
-    TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
+    DecisionRequestId, DecisionRequestKind, DecisionUrgency, HiveConnectionCard,
+    JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, OperatorPresence,
+    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
+    SharedWorkBackend, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
+    WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -51,6 +52,18 @@ impl ApiaryService {
     #[must_use]
     pub const fn new(store: TaskStore) -> Self {
         Self { store }
+    }
+
+    /// Issues a one-day signed public connection card for deliberate sharing
+    /// with a Keeper. Generating a card grants no membership or authority.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the durable local node identity cannot
+    /// be created or reconstituted.
+    pub fn connection_card(&self, now: i64) -> Result<HiveConnectionCard, ApplicationError> {
+        self.store
+            .issue_hive_connection_card(now, 24 * 60 * 60)
+            .map_err(Into::into)
     }
 
     /// Creates one Apiary around the current personal Hive. The local operator
@@ -612,6 +625,23 @@ mod tests {
             )
             .unwrap();
         (TaskService::new(store), queen, worker)
+    }
+
+    #[test]
+    fn connection_card_is_a_public_identity_action_not_membership() {
+        let store = TaskStore::in_memory().unwrap();
+        let service = ApiaryService::new(store.clone());
+        let card = service.connection_card(10_000).unwrap();
+
+        assert_eq!(card.payload.expires_at, 10_000 + 24 * 60 * 60);
+        assert_eq!(
+            card.payload.hive_id,
+            store.local_hive_identity().unwrap().hive.id
+        );
+        assert_eq!(
+            store.local_apiary_context().unwrap(),
+            LocalApiaryContext::Personal
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { downloadDatabaseBackup, fetchJiraReadiness, fetchTerminalHostStatus, type ControlRoomEvent, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
+import { downloadBlob } from "../shared/download";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
@@ -67,12 +68,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   }, [operatorToken]);
   async function downloadBackup() {
     const blob = await downloadDatabaseBackup(operatorToken);
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `swarm-next-hive-${new Date().toISOString().slice(0, 10)}.sqlite3`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `swarm-next-hive-${new Date().toISOString().slice(0, 10)}.sqlite3`);
   }
   return (
     <div className="settings-workspace">

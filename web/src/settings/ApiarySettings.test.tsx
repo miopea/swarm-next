@@ -42,6 +42,35 @@ test("founds only a reviewed Jira-backed Apiary and refreshes Hive identity", as
   await vi.waitFor(() => expect(onHiveIdentityChange).toHaveBeenCalledWith(federated));
 });
 
+test("downloads a short-lived signed Hive card without changing membership", async () => {
+  const createObjectUrl = vi.fn(() => "blob:connection-card");
+  const revokeObjectUrl = vi.fn();
+  vi.stubGlobal("URL", { ...URL, createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === "/api/v1/apiary/connection-card") {
+      return ok({
+        payload: {
+          schema_version: 1, protocol_version: 1, node_id: "node-1", hive_id: "hive-1",
+          hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea",
+          public_key: "public", issued_at: 10, expires_at: 86_410,
+        },
+        signature: "signed",
+      });
+    }
+    throw new Error(`unexpected request ${String(input)}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Download connection card" }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent("expires in 24 hours and grants no access");
+  expect(createObjectUrl).toHaveBeenCalledWith(expect.any(Blob));
+  expect(click).toHaveBeenCalledOnce();
+  expect(revokeObjectUrl).toHaveBeenCalledWith("blob:connection-card");
+  expect(screen.getByText(/Your personal Hive remains fully independent/)).toBeVisible();
+});
+
 test("shows every collapse blocker and cannot bypass the disabled action", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     if (String(input) === "/api/v1/apiary/collapse-readiness") {

@@ -18,7 +18,12 @@ use uuid::Uuid;
 
 mod apiary;
 mod decisions;
+mod federation;
 mod feedback;
+pub use federation::{
+    MAX_CONNECTION_CARD_LIFETIME_SECONDS, MIN_CONNECTION_CARD_LIFETIME_SECONDS,
+    verify_hive_connection_card,
+};
 mod jira;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
 pub use jira::{
@@ -45,7 +50,7 @@ const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 29;
+const CURRENT_SCHEMA_VERSION: i64 = 30;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -82,6 +87,12 @@ pub enum TaskStoreError {
     ApiaryCollapseNotReady,
     #[error("Jira project is not ready for Apiary promotion")]
     ApiaryProjectPromotionNotReady,
+    #[error("Hive connection card is invalid or expired")]
+    InvalidFederationConnectionCard,
+    #[error("the local federation identity is corrupt")]
+    InvalidFederationIdentity,
+    #[error("secure entropy is unavailable for the local federation identity")]
+    FederationEntropyUnavailable,
     #[error("task was not found")]
     NotFound,
     #[error("decision request was not found")]
@@ -1244,6 +1255,9 @@ fn migrate_schema(
     }
     if schema_version < 29 {
         apiary::migrate_apiary_lifecycle(transaction)?;
+    }
+    if schema_version < 30 {
+        federation::migrate_federation_identity(transaction)?;
     }
     Ok(())
 }

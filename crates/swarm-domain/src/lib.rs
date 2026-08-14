@@ -41,6 +41,7 @@ domain_id!(OperatorId);
 domain_id!(HiveId);
 domain_id!(ApiaryId);
 domain_id!(ApiaryInvitationId);
+domain_id!(FederationNodeId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
@@ -235,6 +236,31 @@ pub struct Hive {
 pub struct HiveIdentity {
     pub operator: Operator,
     pub hive: Hive,
+}
+
+pub const FEDERATION_CONNECTION_CARD_SCHEMA_VERSION: u16 = 1;
+pub const FEDERATION_PROTOCOL_VERSION: u16 = 1;
+
+/// Public, signed identity material that one Hive can deliberately share with
+/// a Keeper before any invitation or federation authority exists.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HiveConnectionCardPayload {
+    pub schema_version: u16,
+    pub protocol_version: u16,
+    pub node_id: FederationNodeId,
+    pub hive_id: HiveId,
+    pub hive_name: String,
+    pub operator_id: OperatorId,
+    pub operator_display_name: String,
+    pub public_key: String,
+    pub issued_at: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HiveConnectionCard {
+    pub payload: HiveConnectionCardPayload,
+    pub signature: String,
 }
 
 impl Hive {

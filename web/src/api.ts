@@ -104,6 +104,21 @@ export type ApiaryJiraProject = {
   promoted_by_operator_id: string;
   promoted_at: number;
 };
+export type HiveConnectionCard = {
+  payload: {
+    schema_version: number;
+    protocol_version: number;
+    node_id: string;
+    hive_id: string;
+    hive_name: string;
+    operator_id: string;
+    operator_display_name: string;
+    public_key: string;
+    issued_at: number;
+    expires_at: number;
+  };
+  signature: string;
+};
 export type HiveIdentity = {
   operator: { id: string; display_name: string };
   hive: { id: string; name: string; operator_id: string; apiary_id: string | null };
@@ -405,6 +420,13 @@ export async function createApiary(
     body: JSON.stringify({ name, shared_work_backend: sharedWorkBackend }),
   });
   return response.json() as Promise<LocalApiaryContext>;
+}
+
+export async function fetchHiveConnectionCard(
+  operatorToken: string,
+): Promise<HiveConnectionCard> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/connection-card");
+  return response.json() as Promise<HiveConnectionCard>;
 }
 
 export async function fetchApiaryCollapseReadiness(

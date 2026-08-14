@@ -1460,6 +1460,10 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/hive", get(local_hive))
         .route("/api/v1/apiary", post(create_apiary))
         .route(
+            "/api/v1/apiary/connection-card",
+            get(download_hive_connection_card),
+        )
+        .route(
             "/api/v1/apiary/collapse-readiness",
             get(apiary_collapse_readiness),
         )
@@ -1738,6 +1742,23 @@ async fn apiary_invitations(
         .map(ApiaryInvitationView::from)
         .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(views)).into_response())
+}
+
+async fn download_hive_connection_card(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let card = apiary_service(&state)?
+        .connection_card(unix_timestamp())
+        .map_err(application_error)?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=swarm-next-hive-connection.json"),
+    );
+    Ok((response_headers, Json(card)).into_response())
 }
 
 async fn create_apiary(
@@ -4326,6 +4347,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "apiary_project_promotion_not_ready",
             error.to_string(),
         ),
+        TaskStoreError::InvalidFederationConnectionCard => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_hive_connection_card",
+            error.to_string(),
+        ),
         TaskStoreError::DecisionNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "decision_not_found",
@@ -4446,6 +4472,8 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::Io(_)
         | TaskStoreError::Sql(_)
         | TaskStoreError::LockPoisoned
+        | TaskStoreError::InvalidFederationIdentity
+        | TaskStoreError::FederationEntropyUnavailable
         | TaskStoreError::InvalidAgentCredentialDigest
         | TaskStoreError::UnsupportedSchemaVersion { .. }
         | TaskStoreError::IntegrityFailure(_) => ApiError::new(
@@ -4837,6 +4865,38 @@ mod tests {
         assert_eq!(json["hive"]["name"], "My Hive");
         assert!(json["hive"]["apiary_id"].is_null());
         assert_eq!(json["apiary_context"]["mode"], "personal");
+    }
+
+    #[tokio::test]
+    async fn hive_connection_card_is_private_signed_and_downloadable() {
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/apiary/connection-card")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let response = authorized_get(app, "/api/v1/apiary/connection-card").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response.headers()[header::CONTENT_DISPOSITION],
+            "attachment; filename=swarm-next-hive-connection.json"
+        );
+        let card: swarm_domain::HiveConnectionCard =
+            serde_json::from_value(response_json(response).await).unwrap();
+        swarm_persistence::verify_hive_connection_card(&card, unix_timestamp()).unwrap();
     }
 
     #[tokio::test]
