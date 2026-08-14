@@ -66,6 +66,8 @@ pub enum TaskStoreError {
     LockPoisoned,
     #[error("Apiary invitation is invalid")]
     InvalidApiaryInvitation,
+    #[error("Apiary was not found")]
+    ApiaryNotFound,
     #[error("Apiary invitation was not found")]
     ApiaryInvitationNotFound,
     #[error("Apiary invitation is no longer pending")]

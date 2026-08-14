@@ -1,7 +1,7 @@
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    ApiaryId, ApiaryInvitation, ApiaryInvitationId, ApiaryInvitationState, ApiaryJoinReadiness,
-    HiveId, OperatorId,
+    Apiary, ApiaryId, ApiaryInvitation, ApiaryInvitationId, ApiaryInvitationState,
+    ApiaryJoinReadiness, HiveId, OperatorId,
 };
 
 use crate::{TaskStore, TaskStoreError, parse_domain_id};
@@ -9,6 +9,32 @@ use crate::{TaskStore, TaskStoreError, parse_domain_id};
 const MAX_INVITATION_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
 
 impl TaskStore {
+    /// Returns one durable Apiary by identity without exposing membership or credentials.
+    ///
+    /// # Errors
+    /// Returns an error when the Apiary does not exist or persisted data is invalid.
+    pub fn get_apiary(&self, apiary_id: ApiaryId) -> Result<Apiary, TaskStoreError> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT id, name, keeper_operator_id, shared_work_backend
+                 FROM apiaries WHERE id = ?1",
+                [apiary_id.to_string()],
+                |row| {
+                    Ok(Apiary::persisted(
+                        parse_domain_id(&row.get::<_, String>(0)?)?,
+                        row.get::<_, String>(1)?,
+                        parse_domain_id(&row.get::<_, String>(2)?)?,
+                        row.get::<_, String>(3)?
+                            .parse()
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryNotFound)
+    }
+
     /// Creates one bounded Keeper invitation for a currently personal Hive.
     /// Database constraints reject non-Keeper issuers and duplicate pending invitations.
     ///
@@ -275,6 +301,7 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let identity = store.local_hive_identity().unwrap();
         let (apiary, keeper_id) = add_apiary(&store, "Garden");
+        assert_eq!(store.get_apiary(apiary.id).unwrap(), apiary);
 
         assert_eq!(
             store
