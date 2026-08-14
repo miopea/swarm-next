@@ -1,6 +1,7 @@
 mod agent;
 mod attach;
 mod attachments;
+pub mod federation_http;
 mod jira;
 mod jira_oauth;
 mod notifications;

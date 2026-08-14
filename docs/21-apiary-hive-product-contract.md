@@ -159,6 +159,16 @@ credential, disable caching, and never receive or expose Jira credentials.
 This is the Keeper serialization primitive, not yet the complete Member-side
 Jira claim saga or background reconciliation loop.
 
+The outbound adapter foundation is also bounded independently of any browser:
+remote endpoints require HTTPS and may not embed credentials, queries, or
+fragments; redirects are rejected; each request has a five-second connection
+and total deadline; and response bodies stop at one mebibyte before JSON
+decoding. Network loss, authentication rejection, claim conflict, remote
+rejection, oversized data, and invalid protocol content remain distinct typed
+results. Loopback HTTP exists only for local development and isolated tests.
+This client is not yet wired to persistence or an automatic loop, so the stored
+one-time join secret cannot leave the Hive through this slice.
+
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
 reject Jira promotion, and a joining Hive passes project readiness only when
