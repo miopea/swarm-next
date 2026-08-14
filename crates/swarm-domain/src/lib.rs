@@ -292,6 +292,7 @@ pub struct Apiary {
     pub name: String,
     pub keeper_operator_id: OperatorId,
     shared_work_backend: SharedWorkBackend,
+    policy_revision: u64,
 }
 
 impl Apiary {
@@ -306,12 +307,18 @@ impl Apiary {
             name: name.into(),
             keeper_operator_id,
             shared_work_backend,
+            policy_revision: 1,
         }
     }
 
     #[must_use]
     pub const fn shared_work_backend(&self) -> SharedWorkBackend {
         self.shared_work_backend
+    }
+
+    #[must_use]
+    pub const fn policy_revision(&self) -> u64 {
+        self.policy_revision
     }
 
     /// Reconstitutes an Apiary whose immutable identity and backend were loaded
@@ -322,12 +329,14 @@ impl Apiary {
         name: impl Into<String>,
         keeper_operator_id: OperatorId,
         shared_work_backend: SharedWorkBackend,
+        policy_revision: u64,
     ) -> Self {
         Self {
             id,
             name: name.into(),
             keeper_operator_id,
             shared_work_backend,
+            policy_revision,
         }
     }
 }
@@ -404,6 +413,9 @@ pub struct ApiaryInvitation {
     pub created_at: i64,
     pub expires_at: i64,
     pub resolved_at: Option<i64>,
+    pub required_policy_revision: u64,
+    pub accepted_policy_revision: Option<u64>,
+    pub policy_accepted_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -447,7 +459,6 @@ pub struct ApiaryJoinChecks {
     pub identity: ApiaryJoinCheckState,
     pub integration: ApiaryJoinCheckState,
     pub project_access: ApiaryJoinCheckState,
-    pub policy: ApiaryJoinCheckState,
     pub protocol: ApiaryJoinCheckState,
 }
 
@@ -482,6 +493,11 @@ impl ApiaryJoinReadiness {
             }
             Some(_) => {}
         }
+        let policy_ready = invitation.is_some_and(|candidate| {
+            candidate.required_policy_revision == apiary.policy_revision()
+                && candidate.accepted_policy_revision == Some(apiary.policy_revision())
+                && candidate.policy_accepted_at.is_some()
+        });
         for (ready, blocker) in [
             (
                 checks.identity.is_ready(),
@@ -495,10 +511,7 @@ impl ApiaryJoinReadiness {
                 checks.project_access.is_ready(),
                 ApiaryJoinBlocker::ProjectAccessNotReady,
             ),
-            (
-                checks.policy.is_ready(),
-                ApiaryJoinBlocker::PolicyNotAccepted,
-            ),
+            (policy_ready, ApiaryJoinBlocker::PolicyNotAccepted),
             (
                 checks.protocol.is_ready(),
                 ApiaryJoinBlocker::ProtocolMismatch,
@@ -1840,6 +1853,9 @@ mod tests {
             created_at: 10,
             expires_at: 100,
             resolved_at: None,
+            required_policy_revision: 1,
+            accepted_policy_revision: None,
+            policy_accepted_at: None,
         };
 
         let blocked = ApiaryJoinReadiness::evaluate(
@@ -1850,7 +1866,6 @@ mod tests {
                 identity: ApiaryJoinCheckState::Blocked,
                 integration: ApiaryJoinCheckState::Blocked,
                 project_access: ApiaryJoinCheckState::Blocked,
-                policy: ApiaryJoinCheckState::Blocked,
                 protocol: ApiaryJoinCheckState::Blocked,
             },
             50,
@@ -1866,15 +1881,17 @@ mod tests {
             ]
         );
 
+        let mut accepted_invitation = invitation;
+        accepted_invitation.accepted_policy_revision = Some(1);
+        accepted_invitation.policy_accepted_at = Some(40);
         let ready = ApiaryJoinReadiness::evaluate(
             &hive,
             &apiary,
-            Some(&invitation),
+            Some(&accepted_invitation),
             ApiaryJoinChecks {
                 identity: ApiaryJoinCheckState::Ready,
                 integration: ApiaryJoinCheckState::Ready,
                 project_access: ApiaryJoinCheckState::Ready,
-                policy: ApiaryJoinCheckState::Ready,
                 protocol: ApiaryJoinCheckState::Ready,
             },
             50,
@@ -1896,12 +1913,14 @@ mod tests {
             created_at: 10,
             expires_at: 20,
             resolved_at: None,
+            required_policy_revision: 1,
+            accepted_policy_revision: Some(1),
+            policy_accepted_at: Some(12),
         };
         let checks = ApiaryJoinChecks {
             identity: ApiaryJoinCheckState::Ready,
             integration: ApiaryJoinCheckState::Ready,
             project_access: ApiaryJoinCheckState::Ready,
-            policy: ApiaryJoinCheckState::Ready,
             protocol: ApiaryJoinCheckState::Ready,
         };
 
@@ -1915,6 +1934,7 @@ mod tests {
             vec![
                 ApiaryJoinBlocker::HiveAlreadyFederated,
                 ApiaryJoinBlocker::InvitationRequired,
+                ApiaryJoinBlocker::PolicyNotAccepted,
             ]
         );
     }
@@ -1938,6 +1958,7 @@ mod tests {
             "Garden",
             keeper_id,
             SharedWorkBackend::Jira,
+            3,
         );
         let context = LocalApiaryContext::Federated {
             apiary: apiary.clone(),
@@ -1945,6 +1966,7 @@ mod tests {
         };
 
         assert_eq!(apiary.shared_work_backend(), SharedWorkBackend::Jira);
+        assert_eq!(apiary.policy_revision(), 3);
         assert!(matches!(
             context,
             LocalApiaryContext::Federated {

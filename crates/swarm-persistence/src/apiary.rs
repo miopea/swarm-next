@@ -20,7 +20,7 @@ impl TaskStore {
         let connection = self.connection()?;
         connection
             .query_row(
-                "SELECT id, name, keeper_operator_id, shared_work_backend
+                "SELECT id, name, keeper_operator_id, shared_work_backend, policy_revision
                  FROM apiaries WHERE id = ?1",
                 [apiary_id.to_string()],
                 |row| {
@@ -31,6 +31,7 @@ impl TaskStore {
                         row.get::<_, String>(3)?
                             .parse()
                             .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                        row.get::<_, u64>(4)?,
                     ))
                 },
             )
@@ -163,8 +164,10 @@ impl TaskStore {
         let connection = self.connection()?;
         connection.execute(
             "INSERT INTO apiary_invitations
-                (id, apiary_id, invited_hive_id, invited_by_operator_id, created_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (id, apiary_id, invited_hive_id, invited_by_operator_id, created_at, expires_at,
+                 required_policy_revision)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, a.policy_revision
+             FROM apiaries a WHERE a.id = ?2",
             params![
                 id.to_string(),
                 apiary_id.to_string(),
@@ -175,6 +178,51 @@ impl TaskStore {
             ],
         )?;
         invitation_by_id(&connection, id)?.ok_or(TaskStoreError::ApiaryInvitationNotFound)
+    }
+
+    /// Records the invited Hive operator's acceptance of the exact current
+    /// Apiary policy revision. The caller supplies an action, not readiness;
+    /// ownership and revision are derived and checked in the update predicate.
+    ///
+    /// # Errors
+    /// Returns an error when actor, invitation state, or revision is stale.
+    pub fn accept_apiary_policy(
+        &self,
+        invitation_id: ApiaryInvitationId,
+        actor_operator_id: OperatorId,
+        policy_revision: u64,
+        now: i64,
+    ) -> Result<ApiaryInvitation, TaskStoreError> {
+        if policy_revision == 0 || now < 0 {
+            return Err(TaskStoreError::InvalidApiaryInvitation);
+        }
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE apiary_invitations
+             SET accepted_policy_revision = ?1, policy_accepted_at = ?2
+             WHERE id = ?3 AND state = 'pending' AND required_policy_revision = ?1
+               AND EXISTS (
+                   SELECT 1 FROM apiaries a
+                   WHERE a.id = apiary_invitations.apiary_id
+                     AND a.policy_revision = ?1
+               )
+               AND EXISTS (
+                   SELECT 1 FROM hives h
+                   WHERE h.id = apiary_invitations.invited_hive_id
+                     AND h.operator_id = ?4
+               )",
+            params![
+                policy_revision,
+                now,
+                invitation_id.to_string(),
+                actor_operator_id.to_string()
+            ],
+        )?;
+        if changed != 1 {
+            return Err(TaskStoreError::ApiaryJoinNotReady);
+        }
+        invitation_by_id(&connection, invitation_id)?
+            .ok_or(TaskStoreError::ApiaryInvitationNotFound)
     }
 
     /// Returns one durable invitation by identity.
@@ -202,7 +250,8 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT id, apiary_id, invited_hive_id, invited_by_operator_id, state,
-                    created_at, expires_at, resolved_at
+                    created_at, expires_at, resolved_at, required_policy_revision,
+                    accepted_policy_revision, policy_accepted_at
              FROM apiary_invitations
              WHERE invited_hive_id = ?1 AND state = 'pending' AND expires_at > ?2
              ORDER BY created_at, id",
@@ -353,6 +402,84 @@ pub(super) fn migrate_apiary_jira_projects(
     )
 }
 
+pub(super) fn migrate_apiary_policy_acceptance(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    if table_exists(transaction, "apiaries")?
+        && !column_exists(transaction, "apiaries", "policy_revision")?
+    {
+        transaction.execute_batch(
+            "ALTER TABLE apiaries
+                 ADD COLUMN policy_revision INTEGER NOT NULL DEFAULT 1
+                     CHECK (policy_revision > 0);",
+        )?;
+    }
+    if table_exists(transaction, "apiary_invitations")? {
+        if !column_exists(
+            transaction,
+            "apiary_invitations",
+            "required_policy_revision",
+        )? {
+            transaction.execute_batch(
+                "ALTER TABLE apiary_invitations
+                     ADD COLUMN required_policy_revision INTEGER NOT NULL DEFAULT 1
+                         CHECK (required_policy_revision > 0);",
+            )?;
+        }
+        if !column_exists(
+            transaction,
+            "apiary_invitations",
+            "accepted_policy_revision",
+        )? {
+            transaction.execute_batch(
+                "ALTER TABLE apiary_invitations
+                     ADD COLUMN accepted_policy_revision INTEGER
+                         CHECK (accepted_policy_revision IS NULL OR accepted_policy_revision > 0);",
+            )?;
+        }
+        if !column_exists(transaction, "apiary_invitations", "policy_accepted_at")? {
+            transaction.execute_batch(
+                "ALTER TABLE apiary_invitations ADD COLUMN policy_accepted_at INTEGER;",
+            )?;
+        }
+        transaction.execute_batch(
+            "DROP TRIGGER IF EXISTS immutable_apiary_invitation_identity;
+             CREATE TRIGGER immutable_apiary_invitation_identity
+                 BEFORE UPDATE OF id, apiary_id, invited_hive_id, invited_by_operator_id,
+                                  created_at, expires_at, required_policy_revision
+                 ON apiary_invitations
+                 BEGIN SELECT RAISE(ABORT, 'Apiary invitation identity is immutable'); END;
+             CREATE TRIGGER IF NOT EXISTS apiary_invitation_policy_acceptance_guard
+                 BEFORE UPDATE OF accepted_policy_revision, policy_accepted_at
+                 ON apiary_invitations
+                 WHEN OLD.state <> 'pending'
+                    OR NEW.accepted_policy_revision IS NULL
+                    OR NEW.accepted_policy_revision <> NEW.required_policy_revision
+                    OR NEW.policy_accepted_at IS NULL
+                 BEGIN SELECT RAISE(ABORT, 'Apiary policy acceptance is invalid'); END;",
+        )?;
+    }
+    transaction.execute_batch("PRAGMA user_version = 28;")
+}
+
+fn table_exists(transaction: &rusqlite::Transaction<'_>, table: &str) -> rusqlite::Result<bool> {
+    transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get(0),
+    )
+}
+
+fn column_exists(
+    transaction: &rusqlite::Transaction<'_>,
+    table: &str,
+    column: &str,
+) -> rusqlite::Result<bool> {
+    let query =
+        format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)");
+    transaction.query_row(&query, [column], |row| row.get(0))
+}
+
 fn invitation_by_id(
     connection: &rusqlite::Connection,
     invitation_id: ApiaryInvitationId,
@@ -360,7 +487,8 @@ fn invitation_by_id(
     connection
         .query_row(
             "SELECT id, apiary_id, invited_hive_id, invited_by_operator_id, state,
-                    created_at, expires_at, resolved_at
+                    created_at, expires_at, resolved_at, required_policy_revision,
+                    accepted_policy_revision, policy_accepted_at
              FROM apiary_invitations WHERE id = ?1",
             [invitation_id.to_string()],
             invitation_from_row,
@@ -381,6 +509,9 @@ fn invitation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiaryInvita
         created_at: row.get(5)?,
         expires_at: row.get(6)?,
         resolved_at: row.get(7)?,
+        required_policy_revision: row.get(8)?,
+        accepted_policy_revision: row.get(9)?,
+        policy_accepted_at: row.get(10)?,
     })
 }
 
@@ -454,20 +585,28 @@ mod tests {
     }
 
     fn ready(
+        store: &TaskStore,
         identity: &HiveIdentity,
         apiary: &Apiary,
         invitation: &ApiaryInvitation,
         now: i64,
     ) -> ApiaryJoinReadiness {
+        let accepted = store
+            .accept_apiary_policy(
+                invitation.id,
+                identity.operator.id,
+                apiary.policy_revision(),
+                now,
+            )
+            .unwrap();
         ApiaryJoinReadiness::evaluate(
             &identity.hive,
             apiary,
-            Some(invitation),
+            Some(&accepted),
             ApiaryJoinChecks {
                 identity: ApiaryJoinCheckState::Ready,
                 integration: ApiaryJoinCheckState::Ready,
                 project_access: ApiaryJoinCheckState::Ready,
-                policy: ApiaryJoinCheckState::Ready,
                 protocol: ApiaryJoinCheckState::Ready,
             },
             now,
@@ -535,7 +674,7 @@ mod tests {
             .create_apiary_invitation(orchard.id, identity.hive.id, orchard_keeper, 10, 100)
             .unwrap();
 
-        let readiness = ready(&identity, &garden, &accepted_candidate, 50);
+        let readiness = ready(&store, &identity, &garden, &accepted_candidate, 50);
         let accepted = store
             .accept_apiary_invitation(accepted_candidate.id, &readiness, 50)
             .unwrap();
@@ -557,6 +696,64 @@ mod tests {
     }
 
     #[test]
+    fn policy_acceptance_is_operator_owned_and_revision_bound() {
+        let store = TaskStore::in_memory().unwrap();
+        let identity = store.local_hive_identity().unwrap();
+        let (apiary, keeper_id) = add_apiary(&store, "Garden");
+        let invitation = store
+            .create_apiary_invitation(apiary.id, identity.hive.id, keeper_id, 10, 100)
+            .unwrap();
+        assert_eq!(invitation.required_policy_revision, 1);
+        assert!(invitation.accepted_policy_revision.is_none());
+        assert!(
+            store
+                .accept_apiary_policy(invitation.id, keeper_id, 1, 20)
+                .is_err()
+        );
+        assert!(
+            store
+                .accept_apiary_policy(invitation.id, identity.operator.id, 2, 20)
+                .is_err()
+        );
+        let accepted = store
+            .accept_apiary_policy(invitation.id, identity.operator.id, 1, 20)
+            .unwrap();
+        assert_eq!(accepted.accepted_policy_revision, Some(1));
+        assert_eq!(accepted.policy_accepted_at, Some(20));
+
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE apiaries SET policy_revision = 2 WHERE id = ?1",
+                [apiary.id.to_string()],
+            )
+            .unwrap();
+        assert!(
+            store
+                .accept_apiary_policy(invitation.id, identity.operator.id, 1, 30)
+                .is_err()
+        );
+        let current = store.get_apiary(apiary.id).unwrap();
+        let readiness = ApiaryJoinReadiness::evaluate(
+            &identity.hive,
+            &current,
+            Some(&accepted),
+            ApiaryJoinChecks {
+                identity: ApiaryJoinCheckState::Ready,
+                integration: ApiaryJoinCheckState::Ready,
+                project_access: ApiaryJoinCheckState::Ready,
+                protocol: ApiaryJoinCheckState::Ready,
+            },
+            30,
+        );
+        assert_eq!(
+            readiness.blockers(),
+            &[swarm_domain::ApiaryJoinBlocker::PolicyNotAccepted]
+        );
+    }
+
+    #[test]
     fn acceptance_fails_closed_when_any_readiness_check_is_missing() {
         let store = TaskStore::in_memory().unwrap();
         let identity = store.local_hive_identity().unwrap();
@@ -564,15 +761,22 @@ mod tests {
         let invitation = store
             .create_apiary_invitation(apiary.id, identity.hive.id, keeper_id, 10, 100)
             .unwrap();
+        let accepted = store
+            .accept_apiary_policy(
+                invitation.id,
+                identity.operator.id,
+                apiary.policy_revision(),
+                40,
+            )
+            .unwrap();
         let readiness = ApiaryJoinReadiness::evaluate(
             &identity.hive,
             &apiary,
-            Some(&invitation),
+            Some(&accepted),
             ApiaryJoinChecks {
                 identity: ApiaryJoinCheckState::Ready,
                 integration: ApiaryJoinCheckState::Ready,
-                project_access: ApiaryJoinCheckState::Ready,
-                policy: ApiaryJoinCheckState::Blocked,
+                project_access: ApiaryJoinCheckState::Blocked,
                 protocol: ApiaryJoinCheckState::Ready,
             },
             50,
@@ -663,26 +867,23 @@ mod tests {
 
     #[test]
     fn migrates_schema_v25_to_durable_apiary_invitations() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
-        {
-            let store = TaskStore::open(&path).unwrap();
-            store
-                .connection()
-                .unwrap()
-                .execute_batch(
-                    "DROP TRIGGER apiary_invitation_terminal_state;
-                     DROP TRIGGER immutable_apiary_invitation_identity;
-                     DROP TRIGGER apiary_invitation_personal_hive_insert;
-                     DROP TRIGGER apiary_invitation_keeper_insert;
-                     DROP TABLE apiary_invitations;
-                     PRAGMA user_version = 25;",
-                )
-                .unwrap();
-        }
-
-        let migrated = TaskStore::open(path).unwrap();
-        let connection = migrated.connection().unwrap();
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE operators (id TEXT PRIMARY KEY);
+                 CREATE TABLE apiaries (
+                     id TEXT PRIMARY KEY,
+                     keeper_operator_id TEXT NOT NULL REFERENCES operators(id)
+                 );
+                 CREATE TABLE hives (
+                     id TEXT PRIMARY KEY,
+                     apiary_id TEXT REFERENCES apiaries(id)
+                 );",
+            )
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        migrate_apiary_invitations(&transaction).unwrap();
+        transaction.commit().unwrap();
         assert_eq!(
             connection
                 .query_row(
@@ -698,30 +899,26 @@ mod tests {
             connection
                 .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
                 .unwrap(),
-            crate::CURRENT_SCHEMA_VERSION
+            26
         );
     }
 
     #[test]
     fn migrates_schema_v26_to_promoted_apiary_jira_catalog() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
-        {
-            let store = TaskStore::open(&path).unwrap();
-            store
-                .connection()
-                .unwrap()
-                .execute_batch(
-                    "DROP TRIGGER apiary_jira_project_keeper_insert;
-                     DROP TRIGGER immutable_apiary_jira_project_identity;
-                     DROP TABLE apiary_jira_projects;
-                     PRAGMA user_version = 26;",
-                )
-                .unwrap();
-        }
-
-        let migrated = TaskStore::open(path).unwrap();
-        let connection = migrated.connection().unwrap();
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE operators (id TEXT PRIMARY KEY);
+                 CREATE TABLE apiaries (
+                     id TEXT PRIMARY KEY,
+                     keeper_operator_id TEXT NOT NULL REFERENCES operators(id),
+                     shared_work_backend TEXT NOT NULL
+                 );",
+            )
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        migrate_apiary_jira_projects(&transaction).unwrap();
+        transaction.commit().unwrap();
         assert_eq!(
             connection
                 .query_row(
@@ -737,7 +934,56 @@ mod tests {
             connection
                 .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
                 .unwrap(),
-            crate::CURRENT_SCHEMA_VERSION
+            27
+        );
+    }
+
+    #[test]
+    fn migrates_schema_v27_to_revision_bound_policy_acceptance() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE apiaries (
+                     id TEXT PRIMARY KEY,
+                     name TEXT NOT NULL,
+                     keeper_operator_id TEXT NOT NULL,
+                     shared_work_backend TEXT NOT NULL
+                 );
+                 CREATE TABLE apiary_invitations (
+                     id TEXT PRIMARY KEY,
+                     apiary_id TEXT NOT NULL,
+                     invited_hive_id TEXT NOT NULL,
+                     invited_by_operator_id TEXT NOT NULL,
+                     state TEXT NOT NULL,
+                     created_at INTEGER NOT NULL,
+                     expires_at INTEGER NOT NULL,
+                     resolved_at INTEGER
+                 );
+                 CREATE TRIGGER immutable_apiary_invitation_identity
+                     BEFORE UPDATE OF id ON apiary_invitations
+                     BEGIN SELECT RAISE(ABORT, 'immutable'); END;",
+            )
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        migrate_apiary_policy_acceptance(&transaction).unwrap();
+        transaction.commit().unwrap();
+        assert!(
+            connection
+                .query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM pragma_table_info('apiaries')
+                         WHERE name = 'policy_revision'
+                     )",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            28
         );
     }
 }

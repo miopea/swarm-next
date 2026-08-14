@@ -1743,8 +1743,6 @@ fn apiary_join_checks(
         } else {
             ApiaryJoinCheckState::Blocked
         },
-        // Explicit policy acceptance is not durable yet, so it remains blocked.
-        policy: ApiaryJoinCheckState::Blocked,
         // Invitations currently originate in this protocol-owning store.
         // Distributed transport will replace this with negotiated evidence.
         protocol: ApiaryJoinCheckState::Ready,
@@ -4733,7 +4731,7 @@ mod tests {
     }
 
     #[test]
-    fn apiary_join_checks_use_catalog_evidence_and_never_infer_policy_readiness() {
+    fn apiary_join_checks_use_catalog_evidence_and_block_native_integration() {
         let identity = TaskStore::in_memory()
             .unwrap()
             .local_hive_identity()
@@ -4742,7 +4740,6 @@ mod tests {
         let ready_connection = apiary_join_checks(&jira_apiary, JiraConnectionState::Ready, true);
         assert_eq!(ready_connection.integration, ApiaryJoinCheckState::Ready);
         assert_eq!(ready_connection.project_access, ApiaryJoinCheckState::Ready);
-        assert_eq!(ready_connection.policy, ApiaryJoinCheckState::Blocked);
         assert_eq!(
             apiary_join_checks(&jira_apiary, JiraConnectionState::Ready, false).project_access,
             ApiaryJoinCheckState::Blocked

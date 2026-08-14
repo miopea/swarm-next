@@ -75,7 +75,7 @@ Decision meanings:
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
 | GitHub | Keep/Redesign | Central coding workflow; use typed integration boundary and least-privilege credentials. |
-| Jira | Redesign | Local dogfood slice implemented: operator OAuth, project pools, explicit workflow mapping and selective intake, linked task identity, safe reconciliation, and durable bounded outbound transitions with visible conflict/retry. Apiary promotion and cross-Hive claims remain later work. |
+| Jira | Redesign | Local dogfood slice implemented: operator OAuth, project pools, explicit workflow mapping and selective intake, linked task identity, safe reconciliation, and durable bounded outbound transitions with visible conflict/retry. Jira-backed Apiary groundwork now includes durable invitations, server-derived fail-closed join readiness, a Keeper-owned promoted-project catalog, and invited-operator acceptance bound to the exact current Apiary policy revision. Distributed invitation transport, promotion UI, cross-Hive propagation, and atomic shared claims remain staged work. |
 | Outlook/email import | Investigate | Validate frequency and which parts—task creation, attachment parsing, draft replies—remain valuable. |
 | Cloudflare Tunnel | Redesign | Remote access is valuable; treat tunnel choice as deployment adapter, not core domain. |
 | Browser notifications | Keep | Implemented as a bounded, durable Web Push adapter for Needs you: presence-gated, generic encrypted payloads, explicit opt-in, configurable policy, and an eagerly refreshed current brand icon. |

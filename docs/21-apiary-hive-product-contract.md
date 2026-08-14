@@ -40,6 +40,14 @@ own readiness. Distribution transport and operator UI remain separate later
 slices; Native Apiary joining stays unavailable until its real distributed
 backend can satisfy the same contract.
 
+Policy acceptance is revision-bound and belongs to the invited Hive operator.
+Each invitation records the Apiary policy revision required when it is issued;
+the operator must explicitly accept that exact revision before the sealed join
+readiness can become ready. If the Apiary policy revision changes, prior
+acceptance becomes stale and joining fails closed until a new invitation and
+acceptance are recorded. Keeper, browser, and agent payloads cannot manufacture
+or override this evidence.
+
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries
 reject Jira promotion, and a joining Hive passes project readiness only when
