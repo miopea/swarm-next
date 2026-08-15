@@ -1,10 +1,17 @@
-use std::{sync::Arc, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode, header},
+    response::{IntoResponse, Response},
+};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use serde::Serialize;
-use swarm_domain::DecisionUrgency;
+use serde::{Deserialize, Serialize};
+use swarm_domain::{DecisionUrgency, NotificationPolicy, PresenceDeviceClass, PresenceDeviceId};
 use swarm_persistence::{
-    NotificationDeliveryFailure, NotificationDispatch, NotificationSettings, TaskStore,
+    NotificationDeliveryFailure, NotificationDispatch, NotificationSettings, PushSubscriptionInput,
+    TaskStore,
 };
 use tokio::sync::Mutex;
 use web_push_native::{
@@ -12,6 +19,8 @@ use web_push_native::{
     jwt_simple::algorithms::ES256KeyPair,
     p256::{PublicKey, elliptic_curve::sec1::ToEncodedPoint},
 };
+
+use super::{ApiError, AppState, authorize, task_store, task_store_error};
 
 const PUSH_TIMEOUT: Duration = Duration::from_secs(10);
 const PUSH_TTL: Duration = Duration::from_secs(60 * 60);
@@ -219,6 +228,175 @@ pub fn decode_subscription_key(value: &str, expected: usize) -> Result<Vec<u8>, 
         return Err("subscription key has an invalid length");
     }
     Ok(decoded)
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SetNotificationPolicyRequest {
+    policy: NotificationPolicy,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SaveNotificationSubscriptionRequest {
+    device_class: PresenceDeviceClass,
+    endpoint: String,
+    keys: NotificationSubscriptionKeys,
+}
+
+#[derive(Debug, Deserialize)]
+struct NotificationSubscriptionKeys {
+    p256dh: String,
+    auth: String,
+}
+
+pub(super) async fn notification_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let sender = state.notification_sender.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "notifications_unavailable",
+            "notification transport is unavailable",
+        )
+    })?;
+    let settings = task_store(&state)?
+        .notification_settings()
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(NotificationSettingsResponse {
+            settings,
+            vapid_public_key: sender.public_key(),
+        }),
+    )
+        .into_response())
+}
+
+pub(super) async fn set_notification_policy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SetNotificationPolicyRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let settings = task_store(&state)?
+        .set_notification_policy(request.policy, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    schedule_notification_delivery(&state);
+    notification_settings_response(&state, settings)
+}
+
+pub(super) async fn save_notification_subscription(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_id): Path<String>,
+    Json(request): Json<SaveNotificationSubscriptionRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    validate_push_endpoint(&request.endpoint).map_err(|message| {
+        ApiError::new(StatusCode::BAD_REQUEST, "invalid_push_endpoint", message)
+    })?;
+    let device_id = parse_notification_device_id(&device_id)?;
+    let p256dh = decode_subscription_key(&request.keys.p256dh, 65)
+        .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, "invalid_push_key", message))?;
+    validate_subscription_public_key(&p256dh)
+        .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, "invalid_push_key", message))?;
+    let auth = decode_subscription_key(&request.keys.auth, 16)
+        .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, "invalid_push_key", message))?;
+    let settings = task_store(&state)?
+        .save_notification_subscription(
+            &PushSubscriptionInput {
+                device_id,
+                device_class: request.device_class,
+                endpoint: request.endpoint,
+                p256dh,
+                auth,
+            },
+            unix_timestamp(),
+        )
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    notification_settings_response(&state, settings)
+}
+
+pub(super) async fn remove_notification_subscription(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let settings = task_store(&state)?
+        .remove_notification_subscription(parse_notification_device_id(&device_id)?)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    notification_settings_response(&state, settings)
+}
+
+pub(super) async fn test_notification(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let queued = task_store(&state)?
+        .enqueue_device_test_notification(
+            parse_notification_device_id(&device_id)?,
+            unix_timestamp(),
+        )
+        .map_err(|error| task_store_error(&error))?;
+    if !queued {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "notification_device_not_found",
+            "this browser is not registered for notifications",
+        ));
+    }
+    schedule_notification_delivery(&state);
+    let settings = task_store(&state)?
+        .notification_settings()
+        .map_err(|error| task_store_error(&error))?;
+    notification_settings_response(&state, settings)
+}
+
+fn parse_notification_device_id(device_id: &str) -> Result<PresenceDeviceId, ApiError> {
+    PresenceDeviceId::from_str(device_id).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_presence_device_id",
+            "notification device ID must be a UUID",
+        )
+    })
+}
+
+fn schedule_notification_delivery(state: &Arc<AppState>) {
+    let sender = state.notification_sender.clone();
+    tokio::spawn(async move {
+        if let Some(sender) = sender {
+            sender.deliver().await;
+        }
+    });
+}
+
+fn notification_settings_response(
+    state: &AppState,
+    settings: NotificationSettings,
+) -> Result<Response, ApiError> {
+    let sender = state.notification_sender.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "notifications_unavailable",
+            "notification transport is unavailable",
+        )
+    })?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(NotificationSettingsResponse {
+            settings,
+            vapid_public_key: sender.public_key(),
+        }),
+    )
+        .into_response())
 }
 
 #[derive(Serialize)]
