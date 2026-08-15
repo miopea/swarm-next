@@ -21,6 +21,7 @@ mod provider_activity;
 mod runtime;
 mod session_history;
 mod tasks;
+mod terminal_control;
 mod terminal_socket;
 mod workers;
 
@@ -60,9 +61,9 @@ use swarm_domain::{
     ControlRoomEventKind, DecisionRequestId, FederationCatalogSnapshot, FederationClaimId,
     FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard, HiveId, HiveIdentity,
     JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
-    LocalApiaryContext, OperatorId, PresenceDeviceId, ProviderConversationId, ProviderKind,
-    SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority,
-    TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    LocalApiaryContext, OperatorId, PresenceDeviceId, ProviderKind, SharedWorkBackend,
+    StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority, TaskState,
+    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
@@ -1207,13 +1208,6 @@ struct AttachGrantResponse {
     expires_in_ms: u64,
 }
 
-#[derive(Debug, Deserialize)]
-struct StartSessionRequest {
-    workspace: PathBuf,
-    rows: u16,
-    columns: u16,
-}
-
 #[derive(Debug, Serialize)]
 struct WorkerView {
     #[serde(flatten)]
@@ -1373,25 +1367,9 @@ fn default_terminal_columns() -> u16 {
 }
 
 #[derive(Debug, Deserialize)]
-struct InputRequest {
-    text: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResizeRequest {
-    rows: u16,
-    columns: u16,
-}
-
-#[derive(Debug, Deserialize)]
 struct JiraCommentRequest {
     body: String,
 }
-#[derive(Debug, Deserialize)]
-struct OutputQuery {
-    after: Option<u64>,
-}
-
 #[derive(Debug, Deserialize)]
 struct JiraProjectsQuery {
     query: Option<String>,
@@ -1834,7 +1812,7 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/terminal/sessions",
-            get(session_history::list_live_sessions).post(start_session),
+            get(session_history::list_live_sessions).post(terminal_control::start),
         )
         .route(
             "/api/v1/terminal/history/diagnostics",
@@ -1850,15 +1828,15 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/terminal/sessions/{session_id}",
-            delete(stop_session),
+            delete(terminal_control::stop),
         )
         .route(
             "/api/v1/terminal/sessions/{session_id}/output",
-            get(read_output),
+            get(terminal_control::read_output),
         )
         .route(
             "/api/v1/terminal/sessions/{session_id}/input",
-            post(write_input),
+            post(terminal_control::write_input),
         )
         .route(
             "/api/v1/terminal/sessions/{session_id}/engagements/{device_id}",
@@ -1870,7 +1848,7 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/terminal/sessions/{session_id}/size",
-            put(resize_terminal),
+            put(terminal_control::resize),
         )
         .route(
             "/api/v1/terminal/sessions/{session_id}/attach-grants",
@@ -3724,101 +3702,6 @@ fn jira_issue_snapshot(issue: &jira::JiraIssue) -> JiraIssueSnapshot<'_> {
         assignee_name: issue.assignee_name.as_deref(),
         remote_updated_at: &issue.updated_at,
     }
-}
-
-async fn start_session(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(request): Json<StartSessionRequest>,
-) -> Result<Json<HostResponse>, ApiError> {
-    require_valid_size(request.rows, request.columns)?;
-    let response = authorized_request(
-        &state,
-        &headers,
-        HostRequest::StartClaude {
-            workspace: request.workspace,
-            size: TerminalSize::new(request.rows, request.columns),
-            conversation: ClaudeConversationStart::New {
-                session_id: ProviderConversationId::new(),
-            },
-            mcp_config: None,
-            allow_outside_roots: false,
-        },
-    )
-    .await?;
-    record_session_event(&state)?;
-    Ok(response)
-}
-
-async fn read_output(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(session_id): Path<String>,
-    Query(query): Query<OutputQuery>,
-) -> Result<Json<HostResponse>, ApiError> {
-    authorized_request(
-        &state,
-        &headers,
-        HostRequest::Read {
-            session_id: parse_session_id(&session_id)?,
-            after_sequence: query.after,
-        },
-    )
-    .await
-}
-
-async fn write_input(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(session_id): Path<String>,
-    Json(request): Json<InputRequest>,
-) -> Result<Json<HostResponse>, ApiError> {
-    authorized_request(
-        &state,
-        &headers,
-        HostRequest::Write {
-            session_id: parse_session_id(&session_id)?,
-            bytes: request.text.into_bytes(),
-        },
-    )
-    .await
-}
-
-async fn resize_terminal(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(session_id): Path<String>,
-    Json(request): Json<ResizeRequest>,
-) -> Result<Json<HostResponse>, ApiError> {
-    require_valid_size(request.rows, request.columns)?;
-    authorized_request(
-        &state,
-        &headers,
-        HostRequest::Resize {
-            session_id: parse_session_id(&session_id)?,
-            size: TerminalSize::new(request.rows, request.columns),
-        },
-    )
-    .await
-}
-
-async fn stop_session(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(session_id): Path<String>,
-) -> Result<Json<HostResponse>, ApiError> {
-    let session_id = parse_session_id(&session_id)?;
-    let response = authorized_request(&state, &headers, HostRequest::Stop { session_id }).await?;
-    if let Some(store) = &state.task_store {
-        store
-            .release_worker_session(session_id)
-            .map_err(|error| task_store_error(&error))?;
-        store
-            .release_session_assignments(session_id)
-            .map_err(|error| task_store_error(&error))?;
-    }
-    record_session_event(&state)?;
-    Ok(response)
 }
 
 async fn start_worker_process(
