@@ -1,6 +1,7 @@
 mod agent;
 mod attach;
 mod attachments;
+mod backups;
 mod decisions;
 mod email_attachments;
 pub mod federation_http;
@@ -1773,7 +1774,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/runtime/terminal-host/maintenance",
             post(maintain_terminal_host),
         )
-        .route("/api/v1/backups/database", get(download_database_backup))
+        .route("/api/v1/backups/database", get(backups::download_database))
         .route(
             "/api/v1/feedback/reports",
             get(feedback::list_reports).post(feedback::create_report),
@@ -2641,41 +2642,6 @@ async fn join_apiary(
         )
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
-}
-
-async fn download_database_backup(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let backup = tempfile::NamedTempFile::new().map_err(|error| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "backup_unavailable",
-            format!("a temporary backup could not be created: {error}"),
-        )
-    })?;
-    task_store(&state)?
-        .backup_to(backup.path())
-        .map_err(|error| task_store_error(&error))?;
-    let bytes = std::fs::read(backup.path()).map_err(|error| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "backup_unavailable",
-            format!("the completed backup could not be read: {error}"),
-        )
-    })?;
-    let mut response_headers = HeaderMap::new();
-    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response_headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/vnd.sqlite3"),
-    );
-    response_headers.insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_static("attachment; filename=swarm-next-hive.sqlite3"),
-    );
-    Ok((response_headers, bytes).into_response())
 }
 
 async fn control_room_events(

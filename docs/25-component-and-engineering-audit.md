@@ -148,7 +148,9 @@ Required next extractions are vertical and behavior-led:
   Privacy-safe dogfood report listing/creation and its authenticated private
   attachment upload/download now share a `feedback` HTTP adapter beside the
   existing feedback persistence aggregate; attachment storage and media
-  validation remain owned by the reusable bounded attachment store.
+  validation remain owned by the reusable bounded attachment store. The
+  authenticated consistent SQLite export likewise has one `backups` HTTP
+  owner; online backup integrity remains a persistence responsibility.
 - `crates/swarm-persistence/src/lib.rs` is roughly 3,700 lines although Jira,
   workers, decisions, notifications, dispatches, and outcomes have begun moving
   to focused modules. The content-free control-room event aggregate now owns
