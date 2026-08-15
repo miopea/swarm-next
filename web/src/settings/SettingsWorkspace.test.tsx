@@ -121,7 +121,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("briefly stops 1 active worker");
   expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("Active commands can be interrupted");
   expect(screen.getByLabelText("App and API status")).toHaveTextContent("App and APIApp and API are currentActivated");
-  expect(screen.getByLabelText("App and API status")).toHaveTextContent("the working copy matches, so no reload is pending");
+  expect(screen.getByLabelText("App and API status")).toHaveTextContent("activated automatically after its product-code build passed health checks");
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
   expect(screen.getByRole("group", { name: "Confirm worker engine update" })).toHaveTextContent("Restart 1 active worker now?");
   fireEvent.click(screen.getByRole("button", { name: "Stop workers and update" }));
