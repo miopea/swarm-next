@@ -542,27 +542,27 @@ async function checkSurface(browser, surface) {
       fullPage: true,
     });
     await page.getByRole("button", { name: "Close names" }).click();
-    const personalGuide = page.getByRole("list", { name: "How to join an Apiary" });
-    const keeperGuide = page.getByRole("list", { name: "How to invite a Hive" });
-    const apiaryGuide = await personalGuide.isVisible().catch(() => false) ? personalGuide : keeperGuide;
-    await apiaryGuide.waitFor();
-    const apiaryGuideSteps = await apiaryGuide.locator(":scope > li").count();
-    const personalExchange = await personalGuide.isVisible().catch(() => false);
+    const personalExchangePanel = page.locator(".personal-hive-join");
+    const keeperExchangePanel = page.locator(".apiary-link-invitations");
+    const personalExchange = await personalExchangePanel.isVisible().catch(() => false);
+    const apiaryExchange = personalExchange ? personalExchangePanel : keeperExchangePanel;
+    await apiaryExchange.waitFor();
+    const apiaryGuideSteps = await apiaryExchange.locator(".apiary-transport-boundary > span").count();
     const firstExchangeControl = personalExchange
-      ? page.getByRole("button", { name: "Copy connection link" })
-      : page.getByLabel("Hive connection link");
+      ? page.getByLabel("Keeper invitation link")
+      : page.getByRole("button", { name: "Create invitation link" });
     const secondExchangeControl = personalExchange
-      ? page.getByLabel("Invitation link")
+      ? page.getByText("Review before joining", { exact: true })
       : page.getByText("Hives in this Apiary", { exact: true });
     const apiaryOverflow = await page.locator("#settings-apiary").evaluate((section) => ({
       scrollWidth: section.scrollWidth,
       clientWidth: section.clientWidth,
-      overflowingSteps: [...section.querySelectorAll(".apiary-exchange-guide > li")]
+      overflowingSteps: [...section.querySelectorAll(".apiary-transport-boundary > span")]
         .filter((step) => step.scrollWidth > step.clientWidth + 1).length,
-      overflowingDrops: [...section.querySelectorAll(".apiary-card-drop")]
+      overflowingDrops: [...section.querySelectorAll(".apiary-link-entry")]
         .filter((drop) => drop.scrollWidth > drop.clientWidth + 1).length,
     }));
-    if (apiaryGuideSteps !== 3 || !await firstExchangeControl.isVisible() || !await secondExchangeControl.isVisible()) {
+    if (apiaryGuideSteps !== 2 || !await firstExchangeControl.isVisible() || !await secondExchangeControl.isVisible()) {
       throw new Error(`${surface.name}: Apiary invitation exchange is incomplete`);
     }
     if (apiaryOverflow.scrollWidth > apiaryOverflow.clientWidth + 1 || apiaryOverflow.overflowingSteps > 0 || apiaryOverflow.overflowingDrops > 0) {

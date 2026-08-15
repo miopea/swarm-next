@@ -903,3 +903,18 @@ the independently updated terminal host through the API to worker settings:
   and authentication preserved across complete browser restarts. API PID
   advanced to `3320473`; terminal-host PID remained `2966127`, preserving the
   active worker session. Every proof browser process closed after the run.
+- Release `0.1.0-dev-99fa13fdfde1` replaces the manual Apiary file exchange
+  with one bounded Keeper link and a durable member-owned outbound poll. The
+  private capability stays server-side, exact Hive identity requires explicit
+  Keeper approval, and the approved signed invitation imports automatically on
+  the member's next poll. A real loopback HTTP integration test spans both Hive
+  APIs and proves that the member initiates every connection. Jira remains a
+  direct per-Hive integration; Keeper polling carries federation state and is
+  the future Native Apiary task channel. The release gate passed 337 Rust tests,
+  warnings-denied Clippy, 213 frontend tests, strict TypeScript, and the
+  production build. The updated live Edge gate passed every primary and Apiary
+  member surface at 1,440-pixel desktop and 412-pixel Android widths with zero
+  overflow, 344 and 316 named controls, both transport-boundary explanations,
+  and authentication preserved across complete browser restarts. API PID
+  advanced to `3367448`; terminal-host PID remained `2966127`, preserving the
+  active worker session. Every proof browser context closed after the run.
