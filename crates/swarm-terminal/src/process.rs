@@ -156,6 +156,12 @@ impl ProcessTerminalSession {
         command_builder.env("FORCE_COLOR", "3");
         command_builder.env("CLICOLOR_FORCE", "1");
         command_builder.env_remove("NO_COLOR");
+        // Claude's flicker-free renderer otherwise selects the alternate screen,
+        // where xterm intentionally has no scrollback. Keep Claude in the main
+        // buffer so operators can review bounded history and restored snapshots.
+        if is_claude_executable(&command.executable) {
+            command_builder.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
+        }
         let child = pair
             .slave
             .spawn_command(command_builder)
@@ -354,6 +360,12 @@ impl ProcessTerminalSession {
     pub fn reader_running(&self) -> bool {
         self.reader_running.load(Ordering::Acquire)
     }
+}
+
+fn is_claude_executable(executable: &std::path::Path) -> bool {
+    executable
+        .file_name()
+        .is_some_and(|name| name == "claude" || name == "claude.exe")
 }
 
 fn resume_has_output(resume: &Resume) -> bool {
@@ -680,7 +692,9 @@ fn terminal_error(error: impl std::fmt::Display) -> SessionRegistryError {
 #[cfg(all(test, unix))]
 mod tests {
     use std::{
-        env, thread,
+        env,
+        path::Path,
+        thread,
         time::{Duration, Instant},
     };
 
@@ -694,6 +708,15 @@ mod tests {
             arguments: vec!["-lc".into(), script.into()],
             working_directory: env::temp_dir(),
         }
+    }
+
+    #[test]
+    fn only_claude_provider_executables_disable_the_alternate_screen() {
+        assert!(is_claude_executable(Path::new("claude")));
+        assert!(is_claude_executable(Path::new("/opt/bin/claude")));
+        assert!(is_claude_executable(Path::new("C:/tools/claude.exe")));
+        assert!(!is_claude_executable(Path::new("codex")));
+        assert!(!is_claude_executable(Path::new("claude-helper")));
     }
 
     fn output_until(session: &ProcessTerminalSession, text: &str) -> String {
