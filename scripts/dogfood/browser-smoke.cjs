@@ -326,11 +326,18 @@ async function checkSurface(browser, surface) {
     }
     const apiaryJump = settingsNavigation.getByRole("button", { name: "Apiary", exact: true });
     await apiaryJump.click();
-    const apiaryGuide = page.getByRole("list", { name: "How to join an Apiary" });
+    const personalGuide = page.getByRole("list", { name: "How to join an Apiary" });
+    const keeperGuide = page.getByRole("list", { name: "How to invite a Hive" });
+    const apiaryGuide = await personalGuide.isVisible().catch(() => false) ? personalGuide : keeperGuide;
     await apiaryGuide.waitFor();
     const apiaryGuideSteps = await apiaryGuide.locator(":scope > li").count();
-    const connectionCardControl = page.getByRole("button", { name: "Download connection card" });
-    const invitationControl = page.getByLabel("Choose Apiary invitation");
+    const personalExchange = await personalGuide.isVisible().catch(() => false);
+    const firstExchangeControl = personalExchange
+      ? page.getByRole("button", { name: "Download connection card" })
+      : page.getByLabel("Choose Hive connection card");
+    const secondExchangeControl = personalExchange
+      ? page.getByLabel("Choose Apiary invitation")
+      : page.getByRole("heading", { name: "Hives in this Apiary" });
     const apiaryOverflow = await page.locator("#settings-apiary").evaluate((section) => ({
       scrollWidth: section.scrollWidth,
       clientWidth: section.clientWidth,
@@ -339,7 +346,7 @@ async function checkSurface(browser, surface) {
       overflowingDrops: [...section.querySelectorAll(".apiary-card-drop")]
         .filter((drop) => drop.scrollWidth > drop.clientWidth + 1).length,
     }));
-    if (apiaryGuideSteps !== 3 || !await connectionCardControl.isVisible() || !await invitationControl.isVisible()) {
+    if (apiaryGuideSteps !== 3 || !await firstExchangeControl.isVisible() || !await secondExchangeControl.isVisible()) {
       throw new Error(`${surface.name}: Apiary invitation exchange is incomplete`);
     }
     if (apiaryOverflow.scrollWidth > apiaryOverflow.clientWidth + 1 || apiaryOverflow.overflowingSteps > 0 || apiaryOverflow.overflowingDrops > 0) {
