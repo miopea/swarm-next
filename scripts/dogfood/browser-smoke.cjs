@@ -251,7 +251,8 @@ async function checkSurface(browser, surface) {
         await page.getByRole("tab", { name: "Activity", exact: true }).click();
         await page.getByRole("heading", { name: "What changed recently" }).waitFor();
         const activityRows = page.locator(".work-activity-list > li");
-        if (await activityRows.count() === 0) throw new Error(`${surface.name}: durable work activity is empty`);
+        await activityRows.first().waitFor({ timeout: 15_000 }).catch(() => undefined);
+        if (await activityRows.count() === 0) throw new Error(`${surface.name}: durable work activity is empty after loading`);
         const activityActors = page.locator(".activity-actor");
         if (await activityActors.count() === 0) throw new Error(`${surface.name}: durable work activity has no actor provenance`);
         const actorClasses = await activityActors.evaluateAll((actors) => actors.map((actor) => actor.className));
@@ -259,6 +260,7 @@ async function checkSurface(browser, surface) {
         if (!selectedActor) throw new Error(`${surface.name}: durable work activity exposes an unknown actor`);
         const activitySource = page.locator(".work-activity-controls").getByRole("combobox", { name: "Source", exact: true });
         await activitySource.selectOption(selectedActor);
+        await activityRows.first().waitFor({ timeout: 15_000 }).catch(() => undefined);
         if (await activityRows.count() === 0) throw new Error(`${surface.name}: actor activity filter has no durable events`);
         const mismatchedActors = await activityActors.evaluateAll((actors, expected) => actors
           .filter((actor) => !actor.classList.contains(`actor-${expected}`)).length, selectedActor);
