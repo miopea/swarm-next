@@ -782,3 +782,15 @@ the independently updated terminal host through the API to worker settings:
   complete browser restarts. API PID advanced to `3199255`; terminal-host PID
   remained `2966127`, preserving the active worker session. Every proof browser
   process closed after the run.
+- Release `0.1.0-dev-5e11567a2a3f` gives the authenticated control-room event
+  feed one focused Rust HTTP owner for cursor normalization, bounded long
+  polling, resumable page delivery, stale-cursor reset, and no-store response
+  policy. Its focused private/resumable/content-free test and the full release
+  gate passed: 331 Rust tests, warnings-denied Clippy, 213 frontend tests,
+  strict TypeScript, and the production build. Exact live Edge acceptance
+  passed every primary and Apiary member surface at 1,440-pixel desktop and
+  412-pixel Android widths with zero overflow, 345 and 314 named controls, all
+  three Apiary guide steps, and authentication preserved across complete
+  browser restarts. API PID advanced to `3204299`; terminal-host PID remained
+  `2966127`, preserving the active worker session. Every proof browser process
+  closed after the run.
