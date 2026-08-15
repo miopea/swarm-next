@@ -234,6 +234,7 @@ async function checkSurface(browser, surface) {
     let jiraIssueReview = false;
     let jiraIssueFilter = false;
     let emailIntakeReview = false;
+    let activityReview = false;
     const navigationTargets = [
       { name: "needs-you", nav: /Needs you/, ready: () => page.getByRole("heading", { name: "Needs you" }) },
       { name: "tasks", nav: /Tasks/, ready: () => page.getByRole("heading", { name: "Task board" }) },
@@ -246,6 +247,26 @@ async function checkSurface(browser, surface) {
     for (const target of navigationTargets) {
       await page.getByRole("button", { name: target.nav }).click();
       await target.ready().first().waitFor();
+      if (target.name === "needs-you") {
+        await page.getByRole("tab", { name: "Activity", exact: true }).click();
+        await page.getByRole("heading", { name: "What changed recently" }).waitFor();
+        const activityRows = page.locator(".work-activity-list > li");
+        if (await activityRows.count() === 0) throw new Error(`${surface.name}: durable work activity is empty`);
+        const activityBounds = await page.locator(".work-activity").evaluate((element) => ({
+          scrollWidth: element.scrollWidth,
+          clientWidth: element.clientWidth,
+        }));
+        if (activityBounds.scrollWidth > activityBounds.clientWidth + 1) {
+          throw new Error(`${surface.name}: durable work activity is horizontally clipped`);
+        }
+        await page.getByLabel("Show").selectOption("changes");
+        if (await activityRows.count() === 0) throw new Error(`${surface.name}: change activity filter has no durable events`);
+        await page.getByRole("button", { name: "Refresh" }).click();
+        await activityRows.first().waitFor();
+        await page.screenshot({ path: path.join(outputRoot, `${surface.name}-activity.png`), fullPage: true });
+        activityReview = true;
+        await page.getByRole("tab", { name: /Needs you/ }).click();
+      }
       if (target.name === "tasks") {
         const taskTitleVisible = await page.getByLabel("Task title").isVisible().catch(() => false);
         if (taskTitleVisible) throw new Error(`${surface.name}: task composer obscures active work by default`);
@@ -622,7 +643,7 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
     accessibleControlCount += await verifyAccessibleControls(page, `${surface.name}/settings-detail`);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, identityFields, identityEditorOverflow, apiaryGuideSteps, apiaryOverflow, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, jiraIssueFilter, emailIntakeReview, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, identityFields, identityEditorOverflow, apiaryGuideSteps, apiaryOverflow, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, jiraIssueFilter, emailIntakeReview, activityReview, backup, status: "passed" };
   } finally {
     await context.close();
   }
