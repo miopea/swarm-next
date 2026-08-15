@@ -119,6 +119,10 @@ async function checkMemberSurface(browser, surface) {
     }
     const accessibleControlCount = await verifyAccessibleControls(page, `${surface.name}/member-apiary`);
     await page.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-member.png`), fullPage: true });
+    if (surface.mobile) {
+      await memberControl.locator(".keeper-panel").last().scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-member-lower.png`), fullPage: true });
+    }
     if (errors.length) throw new Error(`${surface.name}/member-apiary: browser errors: ${errors.join(" | ")}`);
     return { surface: surface.name, ...dimensions, accessibleControlCount, status: "passed" };
   } finally {
