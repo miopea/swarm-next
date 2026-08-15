@@ -986,9 +986,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .keeper-hero { grid-template-columns: 48px minmax(0, 1fr); padding: 14px; gap: 11px; }
   .keeper-hero-mark { width: 48px; height: 48px; }
   .keeper-hero-mark .bee-mascot { width: 53px; height: 53px; }
-  .keeper-hero .apiary-backend-badge { grid-column: 1; justify-self: start; }
+  .keeper-hero .apiary-backend-badge { grid-column: 1; justify-self: start; white-space: nowrap; }
   .keeper-hero button { grid-column: 2; width: 100%; }
   .keeper-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .keeper-summary > div:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .keeper-summary > div:nth-child(2) { border-right: 0; }
   .keeper-summary > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .keeper-panel { padding: 14px; }
