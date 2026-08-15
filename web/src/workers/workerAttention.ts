@@ -26,3 +26,9 @@ export function workerAttention(worker: Worker, now = Date.now()): WorkerAttenti
     : worker.attention_state;
   return { state, ...presentation[state] };
 }
+
+export function workerSwitcherDetail(worker: Worker, assignedTaskTitle?: string): string {
+  const state = worker.running ? workerAttention(worker).label : "Sleeping";
+  if (assignedTaskTitle) return `${state} · ${assignedTaskTitle}`;
+  return worker.running ? state : "Sleeping · tap to wake";
+}

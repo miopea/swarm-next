@@ -62,7 +62,7 @@ import {
 import BeeMascot from "./brand/BeeMascot";
 import KeeperControlRoom from "./apiary/KeeperControlRoom";
 import MemberControlRoom from "./apiary/MemberControlRoom";
-import { workerAttention } from "./workers/workerAttention";
+import { workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
 import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
@@ -910,7 +910,7 @@ export function App() {
                       <span className="worker-avatar"><BeeMascot expression={workerExpression(worker)} /></span>
                       <span className="mobile-worker-choice-copy">
                         <span><strong>{worker.name}</strong><small>{worker.role === "queen" ? "Queen" : repositoryName(worker.workspace)}</small></span>
-                        <small>{worker.runtime_error ?? assignedTask?.title ?? (worker.running ? workerAttentionLabel(worker) : "Sleeping · tap to wake")}</small>
+                        <small>{worker.runtime_error ?? workerSwitcherDetail(worker, assignedTask?.title)}</small>
                       </span>
                       <span className={`presence ${worker.running ? "online" : "offline"}`} aria-label={worker.running ? workerAttentionLabel(worker) : "Sleeping"} />
                     </button>

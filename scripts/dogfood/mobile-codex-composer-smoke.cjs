@@ -71,6 +71,17 @@ async function main() {
       await page.screenshot({ path: path.join(outputRoot, "android-codex-submit-failed.png"), fullPage: false });
       throw new Error(`Codex mobile submission marker was not visible; terminal tail: ${visibleTerminal?.slice(-800)}`);
     }
+    await switcher.click();
+    const currentChoice = page.locator(".mobile-worker-choice").filter({ hasText: workerName }).first();
+    try {
+      await currentChoice.getByText(/^Resting(?: ·|$)/).waitFor({ timeout: 15_000 });
+    } catch {
+      const choiceText = await currentChoice.innerText().catch(() => "<unavailable>");
+      const presenceLabel = await currentChoice.locator(".presence").getAttribute("aria-label").catch(() => null);
+      throw new Error(`Completed provider turn did not settle to Resting; choice=${JSON.stringify(choiceText)} presence=${JSON.stringify(presenceLabel)}`);
+    }
+    await page.screenshot({ path: path.join(outputRoot, "android-provider-resting.png"), fullPage: false });
+    await page.getByRole("button", { name: "Close" }).click();
     if (errors.length) throw new Error(`browser errors: ${errors.join(" | ")}`);
     await page.screenshot({ path: path.join(outputRoot, "android-codex-submitted.png"), fullPage: false });
     process.stdout.write(`${JSON.stringify({ baseUrl, workerName, expectedMarker, wokeWorker, status: "passed" }, null, 2)}\n`);

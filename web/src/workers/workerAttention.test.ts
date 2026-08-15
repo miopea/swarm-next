@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { Worker } from "../api";
-import { workerAttention } from "./workerAttention";
+import { workerAttention, workerSwitcherDetail } from "./workerAttention";
 
 const worker: Worker = {
   id: "worker", hive_id: "hive", name: "Daisy", role: "worker", provider: "claude_code",
@@ -22,4 +22,10 @@ test("an expired operator lease presents as resting everywhere", () => {
     label: "Resting",
     expression: "available",
   });
+});
+
+test("mobile worker details keep operational state visible before task context", () => {
+  expect(workerSwitcherDetail({ ...worker, attention_state: "resting" }, "Review the release")).toBe("Resting · Review the release");
+  expect(workerSwitcherDetail({ ...worker, running: false, attention_state: "sleeping" }, "Review the release")).toBe("Sleeping · Review the release");
+  expect(workerSwitcherDetail({ ...worker, running: false, attention_state: "sleeping" })).toBe("Sleeping · tap to wake");
 });
