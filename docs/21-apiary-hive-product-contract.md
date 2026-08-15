@@ -34,6 +34,15 @@ the local Hive becomes the first member, and the selected shared-work backend
 is immutable. A Hive that is already federated cannot found another Apiary;
 changing organizations remains leave-then-join rather than conversion.
 
+The local operator may rename her Hive as a bounded public-label change. A
+Keeper may likewise rename the active Apiary; Members can see that name but
+cannot change it. Renaming never changes durable Hive, operator, Apiary, node,
+or signing identities; membership, backend, policy revision, projects, tasks,
+repositories, credentials, and ownership remain intact. Apiary renames are
+append-only lifecycle events. Previously issued signed cards and invitations
+remain immutable snapshots, while newly issued public identity material uses
+the current label.
+
 The executable invitation foundation is durable and fail-closed. A Keeper may
 issue one bounded pending invitation per Apiary/Hive pair only while the target
 Hive is personal. Acceptance uses one atomic transaction: the matching current

@@ -4,8 +4,39 @@ import {
   assignTask,
   fetchFederationJoinInvitations,
   recoverTransientRuntime,
+  renameApiary,
+  renameHive,
   RuntimeRequestError,
 } from "./api";
+
+test("renames public Hive and Apiary labels through bounded private commands", async () => {
+  const hive = {
+    operator: { id: "operator-1", display_name: "Bea" },
+    hive: { id: "hive-1", name: "Clover Hive", operator_id: "operator-1", apiary_id: "apiary-1" },
+    apiary_context: {
+      mode: "federated" as const,
+      apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const },
+      local_role: "keeper" as const,
+    },
+  };
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify(hive), { status: 200, headers: { "content-type": "application/json" } }))
+    .mockResolvedValueOnce(new Response(JSON.stringify(hive.apiary_context), { status: 200, headers: { "content-type": "application/json" } }));
+  vi.stubGlobal("fetch", fetch);
+
+  await expect(renameHive("operator", "Clover Hive")).resolves.toEqual(hive);
+  await expect(renameApiary("operator", "Grand Garden")).resolves.toEqual(hive.apiary_context);
+
+  expect(fetch).toHaveBeenNthCalledWith(1, "/api/v1/hive", expect.objectContaining({
+    method: "PUT",
+    body: JSON.stringify({ name: "Clover Hive" }),
+  }));
+  expect(fetch).toHaveBeenNthCalledWith(2, "/api/v1/apiary", expect.objectContaining({
+    method: "PUT",
+    body: JSON.stringify({ name: "Grand Garden" }),
+  }));
+  vi.unstubAllGlobals();
+});
 
 test("sends an explicit null worker when returning a task to the queue", async () => {
   const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({

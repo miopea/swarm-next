@@ -93,7 +93,7 @@ Enforcement of Steward-scoped remote actions remains staged work.
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
 | SQLite persistence | Keep/Redesign | Embedded source of truth with one owner, transactional migrations, backups, and integrity checks. |
-| Configuration UI | Redesign | Human-oriented settings grouped by outcome; durable workers can be created, renamed, assigned an always-active policy, and ordered without path entry. No competing YAML/DB precedence after import. |
+| Configuration UI | Redesign | Human-oriented settings grouped by outcome; durable workers can be created, renamed, assigned an always-active policy, and ordered without path entry. Local Hive names and Keeper-owned Apiary names are editable public labels without changing durable identity, ownership, membership, or signing keys. No competing YAML/DB precedence after import. |
 | CLI | Redesign | Installation, service, diagnostics, import/export, and automation only; normal operation remains web-first. |
 | Self-update and restart | Redesign | Atomic update, compatibility check, worker preservation, health verification, and rollback. |
 | Health/readiness/resource diagnostics | Keep/Redesign | First-class subsystem health and correlated traces from day one. |

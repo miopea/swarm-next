@@ -56,13 +56,22 @@ pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
 const MAX_TASK_TITLE_BYTES: usize = 240;
 const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
+const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 41;
+const CURRENT_SCHEMA_VERSION: i64 = 42;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
+
+pub(crate) fn normalize_public_identity_name(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()
+        && value.len() <= MAX_PUBLIC_IDENTITY_NAME_BYTES
+        && !value.chars().any(char::is_control))
+    .then_some(value)
+}
 
 #[derive(Clone)]
 pub struct TaskStore {
@@ -81,6 +90,8 @@ pub enum TaskStoreError {
     InvalidApiaryInvitation,
     #[error("Apiary configuration is invalid")]
     InvalidApiary,
+    #[error("Hive identity is invalid")]
+    InvalidHiveIdentity,
     #[error("this Hive must be personal before it can found an Apiary")]
     ApiaryMembershipConflict,
     #[error("Apiary was not found")]
@@ -359,6 +370,40 @@ impl TaskStore {
                 },
             )
             .map_err(TaskStoreError::from)
+    }
+
+    /// Renames only the Hive owned by this installation. Membership, operator,
+    /// federation keys, workers, tasks, and repositories are unchanged.
+    ///
+    /// # Errors
+    /// Rejects blank, oversized, control-character, or invalid-time input and
+    /// unavailable persistence.
+    pub fn rename_local_hive(&self, name: &str, now: i64) -> Result<HiveIdentity, TaskStoreError> {
+        let name =
+            normalize_public_identity_name(name).ok_or(TaskStoreError::InvalidHiveIdentity)?;
+        if now < 0 {
+            return Err(TaskStoreError::InvalidHiveIdentity);
+        }
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        if transaction.execute(
+            "UPDATE hives SET name = ?1, updated_at = ?2
+             WHERE id = ?3 AND operator_id = ?4",
+            params![
+                name,
+                now,
+                identity.hive.id.to_string(),
+                identity.operator.id.to_string()
+            ],
+        )? != 1
+        {
+            return Err(TaskStoreError::InvalidHiveIdentity);
+        }
+        insert_control_room_event(&transaction, ControlRoomEventKind::RuntimeChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.local_hive_identity()
     }
 
     /// Returns the local Hive's optional federation without inferring any
@@ -1352,6 +1397,9 @@ fn migrate_schema(
         email::migrate_email_intake(transaction)?;
     } else if schema_version < 41 {
         email::migrate_email_multi_source(transaction)?;
+    }
+    if schema_version < 42 {
+        apiary::migrate_apiary_identity_events(transaction)?;
     }
     Ok(())
 }

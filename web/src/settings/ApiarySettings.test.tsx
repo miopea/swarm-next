@@ -14,7 +14,7 @@ test("explains when this Hive has a remotely reachable Apiary URL", async () => 
         reachability: "remote_https",
       });
     }
-    if (url.endsWith("/api/v1/federation/join-invitations")) return ok([]);
+    if (url.endsWith("/api/v1/apiary/join-invitations")) return ok([]);
     throw new Error(`Unexpected request: ${url}`);
   }));
 
@@ -40,7 +40,7 @@ test("warns that a loopback Apiary URL reaches only this machine", async () => {
         reachability: "local_only",
       });
     }
-    if (url.endsWith("/api/v1/federation/join-invitations")) return ok([]);
+    if (url.endsWith("/api/v1/apiary/join-invitations")) return ok([]);
     throw new Error(`Unexpected request: ${url}`);
   }));
 
@@ -48,6 +48,33 @@ test("warns that a loopback Apiary URL reaches only this machine", async () => {
 
   expect(await screen.findByText("Local testing only")).toBeInTheDocument();
   expect(screen.getByText(/reaches only this machine/i)).toBeInTheDocument();
+});
+
+test("renames the local Hive without changing its durable identity", async () => {
+  const onHiveIdentityChange = vi.fn();
+  const renamed = personalIdentity();
+  renamed.hive.name = "Clover Hive";
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/apiary/transport-readiness")) {
+      return ok({ configured: false, endpoint: null, reachability: "unavailable" });
+    }
+    if (url.endsWith("/api/v1/apiary/join-invitations")) return ok([]);
+    if (url === "/api/v1/hive" && init?.method === "PUT") {
+      expect(JSON.parse(String(init.body))).toEqual({ name: "Clover Hive" });
+      return ok(renamed);
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={onHiveIdentityChange} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit names" }));
+  expect(screen.getByRole("group", { name: "Hive and Apiary names" })).toHaveTextContent(/repositories, tasks, Jira projects, and federation keys do not change/i);
+  fireEvent.change(screen.getByLabelText("Hive name"), { target: { value: "  Clover Hive  " } });
+  fireEvent.click(screen.getByRole("button", { name: "Save Hive name" }));
+
+  await vi.waitFor(() => expect(onHiveIdentityChange).toHaveBeenCalledWith(renamed));
+  expect(await screen.findByRole("status")).toHaveTextContent("This Hive is now named Clover Hive");
 });
 
 afterEach(() => {

@@ -670,6 +670,15 @@ export async function fetchHive(operatorToken: string): Promise<HiveIdentity> {
   return response.json() as Promise<HiveIdentity>;
 }
 
+export async function renameHive(operatorToken: string, name: string): Promise<HiveIdentity> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/hive", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  return response.json() as Promise<HiveIdentity>;
+}
+
 export async function createApiary(
   operatorToken: string,
   name: string,
@@ -679,6 +688,18 @@ export async function createApiary(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, shared_work_backend: sharedWorkBackend }),
+  });
+  return response.json() as Promise<LocalApiaryContext>;
+}
+
+export async function renameApiary(
+  operatorToken: string,
+  name: string,
+): Promise<LocalApiaryContext> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
   });
   return response.json() as Promise<LocalApiaryContext>;
 }

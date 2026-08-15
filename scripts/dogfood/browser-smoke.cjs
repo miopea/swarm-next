@@ -360,6 +360,24 @@ async function checkSurface(browser, surface) {
     }
     const apiaryJump = settingsNavigation.getByRole("button", { name: "Apiary", exact: true });
     await apiaryJump.click();
+    await page.getByRole("button", { name: "Edit names" }).click();
+    const identityEditor = page.getByRole("group", { name: "Hive and Apiary names" });
+    await identityEditor.waitFor();
+    const identityFields = await identityEditor.locator("input").count();
+    const identityEditorOverflow = await identityEditor.evaluate((editor) => ({
+      scrollWidth: editor.scrollWidth,
+      clientWidth: editor.clientWidth,
+      overflowingControls: [...editor.querySelectorAll("input, button")]
+        .filter((control) => control.scrollWidth > control.clientWidth + 1).length,
+    }));
+    if (identityFields < 1 || identityEditorOverflow.scrollWidth > identityEditorOverflow.clientWidth + 1 || identityEditorOverflow.overflowingControls > 0) {
+      throw new Error(`${surface.name}: Hive and Apiary name editor is incomplete or overflowing`);
+    }
+    await page.screenshot({
+      path: path.join(outputRoot, `${surface.name}-settings-apiary-names.png`),
+      fullPage: true,
+    });
+    await page.getByRole("button", { name: "Close names" }).click();
     const personalGuide = page.getByRole("list", { name: "How to join an Apiary" });
     const keeperGuide = page.getByRole("list", { name: "How to invite a Hive" });
     const apiaryGuide = await personalGuide.isVisible().catch(() => false) ? personalGuide : keeperGuide;
@@ -473,7 +491,7 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
     accessibleControlCount += await verifyAccessibleControls(page, `${surface.name}/settings-detail`);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, apiaryGuideSteps, apiaryOverflow, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, jiraIssueFilter, emailIntakeReview, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, identityFields, identityEditorOverflow, apiaryGuideSteps, apiaryOverflow, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, jiraIssueFilter, emailIntakeReview, backup, status: "passed" };
   } finally {
     await context.close();
   }

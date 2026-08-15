@@ -22,6 +22,8 @@ import {
   pinApiaryHiveCandidate,
   prepareFederationJoin,
   promoteApiaryJiraProject,
+  renameApiary,
+  renameHive,
   revokeApiaryStewardship,
   setApiaryStewardship,
   type ApiaryCollapseReadiness,
@@ -62,6 +64,9 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const personal = !context || context.mode === "personal";
   const [name, setName] = useState("");
   const [confirmCreate, setConfirmCreate] = useState(false);
+  const [editingIdentity, setEditingIdentity] = useState(false);
+  const [hiveName, setHiveName] = useState(hiveIdentity?.hive.name ?? "");
+  const [apiaryName, setApiaryName] = useState(context?.mode === "federated" ? context.apiary.name : "");
   const [confirmCollapse, setConfirmCollapse] = useState(false);
   const [readiness, setReadiness] = useState<ApiaryCollapseReadiness>();
   const [promotedProjects, setPromotedProjects] = useState<ApiaryJiraProject[]>([]);
@@ -89,6 +94,12 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [error, setError] = useState("");
   const keeper = context?.mode === "federated" && context.local_role === "keeper";
   const member = context?.mode === "federated" && context.local_role === "member";
+
+  useEffect(() => {
+    if (editingIdentity) return;
+    setHiveName(hiveIdentity?.hive.name ?? "");
+    setApiaryName(context?.mode === "federated" ? context.apiary.name : "");
+  }, [editingIdentity, hiveIdentity?.hive.name, context]);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,6 +208,42 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   async function refreshIdentity() {
     const identity = await fetchHive(operatorToken);
     onHiveIdentityChange(identity);
+  }
+
+  async function saveHiveName() {
+    const nextName = hiveName.trim();
+    if (!nextName) return;
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      const identity = await renameHive(operatorToken, nextName);
+      onHiveIdentityChange(identity);
+      setHiveName(identity.hive.name);
+      setMessage(`This Hive is now named ${identity.hive.name}.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The Hive name could not be saved.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function saveApiaryName() {
+    const nextName = apiaryName.trim();
+    if (!nextName || !keeper) return;
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      await renameApiary(operatorToken, nextName);
+      await refreshIdentity();
+      setApiaryName(nextName);
+      setMessage(`This Apiary is now named ${nextName}.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The Apiary name could not be saved.");
+    } finally {
+      setWorking(false);
+    }
   }
 
   function editSteward(operatorId: string) {
@@ -447,6 +494,39 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   return (
     <section id="settings-apiary" className="settings-card apiary-settings" aria-labelledby="apiary-heading">
       <div><p className="eyebrow">Collaboration</p><h3 id="apiary-heading">Your Apiary</h3></div>
+      {hiveIdentity ? (
+        <div className="apiary-identity-panel">
+          <div className="apiary-identity-summary">
+            <span><small>This Hive</small><strong>{hiveIdentity.hive.name}</strong></span>
+            {context?.mode === "federated" ? (
+              <span><small>{context.local_role === "keeper" ? "Keeper of" : "Member of"}</small><strong>{context.apiary.name}</strong></span>
+            ) : <span><small>Mode</small><strong>Personal Hive</strong></span>}
+            {context?.mode === "federated" ? <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span> : null}
+            <button className="secondary-button" disabled={working} onClick={() => setEditingIdentity((current) => !current)}>{editingIdentity ? "Close names" : "Edit names"}</button>
+          </div>
+          {editingIdentity ? (
+            <div className="apiary-identity-editor" role="group" aria-label="Hive and Apiary names">
+              <label className="field-stack" htmlFor="local-hive-name">
+                <span>Hive name</span>
+                <input id="local-hive-name" value={hiveName} maxLength={120} onChange={(event) => setHiveName(event.target.value)} />
+              </label>
+              <button className="secondary-button" disabled={working || !hiveName.trim() || hiveName.trim() === hiveIdentity.hive.name} onClick={() => void saveHiveName()}>Save Hive name</button>
+              {context?.mode === "federated" ? (
+                <>
+                  <label className="field-stack" htmlFor="current-apiary-name">
+                    <span>Apiary name</span>
+                    <input id="current-apiary-name" value={apiaryName} maxLength={120} disabled={!keeper} onChange={(event) => setApiaryName(event.target.value)} />
+                  </label>
+                  {keeper ? (
+                    <button className="secondary-button" disabled={working || !apiaryName.trim() || apiaryName.trim() === context.apiary.name} onClick={() => void saveApiaryName()}>Save Apiary name</button>
+                  ) : <small>Only the Keeper can rename the Apiary.</small>}
+                </>
+              ) : null}
+              <p className="privacy-note">Names update the public roster. Worker ownership, repositories, tasks, Jira projects, and federation keys do not change.</p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {personal ? (
         <>
           <p>Your personal Hive remains fully independent. Form an Apiary only when separate one-operator Hives should share Jira work and coordination.</p>
@@ -581,10 +661,6 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
         </>
       ) : (
         <>
-          <div className="apiary-summary">
-            <span><strong>{context.apiary.name}</strong><small>{context.local_role === "keeper" ? "You are the Keeper" : "Member Hive"}</small></span>
-            <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span>
-          </div>
           <p>Workers, repositories, provider sessions, credentials, and private tasks remain owned by this Hive.</p>
           {member ? (
             <div className="apiary-member-sync" aria-label="Keeper synchronization status">

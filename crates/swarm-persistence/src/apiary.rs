@@ -3,15 +3,17 @@ use std::collections::HashSet;
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryId, ApiaryInvitation, ApiaryInvitationId,
-    ApiaryInvitationState, ApiaryJiraProject, ApiaryJoinReadiness, HiveId, JiraProjectBindingId,
-    JiraProjectScope, LocalApiaryContext, LocalApiaryRole, OperatorId, SharedWorkBackend,
-    StewardCapability, Stewardship, StewardshipId,
+    ApiaryInvitationState, ApiaryJiraProject, ApiaryJoinReadiness, ControlRoomEventKind, HiveId,
+    JiraProjectBindingId, JiraProjectScope, LocalApiaryContext, LocalApiaryRole, OperatorId,
+    SharedWorkBackend, StewardCapability, Stewardship, StewardshipId,
 };
 
-use crate::{TaskStore, TaskStoreError, parse_domain_id};
+use crate::{
+    TaskStore, TaskStoreError, insert_control_room_event, normalize_public_identity_name,
+    parse_domain_id,
+};
 
 const MAX_INVITATION_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
-const MAX_APIARY_NAME_BYTES: usize = 120;
 const MAX_PROJECT_ID_BYTES: usize = 128;
 const MAX_PROJECT_KEY_BYTES: usize = 64;
 const MAX_PROJECT_NAME_BYTES: usize = 240;
@@ -53,8 +55,10 @@ impl TaskStore {
         shared_work_backend: swarm_domain::SharedWorkBackend,
         now: i64,
     ) -> Result<swarm_domain::LocalApiaryContext, TaskStoreError> {
-        let name = name.trim();
-        if now < 0 || name.is_empty() || name.len() > MAX_APIARY_NAME_BYTES {
+        let Some(name) = normalize_public_identity_name(name) else {
+            return Err(TaskStoreError::InvalidApiary);
+        };
+        if now < 0 {
             return Err(TaskStoreError::InvalidApiary);
         }
         let identity = self.local_hive_identity()?;
@@ -97,6 +101,68 @@ impl TaskStore {
                 now
             ],
         )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::RuntimeChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.local_apiary_context()
+    }
+
+    /// Renames the current Apiary without changing its backend, policy,
+    /// membership, projects, claims, or cryptographic identity. Only the
+    /// current Keeper may make this public-label change.
+    ///
+    /// # Errors
+    /// Rejects invalid naming/time, personal or Member Hives, collapsed
+    /// Apiaries, and unavailable persistence.
+    pub fn rename_local_apiary(
+        &self,
+        name: &str,
+        now: i64,
+    ) -> Result<LocalApiaryContext, TaskStoreError> {
+        let Some(name) = normalize_public_identity_name(name) else {
+            return Err(TaskStoreError::InvalidApiary);
+        };
+        if now < 0 {
+            return Err(TaskStoreError::InvalidApiary);
+        }
+        let identity = self.local_hive_identity()?;
+        let LocalApiaryContext::Federated { apiary, local_role } = self.local_apiary_context()?
+        else {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        };
+        if local_role != LocalApiaryRole::Keeper
+            || apiary.keeper_operator_id != identity.operator.id
+        {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        }
+
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        if transaction.execute(
+            "UPDATE apiaries SET name = ?1, updated_at = ?2
+             WHERE id = ?3 AND keeper_operator_id = ?4 AND collapsed_at IS NULL",
+            params![
+                name,
+                now,
+                apiary.id.to_string(),
+                identity.operator.id.to_string()
+            ],
+        )? != 1
+        {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        }
+        transaction.execute(
+            "INSERT INTO apiary_lifecycle_events
+                (apiary_id, actor_operator_id, hive_id, kind, occurred_at)
+             VALUES (?1, ?2, ?3, 'renamed', ?4)",
+            params![
+                apiary.id.to_string(),
+                identity.operator.id.to_string(),
+                identity.hive.id.to_string(),
+                now
+            ],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::RuntimeChanged)?;
         transaction.commit()?;
         drop(connection);
         self.local_apiary_context()
@@ -946,6 +1012,33 @@ pub(super) fn migrate_apiary_lifecycle(
     )
 }
 
+pub(super) fn migrate_apiary_identity_events(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    if !table_exists(transaction, "apiary_lifecycle_events")? {
+        return transaction.execute_batch("PRAGMA user_version = 42;");
+    }
+    transaction.execute_batch(
+        "ALTER TABLE apiary_lifecycle_events RENAME TO apiary_lifecycle_events_v41;
+         CREATE TABLE apiary_lifecycle_events (
+             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             actor_operator_id TEXT NOT NULL REFERENCES operators(id),
+             hive_id TEXT NOT NULL REFERENCES hives(id),
+             kind TEXT NOT NULL CHECK (kind IN ('founded','renamed','collapsed')),
+             occurred_at INTEGER NOT NULL
+         );
+         INSERT INTO apiary_lifecycle_events
+             (sequence, apiary_id, actor_operator_id, hive_id, kind, occurred_at)
+         SELECT sequence, apiary_id, actor_operator_id, hive_id, kind, occurred_at
+         FROM apiary_lifecycle_events_v41;
+         DROP TABLE apiary_lifecycle_events_v41;
+         CREATE INDEX apiary_lifecycle_events_by_apiary
+             ON apiary_lifecycle_events(apiary_id, sequence);
+         PRAGMA user_version = 42;",
+    )
+}
+
 fn collapse_readiness(
     connection: &rusqlite::Connection,
     apiary_id: ApiaryId,
@@ -1307,11 +1400,126 @@ mod tests {
     }
 
     #[test]
+    fn local_identity_names_change_without_changing_durable_ownership() {
+        let store = TaskStore::in_memory().unwrap();
+        let original = store.local_hive_identity().unwrap();
+        let renamed_hive = store.rename_local_hive("  Clover House  ", 5).unwrap();
+        assert_eq!(renamed_hive.hive.name, "Clover House");
+        assert_eq!(renamed_hive.hive.id, original.hive.id);
+        assert_eq!(renamed_hive.hive.operator_id, original.operator.id);
+
+        let context = store
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        let LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected federated context");
+        };
+        let renamed = store.rename_local_apiary("  Grand Garden  ", 20).unwrap();
+        let LocalApiaryContext::Federated {
+            apiary: renamed_apiary,
+            local_role,
+        } = renamed
+        else {
+            panic!("expected federated context");
+        };
+        assert_eq!(renamed_apiary.name, "Grand Garden");
+        assert_eq!(renamed_apiary.id, apiary.id);
+        assert_eq!(renamed_apiary.keeper_operator_id, apiary.keeper_operator_id);
+        assert_eq!(
+            renamed_apiary.shared_work_backend(),
+            SharedWorkBackend::Jira
+        );
+        assert_eq!(renamed_apiary.policy_revision(), apiary.policy_revision());
+        assert_eq!(local_role, LocalApiaryRole::Keeper);
+
+        let connection = store.connection().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT group_concat(kind, ',') FROM apiary_lifecycle_events
+                     WHERE apiary_id = ?1 ORDER BY sequence",
+                    [apiary.id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "founded,renamed"
+        );
+        drop(connection);
+        assert_eq!(
+            store
+                .list_control_room_events(0)
+                .unwrap()
+                .events
+                .iter()
+                .filter(|event| event.kind == ControlRoomEventKind::RuntimeChanged)
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn identity_renaming_rejects_invalid_names_and_non_keepers() {
+        let store = TaskStore::in_memory().unwrap();
+        let invalid_names = [
+            String::new(),
+            "   ".to_string(),
+            "bad\nname".to_string(),
+            "a".repeat(121),
+        ];
+        for name in invalid_names {
+            assert!(matches!(
+                store.rename_local_hive(&name, 1),
+                Err(TaskStoreError::InvalidHiveIdentity)
+            ));
+        }
+        assert!(matches!(
+            store.rename_local_hive("Clover", -1),
+            Err(TaskStoreError::InvalidHiveIdentity)
+        ));
+        assert!(matches!(
+            store.rename_local_apiary("Garden", 1),
+            Err(TaskStoreError::ApiaryKeeperRequired)
+        ));
+
+        let context = store
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, 2)
+            .unwrap();
+        let LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected federated context");
+        };
+        let other_operator = OperatorId::new();
+        let connection = store.connection().unwrap();
+        connection
+            .execute(
+                "INSERT INTO operators (id, display_name) VALUES (?1, ?2)",
+                params![other_operator.to_string(), "Other Keeper"],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE apiaries SET keeper_operator_id = ?1 WHERE id = ?2",
+                params![other_operator.to_string(), apiary.id.to_string()],
+            )
+            .unwrap();
+        drop(connection);
+        assert!(matches!(
+            store.rename_local_apiary("Other Garden", 3),
+            Err(TaskStoreError::ApiaryKeeperRequired)
+        ));
+    }
+
+    #[test]
     fn founding_an_apiary_rejects_invalid_operator_content_without_side_effects() {
         let store = TaskStore::in_memory().unwrap();
-        for (name, now) in [("", 1), ("   ", 1), (&"a".repeat(121), 1), ("Garden", -1)] {
+        let invalid_names = [
+            (String::new(), 1),
+            ("   ".to_string(), 1),
+            ("a".repeat(121), 1),
+            ("Garden".to_string(), -1),
+        ];
+        for (name, now) in invalid_names {
             assert!(matches!(
-                store.create_apiary_for_local_hive(name, SharedWorkBackend::Jira, now),
+                store.create_apiary_for_local_hive(&name, SharedWorkBackend::Jira, now),
                 Err(TaskStoreError::InvalidApiary)
             ));
         }
@@ -1921,6 +2129,62 @@ mod tests {
                 .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
                 .unwrap(),
             29
+        );
+    }
+
+    #[test]
+    fn migrates_schema_v41_to_audited_apiary_renames_without_losing_history() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE operators (id TEXT PRIMARY KEY);
+                 CREATE TABLE apiaries (id TEXT PRIMARY KEY);
+                 CREATE TABLE hives (id TEXT PRIMARY KEY);
+                 CREATE TABLE apiary_lifecycle_events (
+                     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                     apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+                     actor_operator_id TEXT NOT NULL REFERENCES operators(id),
+                     hive_id TEXT NOT NULL REFERENCES hives(id),
+                     kind TEXT NOT NULL CHECK (kind IN ('founded','collapsed')),
+                     occurred_at INTEGER NOT NULL
+                 );
+                 CREATE INDEX apiary_lifecycle_events_by_apiary
+                     ON apiary_lifecycle_events(apiary_id, sequence);
+                 INSERT INTO operators VALUES ('operator-1');
+                 INSERT INTO apiaries VALUES ('apiary-1');
+                 INSERT INTO hives VALUES ('hive-1');
+                 INSERT INTO apiary_lifecycle_events
+                     (apiary_id, actor_operator_id, hive_id, kind, occurred_at)
+                 VALUES ('apiary-1', 'operator-1', 'hive-1', 'founded', 1);
+                 PRAGMA user_version = 41;",
+            )
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        migrate_apiary_identity_events(&transaction).unwrap();
+        transaction.commit().unwrap();
+        connection
+            .execute(
+                "INSERT INTO apiary_lifecycle_events
+                    (apiary_id, actor_operator_id, hive_id, kind, occurred_at)
+                 VALUES ('apiary-1', 'operator-1', 'hive-1', 'renamed', 2)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT group_concat(kind, ',') FROM apiary_lifecycle_events ORDER BY sequence",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "founded,renamed"
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            42
         );
     }
 }

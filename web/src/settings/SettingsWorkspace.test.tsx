@@ -109,9 +109,9 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   fireEvent.click(screen.getByRole("button", { name: "Enable this device" }));
   expect(onEnableNotifications).toHaveBeenCalledOnce();
   expect(screen.getAllByText("Healthy · 0.1.0").length).toBeGreaterThan(0);
-  expect(screen.getByText("Meadow Hive")).toBeInTheDocument();
+  expect(screen.getAllByText("Meadow Hive").length).toBeGreaterThan(0);
   expect(screen.getByText("Bea")).toBeInTheDocument();
-  expect(screen.getByText("Personal Hive")).toBeInTheDocument();
+  expect(screen.getAllByText("Personal Hive").length).toBeGreaterThan(0);
   expect(await screen.findByText("Jira not connected")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Bring Jira into your Hive" }).closest("section")).toHaveTextContent("Owned tasks continue; new shared claims wait.");
   expect(screen.getByText("Live updates").parentElement).toHaveTextContent("Live updatesConnected");

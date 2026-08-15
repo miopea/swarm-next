@@ -1475,6 +1475,11 @@ struct CreateApiaryRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct RenameIdentityRequest {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct AcceptApiaryPolicyRequest {
     policy_revision: u64,
 }
@@ -1775,8 +1780,11 @@ fn api_router(state: AppState) -> Router {
                 .post(create_browser_session)
                 .delete(delete_browser_session),
         )
-        .route("/api/v1/hive", get(local_hive))
-        .route("/api/v1/apiary", post(create_apiary))
+        .route("/api/v1/hive", get(local_hive).put(rename_local_hive))
+        .route(
+            "/api/v1/apiary",
+            post(create_apiary).put(rename_local_apiary),
+        )
         .route("/api/v1/apiary/members", get(apiary_members))
         .route("/api/v1/apiary/stewardships", get(apiary_stewardships))
         .route(
@@ -2151,6 +2159,28 @@ async fn local_hive(
     let identity = task_store(&state)?
         .local_hive_identity()
         .map_err(|error| task_store_error(&error))?;
+    let apiary_context = task_store(&state)?
+        .local_apiary_context()
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(LocalHiveView {
+            identity,
+            apiary_context,
+        }),
+    )
+        .into_response())
+}
+
+async fn rename_local_hive(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<RenameIdentityRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let identity = apiary_service(&state)?
+        .rename_local_hive(&request.name, unix_timestamp())
+        .map_err(application_error)?;
     let apiary_context = task_store(&state)?
         .local_apiary_context()
         .map_err(|error| task_store_error(&error))?;
@@ -2618,6 +2648,18 @@ async fn create_apiary(
         Json(context),
     )
         .into_response())
+}
+
+async fn rename_local_apiary(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<RenameIdentityRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let context = apiary_service(&state)?
+        .rename_local_apiary(&request.name, unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
 }
 
 async fn apiary_collapse_readiness(
@@ -6285,6 +6327,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::InvalidApiary => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_apiary", error.to_string())
         }
+        TaskStoreError::InvalidHiveIdentity => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_hive_identity",
+            error.to_string(),
+        ),
         TaskStoreError::ApiaryMembershipConflict => ApiError::new(
             StatusCode::CONFLICT,
             "apiary_membership_conflict",
@@ -7060,6 +7107,94 @@ mod tests {
         assert_eq!(json["hive"]["name"], "My Hive");
         assert!(json["hive"]["apiary_id"].is_null());
         assert_eq!(json["apiary_context"]["mode"], "personal");
+    }
+
+    #[tokio::test]
+    async fn local_hive_and_keeper_apiary_names_are_private_bounded_commands() {
+        let store = TaskStore::in_memory().unwrap();
+        let original_hive_id = store.local_hive_identity().unwrap().hive.id;
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/hive")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"Clover House"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let invalid = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/hive")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"   "}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response_json(invalid).await["code"],
+            "invalid_hive_identity"
+        );
+
+        let renamed_hive = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/hive")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"  Clover House  "}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(renamed_hive.status(), StatusCode::OK);
+        assert_eq!(renamed_hive.headers()[header::CACHE_CONTROL], "no-store");
+        let renamed_hive = response_json(renamed_hive).await;
+        assert_eq!(renamed_hive["hive"]["name"], "Clover House");
+        assert_eq!(renamed_hive["hive"]["id"], original_hive_id.to_string());
+        assert_eq!(renamed_hive["apiary_context"]["mode"], "personal");
+
+        store
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, 10)
+            .unwrap();
+        let renamed_apiary = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/apiary")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"name":"Grand Garden"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = renamed_apiary.status();
+        let cache_control = renamed_apiary.headers().get(header::CACHE_CONTROL).cloned();
+        let renamed_apiary = response_json(renamed_apiary).await;
+        assert_eq!(status, StatusCode::OK, "{renamed_apiary}");
+        assert_eq!(cache_control.unwrap(), "no-store");
+        assert_eq!(renamed_apiary["apiary"]["name"], "Grand Garden");
+        assert_eq!(renamed_apiary["apiary"]["shared_work_backend"], "jira");
+        assert_eq!(renamed_apiary["apiary"]["policy_revision"], 1);
     }
 
     #[tokio::test]

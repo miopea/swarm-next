@@ -533,6 +533,34 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Renames the Hive owned by this installation without changing any
+    /// membership, worker, task, repository, or federation identity.
+    ///
+    /// # Errors
+    /// Rejects invalid public naming/time or unavailable persistence.
+    pub fn rename_local_hive(
+        &self,
+        name: &str,
+        now: i64,
+    ) -> Result<swarm_domain::HiveIdentity, ApplicationError> {
+        self.store.rename_local_hive(name, now).map_err(Into::into)
+    }
+
+    /// Renames the current Apiary public label. Only its Keeper can do this;
+    /// backend, policy, membership, projects, and signed identity remain fixed.
+    ///
+    /// # Errors
+    /// Rejects invalid input, a personal or Member Hive, or unavailable persistence.
+    pub fn rename_local_apiary(
+        &self,
+        name: &str,
+        now: i64,
+    ) -> Result<LocalApiaryContext, ApplicationError> {
+        self.store
+            .rename_local_apiary(name, now)
+            .map_err(Into::into)
+    }
+
     /// Returns the persisted blockers that must be cleared before the current
     /// sole Keeper Hive may become personal again.
     ///
