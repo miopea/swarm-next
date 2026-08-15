@@ -60,6 +60,7 @@ import {
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
 import KeeperControlRoom from "./apiary/KeeperControlRoom";
+import MemberControlRoom from "./apiary/MemberControlRoom";
 import { workerAttention } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
 import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
@@ -101,6 +102,7 @@ export function App() {
   } = controlRoomModel;
   const loadControlRoom = controlRoomModel.load;
   const keeper = hiveIdentity?.apiary_context?.mode === "federated" && hiveIdentity.apiary_context.local_role === "keeper";
+  const federated = hiveIdentity?.apiary_context?.mode === "federated";
   const [activeSessionId, setActiveSessionId] = useState<string>();
   const [terminalRevision, setTerminalRevision] = useState(0);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -137,11 +139,8 @@ export function App() {
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
   useEffect(() => saveSurface(surface), [surface]);
   useEffect(() => {
-    if (surface === "apiary" && hiveIdentity && !keeper) setSurface("tasks");
-  }, [hiveIdentity, keeper, surface]);
-  useEffect(() => {
-    if (surface === "apiary" && hiveIdentity && !keeper) setSurface("tasks");
-  }, [hiveIdentity, keeper, surface]);
+    if (surface === "apiary" && hiveIdentity && !federated) setSurface("tasks");
+  }, [federated, hiveIdentity, surface]);
   useEffect(() => {
     if (activeSessionId) saveActiveSessionId(activeSessionId);
   }, [activeSessionId]);
@@ -723,7 +722,7 @@ export function App() {
     { id: "tasks", label: "Tasks", detail: `${openTaskCount} open`, group: "Go to", run: () => setSurface("tasks") },
     { id: "new-task", label: "Create task", detail: "Plan work for a worker", group: "Go to", run: () => { setTaskComposeRequest((current) => current + 1); setSurface("tasks"); } },
     { id: "workers", label: "Workers", detail: `${workers.filter((worker) => worker.running).length} running`, group: "Go to", run: () => setSurface("workers") },
-    ...(keeper ? [{ id: "apiary", label: "Apiary", detail: "Keeper overview", group: "Go to" as const, run: () => setSurface("apiary") }] : []),
+    ...(federated ? [{ id: "apiary", label: "Apiary", detail: keeper ? "Keeper overview" : "Membership overview", group: "Go to" as const, run: () => setSurface("apiary") }] : []),
     { id: "add-worker", label: "Add worker", detail: "Configure a repository worker", group: "Go to", run: () => setSurface("settings") },
     { id: "settings", label: "Settings", detail: "Preferences and diagnostics", group: "Go to", run: () => setSurface("settings") },
     ...workers.map((worker) => ({
@@ -756,7 +755,7 @@ export function App() {
         setSurface("decisions");
       },
     })),
-  ], [openTaskCount, pendingDecisionCount, workers, tasks, decisions, activeSessionId, operatorToken, keeper]);
+  ], [openTaskCount, pendingDecisionCount, workers, tasks, decisions, activeSessionId, operatorToken, federated, keeper]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleShortcut);
@@ -788,7 +787,7 @@ export function App() {
 
         {operatorToken ? (
           <>
-            <nav className={`surface-nav${keeper ? " with-apiary" : ""}`} aria-label="Primary">
+            <nav className={`surface-nav${federated ? " with-apiary" : ""}`} aria-label="Primary">
               <button className={surface === "decisions" ? "selected" : ""} aria-current={surface === "decisions" ? "page" : undefined} onClick={() => setSurface("decisions")}>
                 <span><DecisionIcon /> Needs you</span><small>{pendingDecisionCount}</small>
               </button>
@@ -798,7 +797,7 @@ export function App() {
               <button className={surface === "workers" ? "selected" : ""} aria-current={surface === "workers" ? "page" : undefined} aria-label={`Workers, ${liveWorkerCount} active of ${rosterWorkerCount}`} onClick={() => setSurface("workers")}>
                 <span><TerminalIcon /> Workers</span><small>{liveWorkerCount}/{rosterWorkerCount}</small>
               </button>
-              {keeper ? <button className={`apiary-nav-button${surface === "apiary" ? " selected" : ""}`} aria-current={surface === "apiary" ? "page" : undefined} onClick={() => setSurface("apiary")}><span><ApiaryIcon /> Apiary</span></button> : null}
+              {federated ? <button className={`apiary-nav-button${surface === "apiary" ? " selected" : ""}`} aria-current={surface === "apiary" ? "page" : undefined} onClick={() => setSurface("apiary")}><span><ApiaryIcon /> Apiary</span></button> : null}
               <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => setSurface("settings")}>
                 <span><SettingsIcon /> Settings</span>
               </button>
@@ -861,7 +860,7 @@ export function App() {
         <header className="workspace-header">
           <div>
             <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "tasks" ? "Plan and dispatch" : surface === "apiary" ? "Organization without noise" : surface === "settings" ? "Preferences and diagnostics" : activeTask?.title ?? "Persistent terminal"}</p>
-            <h2>{surface === "decisions" ? "Needs you" : surface === "tasks" ? "Task board" : surface === "apiary" ? "Keeper" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
+            <h2>{surface === "decisions" ? "Needs you" : surface === "tasks" ? "Task board" : surface === "apiary" ? keeper ? "Keeper" : "Member Hive" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
             <HiveContextIndicator identity={hiveIdentity} compact />
           </div>
           {surface === "workers" && operatorToken ? (
@@ -960,6 +959,8 @@ export function App() {
           <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
         ) : surface === "apiary" && keeper && hiveIdentity ? (
           <KeeperControlRoom identity={hiveIdentity} operatorToken={operatorToken} onManage={openApiarySettings} />
+        ) : surface === "apiary" && federated && hiveIdentity ? (
+          <MemberControlRoom identity={hiveIdentity} operatorToken={operatorToken} onManage={openApiarySettings} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             busy={busy}

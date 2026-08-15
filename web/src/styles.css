@@ -256,6 +256,21 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-steward-list li > span:last-child { color: var(--muted); font-size: .74rem; line-height: 1.4; text-align: right; }
 .keeper-empty { margin: 0; padding: 17px 0 4px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .keeper-load-state { display: flex; max-width: 1500px; align-items: center; justify-content: space-between; gap: 12px; margin: 0 auto 16px; padding: 11px 14px; border: 1px solid var(--bad); border-radius: var(--radius-sm); background: var(--bad-soft); }
+.member-summary dd { overflow: hidden; font-size: 1rem; text-overflow: ellipsis; white-space: nowrap; }
+.member-detail-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; gap: 12px; }
+.member-detail-list > div { display: grid; min-width: 0; gap: 3px; padding: 10px; border-radius: var(--radius-sm); background: var(--surface-soft); }
+.member-detail-list dt { color: var(--quiet); font-size: .62rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.member-detail-list dd { min-width: 0; margin: 0; overflow: hidden; font-size: .8rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.member-detail-list.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.member-sync-panel > header { align-items: center; }
+.member-sync-copy { margin: 0 0 13px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.member-blocker-list { display: grid; margin: 12px 0 0; padding: 10px 10px 10px 28px; gap: 5px; border: 1px solid color-mix(in srgb, var(--honey-strong) 38%, var(--line)); border-radius: var(--radius-sm); color: var(--muted); background: var(--honey-soft); font-size: .75rem; }
+.member-ready-copy { margin: 12px 0 0; padding: 9px 10px; border-radius: var(--radius-sm); color: var(--good); background: var(--good-soft); font-size: .75rem; }
+.member-project-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.member-project-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.member-project-list li > span:first-child { display: grid; min-width: 0; gap: 3px; }
+.member-project-list strong, .member-project-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-project-list small { color: var(--muted); font-size: .7rem; }
 
 .unlock-panel { display: grid; width: min(430px, calc(100% - 40px)); margin: auto; padding: 38px; gap: 11px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: var(--shadow); }
 .unlock-symbol { width: 76px; height: 76px; margin-bottom: 8px; }

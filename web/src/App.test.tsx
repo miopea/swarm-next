@@ -174,6 +174,42 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
   expect(screen.getByRole("button", { name: "Manage Apiary" })).toBeInTheDocument();
 });
 
+test("gives a Member Hive a first-class Apiary membership surface", async () => {
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url === "/api/v1/hive") return Promise.resolve(ok({
+      operator: { id: "operator-2", display_name: "Cora" },
+      hive: { id: "hive-2", name: "Clover Hive", operator_id: "operator-2", apiary_id: "apiary-1" },
+      apiary_context: { mode: "federated", apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" }, local_role: "member" },
+    }));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [] }));
+    if (["/api/v1/workers", "/api/v1/workspaces", "/api/v1/tasks", "/api/v1/decisions"].includes(url)) return Promise.resolve(ok([]));
+    if (url.endsWith("/apiary/members")) return Promise.resolve(ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: false },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: true },
+    ]));
+    if (url.endsWith("/apiary/shared-work")) return Promise.resolve(ok([]));
+    if (url.endsWith("/apiary/sync-health")) return Promise.resolve(ok({ condition: "idle", last_attempt_at: null, last_success_at: null, consecutive_failures: 0, next_attempt_at: null }));
+    if (url.endsWith("/apiary/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: ["catalog_missing"] }));
+    if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
+    if (url.includes("/api/v1/providers")) return Promise.resolve(ok({ claude_code: true, codex: false }));
+    if (url.includes("/api/v1/preferences/presentation/desktop")) return Promise.resolve(ok({ device_class: "desktop", color_theme: "light", terminal_keys_visible: true, configured: true }));
+    if (url.includes("/api/v1/integrations/jira/task-links")) return Promise.resolve(ok([]));
+    return Promise.resolve(ok({ policy: "important_only", subscription_count: 0 }));
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+
+  const apiary = await screen.findByRole("button", { name: "Apiary" });
+  fireEvent.click(apiary);
+  expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Member Hive" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Manage membership" })).toBeInTheDocument();
+});
+
 test("recovers runtime status and saved authentication after an update handoff", async () => {
   let healthAttempts = 0;
   let sessionAttempts = 0;

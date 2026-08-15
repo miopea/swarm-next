@@ -31,25 +31,95 @@ async function main() {
     ...(browserExecutable ? { executablePath: browserExecutable } : {}),
   });
   const results = [];
+  const memberResults = [];
   try {
     for (const surface of surfaces) {
       results.push(await checkSurface(browser, surface));
+    }
+    for (const surface of surfaces) {
+      memberResults.push(await checkMemberSurface(browser, surface));
     }
   } finally {
     await browser.close();
   }
   const browserRestartPersistence = await verifyBrowserRestartPersistence();
-  const report = { baseUrl, results, browserRestartPersistence };
+  const report = { baseUrl, results, memberResults, browserRestartPersistence };
   const output = compactOutput ? {
     baseUrl,
     surfaces: results.map(({ surface, status, surfaces, accessibleControlCount, apiaryGuideSteps }) => ({
       surface, status, surfaces, accessibleControlCount, apiaryGuideSteps,
     })),
+    memberSurfaces: memberResults,
     browserRestartPersistence,
   } : report;
   const serialized = `${JSON.stringify(output, null, 2)}\n`;
   if (resultPath) await fs.writeFile(resultPath, serialized, "utf8");
   process.stdout.write(serialized);
+}
+
+async function checkMemberSurface(browser, surface) {
+  const context = await browser.newContext({
+    viewport: surface.viewport,
+    isMobile: surface.mobile,
+    hasTouch: surface.mobile,
+    ...(surface.mobile ? { userAgent: "Mozilla/5.0 (Linux; Android 15; Swarm Dogfood) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36" } : {}),
+  });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+  page.on("pageerror", (error) => errors.push(error.message));
+  const fulfill = (route, payload) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+  await page.route("**/api/v1/hive", (route) => fulfill(route, {
+    operator: { id: "visual-member-operator", display_name: "Cora" },
+    hive: { id: "visual-member-hive", name: "Clover Hive", operator_id: "visual-member-operator", apiary_id: "visual-apiary" },
+    apiary_context: { mode: "federated", apiary: { id: "visual-apiary", name: "Grand Garden", keeper_operator_id: "visual-keeper-operator", shared_work_backend: "jira" }, local_role: "member" },
+  }));
+  await page.route("**/api/v1/apiary/members", (route) => fulfill(route, [
+    { hive_id: "visual-keeper-hive", hive_name: "Meadow Hive", operator_id: "visual-keeper-operator", operator_display_name: "Bea", role: "keeper", is_local: false },
+    { hive_id: "visual-member-hive", hive_name: "Clover Hive", operator_id: "visual-member-operator", operator_display_name: "Cora", role: "member", is_local: true },
+  ]));
+  await page.route("**/api/v1/apiary/shared-work", (route) => fulfill(route, [{
+    id: "visual-claim", apiary_id: "visual-apiary", project_id: "10001", issue_id: "20001", issue_key: "WWD-101", home_node_id: "private-node", home_hive_id: "visual-member-hive", home_operator_id: "visual-member-operator", state: "confirmed", reserved_at: 1, reservation_expires_at: 2, confirmed_at: 2, released_at: null, project_key: "WWD", project_name: "Website Development", home_hive_name: "Clover Hive", home_operator_display_name: "Cora",
+  }]));
+  await page.route("**/api/v1/apiary/sync-health", (route) => fulfill(route, { condition: "current", last_attempt_at: 1_786_780_000, last_success_at: 1_786_780_000, consecutive_failures: 0, next_attempt_at: null }));
+  await page.route("**/api/v1/apiary/catalog-readiness", (route) => fulfill(route, {
+    acknowledgement: { apiary_id: "visual-apiary", policy_revision: 1, promoted_project_catalog_digest: "private-digest", project_count: 2, snapshot_issued_at: 1, snapshot_expires_at: 2, acknowledged_at: 1 },
+    jira_connection: "ready",
+    projects: [
+      { project: { project_id: "10001", project_key: "WWD", project_name: "Website Development" }, binding_id: "binding-1", access_verified: true, workflow_mapped: true },
+      { project: { project_id: "10002", project_key: "IT", project_name: "Information Technology" }, binding_id: null, access_verified: false, workflow_mapped: false },
+    ],
+    blockers: ["project_access_not_ready"],
+  }));
+
+  try {
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    const tokenInput = page.getByLabel("Operator token");
+    if (await tokenInput.isVisible().catch(() => false)) {
+      await tokenInput.fill(operatorToken);
+      await page.getByRole("button", { name: "Unlock Swarm" }).click();
+    }
+    await page.getByRole("button", { name: "Apiary", exact: true }).click();
+    const memberControl = page.locator(".member-control-room");
+    await memberControl.waitFor();
+    await page.getByRole("heading", { name: "Grand Garden" }).waitFor();
+    await page.getByText("Meadow Hive", { exact: true }).first().waitFor();
+    await page.getByRole("list", { name: "Member promoted Jira projects" }).waitFor();
+    await page.getByRole("list", { name: "Member shared work ownership" }).waitFor();
+    if (await page.getByText("private-node", { exact: true }).count() || await page.getByText("private-digest", { exact: true }).count()) {
+      throw new Error(`${surface.name}/member-apiary: private federation material was rendered`);
+    }
+    const dimensions = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
+    if (dimensions.scrollWidth > dimensions.clientWidth + 1) {
+      throw new Error(`${surface.name}/member-apiary: horizontal overflow ${dimensions.scrollWidth}px > ${dimensions.clientWidth}px`);
+    }
+    const accessibleControlCount = await verifyAccessibleControls(page, `${surface.name}/member-apiary`);
+    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-member.png`), fullPage: true });
+    if (errors.length) throw new Error(`${surface.name}/member-apiary: browser errors: ${errors.join(" | ")}`);
+    return { surface: surface.name, ...dimensions, accessibleControlCount, status: "passed" };
+  } finally {
+    await context.close();
+  }
 }
 
 async function verifyBrowserRestartPersistence() {

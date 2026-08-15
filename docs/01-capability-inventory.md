@@ -94,6 +94,14 @@ promoted Jira projects, active reservations or durable home-Hive ownership, and
 Steward scopes from the existing private contracts. Routine worker activity
 remains inside each Hive; invitations and configuration stay in Settings.
 
+Member control-room checkpoint: a joined Hive receives the same first-class
+Apiary navigation without being shown Keeper administration. Its read-only
+surface identifies the Keeper, local Hive and operator, catalog convergence,
+per-project readiness, synchronization health, blockers, and only shared work
+whose durable home is this Hive. Browser acceptance uses route-local public
+fixture data so desktop and Android layouts can be proved without changing the
+dogfood Keeper, Jira, membership, or federation credentials.
+
 ## Platform and administration
 
 | Capability | Decision | Rationale and intended direction |

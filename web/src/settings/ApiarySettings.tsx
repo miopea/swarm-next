@@ -43,14 +43,7 @@ import {
   type Stewardship,
 } from "../api";
 import { createApiaryHandoffLink, readApiaryHandoffLink } from "./apiaryHandoff";
-
-const syncCopy = {
-  idle: ["Not connected yet", "Automatic Keeper sync is not enabled in this build."],
-  current: ["Up to date", "This Hive completed its latest Keeper reconciliation."],
-  offline: ["Keeper temporarily unavailable", "Owned work remains local; new shared claims wait."],
-  authentication_required: ["Membership credentials need attention", "Keeper synchronization is paused until access is restored."],
-  incompatible: ["Runtime update required", "This Hive and its Keeper need compatible federation versions."],
-} as const;
+import { federationSyncCopy } from "../apiary/presentation";
 
 type Props = {
   busy: boolean;
@@ -716,8 +709,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
               <div>
                 <span className={`apiary-sync-indicator apiary-sync-${memberSync?.condition ?? "idle"}`} aria-hidden="true" />
                 <span>
-                  <strong>{syncCopy[memberSync?.condition ?? "idle"][0]}</strong>
-                  <small>{syncCopy[memberSync?.condition ?? "idle"][1]}</small>
+                  <strong>{federationSyncCopy[memberSync?.condition ?? "idle"][0]}</strong>
+                  <small>{federationSyncCopy[memberSync?.condition ?? "idle"][1]}</small>
                 </span>
               </div>
               <dl>
