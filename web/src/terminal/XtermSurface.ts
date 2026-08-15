@@ -69,7 +69,10 @@ export class XtermSurface implements TerminalSurface {
   }
 
   write(bytes: Uint8Array): Promise<void> {
-    return new Promise((resolve) => this.#terminal.write(bytes, resolve));
+    return new Promise((resolve) => this.#terminal.write(bytes, () => {
+      this.#publishBufferMetrics();
+      resolve();
+    }));
   }
 
   restore(snapshot: TerminalSnapshot): Promise<void> {
@@ -135,6 +138,13 @@ export class XtermSurface implements TerminalSurface {
     if (!usable) return;
     if (usable.rows === this.#terminal.rows && usable.columns === this.#terminal.cols) return;
     this.#terminal.resize(usable.columns, usable.rows);
+  }
+
+  #publishBufferMetrics(): void {
+    if (!this.#element) return;
+    const buffer = this.#terminal.buffer.active;
+    this.#element.dataset.terminalBufferLines = String(buffer.length);
+    this.#element.dataset.terminalScrollbackRows = String(buffer.baseY);
   }
 
   #scheduleFit(): void {

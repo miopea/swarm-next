@@ -8,6 +8,7 @@ const xterm = vi.hoisted(() => ({
   options: undefined as Record<string, unknown> | undefined,
   focus: vi.fn(),
   resize: vi.fn(),
+  bufferBaseY: 0,
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
@@ -31,6 +32,7 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     rows = 24;
     cols = 80;
+    buffer = { active: { get baseY() { return xterm.bufferBaseY; }, length: 24 } };
     options: Record<string, unknown>;
 
     constructor(options: Record<string, unknown>) {
@@ -288,6 +290,7 @@ test("snapshot geometry stays hidden until the visible renderer is refitted", as
   const surface = new XtermSurface();
   const element = document.createElement("div");
   surface.open(element);
+  xterm.bufferBaseY = 48;
 
   await surface.restore({
     sequence: 1,
@@ -297,6 +300,8 @@ test("snapshot geometry stays hidden until the visible renderer is refitted", as
     bytes: new TextEncoder().encode("snapshot"),
   });
   expect(element.style.visibility).toBe("hidden");
+  expect(element.dataset.terminalScrollbackRows).toBe("48");
+  expect(element.dataset.terminalBufferLines).toBe("24");
 
   const fitting = surface.fit();
   await Promise.resolve();
