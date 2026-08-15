@@ -68,10 +68,12 @@ These abstractions are justified by shared behavior, not visual resemblance.
   `useControlRoomModel`. Cancelled effects cannot apply stale room state, and
   locking cannot leave workspace or Jira-link state behind while hiding the
   rest of the room.
-- `web/src/tasks/TaskBoard.tsx` has dropped to roughly 550 lines. Query/filter/
-  sort is a pure tested `taskBoardModel`, while metadata and assignment are
-  focused components. Editing, activity, Jira/email detail, and action-menu
-  orchestration still belong to the card and remain the next measured split.
+- `web/src/tasks/TaskBoard.tsx` has dropped below 400 lines. Query/filter/sort
+  is a pure tested `taskBoardModel`; collection composition remains in the
+  board; and `TaskCard` now owns its vertical editing, assignment, activity,
+  Jira discussion, email resolution, action-menu, and drag behavior. Metadata
+  and assignment remain focused child components rather than a generic card
+  framework.
 - `web/src/settings/ApiarySettings.tsx` is roughly 1,100 lines and now combines
   identity editing, bootstrap handoffs, policy review, Jira readiness,
   membership, Stewardship, shared-work rollup, and collapse. The signed
@@ -85,9 +87,10 @@ These abstractions are justified by shared behavior, not visual resemblance.
 
 Required next extractions are vertical and behavior-led:
 
-1. Continue splitting `TaskCard` only when editing, activity, or integration
-   detail changes next. Metadata, assignment, and query/filter/sort are already
-   behavior-owned and directly tested; do not create a generic card framework.
+1. Continue splitting `TaskCard` only when one of its owned behaviors becomes
+   independently complex. Metadata, assignment, query/filter/sort, Jira
+   discussion, and email resolution already have focused owners; do not create
+   a generic card framework.
 2. Extract Apiary Keeper onboarding and member joining as two vertical feature
    components when their next behavior lands. Keep shared cryptographic handoff
    parsing independent of both views.
