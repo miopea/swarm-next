@@ -725,3 +725,15 @@ the independently updated terminal host through the API to worker settings:
   restarts. API PID advanced to `3118527`; terminal-host PID remained
   `2966127`, preserving the active worker session. Every proof browser process
   closed after the run.
+- Release `0.1.0-dev-45ef43e886c4` gives operator-decision listing, guarded
+  resolution, outcome delivery state, and bounded retry routes one focused
+  Rust HTTP owner while application and persistence services retain authority
+  for decision policy and durability. The complete gate passed 331 Rust tests,
+  Clippy with warnings denied, 213 frontend tests, strict TypeScript, and the
+  production build. Exact live Edge acceptance passed Needs you, Tasks,
+  Workers, Apiary, Settings, and the Apiary member control room at 1,440-pixel
+  desktop and 412-pixel Android widths with zero overflow, 346 and 318 named
+  controls, all three Apiary guide steps, and authentication across complete
+  browser restarts. API PID advanced to `3139756`; terminal-host PID remained
+  `2966127`, preserving the active worker session. Every proof browser process
+  closed after the run.
