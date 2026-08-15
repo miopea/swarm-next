@@ -605,3 +605,14 @@ the independently updated terminal host through the API to worker settings:
   controls, three Apiary guide steps, and authentication across browser
   restarts. API PID advanced to `3027399`; terminal-host PID remained
   `2966127`.
+- Release `0.1.0-dev-91b9ae4825be` moves durable worker discovery, repository
+  choices, profile creation and editing, ordering, and start/stop commands into
+  one worker-owned API module. Raw compatibility terminal-session commands stay
+  outside that boundary. The public barrel remains compatible, and focused
+  tests cover outside-root approval, encoded worker identities, lifecycle
+  dimensions, ordering, settings, and roster behavior. All 208 frontend tests,
+  strict TypeScript, and the production build passed. Exact live desktop and
+  Android acceptance passed every primary and Apiary member surface with zero
+  overflow, 346 and 318 named controls, three Apiary guide steps, worker
+  selection/focus, and authentication across complete browser restarts. API
+  PID advanced to `3035411`; terminal-host PID remained `2966127`.
