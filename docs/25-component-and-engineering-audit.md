@@ -145,6 +145,10 @@ Required next extractions are vertical and behavior-led:
   environment policy are implemented. Visible operator decisions and their
   guarded resolution/delivery now share a `decisions` HTTP adapter; decision
   durability and worker delivery remain application/persistence concerns.
+  Privacy-safe dogfood report listing/creation and its authenticated private
+  attachment upload/download now share a `feedback` HTTP adapter beside the
+  existing feedback persistence aggregate; attachment storage and media
+  validation remain owned by the reusable bounded attachment store.
 - `crates/swarm-persistence/src/lib.rs` is roughly 3,700 lines although Jira,
   workers, decisions, notifications, dispatches, and outcomes have begun moving
   to focused modules. The content-free control-room event aggregate now owns

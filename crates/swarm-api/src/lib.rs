@@ -4,6 +4,7 @@ mod attachments;
 mod decisions;
 mod email_attachments;
 pub mod federation_http;
+mod feedback;
 mod jira;
 mod jira_oauth;
 mod microsoft_oauth;
@@ -1533,19 +1534,6 @@ struct HistoryQuery {
     record: Option<u32>,
 }
 
-#[derive(Debug, Deserialize)]
-struct DogfoodReportsQuery {
-    limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CreateDogfoodReportRequest {
-    expectation: String,
-    observation: String,
-    diagnostic_bundle: String,
-    attachment_name: Option<String>,
-}
-
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
@@ -1788,15 +1776,15 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/backups/database", get(download_database_backup))
         .route(
             "/api/v1/feedback/reports",
-            get(list_dogfood_reports).post(create_dogfood_report),
+            get(feedback::list_reports).post(feedback::create_report),
         )
         .route(
             "/api/v1/feedback/attachments",
-            post(upload_dogfood_attachment).layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES)),
+            post(feedback::upload_attachment).layer(DefaultBodyLimit::max(MAX_ATTACHMENT_BYTES)),
         )
         .route(
             "/api/v1/feedback/attachments/{name}",
-            get(download_dogfood_attachment),
+            get(feedback::download_attachment),
         )
         .route(
             "/api/v1/tasks",
@@ -2686,122 +2674,6 @@ async fn download_database_backup(
     response_headers.insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_static("attachment; filename=swarm-next-hive.sqlite3"),
-    );
-    Ok((response_headers, bytes).into_response())
-}
-
-async fn list_dogfood_reports(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Query(query): Query<DogfoodReportsQuery>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let reports = task_store(&state)?
-        .list_dogfood_reports(query.limit.unwrap_or(20))
-        .map_err(|error| task_store_error(&error))?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(reports)).into_response())
-}
-
-async fn create_dogfood_report(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(request): Json<CreateDogfoodReportRequest>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let report = task_store(&state)?
-        .create_dogfood_report(
-            &request.expectation,
-            &request.observation,
-            &request.diagnostic_bundle,
-            request.attachment_name.as_deref(),
-        )
-        .map_err(|error| task_store_error(&error))?;
-    Ok((StatusCode::CREATED, Json(report)).into_response())
-}
-
-#[derive(Serialize)]
-struct DogfoodAttachmentResponse {
-    name: String,
-}
-
-async fn upload_dogfood_attachment(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let media_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    let store = state.attachment_store.as_ref().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "attachment_store_unconfigured",
-            "private attachment storage is not configured",
-        )
-    })?;
-    let path = store
-        .save(media_type, &body)
-        .await
-        .map_err(attachment_error)?;
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "attachment_path_unavailable",
-                "private attachment name is not valid UTF-8",
-            )
-        })?;
-    Ok((
-        StatusCode::CREATED,
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(DogfoodAttachmentResponse { name: name.into() }),
-    )
-        .into_response())
-}
-
-async fn download_dogfood_attachment(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(name): Path<String>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let referenced = task_store(&state)?
-        .dogfood_attachment_is_referenced(&name)
-        .map_err(|error| task_store_error(&error))?;
-    if !referenced {
-        return Err(ApiError::new(
-            StatusCode::NOT_FOUND,
-            "feedback_attachment_not_found",
-            "the private report attachment was not found",
-        ));
-    }
-    let store = state.attachment_store.as_ref().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "attachment_store_unconfigured",
-            "private attachment storage is not configured",
-        )
-    })?;
-    let (bytes, media_type) = store.read(&name).await.map_err(attachment_error)?;
-    let mut response_headers = HeaderMap::new();
-    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response_headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    response_headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(media_type)
-            .map_err(|_| attachment_error(AttachmentError::Unavailable))?,
-    );
-    response_headers.insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_str(&format!("attachment; filename={name}"))
-            .map_err(|_| attachment_error(AttachmentError::Unavailable))?,
     );
     Ok((response_headers, bytes).into_response())
 }
