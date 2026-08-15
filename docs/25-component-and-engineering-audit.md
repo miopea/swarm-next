@@ -77,11 +77,12 @@ These abstractions are justified by shared behavior, not visual resemblance.
 - `web/src/settings/ApiarySettings.tsx` previously combined identity editing,
   both bootstrap handoffs, policy review, Jira readiness, membership,
   Stewardship, shared-work rollup, and collapse. Signed handoff controls now
-  have one focused owner and Keeper invitation management is a vertical feature
-  component that owns candidate loading, identity verification, invitation
-  issuance, copy fallback, and operator feedback. Personal-Hive joining remains
-  the next vertical extraction; do not replace either workflow with a generic
-  settings abstraction.
+  have one focused owner. Keeper invitation management owns candidate loading,
+  identity verification, invitation issuance, copy fallback, and operator
+  feedback. `PersonalHiveJoin` independently owns connection-card generation,
+  invitation preview/import, policy acknowledgement, readiness, and the durable
+  prepared-request state. The settings root composes those two vertical
+  features without creating a generic federation framework.
 - `web/src/api.ts` still combines public contract types with every domain HTTP
   operation, but authentication, consistent no-store behavior, typed runtime
   errors, and bounded transient recovery now have one small owner in
@@ -113,9 +114,10 @@ Required next extractions are vertical and behavior-led:
    independently complex. Metadata, assignment, query/filter/sort, Jira
    discussion, and email resolution already have focused owners; do not create
    a generic card framework.
-2. Extract personal-Hive joining as its own vertical feature component when its
-   next behavior lands. Keeper invitation management is already separated, and
-   shared cryptographic handoff parsing remains independent of both views.
+2. Keep Keeper invitation management and personal-Hive joining as separate
+   vertical feature owners. The eventual approved outbound join command belongs
+   in `PersonalHiveJoin`; shared cryptographic handoff parsing remains
+   independent of both views.
 3. Presence, workers, core tasks, Jira, and email are now split over the shared
    request helper. Add another domain module only when a remaining behavior is
    independently complex; do not turn the barrel into a directory-per-endpoint

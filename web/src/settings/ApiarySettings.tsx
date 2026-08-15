@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
-  acceptFederationJoinPolicy,
   collapseApiary,
   createApiary,
   fetchApiaryCollapseReadiness,
@@ -10,43 +9,28 @@ import {
   fetchApiarySharedWork,
   fetchApiaryStewardships,
   fetchFederationCatalogReadiness,
-  fetchFederationJoinInvitations,
   fetchFederationSyncHealth,
-  fetchFederationTransportReadiness,
   fetchHive,
-  fetchHiveConnectionCard,
   fetchJiraBindings,
-  importFederationJoinInvitation,
-  prepareFederationJoin,
   promoteApiaryJiraProject,
   renameApiary,
   renameHive,
   revokeApiaryStewardship,
   setApiaryStewardship,
   type ApiaryCollapseReadiness,
-  type ApiaryInvitationBundle,
   type ApiaryJiraProject,
   type ApiaryMember,
   type ApiarySharedWorkClaim,
-  type FederationJoinInvitationOverview,
   type FederationCatalogReadiness,
   type FederationSyncHealth,
-  type FederationTransportReadiness,
   type HiveIdentity,
   type JiraProjectBinding,
   type StewardCapability,
   type Stewardship,
 } from "../api";
-import { createApiaryHandoffLink, readApiaryHandoffLink } from "./apiaryHandoff";
 import { federationSyncCopy } from "../apiary/presentation";
-import {
-  ApiaryExchangeStep,
-  ApiaryFileFallback,
-  ApiaryGeneratedLink,
-  ApiaryLinkEntry,
-  FederationTransportStatus,
-} from "./ApiaryHandoffControls";
 import KeeperInvitationManager from "./KeeperInvitationManager";
+import PersonalHiveJoin from "./PersonalHiveJoin";
 
 type Props = {
   busy: boolean;
@@ -70,13 +54,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [sharedWork, setSharedWork] = useState<ApiarySharedWorkClaim[]>([]);
   const [stewardships, setStewardships] = useState<Stewardship[]>([]);
   const [memberSync, setMemberSync] = useState<FederationSyncHealth>();
-  const [transportReadiness, setTransportReadiness] = useState<FederationTransportReadiness>();
   const [memberCatalog, setMemberCatalog] = useState<FederationCatalogReadiness>();
   const [memberSyncLoadError, setMemberSyncLoadError] = useState(false);
-  const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
-  const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
-  const [invitationLink, setInvitationLink] = useState("");
-  const [generatedHandoff, setGeneratedHandoff] = useState<{ kind: "connection"; link: string }>();
   const [jiraBindings, setJiraBindings] = useState<JiraProjectBinding[]>([]);
   const [projectLoadError, setProjectLoadError] = useState(false);
   const [sharedWorkLoadError, setSharedWorkLoadError] = useState(false);
@@ -96,14 +75,6 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     setHiveName(hiveIdentity?.hive.name ?? "");
     setApiaryName(context?.mode === "federated" ? context.apiary.name : "");
   }, [editingIdentity, hiveIdentity?.hive.name, context]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void fetchFederationTransportReadiness(operatorToken)
-      .then((value) => { if (!cancelled) setTransportReadiness(value); })
-      .catch(() => { if (!cancelled) setTransportReadiness(undefined); });
-    return () => { cancelled = true; };
-  }, [operatorToken]);
 
   useEffect(() => {
     if (personal) {
@@ -148,19 +119,6 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     });
     return () => { cancelled = true; };
   }, [member, operatorToken, hiveIdentity?.hive.apiary_id]);
-
-  useEffect(() => {
-    if (!personal) {
-      setJoinInvitations([]);
-      setInvitationPreview(undefined);
-      return;
-    }
-    let cancelled = false;
-    void fetchFederationJoinInvitations(operatorToken)
-      .then((value) => { if (!cancelled) setJoinInvitations(value); })
-      .catch(() => { if (!cancelled) setJoinInvitations([]); });
-    return () => { cancelled = true; };
-  }, [personal, operatorToken, hiveIdentity?.hive.apiary_id]);
 
   useEffect(() => {
     if (!keeper) {
@@ -323,34 +281,6 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
-  async function copyHandoffLink(link: string): Promise<boolean> {
-    try {
-      await navigator.clipboard.writeText(link);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function createConnectionLink() {
-    setWorking(true);
-    setError("");
-    setMessage("");
-    try {
-      const card = await fetchHiveConnectionCard(operatorToken);
-      const link = createApiaryHandoffLink("connection", card);
-      setGeneratedHandoff({ kind: "connection", link });
-      const copied = await copyHandoffLink(link);
-      setMessage(copied
-        ? "Connection link copied. It expires in 24 hours and grants no access by itself."
-        : "Connection link created. Copy it below; it expires in 24 hours and grants no access by itself.");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The connection link could not be created.");
-    } finally {
-      setWorking(false);
-    }
-  }
-
   async function returnToPersonalHive() {
     setWorking(true);
     setError("");
@@ -387,90 +317,6 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       setMessage(`${project.project_key} is now in the Apiary project catalog.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Jira project could not be promoted.");
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function previewJoinInvitation(file: File | undefined) {
-    if (!file) return;
-    setError("");
-    setMessage("");
-    try {
-      if (file.size > 512 * 1024) throw new Error("That invitation file is unexpectedly large.");
-      const bundle = JSON.parse(await file.text()) as ApiaryInvitationBundle;
-      if (!bundle?.keeper_connection_card?.payload || !bundle?.invitation?.payload || !bundle.one_time_secret) {
-        throw new Error("That file is not a Swarm Apiary invitation.");
-      }
-      setInvitationPreview(bundle);
-    } catch (cause) {
-      setInvitationPreview(undefined);
-      setError(cause instanceof Error ? cause.message : "That Apiary invitation could not be read.");
-    }
-  }
-
-  function previewJoinInvitationLink() {
-    setError("");
-    setMessage("");
-    try {
-      const bundle = readApiaryHandoffLink<ApiaryInvitationBundle>(invitationLink, "invitation");
-      if (!bundle?.keeper_connection_card?.payload || !bundle?.invitation?.payload || !bundle.one_time_secret) {
-        throw new Error("That link is not a Swarm Apiary invitation.");
-      }
-      setInvitationPreview(bundle);
-      setInvitationLink("");
-    } catch (cause) {
-      setInvitationPreview(undefined);
-      setError(cause instanceof Error ? cause.message : "That Apiary invitation link could not be read.");
-    }
-  }
-
-  async function trustKeeperAndImport() {
-    if (!invitationPreview) return;
-    setWorking(true);
-    setError("");
-    setMessage("");
-    try {
-      const imported = await importFederationJoinInvitation(operatorToken, invitationPreview);
-      setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
-      setInvitationPreview(undefined);
-      setMessage(`${imported.keeper_hive_name} is pinned as Keeper for ${imported.apiary_name}. You have not joined or accepted its policy yet.`);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "That Apiary invitation could not be verified.");
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function acceptImportedPolicy(invitation: FederationJoinInvitationOverview) {
-    setWorking(true);
-    setError("");
-    setMessage("");
-    try {
-      await acceptFederationJoinPolicy(
-        operatorToken,
-        invitation.invitation_id,
-        invitation.required_policy_revision,
-      );
-      setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
-      setMessage(`Policy revision ${invitation.required_policy_revision} accepted locally. This Hive has not joined ${invitation.apiary_name} yet.`);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "That policy revision could not be accepted.");
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  async function prepareJoinRequest(invitation: FederationJoinInvitationOverview) {
-    setWorking(true);
-    setError("");
-    setMessage("");
-    try {
-      await prepareFederationJoin(operatorToken, invitation.invitation_id);
-      setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
-      setMessage(`The signed join request for ${invitation.apiary_name} is prepared locally. Nothing has been sent to the Keeper yet.`);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The join request could not be prepared.");
     } finally {
       setWorking(false);
     }
@@ -515,110 +361,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       {personal ? (
         <>
           <p>Your personal Hive remains fully independent. Form an Apiary only when separate one-operator Hives should share Jira work and coordination.</p>
-          <FederationTransportStatus readiness={transportReadiness} />
-          <div className="apiary-exchange-intro">
-            <span><strong>Join another Keeper's Apiary</strong><small>Three deliberate handoffs keep each operator in control. No membership or shared access changes until both Hives verify the exact identities.</small></span>
-            <ol className="apiary-exchange-guide" aria-label="How to join an Apiary">
-              <ApiaryExchangeStep number="1" title="Copy this Hive's connection link" detail="Send the short-lived link privately to the Keeper. Its signed identity contains no repositories, tasks, terminals, Jira access, credentials, or invitation secret.">
-                <button className="secondary-button" disabled={busy || working} onClick={() => void createConnectionLink()}>Copy connection link</button>
-              </ApiaryExchangeStep>
-              <ApiaryExchangeStep number="2" title="Keeper verifies and invites" detail="The Keeper pastes the link, checks your Hive and operator names, then returns one invitation link bound only to this Hive." />
-              <ApiaryExchangeStep number="3" title="Review before joining" detail="Paste the returned link below. Swarm verifies the Keeper, policy, Jira projects, and local readiness before it prepares any join request." />
-            </ol>
-          </div>
-          {generatedHandoff?.kind === "connection" ? <ApiaryGeneratedLink link={generatedHandoff.link} onCopy={copyHandoffLink} /> : null}
-          <div className="apiary-join-card">
-            <div>
-              <strong>Paste the Keeper's invitation link</strong>
-              <small>Reviewing the link does not send anything or join the Apiary. Its private payload stays after the # fragment and is not sent during web navigation.</small>
-            </div>
-            <ApiaryLinkEntry label="Invitation link" value={invitationLink} action="Review invitation" disabled={busy || working} onChange={setInvitationLink} onAction={previewJoinInvitationLink} />
-            <ApiaryFileFallback summary="Use an invitation file instead" ariaLabel="Choose Apiary invitation" disabled={busy || working} label="Choose invitation file" detail="or drop the Keeper's .json invitation here" onFile={(file) => void previewJoinInvitation(file)} />
-            {invitationPreview ? (
-              <div className="apiary-invitation-preview" role="group" aria-label="Review Apiary invitation">
-                <div><span>Apiary</span><strong>{invitationPreview.invitation.payload.apiary_name}</strong></div>
-                <div><span>Keeper Hive</span><strong>{invitationPreview.keeper_connection_card.payload.hive_name}</strong></div>
-                <div><span>Keeper operator</span><strong>{invitationPreview.keeper_connection_card.payload.operator_display_name}</strong></div>
-                <div><span>Shared work</span><strong>{invitationPreview.invitation.payload.shared_work_backend === "jira" ? "Jira-backed" : "Native Swarm"}</strong></div>
-                <div><span>Policy revision</span><strong>{invitationPreview.invitation.payload.required_policy_revision}</strong></div>
-                <div><span>Shared Jira projects</span><strong>{invitationPreview.promoted_projects.length}</strong></div>
-                <div><span>Expires</span><strong>{new Date(invitationPreview.invitation.payload.expires_at * 1000).toLocaleString()}</strong></div>
-                {invitationPreview.promoted_projects.length > 0 ? (
-                  <ul className="apiary-project-manifest" aria-label="Promoted Jira projects">
-                    {invitationPreview.promoted_projects.map((project) => (
-                      <li key={project.project_id}><strong>{project.project_key}</strong><span>{project.project_name}</span></li>
-                    ))}
-                  </ul>
-                ) : <p className="empty-copy">This Apiary has no promoted Jira projects yet.</p>}
-                <p>Trusting pins this exact Keeper key and saves the one-time invitation privately. It does not join the Apiary, accept policy, share work, or grant terminal access.</p>
-                <div className="settings-actions">
-                  <button className="secondary-button" disabled={working} onClick={() => setInvitationPreview(undefined)}>Choose another</button>
-                  <button className="primary-action" disabled={working} onClick={() => void trustKeeperAndImport()}>{working ? "Verifying…" : "Trust Keeper and save invitation"}</button>
-                </div>
-              </div>
-            ) : null}
-            {joinInvitations.length > 0 ? (
-              <ul className="apiary-join-list" aria-label="Saved Apiary invitations">
-                {joinInvitations.map((invitation) => (
-                  <li key={invitation.invitation_id}>
-                    <div className="apiary-join-summary">
-                      <span><strong>{invitation.apiary_name}</strong><small>{invitation.keeper_hive_name} · {invitation.keeper_operator_display_name}</small></span>
-                      <span className={invitation.readiness.blockers.length === 0 ? "readiness-ready" : "readiness-blocked"}>
-                        {invitation.readiness_compatibility_fallback
-                          ? "Runtime update in progress"
-                          : invitation.readiness.blockers.length === 0
-                            ? "Ready to contact Keeper"
-                            : `${invitation.readiness.blockers.length} readiness ${invitation.readiness.blockers.length === 1 ? "step" : "steps"} left`}
-                      </span>
-                    </div>
-                    <div className="apiary-policy-acknowledgement">
-                      <span>
-                        <strong>Policy revision {invitation.required_policy_revision}</strong>
-                        <small>Jira-backed shared work · {invitation.promoted_projects.length} signed {invitation.promoted_projects.length === 1 ? "project" : "projects"} · Keeper identity pinned</small>
-                      </span>
-                      {invitation.readiness_compatibility_fallback ? (
-                        <button className="secondary-button" disabled>Waiting for runtime</button>
-                      ) : invitation.state === "submitted" ? (
-                        <span className="readiness-ready">Join request prepared</span>
-                      ) : invitation.state === "keeper_pinned" ? (
-                        <button className="secondary-button" disabled={working} onClick={() => void acceptImportedPolicy(invitation)}>
-                          Acknowledge revision {invitation.required_policy_revision}
-                        </button>
-                      ) : invitation.readiness.blockers.length === 0 ? (
-                        <button className="primary-action" disabled={working} onClick={() => void prepareJoinRequest(invitation)}>
-                          {working ? "Preparing…" : "Prepare join request"}
-                        </button>
-                      ) : <span className="readiness-ready">Acknowledged</span>}
-                    </div>
-                    <ul className="apiary-project-readiness" aria-label={`Jira readiness for ${invitation.apiary_name}`}>
-                      {invitation.readiness.projects.map((project) => {
-                        const ready = project.binding_id && project.access_verified && project.workflow_mapped;
-                        const status = invitation.readiness_compatibility_fallback
-                          ? "Readiness refresh pending"
-                          : !project.binding_id
-                          ? "Connect this Jira project"
-                          : !project.access_verified
-                            ? "Verify Jira access"
-                            : !project.workflow_mapped
-                              ? "Finish workflow mapping"
-                              : "Connected and mapped";
-                        return (
-                          <li key={project.project.project_id}>
-                            <span><strong>{project.project.project_key}</strong><small>{project.project.project_name}</small></span>
-                            <span className={ready ? "readiness-ready" : "readiness-blocked"}>{status}</span>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                    {invitation.readiness.jira_connection !== "ready" ? (
-                      <p className="readiness-blocked">Connect Jira on this Hive before it can join.</p>
-                    ) : null}
-                    <small>{invitation.state === "submitted" ? "The signed request is durable and retry-stable. Delivery to the Keeper is not enabled yet." : "Nothing is sent to the Keeper and no membership is granted at this step."}</small>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="empty-copy">No Apiary invitation is saved on this Hive.</p>}
-          </div>
+          <PersonalHiveJoin busy={busy || working} operatorToken={operatorToken} onMessage={setMessage} onError={setError} />
           <label className="field-stack" htmlFor="apiary-name">
             <span>Apiary name</span>
             <input id="apiary-name" value={name} maxLength={120} placeholder="Wildflower Garden" onChange={(event) => { setName(event.target.value); setConfirmCreate(false); }} />
