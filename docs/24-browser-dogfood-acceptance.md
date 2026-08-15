@@ -954,3 +954,13 @@ the independently updated terminal host through the API to worker settings:
   advanced to the new release while terminal-host PID `2966127` remained
   unchanged, preserving the active Queen session. Every proof browser tab was
   closed afterward.
+- Release `0.1.0-dev-e365562241b5` gives Keeper Queen private
+  `swarm_list_apiary_tasks` and `swarm_create_apiary_task` tools while ordinary
+  workers neither discover nor gain authority by directly naming them. The
+  tools list and create only Keeper-canonical Swarm work; they do not expose or
+  target a remote Hive's private worker, repository, terminal, or Jira issue
+  content. The full Rust gate passed 343 tests plus warnings-denied Clippy, and
+  all six focused MCP bridge tests passed after the final lint cleanup. Live
+  read-only MCP discovery against the preserved Queen credential returned both
+  new tool names. API PID advanced to `3537204`; terminal-host PID remained
+  `2966127`, preserving the active Queen session.
