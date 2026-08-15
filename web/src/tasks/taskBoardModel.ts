@@ -1,11 +1,13 @@
 import type { JiraTaskLink, Task, TaskPriority, TaskState, Worker } from "../api";
 
-export type TaskBoardFilter = "all" | "unassigned" | "assigned" | "active" | "jira" | "local" | "attention";
+export type TaskBoardFilter = "all" | "unassigned" | "assigned" | "active" | "attention";
+export type TaskBoardSource = "all" | "jira" | "email" | "local";
 export type TaskBoardSort = "queue" | "priority" | "status" | "updated" | "worker" | "project";
 
 export type TaskBoardQuery = {
   text: string;
   filter: TaskBoardFilter;
+  source: TaskBoardSource;
   sort: TaskBoardSort;
   project: string;
   worker: string;
@@ -39,6 +41,7 @@ export function buildTaskBoardView(
   jiraTaskLinks: JiraTaskLink[],
   workers: Worker[],
   query: TaskBoardQuery,
+  emailTaskIds: ReadonlySet<string> = new Set(),
 ): TaskBoardView {
   const allOpen = tasks.filter((task) => task.state !== "completed");
   const completed = tasks.filter((task) => task.state === "completed");
@@ -49,17 +52,17 @@ export function buildTaskBoardView(
 
   const open = allOpen.filter((task) => {
     const jiraLink = jiraByTask.get(task.id);
+    const source = jiraLink ? "jira" : emailTaskIds.has(task.id) ? "email" : "local";
     const matchesText = !normalizedText || [task.title, task.description, jiraLink?.issue_key, jiraLink?.project_name]
       .some((value) => value?.toLocaleLowerCase().includes(normalizedText));
     if (!matchesText) return false;
+    if (query.source !== "all" && source !== query.source) return false;
     if (query.project !== "all" && jiraLink?.project_key !== query.project) return false;
     if (query.worker === "unassigned" && task.assigned_worker_id) return false;
     if (query.worker !== "all" && query.worker !== "unassigned" && task.assigned_worker_id !== query.worker) return false;
     if (query.filter === "unassigned") return !task.assigned_worker_id;
     if (query.filter === "assigned") return Boolean(task.assigned_worker_id);
     if (query.filter === "active") return task.state === "active";
-    if (query.filter === "jira") return Boolean(jiraLink);
-    if (query.filter === "local") return !jiraLink;
     if (query.filter === "attention") return task.state === "blocked" || task.state === "review";
     return true;
   });

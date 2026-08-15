@@ -9,7 +9,7 @@ import EmailResolutionPanel from "./EmailResolutionPanel";
 import JiraDiscussion from "./JiraDiscussion";
 import TaskActivityPanel from "./TaskActivityPanel";
 import TaskAssignment from "./TaskAssignment";
-import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskProjectChoice } from "./TaskBoardControls";
+import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskBoardSource, type TaskProjectChoice } from "./TaskBoardControls";
 import TaskMetadata from "./TaskMetadata";
 import { buildTaskBoardView } from "./taskBoardModel";
 
@@ -38,11 +38,13 @@ type Props = {
   onReorder: (taskIds: string[]) => Promise<void>;
   query?: string;
   filter?: TaskBoardFilter;
+  source?: TaskBoardSource;
   sort?: TaskBoardSort;
   project?: string;
   worker?: string;
   onQueryChange?: (query: string) => void;
   onFilterChange?: (filter: TaskBoardFilter) => void;
+  onSourceChange?: (source: TaskBoardSource) => void;
   onSortChange?: (sort: TaskBoardSort) => void;
   onProjectChange?: (project: string) => void;
   onWorkerChange?: (worker: string) => void;
@@ -99,11 +101,13 @@ export default function TaskBoard({
   onReorder,
   query = "",
   filter = "all",
+  source = "all",
   sort = "queue",
   project = "all",
   worker = "all",
   onQueryChange,
   onFilterChange,
+  onSourceChange,
   onSortChange,
   onProjectChange,
   onWorkerChange,
@@ -136,7 +140,7 @@ export default function TaskBoard({
     else if (workerId && !assignableWorkers.some((worker) => worker.id === workerId)) setWorkerId(assignableWorkers[0]?.id ?? "");
   }, [assignableWorkers, workerId]);
 
-  const taskView = buildTaskBoardView(tasks, jiraTaskLinks, workers, { text: query, filter, sort, project, worker });
+  const taskView = buildTaskBoardView(tasks, jiraTaskLinks, workers, { text: query, filter, source, sort, project, worker }, new Set(emailTaskSources.map((item) => item.task_id)));
   useEffect(() => {
     let cancelled = false;
     void fetchEmailTaskSources(operatorToken)
@@ -275,7 +279,7 @@ export default function TaskBoard({
 
       <details className="task-mobile-controls">
         <summary>Find, filter, and sort <span>{openTasks.length}/{taskView.allOpenCount}</span></summary>
-        <TaskBoardControls query={query} filter={filter} sort={sort} project={project} worker={worker} workers={workers} projects={projects} openCount={taskView.allOpenCount} busy={busy} onQueryChange={(value) => onQueryChange?.(value)} onFilterChange={(value) => onFilterChange?.(value)} onSortChange={(value) => onSortChange?.(value)} onProjectChange={(value) => onProjectChange?.(value)} onWorkerChange={(value) => onWorkerChange?.(value)} onSync={onJiraSync} />
+        <TaskBoardControls query={query} filter={filter} source={source} sort={sort} project={project} worker={worker} workers={workers} projects={projects} openCount={taskView.allOpenCount} busy={busy} onQueryChange={(value) => onQueryChange?.(value)} onFilterChange={(value) => onFilterChange?.(value)} onSourceChange={(value) => onSourceChange?.(value)} onSortChange={(value) => onSortChange?.(value)} onProjectChange={(value) => onProjectChange?.(value)} onWorkerChange={(value) => onWorkerChange?.(value)} onSync={onJiraSync} />
       </details>
 
       <section className="task-section" aria-labelledby="active-work-heading">

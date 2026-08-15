@@ -240,33 +240,18 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
 
       <section id="settings-runtime" className="settings-card" aria-labelledby="runtime-heading">
         <div><p className="eyebrow">Runtime</p><h3 id="runtime-heading">Local system</h3></div>
-        <dl className="diagnostic-list">
+        <dl className="diagnostic-list runtime-summary-list">
           <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
-          <div><dt>Worker engine</dt><dd>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</dd></div>
-          {health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? (
-            <div><dt>Workers affected</dt><dd>{terminalHostStatus.running_sessions} active worker{terminalHostStatus.running_sessions === 1 ? "" : "s"} will briefly stop · conversations retained</dd></div>
-          ) : null}
           <div><dt>Live updates</dt><dd>{liveFeedLabel(liveFeedState)}</dd></div>
           <div><dt>Running workers</dt><dd>{workers.filter((worker) => worker.running).length}</dd></div>
           <div><dt>Retained sessions</dt><dd>{sessions.length}</dd></div>
-          <div><dt>Development reload</dt><dd>No worker interruption</dd></div>
         </dl>
-        {health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? (
-          <div className="maintenance-action">
-            <div className="runtime-update-comparison" aria-label="Update interruption comparison">
-              <div className="runtime-impact-card runtime-impact-restart">
-                <span className="runtime-impact-label">Restart required · interrupts active work</span>
-                <strong>Every running worker briefly goes offline</strong>
-                <p>The worker engine closes all Claude and Codex terminal processes, replaces itself, then revives Queen and configured always-active workers from their saved conversations. Other workers remain sleeping until you wake them.</p>
-                <small><strong>Clear and present risk:</strong> an in-flight model turn or command is cut off and may need to be checked or retried. Wait for workers to rest when practical. Worker identities, provider conversation IDs, tasks, ownership, and terminal history remain durable.</small>
-              </div>
-              <div className="runtime-impact-card runtime-impact-reload">
-                <span className="runtime-impact-label">No restart · safe during active work</span>
-                <strong>Workers keep running without interruption</strong>
-                <p>A development reload only rebuilds and swaps the API and web working copy. This page briefly reconnects; the separate worker engine and every Claude or Codex process continue running.</p>
-                <small><strong>Limited risk:</strong> an invalid build is rejected and the current app remains active. Worker turns and commands are not interrupted.</small>
-              </div>
-            </div>
+        <div className="runtime-subsystem-grid">
+          <article className={`runtime-subsystem-card ${health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? "runtime-subsystem-restart" : "runtime-subsystem-current"}`} aria-label="Worker engine status">
+            <header><div><span className="runtime-component-name">Worker engine</span><strong>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</strong></div><span className={`runtime-status-badge ${health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? "restart" : "current"}`}>{health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? "Restart required" : "Current"}</span></header>
+            {health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? <>
+              <p>Updating this layer briefly stops {terminalHostStatus.running_sessions} active worker{terminalHostStatus.running_sessions === 1 ? "" : "s"}, then revives Queen and configured always-active workers from their saved conversations.</p>
+              <small><strong>Active commands can be interrupted.</strong> Wait for workers to rest when practical. Identities, provider conversations, tasks, ownership, and terminal history remain durable.</small>
             {!confirmMaintenance ? (
               <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(true)}>Prepare worker engine update</button>
             ) : (
@@ -278,10 +263,10 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
                   <button className="primary-action" disabled={busy} onClick={() => { setConfirmMaintenance(false); void onUpdateWorkerEngine(); }}>Stop workers and update</button>
                 </div>
               </div>
-            )}
-          </div>
-        ) : null}
-        <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} onReload={onReloadDevelopment} />
+            )}</> : <><p>The separate terminal host already matches this release. Running workers do not need to restart.</p><small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small></>}
+          </article>
+          <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} onReload={onReloadDevelopment} />
+        </div>
       </section>
 
       <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} />

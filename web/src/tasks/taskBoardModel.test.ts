@@ -22,7 +22,7 @@ const jiraLink: JiraTaskLink = {
   jira_assignee_account_id: "me", jira_assignee_name: "Operator", remote_updated_at: "2026-08-13T12:00:00Z", last_synced_at: 1, outbound_state: null,
 };
 
-const baseQuery: TaskBoardQuery = { text: "", filter: "all", sort: "queue", project: "all", worker: "all" };
+const baseQuery: TaskBoardQuery = { text: "", filter: "all", source: "all", sort: "queue", project: "all", worker: "all" };
 
 test("separates completed work and retains the total open count while filtering", () => {
   const view = buildTaskBoardView(tasks, [jiraLink], [worker], { ...baseQuery, filter: "attention" });
@@ -46,4 +46,10 @@ test("sorts by product meaning while preserving queue position as the tie breake
     .toEqual(["jira", "blocked", "local"]);
   expect(buildTaskBoardView(tasks, [jiraLink], [worker], { ...baseQuery, sort: "project" }).open.map((task) => task.id))
     .toEqual(["local", "blocked", "jira"]);
+});
+
+test("separates Jira, email, and Swarm-created sources without losing Jira projects", () => {
+  expect(buildTaskBoardView(tasks, [jiraLink], [worker], { ...baseQuery, source: "jira", project: "WWD" }, new Set(["blocked"])).open.map((task) => task.id)).toEqual(["jira"]);
+  expect(buildTaskBoardView(tasks, [jiraLink], [worker], { ...baseQuery, source: "email" }, new Set(["blocked"])).open.map((task) => task.id)).toEqual(["blocked"]);
+  expect(buildTaskBoardView(tasks, [jiraLink], [worker], { ...baseQuery, source: "local" }, new Set(["blocked"])).open.map((task) => task.id)).toEqual(["local"]);
 });

@@ -70,7 +70,7 @@ import SettingsWorkspace from "./settings/SettingsWorkspace";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
-import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort } from "./tasks/TaskBoardControls";
+import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskBoardSource } from "./tasks/TaskBoardControls";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./terminal/MobileTerminalComposer";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
@@ -108,6 +108,7 @@ export function App() {
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
   const [taskQuery, setTaskQuery] = useState("");
   const [taskFilter, setTaskFilter] = useState<TaskBoardFilter>("all");
+  const [taskSource, setTaskSource] = useState<TaskBoardSource>("all");
   const [taskSort, setTaskSort] = useState<TaskBoardSort>("queue");
   const [taskProject, setTaskProject] = useState("all");
   const [taskWorker, setTaskWorkerFilter] = useState("all");
@@ -793,7 +794,7 @@ export function App() {
             {surface !== "settings" && surface !== "decisions" && <div className="rail-context">
               <div className="rail-heading"><span>{surface === "tasks" ? "Board view" : "Workers"}</span></div>
               {surface === "tasks" ? (
-                <TaskBoardControls query={taskQuery} filter={taskFilter} sort={taskSort} project={taskProject} worker={taskWorker} workers={workers} projects={taskProjects} openCount={openTaskCount} busy={busy} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onSync={() => void syncJiraBoard()} />
+                <TaskBoardControls query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} workers={workers} projects={taskProjects} openCount={openTaskCount} busy={busy} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onSync={() => void syncJiraBoard()} />
               ) : workers.length === 0 && orphanSessions.length === 0 ? (
                 <p className="empty-rail">No workers configured.</p>
               ) : (
@@ -942,7 +943,7 @@ export function App() {
         ) : surface === "decisions" ? (
           <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
+          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             busy={busy}

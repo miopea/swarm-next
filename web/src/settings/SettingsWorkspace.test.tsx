@@ -40,6 +40,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       created_at: 1_786_000_000,
     }]);
     if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 5, host_version: "0.1.0-host", draining: false, running_sessions: 1, retained_sessions: 3 } });
+    if (url.includes("runtime/development")) return ok({ enabled: true, version: "0.1.0", state: "idle", reload_available: false, source_revision: "current", source_dirty: false });
     if (url.includes("runtime/resources")) return ok({
       sampled_at: 1,
       policy: {
@@ -116,11 +117,10 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Live updates").parentElement).toHaveTextContent("Live updatesConnected");
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
-  expect((await screen.findByText("Worker engine")).parentElement).toHaveTextContent("Worker engineUpdate ready · restart required");
-  expect(screen.getByText("Workers affected").parentElement).toHaveTextContent("1 active worker will briefly stop · conversations retained");
-  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("Restart required · interrupts active workEvery running worker briefly goes offline");
-  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("an in-flight model turn or command is cut off");
-  expect(screen.getByLabelText("Update interruption comparison")).toHaveTextContent("No restart · safe during active workWorkers keep running without interruption");
+  expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("Worker engineUpdate ready · restart requiredRestart required");
+  expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("briefly stops 1 active worker");
+  expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("Active commands can be interrupted");
+  expect(screen.getByLabelText("App and API status")).toHaveTextContent("App and APIDevelopment build is currentCurrent");
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
   expect(screen.getByRole("group", { name: "Confirm worker engine update" })).toHaveTextContent("Restart 1 active worker now?");
   fireEvent.click(screen.getByRole("button", { name: "Stop workers and update" }));
@@ -235,8 +235,8 @@ test("confirms an opt-in development reload without implying worker loss", async
 
   render(<SettingsWorkspace {...minimalProps()} onReloadDevelopment={onReloadDevelopment} />);
   expect(await screen.findByRole("button", { name: "Reload development build" })).toBeInTheDocument();
-  expect(screen.getByText("Development changes are ready.", { selector: "strong" })).toBeInTheDocument();
-  expect(screen.getByText(/Claude and Codex processes keep running/)).toBeInTheDocument();
+  expect(screen.getByText("Development changes are ready", { selector: "strong" })).toBeInTheDocument();
+  expect(screen.getByLabelText("App and API status")).toHaveTextContent("No worker restart");
   fireEvent.click(screen.getByRole("button", { name: "Reload development build" }));
   expect(screen.getByRole("group", { name: "Confirm development reload" })).toHaveTextContent("Build and activate the working copy?");
   fireEvent.click(screen.getByRole("button", { name: "Build and reload" }));

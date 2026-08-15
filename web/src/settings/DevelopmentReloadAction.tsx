@@ -10,14 +10,16 @@ export default function DevelopmentReloadAction({ busy, runtime, onReload }: Pro
   const [confirming, setConfirming] = useState(false);
   if (!runtime?.enabled) return null;
   if (runtime.state === "requested" || runtime.state === "building") {
-    return <div className="maintenance-action development-reload-action" role="status"><p><strong>Development build in progress.</strong> Workers remain online while Swarm builds and checks the working copy.</p></div>;
+    return <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status" role="status"><header><div><span className="runtime-component-name">App and API</span><strong>Building development changes</strong></div><span className="runtime-status-badge safe">No worker restart</span></header><p>Swarm is compiling and checking the working copy. This page will reconnect; every worker keeps running.</p></article>;
   }
   if (!runtime.reload_available) {
-    return <div className="maintenance-action development-reload-action"><p><strong>Development build is current.</strong> The API and browser already match the product code in this working copy. No reload is needed.</p></div>;
+    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Development build is current</strong></div><span className="runtime-status-badge current">Current</span></header><p>The browser and API match the product code in the working copy. No action is needed.</p><small>Updating this layer never restarts Claude, Codex, or the worker engine.</small></article>;
   }
   return (
-    <div className="maintenance-action development-reload-action">
-      <p><strong>Development changes are ready.</strong> Build the current working copy and switch this same app to it with no worker interruption. The page briefly reconnects, but Claude and Codex processes keep running in the separate worker engine. A failed compile leaves the current release active.</p>
+    <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status">
+      <header><div><span className="runtime-component-name">App and API</span><strong>Development changes are ready</strong></div><span className="runtime-status-badge safe">No worker restart</span></header>
+      <p>Build and switch this app to the working copy. The page briefly reconnects, but Claude and Codex continue in the separate worker engine.</p>
+      <small>A failed compile is rejected and the current app remains active.</small>
       {!confirming ? (
         <button className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>Reload development build</button>
       ) : (
@@ -30,6 +32,6 @@ export default function DevelopmentReloadAction({ busy, runtime, onReload }: Pro
           </div>
         </div>
       )}
-    </div>
+    </article>
   );
 }

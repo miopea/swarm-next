@@ -1016,6 +1016,21 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .restore-guide p { margin: 0; color: var(--muted); font-size: .74rem; line-height: 1.45; }
 .restore-guide code { color: var(--text); overflow-wrap: anywhere; }
 .maintenance-action { display: grid; gap: .75rem; padding: .9rem; border: 1px solid color-mix(in srgb, var(--honey) 55%, var(--line)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--honey-soft) 55%, var(--panel)); }
+.runtime-summary-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.runtime-subsystem-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.runtime-subsystem-card { display: grid; align-content: start; gap: 10px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-raised); }
+.runtime-subsystem-card header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.runtime-subsystem-card header > div { display: grid; min-width: 0; gap: 3px; }
+.runtime-component-name { color: var(--muted); font-size: .69rem; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+.runtime-subsystem-card header strong { font-size: .94rem; }
+.runtime-subsystem-card p, .runtime-subsystem-card small { margin: 0; color: var(--muted); font-size: .77rem; line-height: 1.48; }
+.runtime-subsystem-card small strong { color: var(--text); }
+.runtime-subsystem-card > button { justify-self: start; margin-top: auto; }
+.runtime-subsystem-restart { border-color: color-mix(in srgb, var(--danger) 48%, var(--line)); background: color-mix(in srgb, var(--bad-soft) 40%, var(--panel)); }
+.runtime-subsystem-safe, .runtime-subsystem-current { border-color: color-mix(in srgb, var(--good) 40%, var(--line)); background: color-mix(in srgb, var(--good-soft) 34%, var(--panel)); }
+.runtime-status-badge { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; font-size: .66rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+.runtime-status-badge.restart { color: var(--danger); background: var(--bad-soft); }
+.runtime-status-badge.safe, .runtime-status-badge.current { color: var(--good); background: var(--good-soft); }
 .runtime-update-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
 .runtime-impact-card { display: grid; align-content: start; gap: .35rem; padding: .8rem; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
 .runtime-impact-card strong { font-size: .88rem; }
@@ -1064,6 +1079,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .email-deployment-proof { grid-template-columns: auto 1fr; }
   .email-deployment-proof small { grid-column: 1 / -1; overflow-wrap: anywhere; }
   .runtime-update-comparison { grid-template-columns: 1fr; }
+  .runtime-summary-list, .runtime-subsystem-grid { grid-template-columns: 1fr; }
 }
 .maintenance-action > p { margin: 0; color: var(--muted); font-size: .79rem; line-height: 1.5; }
 .maintenance-confirmation { display: grid; gap: .35rem; }
