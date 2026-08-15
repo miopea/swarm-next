@@ -627,3 +627,15 @@ the independently updated terminal host through the API to worker settings:
   review, safe empty Jira selection, three Apiary steps, and authentication
   across browser restarts. API PID advanced to `3048085`; terminal-host PID
   remained `2966127`.
+- Release `0.1.0-dev-f1f79ce299a9` moves Jira readiness, OAuth entry,
+  project/workflow configuration, issue review, task links, comments, sync
+  commands, retries, and reconciliation behind one integration-owned API
+  boundary. Mocked transport tests cover every command shape and encoded
+  identity without contacting Jira, and malformed rolling-update link payloads
+  fail closed. All 211 frontend tests, strict TypeScript, and the production
+  build passed. Live desktop and Android acceptance remained read-only: Jira
+  discovery and issue review opened with no selected issue and performed no
+  sync, assignment, comment, mapping, or workflow mutation. Every primary and
+  Apiary member surface passed with zero overflow, 346 and 318 named controls,
+  three Apiary guide steps, and authentication across browser restarts. API PID
+  advanced to `3067260`; terminal-host PID remained `2966127`.
