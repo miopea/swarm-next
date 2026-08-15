@@ -664,3 +664,13 @@ the independently updated terminal host through the API to worker settings:
   browser restarts, and every hidden proof browser closed. API PID advanced to
   `3088579`; terminal-host PID remained `2966127`, preserving the active worker
   session while a separately pending worker-engine update stayed deferred.
+- Release `0.1.0-dev-3eab4f698904` moves worker discovery, repository catalog
+  and boundary validation, durable profile configuration/order, and wake/stop
+  routes behind one API adapter without moving terminal process ownership.
+  The clean Rust gate passed 331 workspace tests and Clippy with warnings
+  denied; the focused API crate accounted for 109 of those tests. Live Edge
+  acceptance passed every primary and Apiary member surface at 1,440-pixel
+  desktop and 412-pixel Android widths with zero overflow, 346 and 314 named
+  controls, all three Apiary guide steps, and authentication across browser
+  restarts. API PID advanced to `3094914`; terminal-host PID remained
+  `2966127`, preserving the active worker session.
