@@ -652,3 +652,15 @@ the independently updated terminal host through the API to worker settings:
   closed after writing evidence. API PID advanced to `3075309`; terminal-host
   PID remained `2966127`, so the active worker engine and provider sessions were
   not restarted.
+- Release `0.1.0-dev-70ee41308b41` gives personal-Hive joining one vertical
+  browser owner for connection-card generation, invitation review/import,
+  policy acknowledgement, project readiness, and durable prepared requests.
+  The existing 16 Apiary interaction cases remained green inside the complete
+  213-test frontend gate; strict TypeScript and the production build also
+  passed. Exact live Edge acceptance passed Needs you, Tasks, Workers, Apiary,
+  and Settings at 1,440-pixel desktop and 412-pixel Android widths with zero
+  overflow, 346 and 318 named controls, and all three Apiary guide steps. The
+  mocked member control room passed both sizes, authentication survived full
+  browser restarts, and every hidden proof browser closed. API PID advanced to
+  `3088579`; terminal-host PID remained `2966127`, preserving the active worker
+  session while a separately pending worker-engine update stayed deferred.
