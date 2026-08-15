@@ -1,6 +1,7 @@
 mod agent;
 mod attach;
 mod attachments;
+mod decisions;
 mod email_attachments;
 pub mod federation_http;
 mod jira;
@@ -1469,13 +1470,6 @@ struct JiraCommentRequest {
     body: String,
 }
 #[derive(Debug, Deserialize)]
-struct ResolveDecisionRequest {
-    action: String,
-    #[serde(default)]
-    note: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct OutputQuery {
     after: Option<u64>,
 }
@@ -1808,10 +1802,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/tasks",
             get(tasks::list_tasks).post(tasks::create_task),
         )
-        .route("/api/v1/decisions", get(list_decisions))
+        .route("/api/v1/decisions", get(decisions::list_decisions))
         .route(
             "/api/v1/decisions/{decision_id}/resolution",
-            patch(resolve_decision),
+            patch(decisions::resolve_decision),
         )
         .route("/api/v1/tasks/order", put(tasks::reorder_tasks))
         .route("/api/v1/tasks/activity", get(tasks::recent_task_activity))
@@ -3327,35 +3321,6 @@ fn resource_response(sample: Option<ProcessResourceSample>) -> ProcessResourceRe
     }
 }
 
-async fn list_decisions(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let decisions = task_service(&state)?
-        .list_visible_decisions(None)
-        .map_err(application_error)?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(decisions)).into_response())
-}
-
-async fn resolve_decision(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(decision_id): Path<String>,
-    Json(request): Json<ResolveDecisionRequest>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let decision_id = parse_decision_id(&decision_id)?;
-    task_service(&state)?
-        .resolve_operator_decision(decision_id, &request.action, &request.note)
-        .map_err(application_error)?;
-    state.control_room_notify.notify_waiters();
-    state.deliver_coordination().await;
-    let decision = task_store(&state)?
-        .get_decision_request(decision_id)
-        .map_err(|error| task_store_error(&error))?;
-    Ok(Json(decision).into_response())
-}
 async fn observe_provider_activity(
     state: &AppState,
     profiles: &[WorkerProfile],

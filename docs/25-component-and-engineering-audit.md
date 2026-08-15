@@ -142,7 +142,9 @@ Required next extractions are vertical and behavior-led:
   Queen autonomy policy has its own `orchestration` boundary rather than being
   coupled to notifications or presence merely because Settings renders them
   nearby; future conductor execution belongs there only when its authority and
-  environment policy are implemented.
+  environment policy are implemented. Visible operator decisions and their
+  guarded resolution/delivery now share a `decisions` HTTP adapter; decision
+  durability and worker delivery remain application/persistence concerns.
 - `crates/swarm-persistence/src/lib.rs` is roughly 3,700 lines although Jira,
   workers, decisions, notifications, dispatches, and outcomes have begun moving
   to focused modules.
