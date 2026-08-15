@@ -544,3 +544,16 @@ the independently updated terminal host through the API to worker settings:
   and preserved authentication across complete browser restarts. The gate made
   no Jira selection or mutation and no Apiary state change. Deployment retained
   terminal-host PID `1528937` and the exact same 20 Claude processes.
+- Releases `0.1.0-d2a8a508db9c` and `0.1.0-b99942eebc47` move the complete
+  control-room snapshot behind one typed browser owner. Initial authentication,
+  live-feed invalidation, manual refresh, worker lifecycle commands, and lock
+  now replace or clear the same aggregate atomically; workspace choices and Jira
+  links can no longer remain resident after the rest of the room is locked.
+  Live proof found one mobile timing race where Worker engine briefly appeared
+  unavailable before its request completed. The UI now says `Checking…`, and
+  the gate waits for `Current` or `Update ready` before evaluating maintenance.
+  The final authenticated run passed Needs you, Tasks, Workers, and Settings at
+  exact 1,440 by 900 and 412 by 915 bounds, with 333 and 304 named controls,
+  three Apiary invitation steps, and trusted-session survival across complete
+  desktop and mobile browser restarts. Both deployments preserved terminal-host
+  PID `1528937` and the exact same 20 Claude processes.

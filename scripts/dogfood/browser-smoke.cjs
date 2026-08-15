@@ -9,6 +9,8 @@ const baseUrl = process.env.SWARM_BASE_URL || "http://127.0.0.1:8766";
 const operatorToken = process.env.SWARM_OPERATOR_TOKEN;
 const browserExecutable = process.env.SWARM_BROWSER_EXECUTABLE;
 const outputRoot = process.env.SWARM_BROWSER_EVIDENCE || path.resolve("dist", "browser-smoke");
+const compactOutput = process.env.SWARM_BROWSER_COMPACT === "1";
+const resultPath = process.env.SWARM_BROWSER_RESULT;
 
 if (!operatorToken) {
   throw new Error("SWARM_OPERATOR_TOKEN is required");
@@ -34,7 +36,17 @@ async function main() {
     await browser.close();
   }
   const browserRestartPersistence = await verifyBrowserRestartPersistence();
-  process.stdout.write(`${JSON.stringify({ baseUrl, results, browserRestartPersistence }, null, 2)}\n`);
+  const report = { baseUrl, results, browserRestartPersistence };
+  const output = compactOutput ? {
+    baseUrl,
+    surfaces: results.map(({ surface, status, surfaces, accessibleControlCount, apiaryGuideSteps }) => ({
+      surface, status, surfaces, accessibleControlCount, apiaryGuideSteps,
+    })),
+    browserRestartPersistence,
+  } : report;
+  const serialized = `${JSON.stringify(output, null, 2)}\n`;
+  if (resultPath) await fs.writeFile(resultPath, serialized, "utf8");
+  process.stdout.write(serialized);
 }
 
 async function verifyBrowserRestartPersistence() {
@@ -533,7 +545,11 @@ async function verifyBackupDownload(page) {
   return { sqliteHeader: true, bytes: size };
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  if (resultPath) {
+    await fs.mkdir(path.dirname(resultPath), { recursive: true });
+    await fs.writeFile(resultPath, `${JSON.stringify({ baseUrl, status: "failed", error: error.message }, null, 2)}\n`, "utf8");
+  }
   process.stderr.write(`${error.stack || error.message}\n`);
   process.exitCode = 1;
 });
