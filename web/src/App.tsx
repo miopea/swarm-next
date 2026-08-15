@@ -9,6 +9,7 @@ import {
   resolveDecision,
   createWorker,
   fetchHealth,
+  fetchTerminalHostStatus,
   fetchJiraTaskLinks,
   retryJiraTaskLink,
   fetchNotificationSettings,
@@ -75,6 +76,7 @@ import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./ter
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 import WorkerRosterItem from "./workers/WorkerRosterItem";
 import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
+import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
@@ -113,6 +115,7 @@ export function App() {
   const [decisionFocus, setDecisionFocus] = useState<{ id: string; request: number }>();
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState<string>();
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
   const [mobileKeysVisible, setMobileKeysVisible] = useState(initialMobileKeysVisibility);
   const [liveFeedState, setLiveFeedState] = useState<LiveFeedState>("connecting");
@@ -511,8 +514,9 @@ export function App() {
     setTasks((current) => current.map((task) => task.id === updated.id ? updated : task));
   }
 
-  async function perform(action: () => Promise<void>) {
+  async function perform(action: () => Promise<void>, progress = "Saving…") {
     setBusy(true);
+    setBusyLabel(progress);
     setOperationError(undefined);
     try {
       await action();
@@ -520,6 +524,7 @@ export function App() {
       setOperationError(error instanceof Error ? error.message : "The operation could not be completed");
     } finally {
       setBusy(false);
+      setBusyLabel(undefined);
     }
   }
 
@@ -573,7 +578,28 @@ export function App() {
     if (!operatorToken) return;
     const previousSessionIds = sessions.map((session) => session.session_id);
     await perform(async () => {
-      await updateWorkerEngine(operatorToken);
+      const targetVersion = loadState.kind === "ready" ? loadState.health.version : undefined;
+      await requestRuntimeHandoff(() => updateWorkerEngine(operatorToken).then(() => undefined));
+      setBusyLabel("Reconnecting workers…");
+      let ready = false;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+        try {
+          const [health, host] = await Promise.all([
+            fetchHealth(),
+            fetchTerminalHostStatus(operatorToken),
+          ]);
+          if ((!targetVersion || health.version === targetVersion)
+            && host.host_version === health.version
+            && !host.draining) {
+            ready = true;
+            break;
+          }
+        } catch (error) {
+          if (!isExpectedRuntimeHandoff(error)) throw error;
+        }
+      }
+      if (!ready) throw new Error("The worker engine did not become healthy within two minutes. Workers remain recoverable; check Runtime before retrying.");
       previousSessionIds.forEach((sessionId) => terminalWorkspace.closeSession(sessionId));
       const [controlRoom, nextProviders] = await Promise.all([
         loadControlRoom(operatorToken),
@@ -582,14 +608,15 @@ export function App() {
       controlRoomModel.replace(controlRoom);
       setProviders(nextProviders);
       setActiveSessionId(preferredSessionId(controlRoom.workers, controlRoom.sessions));
-    });
+    }, "Restarting worker engine…");
   }
 
   async function reloadDevelopmentBuild() {
     if (!operatorToken || loadState.kind !== "ready") return;
     const previousVersion = loadState.health.version;
     await perform(async () => {
-      await requestDevelopmentReload(operatorToken);
+      await requestRuntimeHandoff(() => requestDevelopmentReload(operatorToken));
+      setBusyLabel("Building and checking the development update…");
       for (let attempt = 0; attempt < 600; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 2_000));
         let next;
@@ -615,7 +642,7 @@ export function App() {
         }
       }
       throw new Error("The development build did not become healthy within 20 minutes");
-    });
+    }, "Starting development build…");
   }
 
   function releaseEngagementWhenSwitching(
@@ -830,7 +857,7 @@ export function App() {
             </button>
           ) : null}
           <div className="header-actions">
-            {busy && <span className="saving-state">Saving…</span>}
+            {busy && <span className="saving-state">{busyLabel ?? "Saving…"}</span>}
             {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
             {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
