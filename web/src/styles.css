@@ -279,7 +279,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .email-source-select { display: none; }
 .email-source-preview { max-height: min(500px, 52vh); overflow-y: auto; }
 .email-task-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.email-task-fields label { display: grid; align-content: start; gap: 5px; color: var(--muted); font-size: .74rem; }
+.email-task-field { display: grid; align-content: start; gap: 5px; }
+.email-task-field label { color: var(--muted); font-size: .74rem; }
 .email-task-fields input, .email-task-fields select, .email-task-fields textarea { width: 100%; }
 .email-task-title, .email-task-description { grid-column: 1 / -1; }
 .email-task-worker { grid-column: 1 / -1; }
