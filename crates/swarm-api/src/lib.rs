@@ -8,6 +8,7 @@ mod jira_oauth;
 mod microsoft_oauth;
 mod notifications;
 mod outlook;
+mod tasks;
 mod terminal_socket;
 mod workers;
 
@@ -48,13 +49,12 @@ use swarm_domain::{
     LocalApiaryContext, NotificationPolicy, OperatorId, PresenceDeviceClass, PresenceDeviceId,
     PresenceMode, PresenceObservationState, ProviderConversationId, ProviderKind,
     QueenAutonomyLevel, QueenAutonomyPolicy, SharedWorkBackend, StewardCapability, Stewardship,
-    StewardshipId, TaskDetailsUpdate, TaskId, TaskPriority, TaskState, WorkerAttentionState,
-    WorkerId, WorkerProfile, WorkerSessionId,
+    StewardshipId, TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile,
+    WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
-    JiraTransitionFailure, MAX_OPEN_TASKS_PER_ORDER, MAX_TASK_ACTIVITY_NOTE_BYTES,
-    MAX_TASK_ACTIVITY_PAGE, NotificationSettings, PresentationColorTheme, PresentationDeviceClass,
+    JiraTransitionFailure, NotificationSettings, PresentationColorTheme, PresentationDeviceClass,
     PresentationPreferences, PushSubscriptionInput, TaskDispatch, TaskDispatchFailure,
     TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
@@ -1505,22 +1505,6 @@ struct ResizeRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct CreateTaskRequest {
-    title: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    priority: TaskPriority,
-    workspace: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct TransitionTaskRequest {
-    state: TaskState,
-    #[serde(default)]
-    note: String,
-}
-#[derive(Debug, Deserialize)]
 struct JiraCommentRequest {
     body: String,
 }
@@ -1532,11 +1516,6 @@ struct ResolveDecisionRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct AssignTaskRequest {
-    worker_id: Option<WorkerId>,
-}
-
-#[derive(Debug, Deserialize)]
 struct OutputQuery {
     after: Option<u64>,
 }
@@ -1544,16 +1523,6 @@ struct OutputQuery {
 #[derive(Debug, Deserialize)]
 struct ControlRoomEventsQuery {
     after: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TaskActivityQuery {
-    limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReorderTasksRequest {
-    task_ids: Vec<TaskId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1873,18 +1842,30 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/feedback/attachments/{name}",
             get(download_dogfood_attachment),
         )
-        .route("/api/v1/tasks", get(list_tasks).post(create_task))
+        .route(
+            "/api/v1/tasks",
+            get(tasks::list_tasks).post(tasks::create_task),
+        )
         .route("/api/v1/decisions", get(list_decisions))
         .route(
             "/api/v1/decisions/{decision_id}/resolution",
             patch(resolve_decision),
         )
-        .route("/api/v1/tasks/order", put(reorder_tasks))
-        .route("/api/v1/tasks/activity", get(recent_task_activity))
-        .route("/api/v1/tasks/{task_id}", patch(update_task))
-        .route("/api/v1/tasks/{task_id}/activity", get(task_activity))
-        .route("/api/v1/tasks/{task_id}/state", patch(transition_task))
-        .route("/api/v1/tasks/{task_id}/assignment", put(assign_task))
+        .route("/api/v1/tasks/order", put(tasks::reorder_tasks))
+        .route("/api/v1/tasks/activity", get(tasks::recent_task_activity))
+        .route("/api/v1/tasks/{task_id}", patch(tasks::update_task))
+        .route(
+            "/api/v1/tasks/{task_id}/activity",
+            get(tasks::task_activity),
+        )
+        .route(
+            "/api/v1/tasks/{task_id}/state",
+            patch(tasks::transition_task),
+        )
+        .route(
+            "/api/v1/tasks/{task_id}/assignment",
+            put(tasks::assign_task),
+        )
         .route(
             "/api/v1/workers",
             get(workers::list_workers).post(workers::create_worker),
@@ -3699,160 +3680,6 @@ async fn resolve_decision(
         .map_err(|error| task_store_error(&error))?;
     Ok(Json(decision).into_response())
 }
-async fn list_tasks(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let tasks = task_service(&state)?
-        .list_tasks()
-        .map_err(application_error)?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
-}
-
-async fn create_task(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(request): Json<CreateTaskRequest>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let task = task_service(&state)?
-        .create_operator_task(
-            &request.title,
-            &request.description,
-            request.priority,
-            &request.workspace,
-        )
-        .map_err(application_error)?;
-    state.control_room_notify.notify_waiters();
-    Ok((StatusCode::CREATED, Json(task)).into_response())
-}
-
-async fn task_activity(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(task_id): Path<String>,
-    Query(query): Query<TaskActivityQuery>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let limit = query.limit.unwrap_or(30);
-    if !(1..=MAX_TASK_ACTIVITY_PAGE).contains(&limit) {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_task_activity_limit",
-            format!("task activity limit must be between 1 and {MAX_TASK_ACTIVITY_PAGE}"),
-        ));
-    }
-    let activity = task_store(&state)?
-        .list_task_activity(parse_task_id(&task_id)?, limit)
-        .map_err(|error| task_store_error(&error))?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(activity)).into_response())
-}
-
-async fn recent_task_activity(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Query(query): Query<TaskActivityQuery>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let limit = query.limit.unwrap_or(100);
-    if !(1..=MAX_TASK_ACTIVITY_PAGE).contains(&limit) {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_task_activity_limit",
-            format!("task activity limit must be between 1 and {MAX_TASK_ACTIVITY_PAGE}"),
-        ));
-    }
-    let activity = task_store(&state)?
-        .list_recent_task_activity(limit)
-        .map_err(|error| task_store_error(&error))?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(activity)).into_response())
-}
-
-async fn reorder_tasks(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(request): Json<ReorderTasksRequest>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    if request.task_ids.len() > MAX_OPEN_TASKS_PER_ORDER {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_task_order",
-            format!("task order cannot exceed {MAX_OPEN_TASKS_PER_ORDER} entries"),
-        ));
-    }
-    let tasks = task_store(&state)?
-        .reorder_open_tasks(&request.task_ids)
-        .map_err(|error| task_store_error(&error))?;
-    state.control_room_notify.notify_waiters();
-    Ok(Json(tasks).into_response())
-}
-
-async fn update_task(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(task_id): Path<String>,
-    Json(request): Json<TaskDetailsUpdate>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let task = task_service(&state)?
-        .update_operator_task(parse_task_id(&task_id)?, &request)
-        .map_err(application_error)?;
-    state.control_room_notify.notify_waiters();
-    Ok(Json(task).into_response())
-}
-
-async fn transition_task(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(task_id): Path<String>,
-    Json(request): Json<TransitionTaskRequest>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let task_id = parse_task_id(&task_id)?;
-    let store = task_store(&state)?;
-    let current = store
-        .get_task(task_id)
-        .map_err(|error| task_store_error(&error))?;
-    if !current.state.can_transition_to(request.state) {
-        return Err(task_store_error(&TaskStoreError::InvalidTransition {
-            from: current.state,
-            to: request.state,
-        }));
-    }
-    if request.note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
-        return Err(task_store_error(&TaskStoreError::InvalidTaskActivityNote));
-    }
-    let task = task_service(&state)?
-        .transition_operator_task_with_note(task_id, request.state, &request.note)
-        .map_err(application_error)?;
-    state.control_room_notify.notify_waiters();
-    state.deliver_jira_transitions().await;
-    Ok(Json(task).into_response())
-}
-
-async fn assign_task(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(task_id): Path<String>,
-    Json(request): Json<AssignTaskRequest>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let task_id = parse_task_id(&task_id)?;
-    let task = match request.worker_id {
-        Some(worker_id) => task_service(&state)?.assign_operator_task(task_id, worker_id),
-        None => task_service(&state)?.unassign_operator_task(task_id),
-    }
-    .map_err(application_error)?;
-    state.control_room_notify.notify_waiters();
-    state.deliver_coordination().await;
-    let task = task_store(&state)?
-        .get_task(task.id)
-        .map_err(|error| task_store_error(&error))?;
-    Ok(Json(task).into_response())
-}
-
 async fn observe_provider_activity(
     state: &AppState,
     profiles: &[WorkerProfile],
