@@ -77,6 +77,12 @@ The explicit `reconcile-host` action:
 5. verifies the replacement host through same-user IPC;
 6. restores and verifies the retained host release if replacement fails.
 
+The API has a soft systemd dependency on the terminal host. It remains online
+while that host restarts, so the authenticated maintenance request can observe
+the replacement and return its real result instead of deadlocking against its
+own graceful shutdown. Worker and terminal surfaces may briefly reconnect, but
+the App/API process is not restarted by a holder-only update.
+
 The package also installs a bounded user timer. Every two minutes it performs
 the same atomic drain-and-status check. Active sessions make that check a
 successful no-op and admission is reopened immediately; once the count reaches

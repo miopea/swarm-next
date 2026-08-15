@@ -2,7 +2,7 @@
 Description=Swarm Next application and web UI
 PartOf=swarm-next.target
 After=swarm-next-terminal-host.service
-Requires=swarm-next-terminal-host.service
+Wants=swarm-next-terminal-host.service
 
 [Service]
 Type=simple

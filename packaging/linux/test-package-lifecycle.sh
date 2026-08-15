@@ -100,6 +100,11 @@ grep -q "SWARM_ASSET_ROOT=$SWARM_INSTALL_ROOT/assets" "$SWARM_SYSTEMD_USER_ROOT/
 grep -q "SWARM_DATABASE_PATH=$SWARM_STATE_ROOT/swarm-next.sqlite3" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "SWARM_MAINTENANCE_REQUEST_PATH=$SWARM_STATE_ROOT/worker-engine-maintenance.request" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "EnvironmentFile=-$SWARM_CONFIG_ROOT/swarm-next-dev.env" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
+grep -q '^Wants=swarm-next-terminal-host.service$' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
+if grep -q '^Requires=swarm-next-terminal-host.service$' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"; then
+  echo "API must remain online during a controlled terminal-host restart" >&2
+  exit 1
+fi
 grep -q "PathExists=$SWARM_STATE_ROOT/development-reload.request" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-development-reload.path"
 grep -q "ReadWritePaths=$SWARM_INSTALL_ROOT $SWARM_STATE_ROOT $SWARM_WORKSPACE_ROOT" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-development-reload.service"
 grep -q '^Environment=PATH=%h/.cargo/bin:%h/.local/share/pnpm:%h/.local/bin:/usr/local/bin:/usr/bin:/bin$' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-development-reload.service"
