@@ -65,6 +65,7 @@ import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
+import HiveContextIndicator from "./controlRoom/HiveContextIndicator";
 import { useControlRoomModel } from "./controlRoom/useControlRoomModel";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
@@ -772,7 +773,7 @@ export function App() {
       <aside className={`control-rail surface-${surface}`} aria-label="Swarm navigation">
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
-          <div><p className="eyebrow">Swarm Next</p><h1>Control room</h1></div>
+          <div className="brand-copy"><p className="eyebrow">Swarm Next</p><h1>Control room</h1><HiveContextIndicator identity={hiveIdentity} /></div>
         </div>
 
         {operatorToken ? (
@@ -850,11 +851,12 @@ export function App() {
           <div>
             <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "tasks" ? "Plan and dispatch" : surface === "settings" ? "Preferences and diagnostics" : activeTask?.title ?? "Persistent terminal"}</p>
             <h2>{surface === "decisions" ? "Needs you" : surface === "tasks" ? "Task board" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
+            <HiveContextIndicator identity={hiveIdentity} compact />
           </div>
           {surface === "workers" && operatorToken ? (
             <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" onClick={() => setShowMobileWorkers(true)}>
               <span className="worker-avatar"><BeeMascot expression={activeWorker ? workerExpression(activeWorker) : "sleeping"} /></span>
-              <span><small>Current worker</small><strong>{activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "Choose worker")}</strong></span>
+              <span><HiveContextIndicator identity={hiveIdentity} compact /><strong>{activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "Choose worker")}</strong></span>
               <span aria-hidden="true">⌄</span>
             </button>
           ) : null}

@@ -88,11 +88,18 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .rail-resize-handle { position: absolute; z-index: 20; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; touch-action: none; }
 .rail-resize-handle::after { position: absolute; top: 0; right: 2px; width: 2px; height: 100%; background: transparent; content: ""; transition: background .15s; }
 .rail-resize-handle:hover::after, .rail-resize-handle:focus-visible::after, .app-shell.resizing-rail .rail-resize-handle::after { background: var(--accent); }
-.brand-lockup { display: flex; align-items: center; gap: 12px; padding: 0 6px 21px; }
+.brand-lockup { display: flex; align-items: center; gap: 12px; padding: 0 6px 18px; }
+.brand-copy { display: grid; min-width: 0; }
 .brand-lockup h1 { margin: 0; font-size: 1rem; letter-spacing: -.01em; }
 .brand-mark { display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border: 1px solid var(--accent); border-radius: 13px; color: var(--text); background: var(--accent-soft); }
 .brand-mark .bee-mascot { width: 34px; height: 34px; }
 .eyebrow { margin: 0 0 5px; color: var(--muted); font-size: .69rem; font-weight: 500; letter-spacing: .11em; text-transform: uppercase; }
+.hive-context-indicator { display: flex; min-width: 0; align-items: center; gap: 6px; margin-top: 5px; color: var(--muted); font-size: .65rem; line-height: 1.2; }
+.hive-context-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hive-context-role { flex: 0 0 auto; padding: 2px 5px; border-radius: 999px; color: var(--good); background: color-mix(in srgb, var(--good) 11%, transparent); font-size: .55rem; font-weight: 700; letter-spacing: .035em; text-transform: uppercase; }
+.hive-context-role.keeper { color: var(--blocked); background: var(--blocked-soft); }
+.hive-context-role.member { color: var(--good); background: var(--good-soft); }
+.hive-context-indicator.compact { display: none; }
 
 .surface-nav { display: grid; gap: 5px; padding-bottom: 17px; border-bottom: 1px solid var(--line); }
 .surface-nav button { display: flex; min-height: 42px; align-items: center; justify-content: space-between; padding: 0 10px; border: 1px solid transparent; border-radius: 10px; color: var(--muted); background: transparent; text-align: left; }
@@ -857,13 +864,18 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .workspace-header { min-height: 52px; padding: 7px 12px; }
   .workspace-header .eyebrow { display: none; }
   .workspace-header h2 { font-size: 1rem; }
+  .workspace-header > div:first-child { min-width: 0; }
+  .workspace-header > div:first-child h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .workspace-header .hive-context-indicator.compact { display: flex; max-width: min(190px, 46vw); margin-top: 2px; font-size: .58rem; }
+  .workspace-header .hive-context-indicator.compact .hive-context-role { font-size: .5rem; }
   .workspace-header:has(.mobile-worker-switcher-trigger) > div:first-child { display: none; }
   .mobile-worker-switcher-trigger { display: grid; min-width: 0; max-width: min(190px, 48vw); min-height: 38px; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 7px; border-color: var(--line); color: var(--text); background: var(--panel-raised); text-align: left; }
   .mobile-worker-switcher-trigger .worker-avatar { width: 32px; height: 32px; }
   .mobile-worker-switcher-trigger .worker-avatar .bee-mascot { width: 35px; height: 35px; }
   .mobile-worker-switcher-trigger > span:nth-child(2) { display: grid; min-width: 0; }
-  .mobile-worker-switcher-trigger small, .mobile-worker-switcher-trigger strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mobile-worker-switcher-trigger small { color: var(--quiet); font-size: .55rem; text-transform: uppercase; }
+  .mobile-worker-switcher-trigger .hive-context-indicator { max-width: 100%; margin: 0; }
+  .mobile-worker-switcher-trigger .hive-context-role { font-size: .47rem; }
+  .mobile-worker-switcher-trigger strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mobile-worker-switcher-trigger strong { font-size: .76rem; }
   .mobile-worker-backdrop { display: grid; }
   .header-actions { gap: 5px; }
