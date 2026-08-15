@@ -596,3 +596,12 @@ the independently updated terminal host through the API to worker settings:
   widths with zero overflow, 346 and 314 named controls, three Apiary guide
   steps, and authentication preserved across complete browser restarts. API
   PID advanced to `3022514`; terminal-host PID remained `2966127`.
+- Release `0.1.0-dev-95b0d085ea46` is the first complete API-domain split:
+  presence vocabulary, reads, manual-mode changes, and device observations now
+  share one focused module over the request transport while existing imports
+  remain compatible. The gate passed 207 frontend tests, strict TypeScript,
+  and the production build. Live desktop and Android acceptance again passed
+  every primary and member surface with zero overflow, 346 and 318 named
+  controls, three Apiary guide steps, and authentication across browser
+  restarts. API PID advanced to `3027399`; terminal-host PID remained
+  `2966127`.
