@@ -574,3 +574,15 @@ the independently updated terminal host through the API to worker settings:
   Enter frame. The rendered 412 by 915 flow produced an exact transformed
   response through both Codex Clover and Claude Dogfood Clover, returned both
   fixtures to Sleeping, and closed every Edge context after evidence capture.
+- Releases through `0.1.0-dev-ebc3b1217d9b` give the Apiary handoff one
+  component owner for its shared link, file-fallback, transport-status, and
+  three-step guidance controls, then isolate the Keeper invitation workflow
+  from the broader Apiary settings page. The complete frontend gate passed 206
+  tests, strict TypeScript checking, and the production build. Live DOM proof
+  on the Keeper Apiary showed the three invitation steps, verified-link entry,
+  file fallback, promoted Jira project, ownership rollup, and collapse guard.
+  The exact Edge acceptance gate passed at 1,440-pixel desktop and 412-pixel
+  Android widths with zero document overflow, 346 and 318 named controls,
+  three Apiary guide steps, member surfaces, and authentication preserved
+  across complete browser restarts. The App/API-only deployment changed API
+  PID to `3016004` while preserving terminal-host PID `2966127`.
