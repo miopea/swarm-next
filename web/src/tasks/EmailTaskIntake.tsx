@@ -216,12 +216,12 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
               <button className="text-button" type="button" onClick={backToInbox}>← Inbox</button>
               <span id="email-source-review-heading">Review {selectedMessages.length} source email{selectedMessages.length === 1 ? "" : "s"}</span>
             </div>
-            <label className="email-source-select">
-              <span>Preview source email</span>
-              <select value={previewIndex} onChange={(event) => setPreviewIndex(Number(event.target.value))}>
+            <div className="email-source-select">
+              <label htmlFor="email-source-preview">Preview source email</label>
+              <select id="email-source-preview" value={previewIndex} onChange={(event) => setPreviewIndex(Number(event.target.value))}>
                 {selectedMessages.map((item, index) => <option key={item.summary.id} value={index}>{index + 1}. {item.summary.subject || "(No subject)"} — {item.summary.sender_name || item.summary.sender_address}</option>)}
               </select>
-            </label>
+            </div>
             <div className="email-source-tabs" role="tablist" aria-label="Selected source emails">
               {selectedMessages.map((item, index) => <button key={item.summary.id} role="tab" aria-selected={index === previewIndex} onClick={() => setPreviewIndex(index)}><strong>{index + 1}. {item.summary.subject || "(No subject)"}</strong><small>{item.summary.sender_name || item.summary.sender_address}</small></button>)}
             </div>
