@@ -29,10 +29,7 @@ export function rememberMobileKeysVisibility(visible: boolean): void {
 
 export function composeTerminalSubmission(draft: string): readonly [string, string] {
   const normalized = draft.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (normalized.includes("\n")) {
-    return [`\u001b[200~${normalized}\u001b[201~`, MOBILE_TERMINAL_KEYS.enter];
-  }
-  return [normalized, MOBILE_TERMINAL_KEYS.enter];
+  return [`\u001b[200~${normalized}\u001b[201~`, MOBILE_TERMINAL_KEYS.enter];
 }
 
 interface MobileTerminalComposerProps {
