@@ -16,10 +16,13 @@ if (!operatorToken) {
   throw new Error("SWARM_OPERATOR_TOKEN is required");
 }
 
-const surfaces = [
+const configuredSurfaces = [
   { name: "desktop", viewport: { width: 1440, height: 900 }, mobile: false },
   { name: "mobile", viewport: { width: 412, height: 915 }, mobile: true },
 ];
+const requestedSurfaceNames = new Set((process.env.SWARM_BROWSER_SURFACES || "desktop,mobile").split(",").map((name) => name.trim()).filter(Boolean));
+const surfaces = configuredSurfaces.filter((surface) => requestedSurfaceNames.has(surface.name));
+if (!surfaces.length) throw new Error("SWARM_BROWSER_SURFACES must include desktop or mobile");
 
 async function main() {
   await fs.mkdir(outputRoot, { recursive: true });
