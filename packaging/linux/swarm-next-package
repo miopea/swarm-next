@@ -25,6 +25,7 @@ restore_incoming=
 dev_config="$config_root/swarm-next-dev.env"
 dev_reload_started=
 dev_status_path=
+dev_build_root=
 
 die() { printf 'swarm-next-package: %s\n' "$*" >&2; exit 1; }
 run_systemctl() { "$systemctl_bin" --user "$@"; }
@@ -63,7 +64,34 @@ on_exit() {
       printf 'state=failed\n' > "$dev_status_path" 2>/dev/null || true
     fi
   fi
+  [ -z "$dev_build_root" ] || clear_managed_directory "$dev_build_root"
   exit "$result"
+}
+
+clear_managed_directory() {
+  managed_directory=$1
+  case "$managed_directory" in "$state_root"/*) :;; *) die "cleanup path escapes managed state";; esac
+  [ -d "$managed_directory" ] || return 0
+  for candidate in "$managed_directory"/* "$managed_directory"/.[!.]* "$managed_directory"/..?*; do
+    [ -e "$candidate" ] || continue
+    rm -rf -- "$candidate"
+  done
+}
+
+prune_superseded_releases() {
+  releases_root="$install_root/releases"
+  [ -d "$releases_root" ] || return 0
+  keep_current=$(release_from_link "$install_root/current")
+  keep_previous=$(release_from_link "$install_root/previous")
+  keep_host=$(release_from_link "$install_root/host-current")
+  for candidate in "$releases_root"/*; do
+    [ -d "$candidate" ] || continue
+    case "$candidate" in
+      "$keep_current"|"$keep_previous"|"$keep_host") continue;;
+      "$releases_root"/*) rm -rf -- "$candidate";;
+      *) die "release cleanup path escapes managed releases";;
+    esac
+  done
 }
 
 restore_database() {
@@ -269,9 +297,10 @@ reload_development() {
   dev_reload_started=1
   printf 'state=building\n' > "$dev_status_path"
   rm -f "$state_root/development-reload.request"
-  output="$state_root/development-build"
-  mkdir -p "$output"
-  bundle_path=$("$dev_checkout/packaging/linux/build-development-release.sh" "$output")
+  dev_build_root="$state_root/development-build"
+  mkdir -p "$dev_build_root"
+  clear_managed_directory "$dev_build_root"
+  bundle_path=$("$dev_checkout/packaging/linux/build-development-release.sh" "$dev_build_root")
   [ -d "$bundle_path" ] || die "development builder did not return a release directory"
   "$bundle_path/swarm-next-package" update "$bundle_path"
 }
@@ -330,6 +359,7 @@ install_or_update() {
     if run_systemctl enable --now swarm-next.target \
       && run_systemctl enable --now swarm-next-host-reconcile.path swarm-next-host-reconcile.timer \
       && wait_for_health && wait_for_host "$new_release"; then
+      prune_superseded_releases
       printf 'Swarm Next %s is healthy at %s\n' "$version" "$health_url"
       return
     fi
@@ -345,6 +375,7 @@ install_or_update() {
     && run_systemctl enable --now swarm-next-host-reconcile.path swarm-next-host-reconcile.timer \
     && run_systemctl restart swarm-next-api.service && wait_for_health; then
     rollback_release=
+    prune_superseded_releases
     printf 'Swarm Next API %s is healthy at %s; terminal host %s was preserved\n' \
       "$version" "$health_url" "$(basename "$host_release")"
     return
@@ -452,6 +483,7 @@ migrate_protocol() {
     drain_release=
     rollback_release=
     rollback_host_release=
+    prune_superseded_releases
     printf 'Swarm Next protocol migrated to %s and is healthy at %s\n' "$version" "$health_url"
     return
   fi

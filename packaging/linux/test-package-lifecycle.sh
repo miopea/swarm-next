@@ -140,12 +140,15 @@ if grep -q 'restart swarm-next-terminal-host.service' "$HOME/systemctl.log"; the
 fi
 printf 'state=requested\n' > "$SWARM_STATE_ROOT/development-reload.status"
 printf 'request\n' > "$SWARM_STATE_ROOT/development-reload.request"
+mkdir -p "$SWARM_STATE_ROOT/development-build/stale-one" "$SWARM_STATE_ROOT/development-build/stale-two"
+printf 'stale\n' > "$SWARM_STATE_ROOT/development-build/stale-one/file"
 if "$package" reload-development; then
   echo "failing development build unexpectedly succeeded" >&2
   exit 1
 fi
 [ "$(cat "$SWARM_STATE_ROOT/development-reload.status")" = "state=failed" ]
 [ ! -e "$SWARM_STATE_ROOT/development-reload.request" ]
+[ -z "$(find "$SWARM_STATE_ROOT/development-build" -mindepth 1 -maxdepth 1 -print -quit)" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "1.0.0" ]
 : > "$HOME/systemctl.log"
 "$package" disable-development
@@ -186,6 +189,7 @@ if grep -Eq '^drain$|^wait-ready$' "$HOME/swarmctl.log"; then
 fi
 [ -f "$SWARM_INSTALL_ROOT/assets/app-1.0.0.js" ]
 [ -f "$SWARM_INSTALL_ROOT/assets/app-2.0.0.js" ]
+[ "$(find "$SWARM_INSTALL_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ]
 
 # API rollback is also sidecar-safe while a worker is active.
 : > "$HOME/systemctl.log"
