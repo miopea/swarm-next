@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  claimApiaryTask,
   fetchApiaryMembers,
   fetchApiarySharedWork,
   fetchApiaryTasks,
   fetchFederationCatalogReadiness,
   fetchFederationSyncHealth,
   fetchFederationTaskSyncStatus,
+  fetchFederationTaskOutbox,
+  fetchFederationTaskOutboxStatus,
+  transitionApiaryTask,
   type ApiaryMember,
   type ApiarySharedWorkClaim,
   type ApiaryTask,
   type FederationCatalogReadiness,
   type FederationSyncHealth,
   type FederationTaskSyncStatus,
+  type FederationTaskOutboxEntry,
+  type FederationTaskOutboxStatus,
   type HiveIdentity,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -26,9 +32,11 @@ type MemberSnapshot = {
   sync?: FederationSyncHealth;
   taskSync?: FederationTaskSyncStatus;
   catalog?: FederationCatalogReadiness;
+  outbox: FederationTaskOutboxEntry[];
+  outboxStatus?: FederationTaskOutboxStatus;
 };
 
-const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [] };
+const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [] };
 
 export default function MemberControlRoom({ identity, operatorToken, onManage }: Props) {
   const context = identity.apiary_context;
@@ -36,13 +44,15 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
   const [state, setState] = useState<"loading" | "ready" | "partial">("loading");
   const refresh = useCallback(async () => {
     setState("loading");
-    const [members, sharedWork, tasks, sync, taskSync, catalog] = await Promise.allSettled([
+    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus] = await Promise.allSettled([
       fetchApiaryMembers(operatorToken),
       fetchApiarySharedWork(operatorToken),
       fetchApiaryTasks(operatorToken),
       fetchFederationSyncHealth(operatorToken),
       fetchFederationTaskSyncStatus(operatorToken),
       fetchFederationCatalogReadiness(operatorToken),
+      fetchFederationTaskOutbox(operatorToken),
+      fetchFederationTaskOutboxStatus(operatorToken),
     ]);
     setSnapshot((current) => ({
       members: members.status === "fulfilled" ? members.value : current.members,
@@ -51,8 +61,10 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
       sync: sync.status === "fulfilled" ? sync.value : current.sync,
       taskSync: taskSync.status === "fulfilled" ? taskSync.value : current.taskSync,
       catalog: catalog.status === "fulfilled" ? catalog.value : current.catalog,
+      outbox: outbox.status === "fulfilled" ? outbox.value : current.outbox,
+      outboxStatus: outboxStatus.status === "fulfilled" ? outboxStatus.value : current.outboxStatus,
     }));
-    setState([members, sharedWork, tasks, sync, taskSync, catalog].some((result) => result.status === "rejected") ? "partial" : "ready");
+    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus].some((result) => result.status === "rejected") ? "partial" : "ready");
   }, [operatorToken]);
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -65,6 +77,16 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
   const projectCount = snapshot.catalog?.projects.length ?? 0;
   const syncCondition = snapshot.sync?.condition ?? "idle";
   const [syncTitle, syncDetail] = federationSyncCopy[syncCondition];
+  const [actingTask, setActingTask] = useState<string>();
+  const queuedTaskIds = useMemo(() => new Set(snapshot.outbox.filter((entry) => entry.state === "queued").map((entry) => entry.command.task_id)), [snapshot.outbox]);
+  const act = useCallback(async (task: ApiaryTask, target?: ApiaryTask["state"]) => {
+    setActingTask(task.id);
+    try {
+      if (target) await transitionApiaryTask(operatorToken, task.id, target);
+      else await claimApiaryTask(operatorToken, task.id);
+      await refresh();
+    } finally { setActingTask(undefined); }
+  }, [operatorToken, refresh]);
 
   if (context?.mode !== "federated" || context.local_role !== "member") return null;
 
@@ -83,6 +105,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
         <div><dt>Projects ready</dt><dd>{projectCount ? `${readyProjects}/${projectCount}` : "0"}</dd></div>
         <div><dt>My Jira claims</dt><dd>{localClaims.length}</dd></div>
         <div><dt>Keeper tasks</dt><dd>{snapshot.tasks.length}</dd></div>
+        <div><dt>Pending changes</dt><dd>{snapshot.outboxStatus?.queued_count ?? 0}</dd></div>
       </dl>
       <div className="keeper-dashboard-grid" aria-busy={state === "loading"}>
         <article className="keeper-panel member-coordination-panel">
@@ -107,7 +130,13 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
         </article>
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Swarm tasks</p><h4>Polled from Keeper</h4></div><small>Keeper is canonical for this source</small></header>
-          {snapshot.tasks.length ? <ul className="keeper-work-list" aria-label="Member Keeper tasks">{snapshot.tasks.map((task) => <li key={task.id}><span><strong>{task.title}</strong><small>{task.state} · {task.priority}</small></span><span><strong>{task.home_hive_id === identity.hive.id ? "This Hive" : task.home_hive_id ? "Another Hive" : "Unassigned"}</strong><small>Revision {task.revision}</small></span></li>)}</ul> : <p className="keeper-empty">No Swarm-generated Apiary tasks have been received.</p>}
+          {(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0) > 0 ? <p className="member-command-attention" role="status">{(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0)} change{(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0) === 1 ? "" : "s"} need review after Keeper reconciliation.</p> : null}
+          {snapshot.tasks.length ? <ul className="keeper-work-list member-task-list" aria-label="Member Keeper tasks">{snapshot.tasks.map((task) => {
+            const mine = task.home_hive_id === identity.hive.id;
+            const queued = queuedTaskIds.has(task.id);
+            const next = task.state === "ready" ? "active" : task.state === "active" ? "review" : task.state === "review" ? "completed" : undefined;
+            return <li key={task.id}><span><strong>{task.title}</strong><small>{task.state} · {task.priority} · revision {task.revision}</small></span><span className="member-task-owner"><strong>{mine ? "This Hive" : task.home_hive_id ? "Another Hive" : "Unassigned"}</strong>{queued ? <small>Queued for Keeper</small> : !task.home_hive_id ? <button className="secondary-button" type="button" disabled={actingTask === task.id} onClick={() => void act(task)}>Claim for this Hive</button> : mine && next ? <button className="secondary-button" type="button" disabled={actingTask === task.id} onClick={() => void act(task, next)}>Move to {next}</button> : null}</span></li>;
+          })}</ul> : <p className="keeper-empty">No Swarm-generated Apiary tasks have been received.</p>}
         </article>
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Shared catalog</p><h4>Projects available to this Hive</h4></div><small>Access is verified with your Jira identity</small></header>

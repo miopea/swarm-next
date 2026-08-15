@@ -931,3 +931,15 @@ the independently updated terminal host through the API to worker settings:
   preserved across complete browser restarts. API PID advanced to `3423836`;
   terminal-host PID remained `2966127`, preserving the active worker session.
   Every isolated proof browser closed after the run.
+- The governed Apiary-task command checkpoint adds a durable Member outbox,
+  revision-checked Keeper claims and transitions, retry-stable receipts, and
+  ordered event projection without routing Jira through Keeper. Real in-memory
+  Keeper/Member tests covered offline queueing, authenticated application,
+  exact retry, stale conflict, and projection. The full gate passed 342 Rust
+  tests, warnings-denied Clippy, 213 frontend tests, strict TypeScript, and the
+  production build. An isolated real Member runtime on port 8767 showed three
+  Keeper tasks at both 1,440 by 900 and 412 by 915. Claiming while Keeper was
+  unreachable changed one task to `Queued for Keeper`, incremented the durable
+  pending count, survived reload, and kept horizontal overflow at zero. The
+  browser console had no warnings or errors, and the proof tab and temporary
+  runtime processes were closed afterward.

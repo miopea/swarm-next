@@ -5,8 +5,8 @@ use reqwest::{Client, Method, StatusCode, Url};
 use serde::{Serialize, de::DeserializeOwned};
 use swarm_domain::{
     ApiaryJoinLinkId, ApiaryJoinLinkPoll, FederationCatalogSnapshot, FederationClaimId,
-    FederationJoinAcceptance, FederationJoinSubmission, FederationSharedClaim, FederationTaskPage,
-    HiveConnectionCard,
+    FederationJoinAcceptance, FederationJoinSubmission, FederationSharedClaim,
+    FederationTaskCommand, FederationTaskCommandReceipt, FederationTaskPage, HiveConnectionCard,
 };
 use thiserror::Error;
 
@@ -156,6 +156,24 @@ impl FederationHttpClient {
             &format!("api/v1/federation/tasks?after={after}"),
             Some(node_credential),
             None,
+        )
+        .await
+    }
+
+    /// Delivers one durable Member command to Keeper without implicit retry.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, response-bound, or protocol failures.
+    pub async fn submit_task_command(
+        &self,
+        node_credential: &str,
+        command: &FederationTaskCommand,
+    ) -> Result<FederationTaskCommandReceipt, FederationHttpError> {
+        self.send_json(
+            Method::POST,
+            "api/v1/federation/tasks/commands",
+            Some(node_credential),
+            Some(command),
         )
         .await
     }
@@ -327,10 +345,11 @@ mod tests {
     use axum::{Json, Router, body::Body, http::header, response::Redirect, routing::get};
     use serde_json::json;
     use swarm_domain::{
-        ApiaryId, ApiaryInvitationId, FederationClaimState, FederationJoinSubmissionPayload,
-        FederationMembershipReceipt, FederationMembershipReceiptId,
-        FederationMembershipReceiptPayload, FederationNodeId, HiveId, OperatorId,
-        SharedWorkBackend,
+        ApiaryId, ApiaryInvitationId, ApiaryTaskId, FederationClaimState,
+        FederationJoinSubmissionPayload, FederationMembershipReceipt,
+        FederationMembershipReceiptId, FederationMembershipReceiptPayload, FederationNodeId,
+        FederationTaskCommandId, FederationTaskCommandKind, FederationTaskCommandOutcome, HiveId,
+        OperatorId, SharedWorkBackend, TaskState,
     };
 
     use super::*;
@@ -461,6 +480,50 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, FederationHttpError::Conflict));
+    }
+
+    #[tokio::test]
+    async fn task_command_transport_preserves_identity_and_receipt() {
+        let command = FederationTaskCommand {
+            id: FederationTaskCommandId::new(),
+            apiary_id: ApiaryId::new(),
+            task_id: ApiaryTaskId::new(),
+            expected_revision: 4,
+            kind: FederationTaskCommandKind::Transition,
+            target_state: Some(TaskState::Active),
+            created_at: 1_000,
+        };
+        let receipt = FederationTaskCommandReceipt {
+            command_id: command.id,
+            outcome: FederationTaskCommandOutcome::Applied,
+            task_revision: Some(5),
+            processed_at: 1_001,
+        };
+        let expected_command = command.clone();
+        let expected_receipt = receipt.clone();
+        let app = Router::new().route(
+            "/swarm/api/v1/federation/tasks/commands",
+            axum::routing::post(
+                move |headers: axum::http::HeaderMap, Json(body): Json<FederationTaskCommand>| {
+                    let expected_command = expected_command.clone();
+                    let expected_receipt = expected_receipt.clone();
+                    async move {
+                        assert_eq!(headers[header::AUTHORIZATION], "Bearer member-secret");
+                        assert_eq!(body, expected_command);
+                        Json(expected_receipt)
+                    }
+                },
+            ),
+        );
+        let address = spawn_server(app).await;
+        let client = FederationHttpClient::new(&format!("http://{address}/swarm")).unwrap();
+        assert_eq!(
+            client
+                .submit_task_command("member-secret", &command)
+                .await
+                .unwrap(),
+            receipt
+        );
     }
 
     #[tokio::test]

@@ -296,6 +296,29 @@ export type FederationTaskSyncStatus = {
   task_count: number;
   last_applied_at: number | null;
 };
+export type FederationTaskCommandOutcome = "applied" | "conflict" | "rejected";
+export type FederationTaskOutboxState = "queued" | FederationTaskCommandOutcome;
+export type FederationTaskOutboxEntry = {
+  command: {
+    id: string;
+    apiary_id: string;
+    task_id: string;
+    expected_revision: number;
+    kind: "claim" | "transition";
+    target_state: TaskState | null;
+    created_at: number;
+  };
+  state: FederationTaskOutboxState;
+  attempt_count: number;
+  last_attempt_at: number | null;
+  receipt: { command_id: string; outcome: FederationTaskCommandOutcome; task_revision: number | null; processed_at: number } | null;
+};
+export type FederationTaskOutboxStatus = {
+  queued_count: number;
+  conflict_count: number;
+  rejected_count: number;
+  last_attempt_at: number | null;
+};
 export type FederationTransportReadiness = {
   configured: boolean;
   endpoint: string | null;
@@ -686,6 +709,30 @@ export async function fetchFederationTaskSyncStatus(
 ): Promise<FederationTaskSyncStatus> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/task-sync-status");
   return response.json() as Promise<FederationTaskSyncStatus>;
+}
+
+export async function fetchFederationTaskOutbox(operatorToken: string): Promise<FederationTaskOutboxEntry[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/task-outbox");
+  return response.json() as Promise<FederationTaskOutboxEntry[]>;
+}
+
+export async function fetchFederationTaskOutboxStatus(operatorToken: string): Promise<FederationTaskOutboxStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/task-outbox-status");
+  return response.json() as Promise<FederationTaskOutboxStatus>;
+}
+
+export async function claimApiaryTask(operatorToken: string, taskId: string): Promise<FederationTaskOutboxEntry> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/tasks/${encodeURIComponent(taskId)}/claim`, { method: "POST" });
+  return response.json() as Promise<FederationTaskOutboxEntry>;
+}
+
+export async function transitionApiaryTask(operatorToken: string, taskId: string, targetState: TaskState): Promise<FederationTaskOutboxEntry> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/tasks/${encodeURIComponent(taskId)}/transition`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target_state: targetState }),
+  });
+  return response.json() as Promise<FederationTaskOutboxEntry>;
 }
 
 export async function fetchFederationCatalogReadiness(

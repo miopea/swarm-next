@@ -23,6 +23,7 @@ mod email;
 mod events;
 mod federation;
 mod federation_tasks;
+pub use federation_tasks::MAX_FEDERATION_TASK_COMMAND_BATCH;
 mod feedback;
 pub use federation::{
     MAX_CONNECTION_CARD_LIFETIME_SECONDS, MAX_FEDERATION_INVITATION_LIFETIME_SECONDS,
@@ -65,7 +66,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 47;
+const CURRENT_SCHEMA_VERSION: i64 = 48;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1515,6 +1516,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 47 {
         federation_tasks::migrate_federation_tasks(transaction)?;
+    }
+    if schema_version < 48 {
+        federation_tasks::migrate_federation_task_commands(transaction)?;
     }
     Ok(())
 }

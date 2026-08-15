@@ -7,12 +7,13 @@ use swarm_domain::{
     FederationCatalogReadiness, FederationCatalogSnapshot, FederationClaimId,
     FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
     FederationJoinSubmission, FederationMemberConnection, FederationSharedClaim,
-    FederationSyncCondition, FederationSyncHealth, FederationTaskPage, FederationTaskSyncStatus,
-    HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
-    LocalApiaryRole, OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId,
-    PresenceMode, PresenceObservationState, SharedWorkBackend, StewardCapability, Stewardship,
-    StewardshipId, Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId,
-    WorkerProfile, WorkerRole, WorkerSessionId,
+    FederationSyncCondition, FederationSyncHealth, FederationTaskCommand, FederationTaskCommandId,
+    FederationTaskCommandReceipt, FederationTaskOutboxEntry, FederationTaskOutboxStatus,
+    FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard, HiveId, JiraConnectionState,
+    JiraProjectBindingId, LocalApiaryContext, LocalApiaryRole, OperatorId, OperatorPresence,
+    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
+    SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, Task, TaskActivityActor,
+    TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -158,6 +159,113 @@ impl ApiaryService {
     ) -> Result<ApiaryTask, ApplicationError> {
         self.store
             .create_apiary_task(title, description, priority, now)
+            .map_err(Into::into)
+    }
+
+    /// Applies one authenticated idempotent Member command on Keeper.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials, command identity, revision, or persistence.
+    pub fn apply_federation_task_command(
+        &self,
+        node_credential: &str,
+        command: &FederationTaskCommand,
+        now: i64,
+    ) -> Result<FederationTaskCommandReceipt, ApplicationError> {
+        self.store
+            .apply_federation_task_command(node_credential, command, now)
+            .map_err(Into::into)
+    }
+
+    /// Queues one Member claim for delivery to Keeper.
+    ///
+    /// # Errors
+    /// Rejects invalid membership, task state, queue capacity, or persistence.
+    pub fn queue_federation_task_claim(
+        &self,
+        task_id: swarm_domain::ApiaryTaskId,
+        now: i64,
+    ) -> Result<FederationTaskOutboxEntry, ApplicationError> {
+        self.store
+            .queue_federation_task_claim(task_id, now)
+            .map_err(Into::into)
+    }
+
+    /// Queues one Member-owned task transition for delivery to Keeper.
+    ///
+    /// # Errors
+    /// Rejects invalid membership, ownership, transition, capacity, or persistence.
+    pub fn queue_federation_task_transition(
+        &self,
+        task_id: swarm_domain::ApiaryTaskId,
+        target_state: TaskState,
+        now: i64,
+    ) -> Result<FederationTaskOutboxEntry, ApplicationError> {
+        self.store
+            .queue_federation_task_transition(task_id, target_state, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns the oldest bounded commands waiting for Keeper.
+    ///
+    /// # Errors
+    /// Rejects invalid bounds or corrupt/unavailable persistence.
+    pub fn pending_federation_task_commands(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<FederationTaskOutboxEntry>, ApplicationError> {
+        self.store
+            .pending_federation_task_commands(limit)
+            .map_err(Into::into)
+    }
+
+    /// Durably records one transport attempt before network I/O.
+    ///
+    /// # Errors
+    /// Rejects unknown commands, invalid time, or unavailable persistence.
+    pub fn record_federation_task_command_attempt(
+        &self,
+        command_id: FederationTaskCommandId,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .record_federation_task_command_attempt(command_id, now)
+            .map_err(Into::into)
+    }
+
+    /// Stores one exact Keeper receipt against its queued command.
+    ///
+    /// # Errors
+    /// Rejects unknown or altered receipts and unavailable persistence.
+    pub fn apply_federation_task_command_receipt(
+        &self,
+        receipt: &FederationTaskCommandReceipt,
+        now: i64,
+    ) -> Result<FederationTaskOutboxEntry, ApplicationError> {
+        self.store
+            .apply_federation_task_command_receipt(receipt, now)
+            .map_err(Into::into)
+    }
+
+    /// Lists bounded operator-visible outbound command evidence.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable persistence.
+    pub fn federation_task_outbox(
+        &self,
+    ) -> Result<Vec<FederationTaskOutboxEntry>, ApplicationError> {
+        self.store.list_federation_task_outbox().map_err(Into::into)
+    }
+
+    /// Returns content-free pending and attention counts.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn federation_task_outbox_status(
+        &self,
+    ) -> Result<FederationTaskOutboxStatus, ApplicationError> {
+        self.store
+            .federation_task_outbox_status()
             .map_err(Into::into)
     }
 

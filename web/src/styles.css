@@ -251,6 +251,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-role-badge.keeper { color: var(--blocked); background: var(--blocked-soft); }
 .keeper-work-list li, .keeper-steward-list li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; padding: 11px 0; border-top: 1px solid var(--line); }
 .keeper-work-list li > span:last-child { text-align: right; }
+.member-task-owner { align-content: center; justify-items: end; }
+.member-task-owner .secondary-button { margin-top: 4px; padding: 6px 10px; font-size: .76rem; }
+.member-command-attention { margin: 0 0 8px; padding: 9px 11px; border: 1px solid var(--honey-line); border-radius: var(--radius-sm); background: var(--honey-wash); color: var(--ink); }
 .keeper-project-list li { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
 .keeper-project-list strong { color: var(--accent-strong); }
 .keeper-steward-list li > span:last-child { color: var(--muted); font-size: .74rem; line-height: 1.4; text-align: right; }
@@ -1000,6 +1003,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .keeper-hive-list .keeper-role-badge { grid-column: 2; justify-self: start; }
   .keeper-work-list li, .keeper-steward-list li { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .keeper-work-list li > span:last-child, .keeper-steward-list li > span:last-child { text-align: left; }
+  .member-task-owner { justify-items: start; }
   .task-board { padding: 16px; }
   .task-compose { padding: 16px; }
   .task-compose-header { align-items: stretch; flex-direction: column; gap: 13px; }

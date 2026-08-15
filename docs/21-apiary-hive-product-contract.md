@@ -258,6 +258,18 @@ never requires an inbound route to a member machine. This is
 separate from Jira-backed issue synchronization, where every Hive talks to
 Jira directly using its own operator identity.
 
+Member changes to Swarm-generated Apiary tasks use a durable outbound command
+queue. Every command has a unique identity, the last observed task revision,
+and one bounded claim or lifecycle transition. The Keeper persists the exact
+command and receipt atomically with the canonical task event. Retrying an
+identical command returns the same receipt; changing a command under an old
+identity fails closed. A stale revision becomes an operator-visible conflict,
+not an implicit overwrite. Members record an attempt before network I/O, flush
+queued commands before polling newer task events, and retain commands across
+offline periods and process restarts. Routine success stays quiet; conflicts
+and rejections remain visible for review. None of this path reads or mutates
+Jira.
+
 A sole Keeper Hive may explicitly collapse an Apiary after automatic safety
 validation. Native tasks become local while preserving identity and history;
 Jira-backed Apiary projects become Hive-owned bindings. Outstanding invitations,

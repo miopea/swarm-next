@@ -3,8 +3,11 @@ use std::str::FromStr;
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     ApiaryId, ApiaryTask, ApiaryTaskEvent, ApiaryTaskId, ApiaryTaskSource,
-    FEDERATION_PROTOCOL_VERSION, FEDERATION_TASK_FEED_SCHEMA_VERSION, FederationTaskPage,
-    FederationTaskSyncStatus, LocalApiaryContext, LocalApiaryRole, TaskPriority, TaskState,
+    FEDERATION_PROTOCOL_VERSION, FEDERATION_TASK_FEED_SCHEMA_VERSION, FederationTaskCommand,
+    FederationTaskCommandId, FederationTaskCommandKind, FederationTaskCommandOutcome,
+    FederationTaskCommandReceipt, FederationTaskOutboxEntry, FederationTaskOutboxState,
+    FederationTaskOutboxStatus, FederationTaskPage, FederationTaskSyncStatus, LocalApiaryContext,
+    LocalApiaryRole, TaskPriority, TaskState,
 };
 
 use crate::{
@@ -15,6 +18,9 @@ use crate::{
 
 const MAX_FEDERATION_TASK_PAGE: usize = 100;
 const MAX_APIARY_TASKS: usize = 10_000;
+const MAX_APIARY_TASK_COMMANDS: usize = 10_000;
+const MAX_LOCAL_TASK_OUTBOX: usize = 1_024;
+pub const MAX_FEDERATION_TASK_COMMAND_BATCH: usize = 20;
 
 impl TaskStore {
     /// Creates one Keeper-canonical Swarm task and appends its first ordered
@@ -338,6 +344,466 @@ impl TaskStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
+
+    /// Applies one authenticated, revision-checked Member command on Keeper.
+    /// Exact retries return the original durable receipt; altered replays fail.
+    /// Jira is never read or mutated on this path.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials, foreign/malformed commands, altered replay,
+    /// capacity exhaustion, corrupt state, and unavailable persistence.
+    #[allow(clippy::too_many_lines)] // One transaction deliberately owns authentication, idempotency, mutation, event, and receipt.
+    pub fn apply_federation_task_command(
+        &self,
+        node_credential: &str,
+        command: &FederationTaskCommand,
+        now: i64,
+    ) -> Result<FederationTaskCommandReceipt, TaskStoreError> {
+        validate_federation_task_command(command, now)?;
+        let identity = self.local_hive_identity()?;
+        let credential = decode_node_credential(node_credential)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let member = authenticate_member_credential(&transaction, &identity, &credential, now)?;
+        if command.apiary_id != member.apiary {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let command_json =
+            serde_json::to_string(command).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        let existing = transaction
+            .query_row(
+                "SELECT member_node_id, command_json, receipt_json
+                 FROM apiary_task_commands WHERE command_id = ?1",
+                [command.id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((member_node_id, prior_command, receipt_json)) = existing {
+            if member_node_id != member.node.to_string() || prior_command != command_json {
+                return Err(TaskStoreError::InvalidFederationTask);
+            }
+            return serde_json::from_str(&receipt_json)
+                .map_err(|_| TaskStoreError::InvalidFederationTask);
+        }
+        let command_count = transaction.query_row(
+            "SELECT COUNT(*) FROM apiary_task_commands WHERE apiary_id = ?1",
+            [member.apiary.to_string()],
+            |row| row.get::<_, usize>(0),
+        )?;
+        if command_count >= MAX_APIARY_TASK_COMMANDS {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let mut task = transaction
+            .query_row(
+                "SELECT id, apiary_id, source, title, description, priority, state,
+                        home_node_id, home_hive_id, revision, created_at, updated_at
+                 FROM apiary_tasks WHERE apiary_id = ?1 AND id = ?2",
+                params![member.apiary.to_string(), command.task_id.to_string()],
+                apiary_task_from_row,
+            )
+            .optional()?;
+        let outcome = match task.as_mut() {
+            None => FederationTaskCommandOutcome::Rejected,
+            Some(task) if task.revision != command.expected_revision => {
+                FederationTaskCommandOutcome::Conflict
+            }
+            Some(task) => match command.kind {
+                FederationTaskCommandKind::Claim if command.target_state.is_none() => {
+                    if task.home_node_id.is_some() || task.state == TaskState::Completed {
+                        FederationTaskCommandOutcome::Conflict
+                    } else {
+                        task.home_node_id = Some(member.node);
+                        task.home_hive_id = Some(member.hive);
+                        FederationTaskCommandOutcome::Applied
+                    }
+                }
+                FederationTaskCommandKind::Transition => {
+                    let Some(target) = command.target_state else {
+                        return Err(TaskStoreError::InvalidFederationTask);
+                    };
+                    if task.home_node_id != Some(member.node)
+                        || task.home_hive_id != Some(member.hive)
+                    {
+                        FederationTaskCommandOutcome::Conflict
+                    } else if !task.state.can_transition_to(target) {
+                        FederationTaskCommandOutcome::Rejected
+                    } else {
+                        task.state = target;
+                        FederationTaskCommandOutcome::Applied
+                    }
+                }
+                FederationTaskCommandKind::Claim => FederationTaskCommandOutcome::Rejected,
+            },
+        };
+        if outcome == FederationTaskCommandOutcome::Applied {
+            let task = task.as_mut().ok_or(TaskStoreError::InvalidFederationTask)?;
+            task.revision = task
+                .revision
+                .checked_add(1)
+                .ok_or(TaskStoreError::InvalidFederationTask)?;
+            task.updated_at = now;
+            let changed = transaction.execute(
+                "UPDATE apiary_tasks SET state = ?1, home_node_id = ?2,
+                        home_hive_id = ?3, revision = ?4, updated_at = ?5
+                 WHERE id = ?6 AND apiary_id = ?7 AND revision = ?8",
+                params![
+                    task.state.to_string(),
+                    task.home_node_id.map(|id| id.to_string()),
+                    task.home_hive_id.map(|id| id.to_string()),
+                    task.revision,
+                    now,
+                    task.id.to_string(),
+                    task.apiary_id.to_string(),
+                    command.expected_revision,
+                ],
+            )?;
+            if changed != 1 {
+                return Err(TaskStoreError::InvalidFederationTask);
+            }
+            insert_task_event(&transaction, task, now)?;
+        }
+        let task_revision = task.as_ref().map(|task| task.revision);
+        let receipt = insert_task_command_receipt(
+            &transaction,
+            &member,
+            command,
+            &command_json,
+            outcome,
+            task_revision,
+            now,
+        )?;
+        transaction.commit()?;
+        Ok(receipt)
+    }
+
+    /// Queues an offline-safe claim of one unassigned Keeper task for this
+    /// Member Hive. Repeated clicks reuse the same queued command.
+    ///
+    /// # Errors
+    /// Rejects non-Members, stale/owned/completed tasks, capacity exhaustion,
+    /// and unavailable persistence.
+    pub fn queue_federation_task_claim(
+        &self,
+        task_id: ApiaryTaskId,
+        now: i64,
+    ) -> Result<FederationTaskOutboxEntry, TaskStoreError> {
+        self.queue_federation_task_command(task_id, FederationTaskCommandKind::Claim, None, now)
+    }
+
+    /// Queues an offline-safe lifecycle transition for one task already owned
+    /// by this Member Hive.
+    ///
+    /// # Errors
+    /// Rejects non-Members, foreign/stale tasks, invalid transitions, capacity
+    /// exhaustion, and unavailable persistence.
+    pub fn queue_federation_task_transition(
+        &self,
+        task_id: ApiaryTaskId,
+        target_state: TaskState,
+        now: i64,
+    ) -> Result<FederationTaskOutboxEntry, TaskStoreError> {
+        self.queue_federation_task_command(
+            task_id,
+            FederationTaskCommandKind::Transition,
+            Some(target_state),
+            now,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)] // Validation and insertion stay in one transaction to preserve the offline command contract.
+    fn queue_federation_task_command(
+        &self,
+        task_id: ApiaryTaskId,
+        kind: FederationTaskCommandKind,
+        target_state: Option<TaskState>,
+        now: i64,
+    ) -> Result<FederationTaskOutboxEntry, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let identity = self.local_hive_identity()?;
+        let LocalApiaryContext::Federated { apiary, local_role } = self.local_apiary_context()?
+        else {
+            return Err(TaskStoreError::InvalidFederationTask);
+        };
+        if local_role != LocalApiaryRole::Member {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let receipt_json = transaction.query_row(
+            "SELECT receipt_json FROM local_federation_membership WHERE singleton = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )?;
+        let membership: swarm_domain::FederationMembershipReceipt =
+            serde_json::from_str(&receipt_json)
+                .map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        let task_json = transaction
+            .query_row(
+                "SELECT snapshot_json FROM local_apiary_tasks
+                 WHERE task_id = ?1 AND apiary_id = ?2",
+                params![task_id.to_string(), apiary.id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::InvalidFederationTask)?;
+        let task: ApiaryTask =
+            serde_json::from_str(&task_json).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        match kind {
+            FederationTaskCommandKind::Claim
+                if target_state.is_none()
+                    && task.home_node_id.is_none()
+                    && task.state != TaskState::Completed => {}
+            FederationTaskCommandKind::Transition
+                if task.home_hive_id == Some(identity.hive.id)
+                    && task.home_node_id == Some(membership.payload.member_node_id)
+                    && target_state.is_some_and(|target| task.state.can_transition_to(target)) => {}
+            _ => return Err(TaskStoreError::InvalidFederationTask),
+        }
+        let target_value = target_state.map(|state| state.to_string());
+        if let Some(existing) = transaction
+            .query_row(
+                "SELECT command_json, state, attempt_count, last_attempt_at, receipt_json
+                 FROM local_apiary_task_commands
+                 WHERE task_id = ?1 AND kind = ?2
+                   AND COALESCE(target_state, '') = COALESCE(?3, '') AND state = 'queued'
+                 ORDER BY created_at ASC LIMIT 1",
+                params![task_id.to_string(), kind.to_string(), target_value],
+                federation_task_outbox_entry_from_row,
+            )
+            .optional()?
+        {
+            return Ok(existing);
+        }
+        let queued_count = transaction.query_row(
+            "SELECT COUNT(*) FROM local_apiary_task_commands WHERE state = 'queued'",
+            [],
+            |row| row.get::<_, usize>(0),
+        )?;
+        if queued_count >= MAX_LOCAL_TASK_OUTBOX {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        transaction.execute(
+            "DELETE FROM local_apiary_task_commands
+             WHERE task_id = ?1 AND kind = ?2
+               AND COALESCE(target_state, '') = COALESCE(?3, '')
+               AND state IN ('conflict','rejected')",
+            params![task_id.to_string(), kind.to_string(), target_value],
+        )?;
+        let command = FederationTaskCommand {
+            id: FederationTaskCommandId::new(),
+            apiary_id: apiary.id,
+            task_id,
+            expected_revision: task.revision,
+            kind,
+            target_state,
+            created_at: now,
+        };
+        let command_json =
+            serde_json::to_string(&command).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        transaction.execute(
+            "INSERT INTO local_apiary_task_commands
+                (command_id, apiary_id, task_id, expected_revision, kind,
+                 target_state, command_json, state, attempt_count, last_attempt_at,
+                 receipt_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'queued', 0, NULL, NULL, ?8, ?8)",
+            params![
+                command.id.to_string(),
+                command.apiary_id.to_string(),
+                command.task_id.to_string(),
+                command.expected_revision,
+                command.kind.to_string(),
+                command.target_state.map(|state| state.to_string()),
+                command_json,
+                now,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(FederationTaskOutboxEntry {
+            command,
+            state: FederationTaskOutboxState::Queued,
+            attempt_count: 0,
+            last_attempt_at: None,
+            receipt: None,
+        })
+    }
+
+    /// Returns the oldest bounded batch waiting to be sent to Keeper.
+    ///
+    /// # Errors
+    /// Returns an error for invalid limits, corrupt state, or unavailable storage.
+    pub fn pending_federation_task_commands(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<FederationTaskOutboxEntry>, TaskStoreError> {
+        if limit == 0 || limit > MAX_FEDERATION_TASK_COMMAND_BATCH {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT command_json, state, attempt_count, last_attempt_at, receipt_json
+             FROM local_apiary_task_commands WHERE state = 'queued'
+             ORDER BY created_at ASC, command_id ASC LIMIT ?1",
+        )?;
+        let limit = i64::try_from(limit).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        statement
+            .query_map([limit], federation_task_outbox_entry_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Records an outbound attempt before network I/O so a crash cannot erase
+    /// evidence that the Keeper may have received the command.
+    ///
+    /// # Errors
+    /// Rejects unknown/non-queued commands, invalid time, and persistence failures.
+    pub fn record_federation_task_command_attempt(
+        &self,
+        command_id: FederationTaskCommandId,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE local_apiary_task_commands
+             SET attempt_count = attempt_count + 1, last_attempt_at = ?1, updated_at = ?1
+             WHERE command_id = ?2 AND state = 'queued'",
+            params![now, command_id.to_string()],
+        )?;
+        if changed != 1 {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        Ok(())
+    }
+
+    /// Applies one Keeper receipt to the exact queued command. Exact receipt
+    /// retries are harmless; mismatched receipts fail closed.
+    ///
+    /// # Errors
+    /// Rejects unknown commands, altered receipts, invalid time, and storage failures.
+    pub fn apply_federation_task_command_receipt(
+        &self,
+        receipt: &FederationTaskCommandReceipt,
+        now: i64,
+    ) -> Result<FederationTaskOutboxEntry, TaskStoreError> {
+        if now < 0 || receipt.processed_at < 0 {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let receipt_json =
+            serde_json::to_string(receipt).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let prior = transaction
+            .query_row(
+                "SELECT receipt_json FROM local_apiary_task_commands WHERE command_id = ?1",
+                [receipt.command_id.to_string()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::InvalidFederationTask)?;
+        if let Some(prior) = prior {
+            if prior != receipt_json {
+                return Err(TaskStoreError::InvalidFederationTask);
+            }
+        } else {
+            let state = match receipt.outcome {
+                FederationTaskCommandOutcome::Applied => FederationTaskOutboxState::Applied,
+                FederationTaskCommandOutcome::Conflict => FederationTaskOutboxState::Conflict,
+                FederationTaskCommandOutcome::Rejected => FederationTaskOutboxState::Rejected,
+            };
+            transaction.execute(
+                "UPDATE local_apiary_task_commands
+                 SET state = ?1, receipt_json = ?2, updated_at = ?3
+                 WHERE command_id = ?4 AND state = 'queued'",
+                params![
+                    state.to_string(),
+                    receipt_json,
+                    now,
+                    receipt.command_id.to_string(),
+                ],
+            )?;
+        }
+        let entry = transaction.query_row(
+            "SELECT command_json, state, attempt_count, last_attempt_at, receipt_json
+             FROM local_apiary_task_commands WHERE command_id = ?1",
+            [receipt.command_id.to_string()],
+            federation_task_outbox_entry_from_row,
+        )?;
+        transaction.execute(
+            "DELETE FROM local_apiary_task_commands WHERE command_id IN (
+                 SELECT command_id FROM local_apiary_task_commands WHERE state = 'applied'
+                 ORDER BY updated_at DESC, command_id DESC LIMIT -1 OFFSET 512
+             )",
+            [],
+        )?;
+        transaction.commit()?;
+        Ok(entry)
+    }
+
+    /// Returns a bounded operator-visible outbox with queued and attention
+    /// records first. No transport secrets are present.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable persistence.
+    pub fn list_federation_task_outbox(
+        &self,
+    ) -> Result<Vec<FederationTaskOutboxEntry>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT command_json, state, attempt_count, last_attempt_at, receipt_json
+             FROM local_apiary_task_commands
+             ORDER BY CASE state WHEN 'queued' THEN 0 WHEN 'conflict' THEN 1
+                       WHEN 'rejected' THEN 2 ELSE 3 END,
+                      updated_at DESC, command_id DESC LIMIT 100",
+        )?;
+        statement
+            .query_map([], federation_task_outbox_entry_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Returns content-free queue and attention counts for Member UI.
+    ///
+    /// # Errors
+    /// Returns an error for unavailable persistence.
+    pub fn federation_task_outbox_status(
+        &self,
+    ) -> Result<FederationTaskOutboxStatus, TaskStoreError> {
+        let connection = self.connection()?;
+        let (queued_count, conflict_count, rejected_count, last_attempt_at) = connection
+            .query_row(
+                "SELECT
+                SUM(CASE WHEN state = 'queued' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN state = 'conflict' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN state = 'rejected' THEN 1 ELSE 0 END),
+                MAX(last_attempt_at)
+             FROM local_apiary_task_commands",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<usize>>(0)?.unwrap_or(0),
+                        row.get::<_, Option<usize>>(1)?.unwrap_or(0),
+                        row.get::<_, Option<usize>>(2)?.unwrap_or(0),
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                },
+            )?;
+        Ok(FederationTaskOutboxStatus {
+            queued_count,
+            conflict_count,
+            rejected_count,
+            last_attempt_at,
+        })
+    }
 }
 
 fn validate_apiary_task(task: &ApiaryTask, apiary_id: ApiaryId) -> Result<(), TaskStoreError> {
@@ -354,6 +820,119 @@ fn validate_apiary_task(task: &ApiaryTask, apiary_id: ApiaryId) -> Result<(), Ta
         return Err(TaskStoreError::InvalidFederationTask);
     }
     Ok(())
+}
+
+fn validate_federation_task_command(
+    command: &FederationTaskCommand,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    if now < 0
+        || command.created_at < 0
+        || command.created_at > now
+        || command.expected_revision == 0
+        || matches!(command.kind, FederationTaskCommandKind::Claim)
+            && command.target_state.is_some()
+        || matches!(command.kind, FederationTaskCommandKind::Transition)
+            && command.target_state.is_none()
+    {
+        return Err(TaskStoreError::InvalidFederationTask);
+    }
+    Ok(())
+}
+
+fn insert_task_event(
+    transaction: &rusqlite::Transaction<'_>,
+    task: &ApiaryTask,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let snapshot_json =
+        serde_json::to_string(task).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+    transaction.execute(
+        "INSERT INTO apiary_task_events
+            (apiary_id, sequence, task_id, task_revision, snapshot_json, occurred_at)
+         VALUES (
+            ?1,
+            (SELECT COALESCE(MAX(sequence), 0) + 1
+             FROM apiary_task_events WHERE apiary_id = ?1),
+            ?2, ?3, ?4, ?5
+         )",
+        params![
+            task.apiary_id.to_string(),
+            task.id.to_string(),
+            task.revision,
+            snapshot_json,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_task_command_receipt(
+    transaction: &rusqlite::Transaction<'_>,
+    member: &crate::federation::MemberCredentialContext,
+    command: &FederationTaskCommand,
+    command_json: &str,
+    outcome: FederationTaskCommandOutcome,
+    task_revision: Option<u64>,
+    now: i64,
+) -> Result<FederationTaskCommandReceipt, TaskStoreError> {
+    let receipt = FederationTaskCommandReceipt {
+        command_id: command.id,
+        outcome,
+        task_revision,
+        processed_at: now,
+    };
+    let receipt_json =
+        serde_json::to_string(&receipt).map_err(|_| TaskStoreError::InvalidFederationTask)?;
+    transaction.execute(
+        "INSERT INTO apiary_task_commands
+            (command_id, apiary_id, task_id, member_node_id, member_hive_id,
+             member_operator_id, command_json, outcome, receipt_json, processed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            command.id.to_string(),
+            command.apiary_id.to_string(),
+            command.task_id.to_string(),
+            member.node.to_string(),
+            member.hive.to_string(),
+            member.operator.to_string(),
+            command_json,
+            outcome.to_string(),
+            receipt_json,
+            now,
+        ],
+    )?;
+    Ok(receipt)
+}
+
+fn federation_task_outbox_entry_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<FederationTaskOutboxEntry> {
+    let command_json = row.get::<_, String>(0)?;
+    let command = serde_json::from_str(&command_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    let state = FederationTaskOutboxState::from_str(&row.get::<_, String>(1)?)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let receipt = row
+        .get::<_, Option<String>>(4)?
+        .map(|value| serde_json::from_str(&value))
+        .transpose()
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                4,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?;
+    Ok(FederationTaskOutboxEntry {
+        command,
+        state,
+        attempt_count: row.get(2)?,
+        last_attempt_at: row.get(3)?,
+        receipt,
+    })
 }
 
 fn apiary_task_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiaryTaskEvent> {
@@ -452,9 +1031,102 @@ pub(super) fn migrate_federation_tasks(
     )
 }
 
+pub(super) fn migrate_federation_task_commands(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS apiary_task_commands (
+             command_id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             task_id TEXT NOT NULL REFERENCES apiary_tasks(id),
+             member_node_id TEXT NOT NULL,
+             member_hive_id TEXT NOT NULL REFERENCES hives(id),
+             member_operator_id TEXT NOT NULL,
+             command_json TEXT NOT NULL,
+             outcome TEXT NOT NULL CHECK (outcome IN ('applied','conflict','rejected')),
+             receipt_json TEXT NOT NULL,
+             processed_at INTEGER NOT NULL CHECK (processed_at >= 0)
+         );
+         CREATE INDEX IF NOT EXISTS apiary_task_commands_by_apiary
+             ON apiary_task_commands(apiary_id, processed_at DESC);
+         CREATE TABLE IF NOT EXISTS local_apiary_task_commands (
+             command_id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             task_id TEXT NOT NULL,
+             expected_revision INTEGER NOT NULL CHECK (expected_revision > 0),
+             kind TEXT NOT NULL CHECK (kind IN ('claim','transition')),
+             target_state TEXT CHECK (target_state IN ('draft','ready','active','blocked','review','completed')),
+             command_json TEXT NOT NULL,
+             state TEXT NOT NULL CHECK (state IN ('queued','applied','conflict','rejected')),
+             attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+             last_attempt_at INTEGER CHECK (last_attempt_at >= 0),
+             receipt_json TEXT,
+             created_at INTEGER NOT NULL CHECK (created_at >= 0),
+             updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+             CHECK ((kind = 'claim' AND target_state IS NULL) OR
+                    (kind = 'transition' AND target_state IS NOT NULL))
+         );
+         CREATE INDEX IF NOT EXISTS local_apiary_task_commands_queue
+             ON local_apiary_task_commands(state, created_at, command_id);
+         PRAGMA user_version = 48;",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swarm_domain::{
+        FederationJoinAcceptance, FederationJoinReadiness, JiraConnectionState, SharedWorkBackend,
+    };
+
+    fn joined_member(now: i64) -> (TaskStore, TaskStore, FederationJoinAcceptance) {
+        let keeper = TaskStore::in_memory().expect("keeper");
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now)
+            .expect("apiary");
+        let member = TaskStore::in_memory().expect("member");
+        let identity = member.local_hive_identity().expect("identity");
+        let card = member
+            .issue_hive_connection_card(now + 1, 3_600)
+            .expect("card");
+        keeper.pin_hive_candidate(&card, now + 1).expect("pin");
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(
+                identity.hive.id,
+                "https://keeper.example.test/swarm",
+                now + 1,
+                3_600,
+            )
+            .expect("invitation");
+        let invitation = member
+            .import_apiary_invitation_bundle(&bundle, now + 2)
+            .expect("import");
+        member
+            .accept_federation_join_policy(invitation.invitation_id, 1, now + 3)
+            .expect("policy");
+        let submission = member
+            .prepare_federation_join_submission(
+                invitation.invitation_id,
+                &FederationJoinReadiness {
+                    jira_connection: JiraConnectionState::Ready,
+                    projects: Vec::new(),
+                    blockers: Vec::new(),
+                },
+                now + 4,
+            )
+            .expect("submission");
+        let acceptance = keeper
+            .consume_federation_join_submission(&submission, now + 5)
+            .expect("acceptance");
+        member
+            .apply_federation_join_acceptance(
+                acceptance.receipt.payload.invitation_id,
+                &acceptance,
+                now + 6,
+            )
+            .expect("join");
+        (keeper, member, acceptance)
+    }
 
     #[test]
     fn migration_creates_bounded_task_feed_tables() {
@@ -469,6 +1141,8 @@ mod tests {
             "apiary_task_events",
             "local_apiary_tasks",
             "local_apiary_task_sync",
+            "apiary_task_commands",
+            "local_apiary_task_commands",
         ] {
             let exists = connection
                 .query_row(
@@ -479,5 +1153,101 @@ mod tests {
                 .expect("table lookup");
             assert!(exists, "missing {table}");
         }
+    }
+
+    #[test]
+    fn member_claim_is_durable_idempotent_and_projects_keeper_event() {
+        let now = 100_000;
+        let (keeper, member, acceptance) = joined_member(now);
+        let task = keeper
+            .create_apiary_task("Coordinate release", "", TaskPriority::Normal, now + 10)
+            .expect("task");
+        let first_page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, now + 11)
+            .expect("page");
+        member
+            .apply_federation_task_page(&first_page, now + 11)
+            .expect("projection");
+
+        let queued = member
+            .queue_federation_task_claim(task.id, now + 12)
+            .expect("queue");
+        assert_eq!(queued.state, FederationTaskOutboxState::Queued);
+        assert_eq!(
+            member.federation_task_outbox_status().unwrap().queued_count,
+            1
+        );
+        member
+            .record_federation_task_command_attempt(queued.command.id, now + 13)
+            .expect("attempt");
+        let receipt = keeper
+            .apply_federation_task_command(&acceptance.node_credential, &queued.command, now + 14)
+            .expect("apply");
+        assert_eq!(receipt.outcome, FederationTaskCommandOutcome::Applied);
+        assert_eq!(receipt.task_revision, Some(2));
+        assert_eq!(
+            keeper
+                .apply_federation_task_command(
+                    &acceptance.node_credential,
+                    &queued.command,
+                    now + 15,
+                )
+                .expect("exact retry"),
+            receipt
+        );
+        member
+            .apply_federation_task_command_receipt(&receipt, now + 15)
+            .expect("receipt");
+        let next_page = keeper
+            .federation_task_page(
+                &acceptance.node_credential,
+                first_page.next_cursor,
+                now + 16,
+            )
+            .expect("next page");
+        member
+            .apply_federation_task_page(&next_page, now + 16)
+            .expect("apply event");
+        let projected = member.list_local_apiary_tasks().expect("tasks");
+        assert_eq!(
+            projected[0].home_hive_id,
+            Some(acceptance.receipt.payload.member_hive_id)
+        );
+        assert_eq!(projected[0].revision, 2);
+        assert_eq!(
+            member.federation_task_outbox_status().unwrap().queued_count,
+            0
+        );
+    }
+
+    #[test]
+    fn competing_stale_claim_receives_durable_conflict() {
+        let now = 200_000;
+        let (keeper, member, acceptance) = joined_member(now);
+        let task = keeper
+            .create_apiary_task("One owner", "", TaskPriority::High, now + 10)
+            .expect("task");
+        let page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, now + 11)
+            .expect("page");
+        member
+            .apply_federation_task_page(&page, now + 11)
+            .expect("projection");
+        let queued = member
+            .queue_federation_task_claim(task.id, now + 12)
+            .expect("queue");
+        let first = keeper
+            .apply_federation_task_command(&acceptance.node_credential, &queued.command, now + 13)
+            .expect("first");
+        assert_eq!(first.outcome, FederationTaskCommandOutcome::Applied);
+        let mut stale = queued.command.clone();
+        stale.id = FederationTaskCommandId::new();
+        let conflict = keeper
+            .apply_federation_task_command(&acceptance.node_credential, &stale, now + 14)
+            .expect("conflict receipt");
+        assert_eq!(conflict.outcome, FederationTaskCommandOutcome::Conflict);
+        member
+            .apply_federation_task_command_receipt(&conflict, now + 15)
+            .expect_err("foreign command cannot enter local outbox");
     }
 }

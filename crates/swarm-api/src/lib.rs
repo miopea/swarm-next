@@ -60,13 +60,14 @@ use swarm_application::{
 };
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinLink,
-    ApiaryJoinLinkId, ApiaryJoinReadiness, ApiaryKeeperLink, ApiaryTask, DecisionRequestId,
-    FederationCatalogSnapshot, FederationClaimId, FederationJoinSubmission, FederationSharedClaim,
-    FederationSyncCondition, FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard,
-    HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope,
-    JiraStatusMapping, LocalApiaryContext, OperatorId, ProviderKind, SharedWorkBackend,
-    StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority, TaskState,
-    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    ApiaryJoinLinkId, ApiaryJoinReadiness, ApiaryKeeperLink, ApiaryTask, ApiaryTaskId,
+    DecisionRequestId, FederationCatalogSnapshot, FederationClaimId, FederationJoinSubmission,
+    FederationSharedClaim, FederationSyncCondition, FederationTaskCommand,
+    FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
+    FederationTaskSyncStatus, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
+    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext, OperatorId,
+    ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId,
+    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
@@ -1381,6 +1382,11 @@ struct CreateApiaryTaskRequest {
     priority: TaskPriority,
 }
 
+#[derive(Debug, Deserialize)]
+struct TransitionApiaryTaskRequest {
+    target_state: TaskState,
+}
+
 #[derive(Debug, Serialize)]
 struct FederationClaimRollupView {
     #[serde(flatten)]
@@ -1717,6 +1723,10 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/federation/catalog", get(federation_catalog))
         .route("/api/v1/federation/tasks", get(federation_tasks))
+        .route(
+            "/api/v1/federation/tasks/commands",
+            post(apply_federation_task_command),
+        )
         .route("/api/v1/federation/claims", post(reserve_federation_claim))
         .route(
             "/api/v1/federation/claims/{claim_id}",
@@ -1741,6 +1751,22 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/apiary/task-sync-status",
             get(get_federation_task_sync_status),
+        )
+        .route(
+            "/api/v1/apiary/tasks/{task_id}/claim",
+            post(queue_federation_task_claim),
+        )
+        .route(
+            "/api/v1/apiary/tasks/{task_id}/transition",
+            post(queue_federation_task_transition),
+        )
+        .route(
+            "/api/v1/apiary/task-outbox",
+            get(get_federation_task_outbox),
+        )
+        .route(
+            "/api/v1/apiary/task-outbox-status",
+            get(get_federation_task_outbox_status),
         )
         .route(
             "/api/v1/apiary/collapse-readiness",
@@ -2614,6 +2640,19 @@ async fn federation_tasks(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(page)).into_response())
 }
 
+async fn apply_federation_task_command(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(command): Json<FederationTaskCommand>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let receipt = apiary_service(&state)?
+        .apply_federation_task_command(credential, &command, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)).into_response())
+}
+
 async fn reserve_federation_claim(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2744,6 +2783,79 @@ async fn get_federation_task_sync_status(
     authorize(&state, &headers)?;
     let status: FederationTaskSyncStatus = apiary_service(&state)?
         .federation_task_sync_status()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
+}
+
+fn parse_apiary_task_id(value: &str) -> Result<ApiaryTaskId, ApiError> {
+    ApiaryTaskId::from_str(value).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_apiary_task_id",
+            "invalid Apiary task id",
+        )
+    })
+}
+
+async fn queue_federation_task_claim(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let entry = apiary_service(&state)?
+        .queue_federation_task_claim(parse_apiary_task_id(&task_id)?, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(entry),
+    )
+        .into_response())
+}
+
+async fn queue_federation_task_transition(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<TransitionApiaryTaskRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let entry = apiary_service(&state)?
+        .queue_federation_task_transition(
+            parse_apiary_task_id(&task_id)?,
+            request.target_state,
+            unix_timestamp(),
+        )
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(entry),
+    )
+        .into_response())
+}
+
+async fn get_federation_task_outbox(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let entries: Vec<FederationTaskOutboxEntry> = apiary_service(&state)?
+        .federation_task_outbox()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(entries)).into_response())
+}
+
+async fn get_federation_task_outbox_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let status: FederationTaskOutboxStatus = apiary_service(&state)?
+        .federation_task_outbox_status()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
 }
@@ -4238,6 +4350,30 @@ async fn reconcile_federation_tasks(
     node_credential: &str,
     now: i64,
 ) -> Result<(), FederationSyncCondition> {
+    let commands = service
+        .pending_federation_task_commands(swarm_persistence::MAX_FEDERATION_TASK_COMMAND_BATCH)
+        .map_err(|error| {
+            tracing::warn!(%error, "federation task outbox could not be read");
+            FederationSyncCondition::Incompatible
+        })?;
+    for entry in commands {
+        service
+            .record_federation_task_command_attempt(entry.command.id, now)
+            .map_err(|error| {
+                tracing::warn!(%error, "federation task attempt could not be recorded");
+                FederationSyncCondition::Incompatible
+            })?;
+        let receipt = client
+            .submit_task_command(node_credential, &entry.command)
+            .await
+            .map_err(federation_sync_condition)?;
+        service
+            .apply_federation_task_command_receipt(&receipt, now)
+            .map_err(|error| {
+                tracing::warn!(%error, "Keeper returned an incompatible task receipt");
+                FederationSyncCondition::Incompatible
+            })?;
+    }
     let mut cursor = service.federation_task_sync_status().map_or_else(
         |error| {
             tracing::warn!(%error, "federation task cursor could not be read");

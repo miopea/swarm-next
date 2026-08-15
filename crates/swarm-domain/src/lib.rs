@@ -46,6 +46,7 @@ domain_id!(FederationNodeId);
 domain_id!(FederationMembershipReceiptId);
 domain_id!(FederationClaimId);
 domain_id!(ApiaryTaskId);
+domain_id!(FederationTaskCommandId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
@@ -510,6 +511,170 @@ pub struct FederationTaskSyncStatus {
     pub cursor: i64,
     pub task_count: usize,
     pub last_applied_at: Option<i64>,
+}
+
+/// A member-originated change to one Keeper-canonical Swarm task. The command
+/// is revision checked and identified independently from transport retries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationTaskCommandKind {
+    Claim,
+    Transition,
+}
+
+impl fmt::Display for FederationTaskCommandKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Claim => "claim",
+            Self::Transition => "transition",
+        })
+    }
+}
+
+impl FromStr for FederationTaskCommandKind {
+    type Err = ParseFederationTaskCommandKindError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "claim" => Ok(Self::Claim),
+            "transition" => Ok(Self::Transition),
+            _ => Err(ParseFederationTaskCommandKindError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseFederationTaskCommandKindError;
+
+impl fmt::Display for ParseFederationTaskCommandKindError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("invalid federation task command kind")
+    }
+}
+
+impl std::error::Error for ParseFederationTaskCommandKindError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationTaskCommand {
+    pub id: FederationTaskCommandId,
+    pub apiary_id: ApiaryId,
+    pub task_id: ApiaryTaskId,
+    pub expected_revision: u64,
+    pub kind: FederationTaskCommandKind,
+    pub target_state: Option<TaskState>,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationTaskCommandOutcome {
+    Applied,
+    Conflict,
+    Rejected,
+}
+
+impl fmt::Display for FederationTaskCommandOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Applied => "applied",
+            Self::Conflict => "conflict",
+            Self::Rejected => "rejected",
+        })
+    }
+}
+
+impl FromStr for FederationTaskCommandOutcome {
+    type Err = ParseFederationTaskCommandOutcomeError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "applied" => Ok(Self::Applied),
+            "conflict" => Ok(Self::Conflict),
+            "rejected" => Ok(Self::Rejected),
+            _ => Err(ParseFederationTaskCommandOutcomeError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseFederationTaskCommandOutcomeError;
+
+impl fmt::Display for ParseFederationTaskCommandOutcomeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("invalid federation task command outcome")
+    }
+}
+
+impl std::error::Error for ParseFederationTaskCommandOutcomeError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationTaskCommandReceipt {
+    pub command_id: FederationTaskCommandId,
+    pub outcome: FederationTaskCommandOutcome,
+    pub task_revision: Option<u64>,
+    pub processed_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationTaskOutboxState {
+    Queued,
+    Applied,
+    Conflict,
+    Rejected,
+}
+
+impl fmt::Display for FederationTaskOutboxState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Queued => "queued",
+            Self::Applied => "applied",
+            Self::Conflict => "conflict",
+            Self::Rejected => "rejected",
+        })
+    }
+}
+
+impl FromStr for FederationTaskOutboxState {
+    type Err = ParseFederationTaskOutboxStateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "queued" => Ok(Self::Queued),
+            "applied" => Ok(Self::Applied),
+            "conflict" => Ok(Self::Conflict),
+            "rejected" => Ok(Self::Rejected),
+            _ => Err(ParseFederationTaskOutboxStateError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseFederationTaskOutboxStateError;
+
+impl fmt::Display for ParseFederationTaskOutboxStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("invalid federation task outbox state")
+    }
+}
+
+impl std::error::Error for ParseFederationTaskOutboxStateError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationTaskOutboxEntry {
+    pub command: FederationTaskCommand,
+    pub state: FederationTaskOutboxState,
+    pub attempt_count: u32,
+    pub last_attempt_at: Option<i64>,
+    pub receipt: Option<FederationTaskCommandReceipt>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationTaskOutboxStatus {
+    pub queued_count: usize,
+    pub conflict_count: usize,
+    pub rejected_count: usize,
+    pub last_attempt_at: Option<i64>,
 }
 
 /// Durable Member-side evidence that one exact Keeper catalog was verified.

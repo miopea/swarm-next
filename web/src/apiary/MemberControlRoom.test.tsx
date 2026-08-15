@@ -19,6 +19,8 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
     if (url.endsWith("/tasks")) return Promise.resolve(ok([{ id: "task-1", apiary_id: "apiary-1", source: "swarm", title: "Prepare shared brief", description: "", priority: "high", state: "ready", home_node_id: null, home_hive_id: null, revision: 1, created_at: 1, updated_at: 1 }]));
     if (url.endsWith("/sync-health")) return Promise.resolve(ok({ condition: "current", last_attempt_at: 100, last_success_at: 100, consecutive_failures: 0, next_attempt_at: null }));
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 4, task_count: 1, last_applied_at: 100 }));
+    if (url.endsWith("/task-outbox")) return Promise.resolve(ok([]));
+    if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
     if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({
       acknowledgement: { apiary_id: "apiary-1", policy_revision: 1, promoted_project_catalog_digest: "digest", project_count: 1, snapshot_issued_at: 1, snapshot_expires_at: 2, acknowledged_at: 1 },
       jira_connection: "ready",
@@ -35,7 +37,7 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
   expect(screen.getByText("Bea")).toBeInTheDocument();
   expect(screen.getByRole("list", { name: "Member promoted Jira projects" })).toHaveTextContent("WWDWebsite DevelopmentReady");
   expect(screen.getByRole("list", { name: "Member shared work ownership" })).toHaveTextContent("WWD-101Website DevelopmentOwnedCora");
-  expect(screen.getByRole("list", { name: "Member Keeper tasks" })).toHaveTextContent("Prepare shared briefready · highUnassignedRevision 1");
+  expect(screen.getByRole("list", { name: "Member Keeper tasks" })).toHaveTextContent("Prepare shared briefready · high · revision 1UnassignedClaim for this Hive");
   expect(screen.getByText("Keeper task cursor").parentElement).toHaveTextContent("4");
   expect(document.body).not.toHaveTextContent("WWD-102");
   expect(document.body).not.toHaveTextContent("node-2");
@@ -52,6 +54,8 @@ test("keeps local work usable when part of the Member rollup is unavailable", as
     if (url.endsWith("/tasks")) return Promise.resolve(ok([]));
     if (url.endsWith("/sync-health")) return Promise.reject(new Error("offline"));
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 0, task_count: 0, last_applied_at: null }));
+    if (url.endsWith("/task-outbox")) return Promise.resolve(ok([]));
+    if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
     if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "network_unavailable", projects: [], blockers: ["catalog_missing"] }));
     throw new Error(`Unexpected request: ${url}`);
   }));
