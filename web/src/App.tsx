@@ -18,6 +18,7 @@ import {
   fetchProviderCapabilities,
   fetchPresentationPreferences,
   fetchTaskActivity,
+  fetchRecentTaskActivity,
   fetchJiraComments,
   addJiraComment,
   reorderTasks,
@@ -954,7 +955,7 @@ export function App() {
             <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
           </form>
         ) : surface === "decisions" ? (
-          <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} onResolve={resolveInboxDecision} />
+          <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} onFetchActivity={() => fetchRecentTaskActivity(operatorToken)} onResolve={resolveInboxDecision} />
         ) : surface === "tasks" ? (
           <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
         ) : surface === "apiary" && keeper && hiveIdentity ? (

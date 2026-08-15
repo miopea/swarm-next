@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { DecisionRequest, Task, Worker } from "../api";
+import type { DecisionRequest, Task, TaskActivityPage, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
+import WorkActivity from "./WorkActivity";
 
 const kindLabel = {
   input: "Input",
@@ -19,12 +20,17 @@ type Props = {
   focusDecisionId?: string;
   focusRequest?: number;
   onOpenTask?: (taskId: string) => void;
+  onFetchActivity?: () => Promise<TaskActivityPage>;
   onResolve: (decision: DecisionRequest, action: string, note: string) => Promise<void>;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, onOpenTask, onResolve }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, onOpenTask, onFetchActivity, onResolve }: Props) {
+  const [view, setView] = useState<"attention" | "activity">("attention");
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [activity, setActivity] = useState<TaskActivityPage>();
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityFailed, setActivityFailed] = useState(false);
   const taskNames = useMemo(() => new Map(tasks.map((task) => [task.id, task.title])), [tasks]);
   const workerNames = useMemo(() => new Map(workers.map((worker) => [worker.id, worker.name])), [workers]);
   const visible = decisions.filter((decision) => showResolved || decision.state === "pending");
@@ -41,8 +47,26 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
     return () => cancelAnimationFrame(frame);
   }, [decisions, focusDecisionId, focusRequest]);
 
+  const loadActivity = async () => {
+    if (!onFetchActivity) return;
+    setActivityLoading(true);
+    setActivityFailed(false);
+    try { setActivity(await onFetchActivity()); }
+    catch { setActivityFailed(true); }
+    finally { setActivityLoading(false); }
+  };
+
+  useEffect(() => {
+    if (view === "activity" && !activity && !activityLoading && !activityFailed) void loadActivity();
+  }, [view, activity, activityLoading, activityFailed]);
+
   return (
     <section className="decision-inbox" aria-labelledby="decision-inbox-heading">
+      <div className="attention-tabs" role="tablist" aria-label="Attention workspace">
+        <button role="tab" aria-selected={view === "attention"} onClick={() => setView("attention")}>Needs you <small>{pending}</small></button>
+        <button role="tab" aria-selected={view === "activity"} onClick={() => { setView("activity"); if (activity) void loadActivity(); }}>Activity</button>
+      </div>
+      {view === "activity" ? <WorkActivity activity={activity} tasks={tasks} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} /> : <>
       <div className="decision-inbox-intro">
         <div>
           <p className="eyebrow">One calm queue</p>
@@ -100,6 +124,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
           })}
         </div>
       )}
+      </>}
     </section>
   );
 }

@@ -22,7 +22,7 @@ Decision meanings:
 | Multi-worker control room | Redesign | Core value. React workspace with instant switching and stable retained sessions. |
 | Task board | Redesign | Preserve work management while simplifying task types, transitions, and presentation. |
 | Task assignment | Redesign | Preserve manual and assisted assignment; separate recommendations from execution policy. |
-| Task history and audit | Keep | Essential for trust, recovery, and diagnosis; implement as first-class domain events. |
+| Task history and audit | Keep | Implemented as bounded, durable per-task events plus a quiet operator Activity view with task search and progress, assignment, and change filters. It excludes terminal output and transport noise. |
 | Direct terminal input | Keep | Essential, with explicit input ownership and stale-session protection. |
 | Groups and bulk worker actions | Investigate | Likely useful, but validate actual use and whether workspace selection replaces groups. |
 | Worker memory/context notes | Investigate | Preserve only if distinct from provider memory and project instructions. |

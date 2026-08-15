@@ -1915,6 +1915,7 @@ fn api_router(state: AppState) -> Router {
             patch(resolve_decision),
         )
         .route("/api/v1/tasks/order", put(reorder_tasks))
+        .route("/api/v1/tasks/activity", get(recent_task_activity))
         .route("/api/v1/tasks/{task_id}", patch(update_task))
         .route("/api/v1/tasks/{task_id}/activity", get(task_activity))
         .route("/api/v1/tasks/{task_id}/state", patch(transition_task))
@@ -3759,6 +3760,26 @@ async fn task_activity(
     }
     let activity = task_store(&state)?
         .list_task_activity(parse_task_id(&task_id)?, limit)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(activity)).into_response())
+}
+
+async fn recent_task_activity(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<TaskActivityQuery>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let limit = query.limit.unwrap_or(100);
+    if !(1..=MAX_TASK_ACTIVITY_PAGE).contains(&limit) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_task_activity_limit",
+            format!("task activity limit must be between 1 and {MAX_TASK_ACTIVITY_PAGE}"),
+        ));
+    }
+    let activity = task_store(&state)?
+        .list_recent_task_activity(limit)
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(activity)).into_response())
 }
@@ -9886,6 +9907,16 @@ mod tests {
         assert_eq!(activity["events"][2]["from_state"], "draft");
         assert_eq!(activity["events"][2]["to_state"], "ready");
 
+        let recent = authorized_get(app.clone(), "/api/v1/tasks/activity?limit=10").await;
+        assert_eq!(recent.status(), StatusCode::OK);
+        assert_eq!(
+            recent.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        let recent = response_json(recent).await;
+        assert_eq!(recent["events"].as_array().unwrap().len(), 3);
+        assert_eq!(recent["events"][0]["task_id"], created["id"]);
+
         let listed = authorized_get(app, "/api/v1/tasks").await;
         let listed = response_json(listed).await;
         assert_eq!(listed.as_array().unwrap().len(), 1);
@@ -10178,6 +10209,17 @@ mod tests {
             response_json(response).await["code"],
             "invalid_task_activity_limit"
         );
+
+        let response = authorized_get(
+            router(
+                AppState::default()
+                    .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                    .with_task_store(TaskStore::in_memory().unwrap()),
+            ),
+            "/api/v1/tasks/activity?limit=0",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

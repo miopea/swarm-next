@@ -505,6 +505,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 
 .decision-inbox { min-height: 0; padding: 26px; overflow-y: auto; }
+.attention-tabs { display: flex; max-width: 1180px; margin: 0 auto 22px; gap: 5px; padding: 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); }
+.attention-tabs button { min-height: 36px; padding: 6px 14px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; }
+.attention-tabs button[aria-selected="true"] { color: var(--text); background: var(--panel); box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 8%, transparent); }
+.attention-tabs small { display: inline-grid; min-width: 20px; height: 20px; margin-left: 5px; place-items: center; border-radius: 999px; background: var(--soft); font-size: .66rem; }
 .decision-inbox-intro { display: flex; max-width: 1180px; margin: 0 auto 20px; align-items: end; justify-content: space-between; gap: 24px; }
 .decision-inbox-intro h3 { margin: 0 0 7px; font-size: 1.25rem; }
 .decision-inbox-intro p:not(.eyebrow) { max-width: 690px; margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.55; }
@@ -512,6 +516,26 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .decision-empty { display: grid; max-width: 620px; min-height: 420px; margin: 0 auto; place-items: center; align-content: center; color: var(--muted); text-align: center; }
 .decision-empty h3 { margin: 0 0 8px; color: var(--text); font-size: 1.16rem; }
 .decision-empty p:not(.eyebrow) { max-width: 500px; line-height: 1.6; }
+.decision-empty.compact { min-height: 300px; }
+.work-activity { display: grid; max-width: 1180px; margin: 0 auto; gap: 18px; }
+.work-activity-intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, .6fr); align-items: end; gap: 24px; }
+.work-activity-intro h3 { margin: 0 0 7px; font-size: 1.25rem; }
+.work-activity-intro p:not(.eyebrow) { max-width: 650px; margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.55; }
+.work-activity-controls { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, .72fr) auto; align-items: end; gap: 9px; }
+.work-activity-controls label { display: grid; gap: 5px; color: var(--muted); font-size: .69rem; font-weight: 650; }
+.work-activity-controls > button { min-height: 42px; }
+.work-activity-list { display: grid; margin: 0; padding: 0; gap: 7px; list-style: none; }
+.work-activity-list li { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; min-height: 62px; align-items: center; gap: 13px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
+.activity-kind { width: 8px; height: 8px; border-radius: 50%; background: var(--quiet); }
+.activity-kind.kind-state_changed { background: var(--good); }
+.activity-kind.kind-assigned, .activity-kind.kind-unassigned { background: var(--accent); }
+.activity-copy { display: grid; min-width: 0; gap: 2px; }
+.activity-copy button { width: fit-content; max-width: 100%; min-height: 0; padding: 0; overflow: hidden; border: 0; color: var(--text); background: transparent; font-size: .83rem; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.activity-copy button:hover:not(:disabled) { color: var(--accent-strong); }
+.activity-copy > span { color: var(--muted); font-size: .74rem; }
+.activity-copy small { color: var(--quiet); font-size: .7rem; line-height: 1.35; }
+.work-activity-list time { color: var(--quiet); font-size: .69rem; white-space: nowrap; }
+.work-activity-footnote, .activity-state { margin: 0; padding: 18px; color: var(--muted); text-align: center; }
 .decision-list { display: grid; max-width: 1180px; margin: 0 auto; gap: 14px; }
 .decision-card { display: grid; gap: 16px; padding: 21px; border: 1px solid var(--line); border-left: 4px solid var(--good); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 6%, transparent); }
 .decision-card.urgency-time_sensitive { border-left-color: var(--accent); background: color-mix(in srgb, var(--warn-soft) 22%, var(--panel)); }
@@ -1034,7 +1058,13 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .command-palette { max-height: calc(100dvh - 20px); padding: 16px; }
   .command-results > button, .command-results > button[data-group="Work"] { display: flex; align-items: flex-start; flex-direction: column; gap: 3px; }
   .decision-inbox { padding: 16px; }
+  .attention-tabs { margin-bottom: 16px; }
   .decision-inbox-intro { align-items: start; flex-direction: column; gap: 12px; }
+  .work-activity-intro { grid-template-columns: 1fr; gap: 14px; }
+  .work-activity-controls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .work-activity-controls > button { grid-column: 1 / -1; }
+  .work-activity-list li { grid-template-columns: 9px minmax(0, 1fr); }
+  .work-activity-list time { grid-column: 2; }
   .decision-context { grid-template-columns: 1fr; }
   .decision-resolution { grid-template-columns: 1fr; }
   .decision-resolved { align-items: flex-start; flex-direction: column; }

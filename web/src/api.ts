@@ -973,6 +973,17 @@ export async function fetchTaskActivity(
   return response.json() as Promise<TaskActivityPage>;
 }
 
+export async function fetchRecentTaskActivity(
+  operatorToken: string,
+  limit = 100,
+): Promise<TaskActivityPage> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/tasks/activity?limit=${encodeURIComponent(String(limit))}`,
+  );
+  return response.json() as Promise<TaskActivityPage>;
+}
+
 export async function reorderTasks(operatorToken: string, taskIds: string[]): Promise<Task[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/tasks/order", {
     method: "PUT",

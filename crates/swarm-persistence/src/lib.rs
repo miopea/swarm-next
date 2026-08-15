@@ -752,6 +752,40 @@ impl TaskStore {
         })
     }
 
+    /// Lists the newest durable task events across the local Hive.
+    pub fn list_recent_task_activity(
+        &self,
+        limit: usize,
+    ) -> Result<TaskActivityPage, TaskStoreError> {
+        let hive_id = self.local_hive_identity()?.hive.id;
+        let connection = self.connection()?;
+        let limit = limit.clamp(1, MAX_TASK_ACTIVITY_PAGE);
+        let query_limit = i64::try_from(limit.saturating_add(1))
+            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
+        let mut statement = connection.prepare(
+            "SELECT activity.sequence, activity.task_id, activity.kind,
+                    activity.from_state, activity.to_state, activity.note,
+                    activity.occurred_at
+             FROM task_activity activity
+             JOIN tasks task ON task.id = activity.task_id
+             WHERE task.hive_id = ?1
+             ORDER BY activity.sequence DESC LIMIT ?2",
+        )?;
+        let mut activity = statement
+            .query_map(
+                params![hive_id.to_string(), query_limit],
+                task_activity_from_row,
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let truncated = activity.len() > limit;
+        activity.truncate(limit);
+        activity.reverse();
+        Ok(TaskActivityPage {
+            events: activity,
+            truncated,
+        })
+    }
+
     /// Replaces the complete open-task order for the local Hive atomically.
     ///
     /// # Errors
@@ -2345,6 +2379,33 @@ mod tests {
         assert_eq!(activity.events[1].to_state, Some(TaskState::Ready));
         assert_eq!(activity.events[2].kind, TaskActivityKind::Assigned);
         assert_eq!(activity.events[5].to_state, Some(TaskState::Completed));
+    }
+
+    #[test]
+    fn recent_task_activity_is_bounded_across_the_local_hive() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store.create_task("First task", "/workspace/first").unwrap();
+        let second = store
+            .create_task("Second task", "/workspace/second")
+            .unwrap();
+        store.transition_task(first.id, TaskState::Ready).unwrap();
+        store.transition_task(second.id, TaskState::Ready).unwrap();
+
+        let recent = store.list_recent_task_activity(3).unwrap();
+
+        assert!(recent.truncated);
+        assert_eq!(recent.events.len(), 3);
+        assert!(
+            recent
+                .events
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+        assert_eq!(recent.events.last().unwrap().task_id, second.id);
+        assert_eq!(
+            recent.events.last().unwrap().to_state,
+            Some(TaskState::Ready)
+        );
     }
 
     #[test]
