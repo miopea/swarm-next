@@ -518,10 +518,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .decision-empty p:not(.eyebrow) { max-width: 500px; line-height: 1.6; }
 .decision-empty.compact { min-height: 300px; }
 .work-activity { display: grid; max-width: 1180px; margin: 0 auto; gap: 18px; }
-.work-activity-intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, .6fr); align-items: end; gap: 24px; }
+.work-activity-intro { display: grid; grid-template-columns: minmax(0, 1fr); align-items: end; gap: 14px; }
 .work-activity-intro h3 { margin: 0 0 7px; font-size: 1.25rem; }
 .work-activity-intro p:not(.eyebrow) { max-width: 650px; margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.55; }
-.work-activity-controls { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, .72fr) auto; align-items: end; gap: 9px; }
+.work-activity-controls { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(130px, .72fr) minmax(120px, .62fr) auto; align-items: end; gap: 9px; }
 .work-activity-controls label { display: grid; gap: 5px; color: var(--muted); font-size: .69rem; font-weight: 650; }
 .work-activity-controls > button { min-height: 42px; }
 .work-activity-list { display: grid; margin: 0; padding: 0; gap: 7px; list-style: none; }
@@ -533,6 +533,11 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .activity-copy button { width: fit-content; max-width: 100%; min-height: 0; padding: 0; overflow: hidden; border: 0; color: var(--text); background: transparent; font-size: .83rem; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .activity-copy button:hover:not(:disabled) { color: var(--accent-strong); }
 .activity-copy > span { color: var(--muted); font-size: .74rem; }
+.activity-summary { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.activity-actor { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: var(--good-soft); color: var(--good); font-size: .63rem; font-weight: 750; letter-spacing: .02em; }
+.activity-actor.actor-jira { background: var(--blocked-soft); color: var(--blocked); }
+.activity-actor.actor-email { background: var(--accent-soft); color: var(--accent-strong); }
+.activity-actor.actor-system { background: var(--panel-soft); color: var(--quiet); }
 .activity-copy small { color: var(--quiet); font-size: .7rem; line-height: 1.35; }
 .work-activity-list time { color: var(--quiet); font-size: .69rem; white-space: nowrap; }
 .work-activity-footnote, .activity-state { margin: 0; padding: 18px; color: var(--muted); text-align: center; }

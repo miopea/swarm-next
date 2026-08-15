@@ -9904,6 +9904,7 @@ mod tests {
         assert!(!activity["truncated"].as_bool().unwrap());
         assert_eq!(activity["events"].as_array().unwrap().len(), 3);
         assert_eq!(activity["events"][0]["kind"], "created");
+        assert_operator_activity(&activity);
         assert_eq!(activity["events"][2]["from_state"], "draft");
         assert_eq!(activity["events"][2]["to_state"], "ready");
 
@@ -9921,6 +9922,16 @@ mod tests {
         let listed = response_json(listed).await;
         assert_eq!(listed.as_array().unwrap().len(), 1);
         assert_eq!(listed[0]["title"], "Recover every terminal");
+    }
+
+    fn assert_operator_activity(activity: &serde_json::Value) {
+        assert!(
+            activity["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| { entry["actor_kind"] == "operator" && entry["actor_id"].is_null() })
+        );
     }
 
     #[tokio::test]

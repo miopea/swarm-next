@@ -1753,6 +1753,98 @@ pub enum TaskActivityKind {
     Unassigned,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskActivityActorKind {
+    Operator,
+    Worker,
+    Jira,
+    Email,
+    System,
+}
+
+impl fmt::Display for TaskActivityActorKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Operator => "operator",
+            Self::Worker => "worker",
+            Self::Jira => "jira",
+            Self::Email => "email",
+            Self::System => "system",
+        })
+    }
+}
+
+impl FromStr for TaskActivityActorKind {
+    type Err = ParseTaskActivityActorKindError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "operator" => Ok(Self::Operator),
+            "worker" => Ok(Self::Worker),
+            "jira" => Ok(Self::Jira),
+            "email" => Ok(Self::Email),
+            "system" => Ok(Self::System),
+            _ => Err(ParseTaskActivityActorKindError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseTaskActivityActorKindError;
+
+impl fmt::Display for ParseTaskActivityActorKindError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("unknown task activity actor kind")
+    }
+}
+
+impl std::error::Error for ParseTaskActivityActorKindError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskActivityActor {
+    pub kind: TaskActivityActorKind,
+    pub id: Option<String>,
+}
+
+impl TaskActivityActor {
+    #[must_use]
+    pub fn operator() -> Self {
+        Self {
+            kind: TaskActivityActorKind::Operator,
+            id: None,
+        }
+    }
+    #[must_use]
+    pub fn worker(id: WorkerId) -> Self {
+        Self {
+            kind: TaskActivityActorKind::Worker,
+            id: Some(id.to_string()),
+        }
+    }
+    #[must_use]
+    pub fn jira() -> Self {
+        Self {
+            kind: TaskActivityActorKind::Jira,
+            id: None,
+        }
+    }
+    #[must_use]
+    pub fn email() -> Self {
+        Self {
+            kind: TaskActivityActorKind::Email,
+            id: None,
+        }
+    }
+    #[must_use]
+    pub fn system() -> Self {
+        Self {
+            kind: TaskActivityActorKind::System,
+            id: None,
+        }
+    }
+}
+
 impl fmt::Display for TaskActivityKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -1800,6 +1892,8 @@ pub struct TaskActivity {
     pub to_state: Option<TaskState>,
     pub note: String,
     pub occurred_at: i64,
+    pub actor_kind: TaskActivityActorKind,
+    pub actor_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

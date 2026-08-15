@@ -66,7 +66,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
         <button role="tab" aria-selected={view === "attention"} onClick={() => setView("attention")}>Needs you <small>{pending}</small></button>
         <button role="tab" aria-selected={view === "activity"} onClick={() => { setView("activity"); if (activity) void loadActivity(); }}>Activity</button>
       </div>
-      {view === "activity" ? <WorkActivity activity={activity} tasks={tasks} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} /> : <>
+      {view === "activity" ? <WorkActivity activity={activity} tasks={tasks} workers={workers} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} /> : <>
       <div className="decision-inbox-intro">
         <div>
           <p className="eyebrow">One calm queue</p>

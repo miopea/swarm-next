@@ -537,6 +537,7 @@ export type DecisionRequest = {
 };
 
 export type TaskActivityKind = "created" | "details_updated" | "state_changed" | "assigned" | "unassigned";
+export type TaskActivityActorKind = "operator" | "worker" | "jira" | "email" | "system";
 
 export type TaskActivity = {
   sequence: number;
@@ -546,6 +547,8 @@ export type TaskActivity = {
   to_state: TaskState | null;
   note: string;
   occurred_at: number;
+  actor_kind: TaskActivityActorKind;
+  actor_id: string | null;
 };
 
 export type TaskActivityPage = {

@@ -843,8 +843,8 @@ fn insert_email_task_activity(
     draft: &EmailTaskDraft<'_>,
 ) -> Result<(), TaskStoreError> {
     transaction.execute(
-        "INSERT INTO task_activity (task_id, kind, to_state, note)
-         VALUES (?1, 'created', 'draft', ?2)",
+        "INSERT INTO task_activity (task_id, kind, to_state, note, actor_kind)
+         VALUES (?1, 'created', 'draft', ?2, 'email')",
         params![
             task_id.to_string(),
             format!(
@@ -855,14 +855,15 @@ fn insert_email_task_activity(
     )?;
     if draft.state == TaskState::Ready {
         transaction.execute(
-            "INSERT INTO task_activity (task_id, kind, from_state, to_state)
-             VALUES (?1, 'transitioned', 'draft', 'ready')",
+            "INSERT INTO task_activity (task_id, kind, from_state, to_state, actor_kind)
+             VALUES (?1, 'state_changed', 'draft', 'ready', 'email')",
             [task_id.to_string()],
         )?;
     }
     if draft.worker_id.is_some() {
         transaction.execute(
-            "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'assigned')",
+            "INSERT INTO task_activity (task_id, kind, actor_kind)
+             VALUES (?1, 'assigned', 'email')",
             [task_id.to_string()],
         )?;
     }

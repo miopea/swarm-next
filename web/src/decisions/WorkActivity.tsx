@@ -1,34 +1,39 @@
 import { useMemo, useState } from "react";
 
-import type { Task, TaskActivity, TaskActivityPage, TaskState } from "../api";
+import type { Task, TaskActivity, TaskActivityActorKind, TaskActivityPage, TaskState, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 
 type ActivityFilter = "all" | "progress" | "assignments" | "changes";
+type ActorFilter = "all" | TaskActivityActorKind;
 
 const stateLabels: Record<TaskState, string> = {
   draft: "Draft", ready: "Ready", active: "In progress", blocked: "Blocked", review: "Review", completed: "Completed",
 };
 
-export default function WorkActivity({ activity, tasks, loading, failed, onRetry, onOpenTask }: {
+export default function WorkActivity({ activity, tasks, workers, loading, failed, onRetry, onOpenTask }: {
   activity: TaskActivityPage | undefined;
   tasks: Task[];
+  workers: Worker[];
   loading: boolean;
   failed: boolean;
   onRetry: () => void;
   onOpenTask?: (taskId: string) => void;
 }) {
   const [filter, setFilter] = useState<ActivityFilter>("all");
+  const [actorFilter, setActorFilter] = useState<ActorFilter>("all");
   const [query, setQuery] = useState("");
   const taskNames = useMemo(() => new Map(tasks.map((task) => [task.id, task.title])), [tasks]);
+  const workerNames = useMemo(() => new Map(workers.map((worker) => [worker.id, worker.name])), [workers]);
   const visible = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
     return [...(activity?.events ?? [])].reverse().filter((entry) => {
       if (filter === "progress" && entry.kind !== "state_changed") return false;
       if (filter === "assignments" && entry.kind !== "assigned" && entry.kind !== "unassigned") return false;
       if (filter === "changes" && entry.kind !== "created" && entry.kind !== "details_updated") return false;
+      if (actorFilter !== "all" && entry.actor_kind !== actorFilter) return false;
       return !normalized || (taskNames.get(entry.task_id) ?? "Unknown task").toLocaleLowerCase().includes(normalized);
     });
-  }, [activity, filter, query, taskNames]);
+  }, [activity, actorFilter, filter, query, taskNames]);
 
   if (loading) return <div className="activity-state" role="status">Loading recent work…</div>;
   if (failed) return <div className="activity-state">Activity is unavailable. <button className="text-button" type="button" onClick={onRetry}>Retry</button></div>;
@@ -40,6 +45,7 @@ export default function WorkActivity({ activity, tasks, loading, failed, onRetry
         <div className="work-activity-controls">
           <label><span>Find work</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Task title" /></label>
           <label><span>Show</span><select value={filter} onChange={(event) => setFilter(event.target.value as ActivityFilter)}><option value="all">All activity</option><option value="progress">Progress</option><option value="assignments">Assignments</option><option value="changes">Created and edited</option></select></label>
+          <label><span>Source</span><select value={actorFilter} onChange={(event) => setActorFilter(event.target.value as ActorFilter)}><option value="all">Everyone</option><option value="operator">You</option><option value="worker">Workers</option><option value="jira">Jira</option><option value="email">Email</option><option value="system">Swarm</option></select></label>
           <button className="secondary-button" type="button" onClick={onRetry}>Refresh</button>
         </div>
       </div>
@@ -50,7 +56,7 @@ export default function WorkActivity({ activity, tasks, loading, failed, onRetry
               <span className={`activity-kind kind-${entry.kind}`} aria-hidden="true" />
               <div className="activity-copy">
                 <button type="button" onClick={() => onOpenTask?.(entry.task_id)} disabled={!onOpenTask}>{taskNames.get(entry.task_id) ?? "Unavailable task"}</button>
-                <span>{activityLabel(entry)}</span>
+                <span className="activity-summary"><span className={`activity-actor actor-${entry.actor_kind}`}>{actorLabel(entry, workerNames)}</span><span>{activityLabel(entry)}</span></span>
                 {entry.note ? <small>{entry.note}</small> : null}
               </div>
               <time dateTime={new Date(entry.occurred_at * 1000).toISOString()}>{formatTime(entry.occurred_at)}</time>
@@ -63,6 +69,14 @@ export default function WorkActivity({ activity, tasks, loading, failed, onRetry
       {activity?.truncated ? <p className="work-activity-footnote">Showing the latest {activity.events.length} events.</p> : null}
     </section>
   );
+}
+
+function actorLabel(activity: TaskActivity, workerNames: Map<string, string>): string {
+  if (activity.actor_kind === "operator") return "You";
+  if (activity.actor_kind === "worker") return activity.actor_id ? workerNames.get(activity.actor_id) ?? "Worker" : "Worker";
+  if (activity.actor_kind === "jira") return "Jira";
+  if (activity.actor_kind === "email") return "Email";
+  return "Swarm";
 }
 
 function activityLabel(activity: TaskActivity): string {

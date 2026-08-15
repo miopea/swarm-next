@@ -386,8 +386,9 @@ impl TaskStore {
                     tasks_changed |= changed > 0;
                     if previous_state != synchronized_state {
                         transaction.execute(
-                            "INSERT INTO task_activity (task_id, kind, from_state, to_state, note)
-                         VALUES (?1, 'state_changed', ?2, ?3, ?4)",
+                            "INSERT INTO task_activity (
+                                 task_id, kind, from_state, to_state, note, actor_kind
+                             ) VALUES (?1, 'state_changed', ?2, ?3, ?4, 'jira')",
                             params![
                                 task_id.to_string(),
                                 previous_state.to_string(),
@@ -414,8 +415,8 @@ impl TaskStore {
                         ],
                     )?;
                     transaction.execute(
-                        "INSERT INTO task_activity (task_id, kind, to_state, note)
-                     VALUES (?1, 'created', ?2, ?3)",
+                        "INSERT INTO task_activity (task_id, kind, to_state, note, actor_kind)
+                     VALUES (?1, 'created', ?2, ?3, 'jira')",
                         params![
                             task_id.to_string(),
                             target_state.to_string(),
@@ -832,8 +833,8 @@ impl TaskStore {
             params![id, task_id.to_string(), body],
         )?;
         transaction.execute(
-            "INSERT INTO task_activity (task_id, kind, note)
-             VALUES (?1, 'details_updated', ?2)",
+            "INSERT INTO task_activity (task_id, kind, note, actor_kind)
+             VALUES (?1, 'details_updated', ?2, 'operator')",
             params![task_id.to_string(), "Jira comment queued"],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
@@ -921,8 +922,8 @@ impl TaskStore {
         )? == 1;
         if changed {
             transaction.execute(
-                "INSERT INTO task_activity (task_id, kind, note)
-                 VALUES (?1, 'details_updated', 'Comment delivered to Jira')",
+                "INSERT INTO task_activity (task_id, kind, note, actor_kind)
+                 VALUES (?1, 'details_updated', 'Comment delivered to Jira', 'jira')",
                 [task_id],
             )?;
             insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;

@@ -9,8 +9,8 @@ use swarm_domain::{
     HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
     LocalApiaryRole, OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId,
     PresenceMode, PresenceObservationState, SharedWorkBackend, StewardCapability, Stewardship,
-    StewardshipId, Task, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
-    WorkerSessionId,
+    StewardshipId, Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId,
+    WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -796,7 +796,13 @@ impl TaskService {
         workspace: &str,
     ) -> Result<Task, ApplicationError> {
         self.store
-            .create_task_with_details(title, description, priority, workspace)
+            .create_task_with_details_as(
+                title,
+                description,
+                priority,
+                workspace,
+                &TaskActivityActor::operator(),
+            )
             .map_err(Into::into)
     }
 
@@ -810,7 +816,7 @@ impl TaskService {
         update: &swarm_domain::TaskDetailsUpdate,
     ) -> Result<Task, ApplicationError> {
         self.store
-            .update_task_details(task_id, update)
+            .update_task_details_as(task_id, update, &TaskActivityActor::operator())
             .map_err(Into::into)
     }
     /// Assigns a local task to a stable worker profile.
@@ -823,7 +829,7 @@ impl TaskService {
         worker_id: WorkerId,
     ) -> Result<Task, ApplicationError> {
         self.store
-            .assign_task_to_worker(task_id, worker_id)
+            .assign_task_to_worker_as(task_id, worker_id, &TaskActivityActor::operator())
             .map_err(Into::into)
     }
 
@@ -833,7 +839,9 @@ impl TaskService {
     ///
     /// Propagates task validation and persistence failures.
     pub fn unassign_operator_task(&self, task_id: TaskId) -> Result<Task, ApplicationError> {
-        self.store.unassign_task(task_id).map_err(Into::into)
+        self.store
+            .unassign_task_as(task_id, &TaskActivityActor::operator())
+            .map_err(Into::into)
     }
 
     /// Applies one domain-valid task transition for the operator or Queen.
@@ -846,7 +854,7 @@ impl TaskService {
         target: TaskState,
     ) -> Result<Task, ApplicationError> {
         self.store
-            .transition_task(task_id, target)
+            .transition_task_with_note_as(task_id, target, "", &TaskActivityActor::operator())
             .map_err(Into::into)
     }
     /// Applies one domain-valid task transition with an optional audit note.
@@ -860,7 +868,7 @@ impl TaskService {
         note: &str,
     ) -> Result<Task, ApplicationError> {
         self.store
-            .transition_task_with_note(task_id, target, note)
+            .transition_task_with_note_as(task_id, target, note, &TaskActivityActor::operator())
             .map_err(Into::into)
     }
     /// Lists the work visible to an agent. Queen sees the Hive queue; workers see only their
@@ -915,7 +923,15 @@ impl TaskService {
         workspace: &str,
     ) -> Result<Task, ApplicationError> {
         require_queen(principal)?;
-        self.create_operator_task(title, description, priority, workspace)
+        self.store
+            .create_task_with_details_as(
+                title,
+                description,
+                priority,
+                workspace,
+                &TaskActivityActor::worker(principal.worker_id),
+            )
+            .map_err(Into::into)
     }
 
     /// Assigns a task to a stable worker, whether running or sleeping.
@@ -930,7 +946,13 @@ impl TaskService {
     ) -> Result<Task, ApplicationError> {
         require_queen(principal)?;
         self.store.get_worker_profile(worker_id)?;
-        self.assign_operator_task(task_id, worker_id)
+        self.store
+            .assign_task_to_worker_as(
+                task_id,
+                worker_id,
+                &TaskActivityActor::worker(principal.worker_id),
+            )
+            .map_err(Into::into)
     }
 
     /// Applies a domain-valid state transition within the caller's authority.
@@ -968,7 +990,14 @@ impl TaskService {
                 .transition_worker_task(task_id, target, note, session_id)
                 .map_err(Into::into);
         }
-        self.transition_operator_task_with_note(task_id, target, note)
+        self.store
+            .transition_task_with_note_as(
+                task_id,
+                target,
+                note,
+                &TaskActivityActor::worker(principal.worker_id),
+            )
+            .map_err(Into::into)
     }
     /// Lists the operator/Queen inbox, or only requests originated by a worker caller.
     ///
@@ -1324,6 +1353,12 @@ mod tests {
         service
             .assign_task(AgentPrincipal::from(&queen), mine.id, worker.id)
             .unwrap();
+        let queen_activity = service.store().list_task_activity(mine.id, 10).unwrap();
+        let queen_id = queen.id.to_string();
+        assert!(queen_activity.events.iter().all(|entry| {
+            entry.actor_kind == swarm_domain::TaskActivityActorKind::Worker
+                && entry.actor_id.as_deref() == Some(queen_id.as_str())
+        }));
 
         let current = service.store().get_worker_profile(worker.id).unwrap();
         assert_eq!(
@@ -1342,6 +1377,11 @@ mod tests {
         ] {
             service.transition_operator_task(mine.id, state).unwrap();
         }
+        let activity = service.store().list_task_activity(mine.id, 20).unwrap();
+        assert!(activity.events[2..].iter().all(|entry| {
+            entry.actor_kind == swarm_domain::TaskActivityActorKind::Operator
+                && entry.actor_id.is_none()
+        }));
         assert!(
             service
                 .list_visible_tasks(AgentPrincipal::from(&current))

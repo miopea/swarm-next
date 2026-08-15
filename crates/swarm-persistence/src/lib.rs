@@ -10,8 +10,9 @@ use swarm_domain::{
     Apiary, ApiaryId, ApiaryMemberSummary, ControlRoomEvent, ControlRoomEventKind,
     ControlRoomEventPage, Hive, HiveId, HiveIdentity, LocalApiaryContext, LocalApiaryRole,
     Operator, OperatorId, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, Task,
-    TaskActivity, TaskActivityKind, TaskActivityPage, TaskDetailsUpdate, TaskDispatchState, TaskId,
-    TaskOutcomeDeliveryState, TaskPriority, TaskState, WorkerId, WorkerSessionId,
+    TaskActivity, TaskActivityActor, TaskActivityActorKind, TaskActivityKind, TaskActivityPage,
+    TaskDetailsUpdate, TaskDispatchState, TaskId, TaskOutcomeDeliveryState, TaskPriority,
+    TaskState, WorkerId, WorkerSessionId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -59,7 +60,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 43;
+const CURRENT_SCHEMA_VERSION: i64 = 44;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -577,6 +578,27 @@ impl TaskStore {
         priority: TaskPriority,
         workspace: &str,
     ) -> Result<Task, TaskStoreError> {
+        self.create_task_with_details_as(
+            title,
+            description,
+            priority,
+            workspace,
+            &TaskActivityActor::system(),
+        )
+    }
+
+    /// Creates a validated draft and records its authenticated origin.
+    ///
+    /// # Errors
+    /// Returns an error for invalid content or unavailable persistence.
+    pub fn create_task_with_details_as(
+        &self,
+        title: &str,
+        description: &str,
+        priority: TaskPriority,
+        workspace: &str,
+        actor: &TaskActivityActor,
+    ) -> Result<Task, TaskStoreError> {
         let title = title.trim();
         let description = description.trim();
         let workspace = workspace.trim();
@@ -600,8 +622,9 @@ impl TaskStore {
             ],
         )?;
         transaction.execute(
-            "INSERT INTO task_activity (task_id, kind, to_state) VALUES (?1, 'created', 'draft')",
-            [id.to_string()],
+            "INSERT INTO task_activity (task_id, kind, to_state, actor_kind, actor_id)
+             VALUES (?1, 'created', 'draft', ?2, ?3)",
+            params![id.to_string(), actor.kind.to_string(), actor.id.as_deref()],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
@@ -616,6 +639,18 @@ impl TaskStore {
     /// Returns an error when the task does not exist, is already completed, or
     /// the unassignment transaction cannot be committed.
     pub fn unassign_task(&self, id: TaskId) -> Result<Task, TaskStoreError> {
+        self.unassign_task_as(id, &TaskActivityActor::system())
+    }
+
+    /// Returns an open task to the Hive queue and records its authenticated origin.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown or completed task or unavailable persistence.
+    pub fn unassign_task_as(
+        &self,
+        id: TaskId,
+        actor: &TaskActivityActor,
+    ) -> Result<Task, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let state: Option<String> = transaction
@@ -645,8 +680,9 @@ impl TaskStore {
             [id.to_string()],
         )?;
         transaction.execute(
-            "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'unassigned')",
-            [id.to_string()],
+            "INSERT INTO task_activity (task_id, kind, actor_kind, actor_id)
+             VALUES (?1, 'unassigned', ?2, ?3)",
+            params![id.to_string(), actor.kind.to_string(), actor.id.as_deref()],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
@@ -736,7 +772,8 @@ impl TaskStore {
         let query_limit = i64::try_from(limit.saturating_add(1))
             .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
         let mut statement = connection.prepare(
-            "SELECT sequence, task_id, kind, from_state, to_state, note, occurred_at
+            "SELECT sequence, task_id, kind, from_state, to_state, note, occurred_at,
+                    actor_kind, actor_id
              FROM task_activity WHERE task_id = ?1
              ORDER BY sequence DESC LIMIT ?2",
         )?;
@@ -769,7 +806,7 @@ impl TaskStore {
         let mut statement = connection.prepare(
             "SELECT activity.sequence, activity.task_id, activity.kind,
                     activity.from_state, activity.to_state, activity.note,
-                    activity.occurred_at
+                    activity.occurred_at, activity.actor_kind, activity.actor_id
              FROM task_activity activity
              JOIN tasks task ON task.id = activity.task_id
              WHERE task.hive_id = ?1
@@ -843,6 +880,19 @@ impl TaskStore {
         id: TaskId,
         update: &TaskDetailsUpdate,
     ) -> Result<Task, TaskStoreError> {
+        self.update_task_details_as(id, update, &TaskActivityActor::system())
+    }
+
+    /// Replaces supplied task details and records their authenticated origin.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid or empty update, unknown task, or unavailable persistence.
+    pub fn update_task_details_as(
+        &self,
+        id: TaskId,
+        update: &TaskDetailsUpdate,
+        actor: &TaskActivityActor,
+    ) -> Result<Task, TaskStoreError> {
         if update.title.is_none()
             && update.description.is_none()
             && update.priority.is_none()
@@ -899,8 +949,9 @@ impl TaskStore {
             ],
         )?;
         transaction.execute(
-            "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'details_updated')",
-            [id.to_string()],
+            "INSERT INTO task_activity (task_id, kind, actor_kind, actor_id)
+             VALUES (?1, 'details_updated', ?2, ?3)",
+            params![id.to_string(), actor.kind.to_string(), actor.id.as_deref()],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
@@ -942,7 +993,7 @@ impl TaskStore {
     /// # Errors
     /// Returns an error for an unknown task, rejected transition, or persistence failure.
     pub fn transition_task(&self, id: TaskId, target: TaskState) -> Result<Task, TaskStoreError> {
-        self.transition_task_inner(id, target, "", None)
+        self.transition_task_inner(id, target, "", None, &TaskActivityActor::system())
     }
 
     /// Applies an operator or Queen transition with a bounded audit note.
@@ -955,7 +1006,21 @@ impl TaskStore {
         target: TaskState,
         note: &str,
     ) -> Result<Task, TaskStoreError> {
-        self.transition_task_inner(id, target, note, None)
+        self.transition_task_with_note_as(id, target, note, &TaskActivityActor::system())
+    }
+
+    /// Applies a task transition and records its authenticated origin.
+    ///
+    /// # Errors
+    /// Returns an error for invalid content, lifecycle, or persistence.
+    pub fn transition_task_with_note_as(
+        &self,
+        id: TaskId,
+        target: TaskState,
+        note: &str,
+        actor: &TaskActivityActor,
+    ) -> Result<Task, TaskStoreError> {
+        self.transition_task_inner(id, target, note, None, actor)
     }
 
     /// Applies an assigned worker transition and queues Blocked or Review for Queen atomically.
@@ -969,7 +1034,27 @@ impl TaskStore {
         note: &str,
         session_id: WorkerSessionId,
     ) -> Result<Task, TaskStoreError> {
-        self.transition_task_inner(id, target, note, Some(session_id))
+        let connection = self.connection()?;
+        let worker_id = connection
+            .query_row(
+                "SELECT worker_id FROM worker_sessions
+                 WHERE session_id = ?1 AND ended_at IS NULL",
+                [session_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|value| WorkerId::from_str(&value))
+            .transpose()
+            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?
+            .ok_or(TaskStoreError::WorkerSessionNotActive)?;
+        drop(connection);
+        self.transition_task_inner(
+            id,
+            target,
+            note,
+            Some(session_id),
+            &TaskActivityActor::worker(worker_id),
+        )
     }
 
     fn transition_task_inner(
@@ -978,6 +1063,7 @@ impl TaskStore {
         target: TaskState,
         note: &str,
         reporting_session_id: Option<WorkerSessionId>,
+        actor: &TaskActivityActor,
     ) -> Result<Task, TaskStoreError> {
         if note.len() > MAX_TASK_ACTIVITY_NOTE_BYTES {
             return Err(TaskStoreError::InvalidTaskActivityNote);
@@ -1031,13 +1117,16 @@ impl TaskStore {
             params![id.to_string(), target.to_string()],
         )?;
         transaction.execute(
-            "INSERT INTO task_activity (task_id, kind, from_state, to_state, note)
-             VALUES (?1, 'state_changed', ?2, ?3, ?4)",
+            "INSERT INTO task_activity (
+                 task_id, kind, from_state, to_state, note, actor_kind, actor_id
+             ) VALUES (?1, 'state_changed', ?2, ?3, ?4, ?5, ?6)",
             params![
                 id.to_string(),
                 current.to_string(),
                 target.to_string(),
-                note
+                note,
+                actor.kind.to_string(),
+                actor.id.as_deref(),
             ],
         )?;
         let activity_sequence = transaction.last_insert_rowid();
@@ -1089,6 +1178,19 @@ impl TaskStore {
         &self,
         id: TaskId,
         worker_id: WorkerId,
+    ) -> Result<Task, TaskStoreError> {
+        self.assign_task_to_worker_as(id, worker_id, &TaskActivityActor::system())
+    }
+
+    /// Assigns a task and records its authenticated origin.
+    ///
+    /// # Errors
+    /// Returns an error for unknown workers, completed work, queue capacity, or persistence.
+    pub fn assign_task_to_worker_as(
+        &self,
+        id: TaskId,
+        worker_id: WorkerId,
+        actor: &TaskActivityActor,
     ) -> Result<Task, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -1168,8 +1270,9 @@ impl TaskStore {
             [],
         )?;
         transaction.execute(
-            "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'assigned')",
-            [id.to_string()],
+            "INSERT INTO task_activity (task_id, kind, actor_kind, actor_id)
+             VALUES (?1, 'assigned', ?2, ?3)",
+            params![id.to_string(), actor.kind.to_string(), actor.id.as_deref()],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
@@ -1442,7 +1545,40 @@ fn migrate_schema(
     if schema_version < 43 {
         email::migrate_email_reply_targets(transaction)?;
     }
+    if schema_version < 44 {
+        migrate_task_activity_actors(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_task_activity_actors(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let activity_exists = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_activity')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if activity_exists {
+        let actor_kind_exists = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_activity') WHERE name = 'actor_kind')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !actor_kind_exists {
+            transaction.execute_batch(
+                "ALTER TABLE task_activity ADD COLUMN actor_kind TEXT NOT NULL DEFAULT 'system'
+                     CHECK (actor_kind IN ('operator','worker','jira','email','system'));",
+            )?;
+        }
+        let actor_id_exists = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_activity') WHERE name = 'actor_id')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !actor_id_exists {
+            transaction.execute_batch("ALTER TABLE task_activity ADD COLUMN actor_id TEXT;")?;
+        }
+    }
+    transaction.pragma_update(None, "user_version", 44)
 }
 
 fn migrate_federation_schema(
@@ -2321,6 +2457,8 @@ fn task_activity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskActiv
         .map(|value| TaskState::from_str(&value))
         .transpose()
         .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let actor_kind = TaskActivityActorKind::from_str(&row.get::<_, String>(7)?)
+        .map_err(|_| rusqlite::Error::InvalidQuery)?;
     Ok(TaskActivity {
         sequence: row.get(0)?,
         task_id: TaskId::from_str(&row.get::<_, String>(1)?)
@@ -2330,6 +2468,8 @@ fn task_activity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskActiv
         to_state,
         note: row.get(5)?,
         occurred_at: row.get(6)?,
+        actor_kind,
+        actor_id: row.get(8)?,
     })
 }
 
@@ -2410,6 +2550,43 @@ mod tests {
             recent.events.last().unwrap().to_state,
             Some(TaskState::Ready)
         );
+    }
+
+    #[test]
+    fn task_activity_preserves_authenticated_actor_provenance() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Daisy",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store
+            .create_task_with_details_as(
+                "Trace the work",
+                "",
+                TaskPriority::Normal,
+                "/workspace",
+                &TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store
+            .transition_task_with_note_as(
+                task.id,
+                TaskState::Ready,
+                "Prepared by Daisy",
+                &TaskActivityActor::worker(worker.id),
+            )
+            .unwrap();
+
+        let activity = store.list_task_activity(task.id, 10).unwrap().events;
+        assert_eq!(activity[0].actor_kind, TaskActivityActorKind::Operator);
+        assert_eq!(activity[0].actor_id, None);
+        assert_eq!(activity[1].actor_kind, TaskActivityActorKind::Worker);
+        assert_eq!(activity[1].actor_id, Some(worker.id.to_string()));
     }
 
     #[test]
@@ -3745,5 +3922,44 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn migrates_schema_v43_to_durable_task_activity_actors() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let task_id = {
+            let store = TaskStore::open(&path).unwrap();
+            let task = store
+                .create_task("Existing activity", "/workspace")
+                .unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "ALTER TABLE task_activity DROP COLUMN actor_id;
+                     ALTER TABLE task_activity DROP COLUMN actor_kind;
+                     PRAGMA user_version = 43;",
+                )
+                .unwrap();
+            task.id
+        };
+
+        let migrated = TaskStore::open(path).unwrap();
+        let columns = migrated
+            .connection()
+            .unwrap()
+            .prepare("PRAGMA table_info(task_activity)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(columns.contains(&"actor_kind".to_owned()));
+        assert!(columns.contains(&"actor_id".to_owned()));
+        let existing = migrated.list_task_activity(task_id, 10).unwrap();
+        assert_eq!(existing.events[0].actor_kind, TaskActivityActorKind::System);
+        assert_eq!(existing.events[0].actor_id, None);
+        migrated.verify_integrity().unwrap();
     }
 }
