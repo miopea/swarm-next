@@ -23,6 +23,14 @@ second_location=$(sh "$second_checkout/packaging/linux/worker-engine-build-id.sh
   exit 1
 }
 
+sed 's/$/\r/' "$scratch/crates/swarm-terminal-host/src/main.rs" > "$scratch/host-main.crlf"
+mv "$scratch/host-main.crlf" "$scratch/crates/swarm-terminal-host/src/main.rs"
+crlf_checkout=$(build_id)
+[ "$crlf_checkout" = "$baseline" ] || {
+  echo "checkout line endings must not change the worker engine build id" >&2
+  exit 1
+}
+
 printf '\n// Task-domain-only test edit.\n' >> "$scratch/crates/swarm-domain/src/lib.rs"
 domain_only=$(build_id)
 [ "$domain_only" = "$baseline" ] || {
