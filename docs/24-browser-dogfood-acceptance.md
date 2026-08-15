@@ -688,3 +688,16 @@ the independently updated terminal host through the API to worker settings:
   restarts. API PID advanced to `3100234`; terminal-host PID remained
   `2966127`, preserving the active worker session. Every proof tab and hidden
   browser process closed after the run.
+- Release `0.1.0-dev-9d57d64a38e5` gives operator presence and device-scoped
+  presentation preferences independent Rust HTTP owners. Manual At Hive/Away/
+  Night Watch state and device observations remain application-owned;
+  presentation persistence remains persistence-owned. Notification delivery
+  and Queen autonomy policy were deliberately not coupled to either adapter.
+  The complete gate passed 331 Rust tests, Clippy with warnings denied, 213
+  frontend tests, strict TypeScript, and the production build. Read-only live
+  Edge acceptance passed every primary and Apiary member surface at 1,440-pixel
+  desktop and 412-pixel Android widths with zero overflow, 346 and 314 named
+  controls, all three Apiary guide steps, and authentication across complete
+  browser restarts. API PID advanced to `3105931`; terminal-host PID remained
+  `2966127`, preserving the active worker session. The unauthenticated in-app
+  proof tab and every authenticated hidden Edge process closed after use.
