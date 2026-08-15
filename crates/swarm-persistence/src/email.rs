@@ -237,31 +237,7 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let mut existing_task_ids = Vec::new();
-        let mut existing_message_count = 0_usize;
-        for message in messages {
-            if let Some(existing_task_id) = transaction
-                .query_row(
-                    "SELECT task_id FROM email_message_links
-                 WHERE integration_id = ?1 AND message_id = ?2",
-                    params![message.integration_id.trim(), message.message_id.trim()],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-            {
-                existing_message_count += 1;
-                existing_task_ids.push(existing_task_id);
-            }
-        }
-        existing_task_ids.sort();
-        existing_task_ids.dedup();
-        if existing_task_ids.len() > 1
-            || (!existing_task_ids.is_empty() && existing_message_count != messages.len())
-        {
-            return Err(TaskStoreError::EmailMergeConflict);
-        }
-        if let Some(existing_task_id) = existing_task_ids.first() {
-            let task_id = parse_domain_id::<TaskId>(&existing_task_id)?;
+        if let Some(task_id) = existing_email_task_id(&transaction, messages)? {
             transaction.commit()?;
             drop(connection);
             let sources = self.email_task_links_for_task(task_id)?;
@@ -277,132 +253,8 @@ impl TaskStore {
             });
         }
 
-        let hive_id: String = transaction.query_row(
-            "SELECT hive_id FROM local_hive_identity WHERE singleton = 1",
-            [],
-            |row| row.get(0),
-        )?;
-        let task_id = TaskId::new();
-        let (workspace, session_id) = if let Some(worker_id) = draft.worker_id {
-            transaction
-                .query_row(
-                    "SELECT profile.workspace, session.session_id
-                     FROM worker_profiles profile
-                     LEFT JOIN worker_sessions session
-                       ON session.worker_id = profile.id AND session.ended_at IS NULL
-                     WHERE profile.id = ?1 AND profile.role != 'queen'",
-                    [worker_id.to_string()],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
-                )
-                .optional()?
-                .ok_or(TaskStoreError::WorkerNotFound)?
-        } else {
-            ("email://inbox".to_string(), None)
-        };
-        transaction.execute(
-            "INSERT INTO tasks (
-                 id, hive_id, title, description, priority, workspace, state,
-                 assigned_worker_id, position
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-                 COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0))",
-            params![
-                task_id.to_string(),
-                hive_id,
-                title,
-                description,
-                draft.priority.to_string(),
-                workspace,
-                draft.state.to_string(),
-                draft.worker_id.map(|id| id.to_string()),
-            ],
-        )?;
-        transaction.execute(
-            "INSERT INTO task_activity (task_id, kind, to_state, note)
-             VALUES (?1, 'created', 'draft', ?2)",
-            params![
-                task_id.to_string(),
-                format!(
-                    "Imported from {} email{}",
-                    messages.len(),
-                    if messages.len() == 1 { "" } else { "s" }
-                )
-            ],
-        )?;
-        if draft.state == TaskState::Ready {
-            transaction.execute(
-                "INSERT INTO task_activity (task_id, kind, from_state, to_state)
-                 VALUES (?1, 'transitioned', 'draft', 'ready')",
-                [task_id.to_string()],
-            )?;
-        }
-        if draft.worker_id.is_some() {
-            transaction.execute(
-                "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'assigned')",
-                [task_id.to_string()],
-            )?;
-        }
-        if let (Some(worker_id), Some(session_id)) = (draft.worker_id, session_id) {
-            let queued: i64 = transaction.query_row(
-                "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
-                [],
-                |row| row.get(0),
-            )?;
-            if queued >= 256 {
-                return Err(TaskStoreError::TaskDispatchQueueFull);
-            }
-            let assignment_id = Uuid::now_v7().to_string();
-            transaction.execute(
-                "INSERT INTO task_assignments (id, task_id, worker_session_id)
-                 VALUES (?1, ?2, ?3)",
-                params![assignment_id, task_id.to_string(), session_id],
-            )?;
-            transaction.execute(
-                "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
-                 VALUES (?1, ?2, ?3, 'queued')",
-                params![assignment_id, task_id.to_string(), worker_id.to_string()],
-            )?;
-        }
-        for message in messages {
-            let source_id = Uuid::now_v7().to_string();
-            transaction.execute(
-                "INSERT INTO email_message_links (
-                     id, task_id, integration_id, message_id, conversation_id,
-                     internet_message_id, sender_name, sender_address, received_at, web_url
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    source_id,
-                    task_id.to_string(),
-                    message.integration_id.trim(),
-                    message.message_id.trim(),
-                    message.conversation_id.trim(),
-                    message.internet_message_id.map(str::trim),
-                    message.sender_name.trim(),
-                    message.sender_address.trim(),
-                    message.received_at,
-                    message.web_url.trim(),
-                ],
-            )?;
-            for attachment in message.attachments {
-                transaction.execute(
-                    "INSERT INTO email_task_attachments (
-                         id, source_id, task_id, storage_name, display_name, media_type,
-                         byte_size, is_inline, content_id
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![
-                        Uuid::now_v7().to_string(),
-                        source_id,
-                        task_id.to_string(),
-                        attachment.storage_name.trim(),
-                        attachment.display_name.trim(),
-                        attachment.media_type.trim(),
-                        i64::try_from(attachment.byte_size)
-                            .map_err(|_| TaskStoreError::InvalidEmailAttachment)?,
-                        attachment.inline,
-                        attachment.content_id.map(str::trim),
-                    ],
-                )?;
-            }
-        }
+        let task_id = insert_email_import_task(&transaction, messages, draft, title, description)?;
+        insert_email_sources(&transaction, task_id, messages)?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
@@ -815,6 +667,215 @@ impl TaskStore {
         }
         email_reply_by_id(&connection, id)?.ok_or(TaskStoreError::InvalidEmailReply)
     }
+}
+
+fn existing_email_task_id(
+    transaction: &rusqlite::Transaction<'_>,
+    messages: &[EmailMessageSnapshot<'_>],
+) -> Result<Option<TaskId>, TaskStoreError> {
+    let mut task_ids = Vec::new();
+    let mut linked_count = 0_usize;
+    for message in messages {
+        if let Some(task_id) = transaction
+            .query_row(
+                "SELECT task_id FROM email_message_links
+                 WHERE integration_id = ?1 AND message_id = ?2",
+                params![message.integration_id.trim(), message.message_id.trim()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            linked_count += 1;
+            task_ids.push(task_id);
+        }
+    }
+    task_ids.sort();
+    task_ids.dedup();
+    if task_ids.len() > 1 || (!task_ids.is_empty() && linked_count != messages.len()) {
+        return Err(TaskStoreError::EmailMergeConflict);
+    }
+    Ok(task_ids
+        .first()
+        .map(|task_id| parse_domain_id::<TaskId>(task_id))
+        .transpose()?)
+}
+
+fn insert_email_import_task(
+    transaction: &rusqlite::Transaction<'_>,
+    messages: &[EmailMessageSnapshot<'_>],
+    draft: &EmailTaskDraft<'_>,
+    title: &str,
+    description: &str,
+) -> Result<TaskId, TaskStoreError> {
+    let hive_id: String = transaction.query_row(
+        "SELECT hive_id FROM local_hive_identity WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let task_id = TaskId::new();
+    let (workspace, session_id) = email_import_worker(transaction, draft.worker_id)?;
+    transaction.execute(
+        "INSERT INTO tasks (
+             id, hive_id, title, description, priority, workspace, state,
+             assigned_worker_id, position
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+             COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0))",
+        params![
+            task_id.to_string(),
+            hive_id,
+            title,
+            description,
+            draft.priority.to_string(),
+            workspace,
+            draft.state.to_string(),
+            draft.worker_id.map(|id| id.to_string()),
+        ],
+    )?;
+    insert_email_task_activity(transaction, task_id, messages.len(), draft)?;
+    if let (Some(worker_id), Some(session_id)) = (draft.worker_id, session_id) {
+        queue_email_task_dispatch(transaction, task_id, worker_id, &session_id)?;
+    }
+    Ok(task_id)
+}
+
+fn email_import_worker(
+    transaction: &rusqlite::Transaction<'_>,
+    worker_id: Option<WorkerId>,
+) -> Result<(String, Option<String>), TaskStoreError> {
+    let Some(worker_id) = worker_id else {
+        return Ok(("email://inbox".to_string(), None));
+    };
+    transaction
+        .query_row(
+            "SELECT profile.workspace, session.session_id
+             FROM worker_profiles profile
+             LEFT JOIN worker_sessions session
+               ON session.worker_id = profile.id AND session.ended_at IS NULL
+             WHERE profile.id = ?1 AND profile.role != 'queen'",
+            [worker_id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .optional()?
+        .ok_or(TaskStoreError::WorkerNotFound)
+}
+
+fn insert_email_task_activity(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    message_count: usize,
+    draft: &EmailTaskDraft<'_>,
+) -> Result<(), TaskStoreError> {
+    transaction.execute(
+        "INSERT INTO task_activity (task_id, kind, to_state, note)
+         VALUES (?1, 'created', 'draft', ?2)",
+        params![
+            task_id.to_string(),
+            format!(
+                "Imported from {message_count} email{}",
+                if message_count == 1 { "" } else { "s" }
+            )
+        ],
+    )?;
+    if draft.state == TaskState::Ready {
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, from_state, to_state)
+             VALUES (?1, 'transitioned', 'draft', 'ready')",
+            [task_id.to_string()],
+        )?;
+    }
+    if draft.worker_id.is_some() {
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'assigned')",
+            [task_id.to_string()],
+        )?;
+    }
+    Ok(())
+}
+
+fn queue_email_task_dispatch(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    worker_id: WorkerId,
+    session_id: &str,
+) -> Result<(), TaskStoreError> {
+    let queued: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
+        [],
+        |row| row.get(0),
+    )?;
+    if queued >= 256 {
+        return Err(TaskStoreError::TaskDispatchQueueFull);
+    }
+    let assignment_id = Uuid::now_v7().to_string();
+    transaction.execute(
+        "INSERT INTO task_assignments (id, task_id, worker_session_id) VALUES (?1, ?2, ?3)",
+        params![assignment_id, task_id.to_string(), session_id],
+    )?;
+    transaction.execute(
+        "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
+         VALUES (?1, ?2, ?3, 'queued')",
+        params![assignment_id, task_id.to_string(), worker_id.to_string()],
+    )?;
+    Ok(())
+}
+
+fn insert_email_sources(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    messages: &[EmailMessageSnapshot<'_>],
+) -> Result<(), TaskStoreError> {
+    for message in messages {
+        let source_id = Uuid::now_v7().to_string();
+        transaction.execute(
+            "INSERT INTO email_message_links (
+                 id, task_id, integration_id, message_id, conversation_id,
+                 internet_message_id, sender_name, sender_address, received_at, web_url
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                source_id,
+                task_id.to_string(),
+                message.integration_id.trim(),
+                message.message_id.trim(),
+                message.conversation_id.trim(),
+                message.internet_message_id.map(str::trim),
+                message.sender_name.trim(),
+                message.sender_address.trim(),
+                message.received_at,
+                message.web_url.trim(),
+            ],
+        )?;
+        insert_email_attachments(transaction, task_id, &source_id, message.attachments)?;
+    }
+    Ok(())
+}
+
+fn insert_email_attachments(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+    source_id: &str,
+    attachments: &[EmailAttachmentSnapshot<'_>],
+) -> Result<(), TaskStoreError> {
+    for attachment in attachments {
+        transaction.execute(
+            "INSERT INTO email_task_attachments (
+                 id, source_id, task_id, storage_name, display_name, media_type,
+                 byte_size, is_inline, content_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                Uuid::now_v7().to_string(),
+                source_id,
+                task_id.to_string(),
+                attachment.storage_name.trim(),
+                attachment.display_name.trim(),
+                attachment.media_type.trim(),
+                i64::try_from(attachment.byte_size)
+                    .map_err(|_| TaskStoreError::InvalidEmailAttachment)?,
+                attachment.inline,
+                attachment.content_id.map(str::trim),
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) fn migrate_email_intake(

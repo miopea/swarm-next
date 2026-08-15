@@ -4805,58 +4805,9 @@ async fn import_email_task(
     Json(request): Json<ImportEmailTaskRequest>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    if request.message_ids.is_empty() || request.message_ids.len() > 20 {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_email_selection",
-            "choose between 1 and 20 Inbox messages",
-        ));
-    }
-    let unique = request
-        .message_ids
-        .iter()
-        .collect::<std::collections::HashSet<_>>();
-    if unique.len() != request.message_ids.len() {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_email_selection",
-            "each Inbox message may be selected only once",
-        ));
-    }
-    let outlook = state.outlook.read().await.clone();
-    let attachment_store = state.email_attachment_store.as_ref().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "email_attachment_store_unconfigured",
-            "private email attachment storage is not configured",
-        )
-    })?;
-    let mut messages = Vec::with_capacity(request.message_ids.len());
-    let mut stored_by_message = Vec::with_capacity(request.message_ids.len());
-    for message_id in &request.message_ids {
-        let message = outlook.message(message_id).await.map_err(outlook_error)?;
-        let mut stored = Vec::with_capacity(message.attachments.len());
-        for attachment in &message.attachments {
-            let content = outlook
-                .attachment(message_id, &attachment.id)
-                .await
-                .map_err(outlook_error)?;
-            let storage_name = attachment_store
-                .save(&content.metadata.media_type, &content.bytes)
-                .await
-                .map_err(email_attachment_error)?;
-            stored.push(StoredEmailAttachment {
-                storage_name,
-                display_name: content.metadata.name,
-                media_type: content.metadata.media_type,
-                byte_size: content.bytes.len() as u64,
-                inline: content.metadata.inline,
-                content_id: content.metadata.content_id,
-            });
-        }
-        messages.push(message);
-        stored_by_message.push(stored);
-    }
+    validate_email_selection(&request.message_ids)?;
+    let (messages, stored_by_message) =
+        load_email_import_messages(&state, &request.message_ids).await?;
     let attachment_snapshots = stored_by_message
         .iter()
         .map(|stored| {
@@ -4918,6 +4869,72 @@ async fn import_email_task(
         Json(imported),
     )
         .into_response())
+}
+
+fn validate_email_selection(message_ids: &[String]) -> Result<(), ApiError> {
+    if message_ids.is_empty() || message_ids.len() > 20 {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_email_selection",
+            "choose between 1 and 20 Inbox messages",
+        ));
+    }
+    let unique = message_ids.iter().collect::<HashSet<_>>();
+    if unique.len() != message_ids.len() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_email_selection",
+            "each Inbox message may be selected only once",
+        ));
+    }
+    Ok(())
+}
+
+async fn load_email_import_messages(
+    state: &AppState,
+    message_ids: &[String],
+) -> Result<
+    (
+        Vec<outlook::OutlookMessage>,
+        Vec<Vec<StoredEmailAttachment>>,
+    ),
+    ApiError,
+> {
+    let outlook = state.outlook.read().await.clone();
+    let attachment_store = state.email_attachment_store.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_attachment_store_unconfigured",
+            "private email attachment storage is not configured",
+        )
+    })?;
+    let mut messages = Vec::with_capacity(message_ids.len());
+    let mut stored_by_message = Vec::with_capacity(message_ids.len());
+    for message_id in message_ids {
+        let message = outlook.message(message_id).await.map_err(outlook_error)?;
+        let mut stored = Vec::with_capacity(message.attachments.len());
+        for attachment in &message.attachments {
+            let content = outlook
+                .attachment(message_id, &attachment.id)
+                .await
+                .map_err(outlook_error)?;
+            let storage_name = attachment_store
+                .save(&content.metadata.media_type, &content.bytes)
+                .await
+                .map_err(email_attachment_error)?;
+            stored.push(StoredEmailAttachment {
+                storage_name,
+                display_name: content.metadata.name,
+                media_type: content.metadata.media_type,
+                byte_size: content.bytes.len() as u64,
+                inline: content.metadata.inline,
+                content_id: content.metadata.content_id,
+            });
+        }
+        messages.push(message);
+        stored_by_message.push(stored);
+    }
+    Ok((messages, stored_by_message))
 }
 
 async fn email_task_source(
