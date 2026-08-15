@@ -266,18 +266,23 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .email-message-selection input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var(--honey-strong); }
 .email-selection-actions { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: color-mix(in srgb, var(--panel) 94%, transparent); box-shadow: var(--shadow-soft); }
 .email-selection-actions span { color: var(--muted); font-size: .78rem; }
-.email-import-review { display: grid; gap: 12px; }
+.email-import-review { display: grid; grid-template-areas: "source setup"; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); align-items: start; gap: 14px; }
+.email-source-workbench { display: grid; grid-area: source; min-width: 0; gap: 10px; }
+.email-task-setup { position: sticky; top: 92px; display: grid; grid-area: setup; min-width: 0; gap: 12px; padding: 14px; border: 1px solid color-mix(in srgb, var(--honey-strong) 42%, var(--line)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--honey-soft) 24%, var(--panel-raised)); box-shadow: var(--shadow-soft); }
+.email-task-setup h4 { margin: 0; font-size: .95rem; }
 .email-detail-toolbar > span { color: var(--muted); font-size: .74rem; }
 .email-source-tabs { display: flex; gap: 8px; padding-bottom: 4px; overflow-x: auto; }
 .email-source-tabs button { display: grid; flex: 0 0 min(280px, 74vw); gap: 3px; padding: 10px 12px; border-color: var(--line); background: var(--panel); text-align: left; }
 .email-source-tabs button[aria-selected="true"] { border-color: var(--honey-strong); background: var(--honey-soft); box-shadow: 0 0 0 2px color-mix(in srgb, var(--honey) 18%, transparent); }
 .email-source-tabs strong, .email-source-tabs small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .email-source-tabs small { color: var(--muted); }
+.email-source-select { display: none; }
 .email-source-preview { max-height: min(500px, 52vh); overflow-y: auto; }
-.email-task-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.email-task-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .email-task-fields label { display: grid; align-content: start; gap: 5px; color: var(--muted); font-size: .74rem; }
 .email-task-fields input, .email-task-fields select, .email-task-fields textarea { width: 100%; }
 .email-task-title, .email-task-description { grid-column: 1 / -1; }
+.email-task-worker { grid-column: 1 / -1; }
 .email-task-description textarea { resize: vertical; }
 .email-import-actions > small { max-width: 720px; margin-right: auto; color: var(--muted); font-size: .73rem; line-height: 1.45; }
 .email-message-sender, .email-message-content, .email-message-content strong, .email-message-content small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1116,9 +1121,14 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .email-message-selection time { grid-column: 3; grid-row: 1; }
   .email-selection-actions { align-items: stretch; flex-direction: column; }
   .email-selection-actions button { width: 100%; }
+  .email-import-review { grid-template-areas: "setup" "source"; grid-template-columns: minmax(0, 1fr); }
+  .email-task-setup { position: static; padding: 12px; }
   .email-task-fields { grid-template-columns: 1fr; }
-  .email-task-title, .email-task-description { grid-column: 1; }
-  .email-source-preview { max-height: none; }
+  .email-task-title, .email-task-description, .email-task-worker { grid-column: 1; }
+  .email-source-tabs { display: none; }
+  .email-source-select { display: grid; gap: 5px; color: var(--muted); font-size: .74rem; }
+  .email-source-select select { width: 100%; }
+  .email-source-preview { max-height: min(460px, 58vh); }
   .email-message-sender { grid-column: 1; }
   .email-message-content { grid-column: 1 / -1; display: grid; gap: 2px; }
   .email-message-content strong, .email-message-content small { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }

@@ -220,6 +220,19 @@ async function checkSurface(browser, surface) {
               exact: true,
             }).click();
             await emailSource.getByRole("heading", { name: "Review the task before import" }).waitFor();
+            await emailSource.getByRole("heading", { name: "Shape the work before it joins the board" }).waitFor();
+            for (const field of ["Task title", "Task description", "Priority", "Starting status", "Worker"]) {
+              if (!await emailSource.getByLabel(field, { exact: true }).isVisible()) {
+                throw new Error(`${surface.name}: email import field ${field} is unavailable`);
+              }
+            }
+            if (surface.mobile) {
+              if (!await emailSource.getByLabel("Preview source email", { exact: true }).isVisible()) {
+                throw new Error(`${surface.name}: compact email source selector is unavailable`);
+              }
+            } else if (!await emailSource.getByRole("tablist", { name: "Selected source emails" }).isVisible()) {
+              throw new Error(`${surface.name}: desktop email source tabs are unavailable`);
+            }
             const reviewBounds = await emailSource.evaluate((element) => ({
               scrollWidth: element.scrollWidth,
               clientWidth: element.clientWidth,

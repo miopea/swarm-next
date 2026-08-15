@@ -72,7 +72,7 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
     if (!preview) return;
     let cancelled = false;
     const previews = preview.attachments.filter((attachment) =>
-      attachment.inline && ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(attachment.media_type),
+      ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(attachment.media_type),
     );
     void Promise.all(previews.map(async (attachment) => {
       const blob = await fetchEmailAttachmentPreview(operatorToken, preview.summary.id, attachment.id);
@@ -200,27 +200,39 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
         </>
       ) : (
         <div className="email-import-review">
-          <div className="email-detail-toolbar">
-            <button className="text-button" type="button" onClick={backToInbox}>← Inbox</button>
-            <span>Original threads and attachments remain separate inside this task.</span>
-          </div>
-          <div className="email-source-tabs" role="tablist" aria-label="Selected source emails">
-            {selectedMessages.map((item, index) => <button key={item.summary.id} role="tab" aria-selected={index === previewIndex} onClick={() => setPreviewIndex(index)}><strong>{item.summary.subject || "(No subject)"}</strong><small>{item.summary.sender_name || item.summary.sender_address}</small></button>)}
-          </div>
-          {preview ? <article className="email-message-detail email-source-preview">
-            <div className="email-detail-toolbar"><span>{formatReceived(preview.summary.received_at)}</span><a href={preview.summary.web_url} target="_blank" rel="noreferrer">Open original</a></div>
-            <div className="email-body-preview">{readableBody(preview.body_text || preview.summary.preview || "No readable message body.")}</div>
-            {Object.keys(imageUrls).length ? <div className="email-inline-images" aria-label="Images in this message">{preview.attachments.filter((attachment) => imageUrls[attachment.id]).map((attachment) => <figure key={attachment.id}><img src={imageUrls[attachment.id]} alt={attachment.name || "Image from email"} /><figcaption>{attachment.name}</figcaption></figure>)}</div> : null}
-            {preview.attachments.length ? <div className="email-attachment-list"><strong>{preview.attachments.length} attachment{preview.attachments.length === 1 ? "" : "s"}</strong>{preview.attachments.map((attachment) => <span key={attachment.id}>{attachment.name} · {formatBytes(attachment.byte_size)}</span>)}</div> : null}
-          </article> : null}
-          <div className="email-task-fields">
-            <label className="email-task-title"><span>Task title</span><input value={title} maxLength={240} onChange={(event) => setTitle(event.target.value)} /></label>
-            <label className="email-task-description"><span>Task description</span><textarea value={description} rows={8} onChange={(event) => setDescription(event.target.value)} /></label>
-            <label><span>Priority</span><select value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
-            <label><span>Starting status</span><select value={initialState} onChange={(event) => setInitialState(event.target.value as "draft" | "ready")}><option value="draft">Draft — review later</option><option value="ready">Ready — available to work</option></select></label>
-            <label><span>Worker</span><select value={workerId} onChange={(event) => setWorkerId(event.target.value)}><option value="">Unassigned</option>{assignableWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {worker.attention_state}</option>)}</select></label>
-          </div>
-          <div className="email-import-actions"><small>Each original thread stays linked to the task for a reviewed plain-language resolution after completion and deployment.</small><button className="primary-action" type="button" disabled={busy || !title.trim()} onClick={() => void importSelected()}>{busy ? "Importing…" : `Import ${selectedMessages.length} email${selectedMessages.length === 1 ? "" : "s"} as one task`}</button></div>
+          <section className="email-task-setup" aria-labelledby="email-task-setup-heading">
+            <div><p className="eyebrow">Task setup</p><h4 id="email-task-setup-heading">Shape the work before it joins the board</h4></div>
+            <div className="email-task-fields">
+              <label className="email-task-title"><span>Task title</span><input value={title} maxLength={240} onChange={(event) => setTitle(event.target.value)} /></label>
+              <label className="email-task-description"><span>Task description</span><textarea value={description} rows={6} onChange={(event) => setDescription(event.target.value)} /></label>
+              <label><span>Priority</span><select value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
+              <label><span>Starting status</span><select value={initialState} onChange={(event) => setInitialState(event.target.value as "draft" | "ready")}><option value="draft">Draft — review later</option><option value="ready">Ready — available to work</option></select></label>
+              <label className="email-task-worker"><span>Worker</span><select value={workerId} onChange={(event) => setWorkerId(event.target.value)}><option value="">Unassigned</option>{assignableWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {worker.attention_state}</option>)}</select></label>
+            </div>
+            <div className="email-import-actions"><small>Every original thread and attachment stays linked for a reviewed plain-language reply after completion and deployment.</small><button className="primary-action" type="button" disabled={busy || !title.trim()} onClick={() => void importSelected()}>{busy ? "Importing…" : `Import ${selectedMessages.length} email${selectedMessages.length === 1 ? "" : "s"} as one task`}</button></div>
+          </section>
+          <section className="email-source-workbench" aria-labelledby="email-source-review-heading">
+            <div className="email-detail-toolbar">
+              <button className="text-button" type="button" onClick={backToInbox}>← Inbox</button>
+              <span id="email-source-review-heading">Review {selectedMessages.length} source email{selectedMessages.length === 1 ? "" : "s"}</span>
+            </div>
+            <label className="email-source-select">
+              <span>Preview source email</span>
+              <select value={previewIndex} onChange={(event) => setPreviewIndex(Number(event.target.value))}>
+                {selectedMessages.map((item, index) => <option key={item.summary.id} value={index}>{index + 1}. {item.summary.subject || "(No subject)"} — {item.summary.sender_name || item.summary.sender_address}</option>)}
+              </select>
+            </label>
+            <div className="email-source-tabs" role="tablist" aria-label="Selected source emails">
+              {selectedMessages.map((item, index) => <button key={item.summary.id} role="tab" aria-selected={index === previewIndex} onClick={() => setPreviewIndex(index)}><strong>{index + 1}. {item.summary.subject || "(No subject)"}</strong><small>{item.summary.sender_name || item.summary.sender_address}</small></button>)}
+            </div>
+            {preview ? <article className="email-message-detail email-source-preview">
+              <div className="email-detail-toolbar"><span>{formatReceived(preview.summary.received_at)}</span><a href={preview.summary.web_url} target="_blank" rel="noreferrer">Open original</a></div>
+              <header><h4>{preview.summary.subject || "(No subject)"}</h4><p>{preview.summary.sender_name || preview.summary.sender_address} · {preview.summary.sender_address}</p></header>
+              <div className="email-body-preview">{readableBody(preview.body_text || preview.summary.preview || "No readable message body.")}</div>
+              {Object.keys(imageUrls).length ? <div className="email-inline-images" aria-label="Images in this message">{preview.attachments.filter((attachment) => imageUrls[attachment.id]).map((attachment) => <figure key={attachment.id}><img src={imageUrls[attachment.id]} alt={attachment.name || "Image from email"} /><figcaption>{attachment.name}</figcaption></figure>)}</div> : null}
+              {preview.attachments.length ? <div className="email-attachment-list"><strong>{preview.attachments.length} attachment{preview.attachments.length === 1 ? "" : "s"}</strong>{preview.attachments.map((attachment) => <span key={attachment.id}>{attachment.name} · {formatBytes(attachment.byte_size)}</span>)}</div> : null}
+            </article> : null}
+          </section>
         </div>
       )}
       {message ? <p className="settings-message" role="status">{message}</p> : null}

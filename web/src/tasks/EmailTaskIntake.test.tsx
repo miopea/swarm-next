@@ -11,6 +11,9 @@ afterEach(() => {
 
 test("previews an Inbox message and explicitly imports its body and attachments as a task", async () => {
   const requests: { url: string; method: string; body?: string }[] = [];
+  const createObjectURL = vi.fn(() => "blob:private-attached-image");
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -30,6 +33,7 @@ test("previews an Inbox message and explicitly imports its body and attachments 
       body_text: "The submit button does not work on my phone.",
       attachments: [{ id: "attachment-1", name: "screenshot.png", media_type: "image/png", byte_size: 2048, inline: false, content_id: null }],
     });
+    if (url.endsWith("/messages/message-1/attachments/attachment-1")) return new Response(new Blob(["image"], { type: "image/png" }));
     if (url.endsWith("/integrations/email/import") && method === "POST") return ok({ created: true, task: { id: "task-1" }, source: { id: "source-1" }, sources: [{ id: "source-1" }] });
     throw new Error(`Unexpected request: ${method} ${url}`);
   }));
@@ -43,7 +47,8 @@ test("previews an Inbox message and explicitly imports its body and attachments 
   fireEvent.click(screen.getByRole("button", { name: "Review 1 message" }));
   expect(await screen.findByText("The submit button does not work on my phone.")).toBeInTheDocument();
   expect(screen.getByText("screenshot.png · 2 KB")).toBeInTheDocument();
-  expect(screen.getByText(/Original threads and attachments remain separate/)).toBeInTheDocument();
+  expect(await screen.findByRole("img", { name: "screenshot.png" })).toHaveAttribute("src", "blob:private-attached-image");
+  expect(screen.getByText(/Every original thread and attachment stays linked/)).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "high" } });
   fireEvent.click(screen.getByRole("button", { name: "Import 1 email as one task" }));
 
