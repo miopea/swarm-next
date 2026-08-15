@@ -68,4 +68,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: packaging/linux/test-worker-engine-build-id.sh
       - run: packaging/linux/test-package-lifecycle.sh
