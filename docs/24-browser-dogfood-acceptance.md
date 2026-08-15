@@ -586,3 +586,13 @@ the independently updated terminal host through the API to worker settings:
   three Apiary guide steps, member surfaces, and authentication preserved
   across complete browser restarts. The App/API-only deployment changed API
   PID to `3016004` while preserving terminal-host PID `2966127`.
+- Release `0.1.0-dev-10537f325a0d` moves browser authentication, no-store
+  requests, typed runtime failures, and bounded transient recovery behind one
+  shared transport owner without changing the public API barrel. All 206
+  frontend tests, strict TypeScript checking, and the production build passed.
+  The source detector correctly requested an App/API reload for this product
+  change, then returned to current after activation. Live acceptance passed all
+  primary and member surfaces at 1,440-pixel desktop and 412-pixel Android
+  widths with zero overflow, 346 and 314 named controls, three Apiary guide
+  steps, and authentication preserved across complete browser restarts. API
+  PID advanced to `3022514`; terminal-host PID remained `2966127`.
