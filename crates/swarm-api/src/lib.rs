@@ -3289,23 +3289,34 @@ struct DevelopmentSourceStatus {
     reload_available: bool,
 }
 
+const DEVELOPMENT_PRODUCT_PATHS: [&str; 5] =
+    ["Cargo.toml", "Cargo.lock", "crates", "web", "packaging"];
+
 fn development_source_status(state: &AppState) -> Option<DevelopmentSourceStatus> {
     let checkout = state.development_checkout_path.as_ref()?;
+    development_source_status_for(
+        checkout,
+        deployed_source_revision(build_version()).as_deref(),
+    )
+}
+
+fn development_source_status_for(
+    checkout: &FilePath,
+    deployed_revision: Option<&str>,
+) -> Option<DevelopmentSourceStatus> {
     let revision = git_output(checkout, &["rev-parse", "--short=12", "HEAD"])?;
-    let product_paths = ["Cargo.toml", "Cargo.lock", "crates", "web", "packaging"];
     let dirty = !git_output_with_paths(
         checkout,
         &["status", "--porcelain", "--untracked-files=normal", "--"],
-        &product_paths,
+        &DEVELOPMENT_PRODUCT_PATHS,
     )
     .is_some_and(|output| output.is_empty());
-    let deployed_revision = deployed_source_revision(build_version());
-    let committed_changes = deployed_revision.as_deref().is_none_or(|deployed| {
+    let committed_changes = deployed_revision.is_none_or(|deployed| {
         Command::new("git")
             .arg("-C")
-            .arg(checkout.as_ref())
+            .arg(checkout)
             .args(["diff", "--quiet", deployed, "HEAD", "--"])
-            .args(product_paths)
+            .args(DEVELOPMENT_PRODUCT_PATHS)
             .status()
             .map_or(true, |status| !status.success())
     });
@@ -7048,6 +7059,91 @@ mod tests {
             Some("a5d95af96bee")
         );
         assert_eq!(deployed_source_revision("0.1.0"), None);
+    }
+
+    #[test]
+    fn development_reload_only_tracks_product_changes() {
+        let checkout = TempDir::new().unwrap();
+        let checkout_path = checkout.path();
+        std::fs::create_dir_all(checkout_path.join("web/src")).unwrap();
+        std::fs::create_dir_all(checkout_path.join("docs")).unwrap();
+        std::fs::create_dir_all(checkout_path.join("scripts")).unwrap();
+        std::fs::write(checkout_path.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(checkout_path.join("web/src/main.ts"), "export {};\n").unwrap();
+        std::fs::write(checkout_path.join("docs/guide.md"), "first\n").unwrap();
+        std::fs::write(checkout_path.join("scripts/check.sh"), "exit 0\n").unwrap();
+
+        let git = |arguments: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(checkout_path)
+                .args(arguments)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {arguments:?} failed");
+        };
+        git(&["init", "--quiet"]);
+        git(&["add", "."]);
+        git(&[
+            "-c",
+            "user.name=Swarm Test",
+            "-c",
+            "user.email=swarm-test@example.com",
+            "commit",
+            "--quiet",
+            "-m",
+            "base",
+        ]);
+        let deployed_revision = git_output(checkout_path, &["rev-parse", "HEAD"]).unwrap();
+
+        std::fs::write(checkout_path.join("docs/guide.md"), "second\n").unwrap();
+        std::fs::write(checkout_path.join("scripts/check.sh"), "exit 1\n").unwrap();
+        let docs_only = development_source_status_for(checkout_path, Some(&deployed_revision))
+            .expect("development checkout should be readable");
+        assert!(!docs_only.dirty);
+        assert!(!docs_only.reload_available);
+
+        git(&["add", "docs", "scripts"]);
+        git(&[
+            "-c",
+            "user.name=Swarm Test",
+            "-c",
+            "user.email=swarm-test@example.com",
+            "commit",
+            "--quiet",
+            "-m",
+            "docs only",
+        ]);
+        let committed_docs =
+            development_source_status_for(checkout_path, Some(&deployed_revision)).unwrap();
+        assert!(!committed_docs.dirty);
+        assert!(!committed_docs.reload_available);
+
+        std::fs::write(
+            checkout_path.join("web/src/main.ts"),
+            "export const changed = true;\n",
+        )
+        .unwrap();
+        let dirty_product =
+            development_source_status_for(checkout_path, Some(&deployed_revision)).unwrap();
+        assert!(dirty_product.dirty);
+        assert!(dirty_product.reload_available);
+
+        git(&["add", "web"]);
+        git(&[
+            "-c",
+            "user.name=Swarm Test",
+            "-c",
+            "user.email=swarm-test@example.com",
+            "commit",
+            "--quiet",
+            "-m",
+            "product change",
+        ]);
+        let committed_product =
+            development_source_status_for(checkout_path, Some(&deployed_revision)).unwrap();
+        assert!(!committed_product.dirty);
+        assert!(committed_product.reload_available);
     }
 
     #[tokio::test]
