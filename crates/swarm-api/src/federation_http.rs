@@ -275,7 +275,12 @@ mod tests {
 
     use axum::{Json, Router, body::Body, http::header, response::Redirect, routing::get};
     use serde_json::json;
-    use swarm_domain::{ApiaryId, FederationClaimState, FederationNodeId, HiveId, OperatorId};
+    use swarm_domain::{
+        ApiaryId, ApiaryInvitationId, FederationClaimState, FederationJoinSubmissionPayload,
+        FederationMembershipReceipt, FederationMembershipReceiptId,
+        FederationMembershipReceiptPayload, FederationNodeId, HiveId, OperatorId,
+        SharedWorkBackend,
+    };
 
     use super::*;
 
@@ -295,6 +300,33 @@ mod tests {
         }
         assert!(FederationHttpClient::new("https://keeper.example.test/swarm").is_ok());
         assert!(FederationHttpClient::new("http://127.0.0.1:8766").is_ok());
+    }
+
+    #[tokio::test]
+    async fn join_transport_delivers_the_sealed_submission_only_to_the_bounded_endpoint() {
+        let submission = sample_join_submission();
+        let expected_submission = submission.clone();
+        let acceptance = sample_join_acceptance(&submission);
+        let expected_acceptance = acceptance.clone();
+        let app = Router::new().route(
+            "/swarm/api/v1/federation/join",
+            axum::routing::post(
+                move |headers: axum::http::HeaderMap,
+                      Json(body): Json<FederationJoinSubmission>| {
+                    let expected_submission = expected_submission.clone();
+                    let expected_acceptance = expected_acceptance.clone();
+                    async move {
+                        assert!(headers.get(header::AUTHORIZATION).is_none());
+                        assert_eq!(body, expected_submission);
+                        Json(expected_acceptance)
+                    }
+                },
+            ),
+        );
+        let address = spawn_server(app).await;
+        let client = FederationHttpClient::new(&format!("http://{address}/swarm")).unwrap();
+
+        assert_eq!(client.join(&submission).await.unwrap(), acceptance);
     }
 
     #[tokio::test]
@@ -438,6 +470,56 @@ mod tests {
             reservation_expires_at: 1_120,
             confirmed_at: None,
             released_at: None,
+        }
+    }
+
+    fn sample_join_submission() -> FederationJoinSubmission {
+        FederationJoinSubmission {
+            payload: FederationJoinSubmissionPayload {
+                schema_version: 1,
+                protocol_version: 1,
+                invitation_id: ApiaryInvitationId::new(),
+                apiary_id: ApiaryId::new(),
+                required_policy_revision: 3,
+                promoted_project_catalog_digest: "catalog-digest".into(),
+                invited_node_id: FederationNodeId::new(),
+                invited_hive_id: HiveId::new(),
+                invited_operator_id: OperatorId::new(),
+                submitted_at: 1_000,
+            },
+            signature: "member-signature".into(),
+            one_time_secret: "one-time-secret".into(),
+        }
+    }
+
+    fn sample_join_acceptance(submission: &FederationJoinSubmission) -> FederationJoinAcceptance {
+        FederationJoinAcceptance {
+            receipt: FederationMembershipReceipt {
+                payload: FederationMembershipReceiptPayload {
+                    schema_version: 1,
+                    protocol_version: 1,
+                    receipt_id: FederationMembershipReceiptId::new(),
+                    invitation_id: submission.payload.invitation_id,
+                    apiary_id: submission.payload.apiary_id,
+                    apiary_name: "Wildflower Garden".into(),
+                    shared_work_backend: SharedWorkBackend::Jira,
+                    policy_revision: submission.payload.required_policy_revision,
+                    promoted_project_catalog_digest: submission
+                        .payload
+                        .promoted_project_catalog_digest
+                        .clone(),
+                    keeper_node_id: FederationNodeId::new(),
+                    keeper_hive_id: HiveId::new(),
+                    keeper_operator_id: OperatorId::new(),
+                    member_node_id: submission.payload.invited_node_id,
+                    member_hive_id: submission.payload.invited_hive_id,
+                    member_operator_id: submission.payload.invited_operator_id,
+                    joined_at: 1_001,
+                    credential_expires_at: 2_000,
+                },
+                signature: "keeper-signature".into(),
+            },
+            node_credential: "member-node-credential".into(),
         }
     }
 }
