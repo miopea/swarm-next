@@ -145,20 +145,21 @@ export default function TaskBoard({
     return () => { cancelled = true; };
   }, [operatorToken, tasks]);
   const { open: openTasks, completed: completedTasks, jiraByTask } = taskView;
+  const focusedTaskCompleted = Boolean(focusTaskId && completedTasks.some((task) => task.id === focusTaskId));
   const canReorder = sort === "queue" && !query.trim() && filter === "all";
   const taskReorder = useReorderDrag(openTasks.map((task) => task.id), (taskIds) => void onReorder(taskIds));
   const draggedTask = tasks.find((task) => task.id === taskReorder.draggedId);
 
   useEffect(() => {
     if (!focusTaskId) return;
-    if (completedTasks.some((task) => task.id === focusTaskId)) completedTasksPanel.current?.setAttribute("open", "");
+    if (focusedTaskCompleted) completedTasksPanel.current?.setAttribute("open", "");
     const frame = requestAnimationFrame(() => {
       const card = document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(focusTaskId)}"]`);
       card?.scrollIntoView({ behavior: "smooth", block: "center" });
       card?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [focusTaskId, focusRequest, completedTasks]);
+  }, [focusTaskId, focusRequest, focusedTaskCompleted]);
 
   useEffect(() => {
     if (!composeRequest) return;

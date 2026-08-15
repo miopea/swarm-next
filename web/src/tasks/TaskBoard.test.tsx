@@ -68,6 +68,17 @@ test("reveals and focuses a completed task selected through global navigation", 
   expect(scrollIntoView).toHaveBeenCalled();
 });
 
+test("keeps task creation focused after navigating from a completed task", async () => {
+  const completed = { ...task, state: "completed" as const };
+  Element.prototype.scrollIntoView = vi.fn();
+  const { props, rerender } = renderBoard({ tasks: [completed], focusTaskId: completed.id, focusRequest: 1, composeRequest: 0 });
+  await waitFor(() => expect(screen.getByRole("article", { name: completed.title })).toHaveFocus());
+
+  rerender(<TaskBoard {...props} tasks={[completed]} focusTaskId={completed.id} focusRequest={1} composeRequest={1} />);
+
+  await waitFor(() => expect(screen.getByLabelText("Task title")).toHaveFocus());
+});
+
 test("dragging a task exposes only legal workflow targets and performs the drop", () => {
   const onTransition = vi.fn().mockResolvedValue(undefined);
   renderBoard({ onTransition });

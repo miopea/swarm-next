@@ -650,7 +650,17 @@ async function checkSurface(browser, surface) {
     await page.getByRole("heading", { name: "Task board" }).waitFor();
     const taskTitle = page.getByLabel("Task title");
     await taskTitle.waitFor();
-    await page.waitForFunction(() => document.activeElement?.id === "task-title");
+    try {
+      await page.waitForFunction(() => document.activeElement?.id === "task-title", undefined, { timeout: 3_000 });
+    } catch {
+      const focus = await page.evaluate(() => ({
+        id: document.activeElement?.id || "",
+        tag: document.activeElement?.tagName || "",
+        text: document.activeElement?.textContent?.trim().slice(0, 120) || "",
+      }));
+      await page.screenshot({ path: path.join(outputRoot, `${surface.name}-task-focus-failed.png`), fullPage: true });
+      throw new Error(`${surface.name}: quick task creation focus stayed on ${JSON.stringify(focus)}`);
+    }
     const createTaskFocused = await taskTitle.evaluate((input) => input === document.activeElement);
     if (!createTaskFocused) throw new Error(`${surface.name}: quick task creation did not focus the title`);
     await page.getByRole("button", { name: /Settings/ }).click();
