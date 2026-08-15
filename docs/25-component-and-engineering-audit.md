@@ -74,12 +74,14 @@ These abstractions are justified by shared behavior, not visual resemblance.
   Jira discussion, email resolution, action-menu, and drag behavior. Metadata
   and assignment remain focused child components rather than a generic card
   framework.
-- `web/src/settings/ApiarySettings.tsx` is roughly 1,100 lines and now combines
-  identity editing, bootstrap handoffs, policy review, Jira readiness,
-  membership, Stewardship, shared-work rollup, and collapse. The signed
-  handoff codec and repeated controls are separated, but the next Apiary change
-  should extract vertical Keeper onboarding and member-join sections rather
-  than adding another generic settings abstraction.
+- `web/src/settings/ApiarySettings.tsx` previously combined identity editing,
+  both bootstrap handoffs, policy review, Jira readiness, membership,
+  Stewardship, shared-work rollup, and collapse. Signed handoff controls now
+  have one focused owner and Keeper invitation management is a vertical feature
+  component that owns candidate loading, identity verification, invitation
+  issuance, copy fallback, and operator feedback. Personal-Hive joining remains
+  the next vertical extraction; do not replace either workflow with a generic
+  settings abstraction.
 - `web/src/api.ts` is roughly 1,600 lines and combines public contract types with
   every HTTP operation.
 - `web/src/styles.css` is roughly 1,165 lines in one global
@@ -91,9 +93,9 @@ Required next extractions are vertical and behavior-led:
    independently complex. Metadata, assignment, query/filter/sort, Jira
    discussion, and email resolution already have focused owners; do not create
    a generic card framework.
-2. Extract Apiary Keeper onboarding and member joining as two vertical feature
-   components when their next behavior lands. Keep shared cryptographic handoff
-   parsing independent of both views.
+2. Extract personal-Hive joining as its own vertical feature component when its
+   next behavior lands. Keeper invitation management is already separated, and
+   shared cryptographic handoff parsing remains independent of both views.
 3. API contracts split by domain (`tasks`, `workers`, `jira`, `presence`) while
    keeping one small shared authenticated request helper.
 4. CSS moves with extracted feature components after their visual contracts are
