@@ -150,7 +150,11 @@ Required next extractions are vertical and behavior-led:
   existing feedback persistence aggregate; attachment storage and media
   validation remain owned by the reusable bounded attachment store. The
   authenticated consistent SQLite export likewise has one `backups` HTTP
-  owner; online backup integrity remains a persistence responsibility.
+  owner; online backup integrity remains a persistence responsibility. Durable
+  browser-session creation, restoration, locking, constant-time bearer/cookie
+  verification, and secure cookie policy now share one `auth` owner used by
+  every private route rather than leaving authentication in the composition
+  root.
 - `crates/swarm-persistence/src/lib.rs` is roughly 3,700 lines although Jira,
   workers, decisions, notifications, dispatches, and outcomes have begun moving
   to focused modules. The content-free control-room event aggregate now owns

@@ -1,6 +1,7 @@
 mod agent;
 mod attach;
 mod attachments;
+mod auth;
 mod backups;
 mod decisions;
 mod email_attachments;
@@ -38,11 +39,8 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::{delete, get, patch, post, put},
 };
-use base64ct::{Base64UrlUnpadded, Encoding};
 use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 use swarm_application::{
     ApiaryHiveCandidateOverview, ApiaryInvitationOverview, ApiaryService, ApplicationError,
     FederationJoinInvitationOverview, TaskService,
@@ -76,6 +74,7 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 use attach::{ATTACH_GRANT_TTL, AttachGrantError, AttachGrantStore, MAX_ATTACH_GRANTS};
 use attachments::{AttachmentError, AttachmentStore, MAX_ATTACHMENT_BYTES};
+use auth::authorize;
 use terminal_socket::{
     MAX_WEBSOCKET_MESSAGE_BYTES, TERMINAL_GRANT_PROTOCOL_PREFIX, TERMINAL_WEBSOCKET_PROTOCOL,
     serve_terminal_socket,
@@ -84,8 +83,6 @@ use terminal_socket::{
 const MAX_TERMINAL_WEBSOCKETS: usize = 32;
 const RESOURCE_ADVISORY_BYTES: u64 = 256 * 1024 * 1024;
 const RESOURCE_CRITICAL_BYTES: u64 = 512 * 1024 * 1024;
-const OPERATOR_SESSION_COOKIE: &str = "swarm_next_operator_session";
-const OPERATOR_SESSION_MAX_AGE_SECONDS: u64 = 30 * 24 * 60 * 60;
 const WORKER_RECOVERY_STABILITY_SECONDS: i64 = 5 * 60;
 
 #[derive(Clone)]
@@ -1644,9 +1641,9 @@ fn api_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route(
             "/api/v1/auth/session",
-            get(get_browser_session)
-                .post(create_browser_session)
-                .delete(delete_browser_session),
+            get(auth::get_session)
+                .post(auth::create_session)
+                .delete(auth::delete_session),
         )
         .route("/api/v1/hive", get(local_hive).put(rename_local_hive))
         .route(
@@ -1997,50 +1994,6 @@ fn build_version() -> &'static str {
 
 fn worker_engine_build_id() -> &'static str {
     option_env!("SWARM_WORKER_ENGINE_BUILD_ID").unwrap_or(build_version())
-}
-
-async fn get_browser_session(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        StatusCode::NO_CONTENT,
-    )
-        .into_response())
-}
-
-async fn create_browser_session(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let cookie = browser_session_set_cookie(&state, &headers)?;
-    Ok((
-        [
-            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-            (header::SET_COOKIE, cookie),
-        ],
-        StatusCode::NO_CONTENT,
-    )
-        .into_response())
-}
-
-async fn delete_browser_session() -> Response {
-    (
-        [
-            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-            (
-                header::SET_COOKIE,
-                HeaderValue::from_static(
-                    "swarm_next_operator_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
-                ),
-            ),
-        ],
-        StatusCode::NO_CONTENT,
-    )
-        .into_response()
 }
 
 async fn local_hive(
@@ -5633,39 +5586,6 @@ fn websocket_grant(headers: &HeaderMap) -> Option<&str> {
         .find_map(|protocol| protocol.strip_prefix(TERMINAL_GRANT_PROTOCOL_PREFIX))
 }
 
-fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    let expected = state.operator_token.as_deref().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "operator_auth_unconfigured",
-            "operator authentication is not configured",
-        )
-    })?;
-    let presented_bearer = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .unwrap_or_default();
-    let expected_session = browser_session_value(expected);
-    let presented_session = cookie_value(headers, OPERATOR_SESSION_COOKIE).unwrap_or_default();
-    let bearer_matches = presented_bearer.len() == expected.len()
-        && bool::from(presented_bearer.as_bytes().ct_eq(expected.as_bytes()));
-    let session_matches = presented_session.len() == expected_session.len()
-        && bool::from(
-            presented_session
-                .as_bytes()
-                .ct_eq(expected_session.as_bytes()),
-        );
-    if !bearer_matches && !session_matches {
-        return Err(ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "invalid_operator_token",
-            "a valid operator session is required",
-        ));
-    }
-    Ok(())
-}
-
 fn federation_node_credential(headers: &HeaderMap) -> Result<&str, ApiError> {
     headers
         .get(header::AUTHORIZATION)
@@ -5678,70 +5598,6 @@ fn federation_node_credential(headers: &HeaderMap) -> Result<&str, ApiError> {
                 "invalid_federation_credential",
                 "a current federation node credential is required",
             )
-        })
-}
-
-fn browser_session_set_cookie(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<HeaderValue, ApiError> {
-    let expected = state.operator_token.as_deref().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "operator_auth_unconfigured",
-            "operator authentication is not configured",
-        )
-    })?;
-    let secure = if request_is_secure(headers) {
-        "; Secure"
-    } else {
-        ""
-    };
-    HeaderValue::from_str(&format!(
-        "{OPERATOR_SESSION_COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={OPERATOR_SESSION_MAX_AGE_SECONDS}{secure}",
-        browser_session_value(expected),
-    ))
-    .map_err(|_| {
-        ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "operator_session_unavailable",
-            "browser session could not be created",
-        )
-    })
-}
-
-fn browser_session_value(operator_token: &str) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"swarm-next.operator-session.v1\0");
-    digest.update(operator_token.as_bytes());
-    Base64UrlUnpadded::encode_string(&digest.finalize())
-}
-
-fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers
-        .get(header::COOKIE)?
-        .to_str()
-        .ok()?
-        .split(';')
-        .map(str::trim)
-        .find_map(|cookie| cookie.strip_prefix(name)?.strip_prefix('='))
-}
-
-fn request_is_secure(headers: &HeaderMap) -> bool {
-    if headers
-        .get("x-forwarded-proto")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("https"))
-    {
-        return true;
-    }
-    headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .is_none_or(|host| {
-            !host.starts_with("localhost")
-                && !host.starts_with("127.0.0.1")
-                && !host.starts_with("[::1]")
         })
 }
 
