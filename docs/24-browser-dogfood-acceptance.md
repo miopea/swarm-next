@@ -943,3 +943,14 @@ the independently updated terminal host through the API to worker settings:
   pending count, survived reload, and kept horizontal overflow at zero. The
   browser console had no warnings or errors, and the proof tab and temporary
   runtime processes were closed afterward.
+- Release `0.1.0-dev-0056e623714d` gives Keeper a first-class shared-task
+  creation flow over the existing canonical Apiary task command. The form
+  captures an outcome, optional context, and priority while deliberately
+  omitting private Member workers and repositories. The frontend gate passed
+  218 tests, strict TypeScript, and the production build. Live proof on the
+  real Keeper Apiary showed the shared-work panel expanding to 845 pixels at
+  desktop width, a single-column Android form with 317-pixel controls at 412
+  by 915, disabled empty submission, and zero horizontal overflow. The API
+  advanced to the new release while terminal-host PID `2966127` remained
+  unchanged, preserving the active Queen session. Every proof browser tab was
+  closed afterward.

@@ -270,6 +270,13 @@ offline periods and process restarts. Routine success stays quiet; conflicts
 and rejections remain visible for review. None of this path reads or mutates
 Jira.
 
+Keeper now has a first-class operator flow for creating those canonical Swarm
+tasks. Creation records a focused outcome, optional context, and priority as
+unassigned Apiary work; it never selects or exposes a Member's private worker,
+repository, terminal, or provider session. Member Hives receive the new task
+through their existing outbound poll and may claim it through the governed
+command queue.
+
 A sole Keeper Hive may explicitly collapse an Apiary after automatic safety
 validation. Native tasks become local while preserving identity and history;
 Jira-backed Apiary projects become Hive-owned bindings. Outstanding invitations,
