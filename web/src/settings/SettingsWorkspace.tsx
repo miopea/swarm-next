@@ -63,15 +63,31 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState(() => readSettingsSection() ?? "settings-crew");
   useEffect(() => {
+    let frame: number | undefined;
+    let settleTimer: number | undefined;
+    let finalTimer: number | undefined;
+    const scrollToSection = (section: string) => {
+      document.getElementById(section)?.scrollIntoView?.({ behavior: "auto", block: "start" });
+    };
     const selectLinkedSection = () => {
       const section = readSettingsSection();
       if (!section) return;
       setActiveSettingsSection(section);
-      window.requestAnimationFrame(() => document.getElementById(section)?.scrollIntoView?.({ behavior: "auto", block: "start" }));
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer);
+      if (finalTimer !== undefined) window.clearTimeout(finalTimer);
+      frame = window.requestAnimationFrame(() => scrollToSection(section));
+      settleTimer = window.setTimeout(() => scrollToSection(section), 150);
+      finalTimer = window.setTimeout(() => scrollToSection(section), 500);
     };
     selectLinkedSection();
     window.addEventListener("hashchange", selectLinkedSection);
-    return () => window.removeEventListener("hashchange", selectLinkedSection);
+    return () => {
+      window.removeEventListener("hashchange", selectLinkedSection);
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer);
+      if (finalTimer !== undefined) window.clearTimeout(finalTimer);
+    };
   }, []);
   useEffect(() => {
     let cancelled = false;

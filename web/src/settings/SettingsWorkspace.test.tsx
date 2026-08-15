@@ -1,13 +1,17 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import SettingsWorkspace from "./SettingsWorkspace";
 import { jiraStatusLabel, resourceLabel } from "./DiagnosticsWorkspace";
 
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  if (originalScrollIntoView) HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+  else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });
 
 test("shows subsystem diagnostics, previews a sanitized report, and changes the selected theme", async () => {
@@ -185,6 +189,27 @@ test("uses actionable Jira diagnostic states", () => {
   expect(jiraStatusLabel({ configured: true, connection: "network_unavailable", account_name: null }, false)).toBe("Network unavailable");
   expect(jiraStatusLabel({ configured: true, connection: "credentials_invalid", account_name: null }, false)).toBe("Credentials need attention");
   expect(jiraStatusLabel(undefined, true)).toBe("Unavailable");
+});
+
+test("restores a linked settings section after its responsive layout settles", async () => {
+  const scrollIntoView = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+  window.history.replaceState({}, "", "/#settings-apiary");
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("integrations/jira/bindings") || url.includes("feedback/reports")) return ok([]);
+    if (url.includes("integrations/email/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("runtime/resources")) return ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 1, critical_bytes: 2 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" } });
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 7, host_version: "0.1.0", draining: false, running_sessions: 0, retained_sessions: 0 } });
+    if (url.includes("runtime/development")) return ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false });
+    return ok({ type: "history_diagnostics", diagnostics: null });
+  }));
+
+  render(<SettingsWorkspace {...minimalProps()} />);
+
+  expect(screen.getByRole("button", { name: "Apiary" })).toHaveAttribute("aria-current", "location");
+  await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
 });
 
 test("downloads a consistent Hive database snapshot", async () => {
