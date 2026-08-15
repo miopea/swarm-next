@@ -120,7 +120,8 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("Worker engineUpdate ready · restart requiredRestart required");
   expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("briefly stops 1 active worker");
   expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("Active commands can be interrupted");
-  expect(screen.getByLabelText("App and API status")).toHaveTextContent("App and APIDevelopment build is currentCurrent");
+  expect(screen.getByLabelText("App and API status")).toHaveTextContent("App and APIApp and API are currentActivated");
+  expect(screen.getByLabelText("App and API status")).toHaveTextContent("the working copy matches, so no reload is pending");
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
   expect(screen.getByRole("group", { name: "Confirm worker engine update" })).toHaveTextContent("Restart 1 active worker now?");
   fireEvent.click(screen.getByRole("button", { name: "Stop workers and update" }));
@@ -235,8 +236,8 @@ test("confirms an opt-in development reload without implying worker loss", async
 
   render(<SettingsWorkspace {...minimalProps()} onReloadDevelopment={onReloadDevelopment} />);
   expect(await screen.findByRole("button", { name: "Reload development build" })).toBeInTheDocument();
-  expect(screen.getByText("Development changes are ready", { selector: "strong" })).toBeInTheDocument();
-  expect(screen.getByLabelText("App and API status")).toHaveTextContent("No worker restart");
+  expect(screen.getByText("Development reload available", { selector: "strong" })).toBeInTheDocument();
+  expect(screen.getByLabelText("App and API status")).toHaveTextContent("Workers stay online");
   fireEvent.click(screen.getByRole("button", { name: "Reload development build" }));
   expect(screen.getByRole("group", { name: "Confirm development reload" })).toHaveTextContent("Build and activate the working copy?");
   fireEvent.click(screen.getByRole("button", { name: "Build and reload" }));

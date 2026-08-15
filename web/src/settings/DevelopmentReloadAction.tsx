@@ -9,29 +9,52 @@ type Props = {
 export default function DevelopmentReloadAction({ busy, runtime, onReload }: Props) {
   const [confirming, setConfirming] = useState(false);
   if (!runtime?.enabled) return null;
+  const runningRevision = deployedRevision(runtime.version);
+  const workingRevision = shortRevision(runtime.source_revision);
   if (runtime.state === "requested" || runtime.state === "building") {
-    return <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status" role="status"><header><div><span className="runtime-component-name">App and API</span><strong>Building development changes</strong></div><span className="runtime-status-badge safe">No worker restart</span></header><p>Swarm is compiling and checking the working copy. This page will reconnect; every worker keeps running.</p></article>;
+    return <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status" role="status"><header><div><span className="runtime-component-name">App and API</span><strong>Building development changes</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header><p>Revision {runningRevision} remains active while Swarm compiles and checks {workingRevision}.</p><small>The page reconnects only after the new browser and API build is healthy. Claude, Codex, and the worker engine keep running.</small></article>;
   }
+  if (runtime.state === "failed") return (
+    <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="alert">
+      <header><div><span className="runtime-component-name">App and API</span><strong>Development build failed</strong></div><span className="runtime-status-badge restart">Current app preserved</span></header>
+      <p>Revision {runningRevision} is still serving this page. The attempted {workingRevision} build was rejected before activation.</p>
+      <small>Workers were never restarted or interrupted. Check the development reload service log before retrying.</small>
+      {runtime.reload_available && !confirming ? <button className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>Retry development build</button> : null}
+      {confirming ? <ReloadConfirmation busy={busy} onCancel={() => setConfirming(false)} onConfirm={() => { setConfirming(false); void onReload(); }} /> : null}
+    </article>
+  );
   if (!runtime.reload_available) {
-    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Development build is current</strong></div><span className="runtime-status-badge current">Current</span></header><p>The browser and API match the product code in the working copy. No action is needed.</p><small>Updating this layer never restarts Claude, Codex, or the worker engine.</small></article>;
+    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>App and API are current</strong></div><span className="runtime-status-badge current">Activated</span></header><p>Running revision {runningRevision}; the working copy matches, so no reload is pending.</p><small>Development deployments activate this layer independently. Claude, Codex, and the worker engine are not restarted.</small></article>;
   }
   return (
     <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status">
-      <header><div><span className="runtime-component-name">App and API</span><strong>Development changes are ready</strong></div><span className="runtime-status-badge safe">No worker restart</span></header>
-      <p>Build and switch this app to the working copy. The page briefly reconnects, but Claude and Codex continue in the separate worker engine.</p>
-      <small>A failed compile is rejected and the current app remains active.</small>
+      <header><div><span className="runtime-component-name">App and API</span><strong>Development reload available</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header>
+      <p>Revision {runningRevision} is active. Build and switch the browser and API to working-copy revision {workingRevision}.</p>
+      <small>A failed compile is rejected and {runningRevision} remains active. Claude, Codex, and the worker engine are not restarted.</small>
       {!confirming ? (
         <button className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>Reload development build</button>
       ) : (
-        <div className="maintenance-confirmation" role="group" aria-label="Confirm development reload">
-          <strong>Build and activate the working copy?</strong>
-          <span>This can take several minutes. Swarm will reopen itself when the new API and browser build are healthy; the separate worker engine is not restarted.</span>
-          <div className="settings-actions">
-            <button className="secondary-button" disabled={busy} onClick={() => setConfirming(false)}>Not now</button>
-            <button className="primary-action" disabled={busy} onClick={() => { setConfirming(false); void onReload(); }}>Build and reload</button>
-          </div>
-        </div>
+        <ReloadConfirmation busy={busy} onCancel={() => setConfirming(false)} onConfirm={() => { setConfirming(false); void onReload(); }} />
       )}
     </article>
   );
+}
+
+function ReloadConfirmation({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return <div className="maintenance-confirmation" role="group" aria-label="Confirm development reload">
+    <strong>Build and activate the working copy?</strong>
+    <span>This can take several minutes. Swarm reopens only after the new API and browser build are healthy; the separate worker engine is not restarted.</span>
+    <div className="settings-actions">
+      <button className="secondary-button" disabled={busy} onClick={onCancel}>Not now</button>
+      <button className="primary-action" disabled={busy} onClick={onConfirm}>Build and reload</button>
+    </div>
+  </div>;
+}
+
+function deployedRevision(version: string) {
+  return version.match(/-dev-([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7) ?? "the current build";
+}
+
+function shortRevision(revision: string | null) {
+  return revision?.slice(0, 7) || "the working copy";
 }

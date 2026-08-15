@@ -244,7 +244,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
       <section id="settings-runtime" className="settings-card" aria-labelledby="runtime-heading">
         <div><p className="eyebrow">Runtime</p><h3 id="runtime-heading">Local system</h3></div>
         <dl className="diagnostic-list runtime-summary-list">
-          <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
+          <div><dt>App/API</dt><dd>{health ? compactRuntimeVersion(health.version) : "Unavailable"}</dd></div>
           <div><dt>Live updates</dt><dd>{liveFeedLabel(liveFeedState)}</dd></div>
           <div><dt>Running workers</dt><dd>{workers.filter((worker) => worker.running).length}</dd></div>
           <div><dt>Retained sessions</dt><dd>{sessions.length}</dd></div>
@@ -318,6 +318,12 @@ function workerEngineLabel(health: Health | undefined, host: TerminalHostStatus 
     return "Update ready · restart required";
   }
   return `Current · ${host.running_sessions} active`;
+}
+
+function compactRuntimeVersion(version: string) {
+  const revision = version.match(/-dev-([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7);
+  const release = version.split("-dev-")[0];
+  return revision ? `Healthy · ${release} · ${revision}` : `Healthy · ${version}`;
 }
 
 
