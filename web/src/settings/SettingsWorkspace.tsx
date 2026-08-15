@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { downloadDatabaseBackup, fetchDevelopmentRuntime, fetchEmailReadiness, fetchJiraReadiness, fetchTerminalHostStatus, type ControlRoomEvent, type DevelopmentRuntime, type EmailReadiness, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, fetchEmailReadiness, fetchJiraReadiness, fetchTerminalHostStatus, type ControlRoomEvent, type EmailReadiness, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
 import { downloadBlob } from "../shared/download";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
@@ -10,6 +10,7 @@ import type { NotificationCapabilityState } from "../notifications/NotificationC
 import { workerEngineUpdateRequired } from "../runtime/workerEngine";
 import ApiarySettings from "./ApiarySettings";
 import DevelopmentReloadAction from "./DevelopmentReloadAction";
+import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import EmailSettings from "./EmailSettings";
 import JiraSettings from "./JiraSettings";
@@ -53,7 +54,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
-  const [developmentRuntime, setDevelopmentRuntime] = useState<DevelopmentRuntime>();
+  const developmentRuntime = useDevelopmentRuntime(operatorToken, health?.version);
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
   const [emailReadiness, setEmailReadiness] = useState<EmailReadiness>();
@@ -68,13 +69,6 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
       .catch(() => { if (!cancelled) { setTerminalHostStatus(undefined); setTerminalHostLoaded(true); } });
     return () => { cancelled = true; };
   }, [operatorToken, providers]);
-  useEffect(() => {
-    let cancelled = false;
-    void fetchDevelopmentRuntime(operatorToken)
-      .then((runtime) => { if (!cancelled) setDevelopmentRuntime(runtime); })
-      .catch(() => { if (!cancelled) setDevelopmentRuntime(undefined); });
-    return () => { cancelled = true; };
-  }, [operatorToken, health?.version]);
   useEffect(() => {
     let cancelled = false;
     void fetchJiraReadiness(operatorToken)

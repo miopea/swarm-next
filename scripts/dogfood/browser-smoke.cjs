@@ -135,6 +135,11 @@ async function checkSurface(browser, surface) {
     observePage(page);
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: /Workers/ }).waitFor();
+    const hiveContext = page.locator(".hive-context-indicator:visible").first();
+    await hiveContext.waitFor();
+    if (!/Hive/i.test(await hiveContext.getAttribute("aria-label") || "")) {
+      throw new Error(`${surface.name}: current Hive and Apiary role are not visible in the control room`);
+    }
     if (await page.getByLabel("Operator token").isVisible().catch(() => false)) {
       throw new Error(`${surface.name}: browser session did not survive page reopen`);
     }
