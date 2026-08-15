@@ -26,12 +26,12 @@ export function rememberMobileKeysVisibility(visible: boolean): void {
   localStorage.setItem(MOBILE_KEYS_VISIBILITY, String(visible));
 }
 
-export function composeTerminalSubmission(draft: string): string {
+export function composeTerminalSubmission(draft: string): readonly [string, string] {
   const normalized = draft.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (normalized.includes("\n")) {
-    return `\u001b[200~${normalized}\u001b[201~\r`;
+    return [`\u001b[200~${normalized}\u001b[201~`, MOBILE_TERMINAL_KEYS.enter];
   }
-  return `${normalized}\r`;
+  return [normalized, MOBILE_TERMINAL_KEYS.enter];
 }
 
 interface MobileTerminalComposerProps {
@@ -54,7 +54,13 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!connected || draft.length === 0) return;
-    onInput(composeTerminalSubmission(draft));
+    const [content, submitKey] = composeTerminalSubmission(draft);
+    // Provider TUIs distinguish pasted text from an Enter key event. Keep
+    // these as separate WebSocket frames so Codex submits the composed message
+    // instead of leaving it in the prompt; Claude accepts the same terminal
+    // semantics, including bracketed multiline paste.
+    onInput(content);
+    onInput(submitKey);
     setDraft("");
     requestAnimationFrame(() => textarea.current?.focus());
   }

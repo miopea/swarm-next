@@ -11,21 +11,22 @@ import {
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
 
-test("sends slash commands through the terminal unchanged and appends Enter", () => {
+test("sends slash commands and Enter as separate terminal frames", () => {
   const onInput = vi.fn();
   render(<MobileTerminalComposer connectionState="connected" onInput={onInput} />);
 
   fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "/status" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-  expect(onInput).toHaveBeenCalledWith("/status\r");
+  expect(onInput.mock.calls.map(([value]) => value)).toEqual(["/status", MOBILE_TERMINAL_KEYS.enter]);
   expect(screen.getByLabelText(/Message worker/)).toHaveValue("");
 });
 
-test("uses bracketed paste for multiline dictation before submitting once", () => {
-  expect(composeTerminalSubmission("first\r\nsecond")).toBe(
-    "\u001b[200~first\nsecond\u001b[201~\r",
-  );
+test("uses bracketed paste for multiline dictation before a separate Enter frame", () => {
+  expect(composeTerminalSubmission("first\r\nsecond")).toEqual([
+    "\u001b[200~first\nsecond\u001b[201~",
+    MOBILE_TERMINAL_KEYS.enter,
+  ]);
 });
 
 test("bounds drafts kept in the browser view", () => {
