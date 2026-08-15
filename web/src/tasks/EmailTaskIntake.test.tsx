@@ -30,7 +30,7 @@ test("previews an Inbox message and explicitly imports its body and attachments 
       body_text: "The submit button does not work on my phone.",
       attachments: [{ id: "attachment-1", name: "screenshot.png", media_type: "image/png", byte_size: 2048, inline: false, content_id: null }],
     });
-    if (url.endsWith("/messages/message-1/import") && method === "POST") return ok({ created: true, task_id: "task-1" });
+    if (url.endsWith("/integrations/email/import") && method === "POST") return ok({ created: true, task: { id: "task-1" }, source: { id: "source-1" }, sources: [{ id: "source-1" }] });
     throw new Error(`Unexpected request: ${method} ${url}`);
   }));
   const imported = vi.fn().mockResolvedValue(undefined);
@@ -39,17 +39,18 @@ test("previews an Inbox message and explicitly imports its body and attachments 
 
   expect(await screen.findByText("Website form is broken")).toBeInTheDocument();
   expect(screen.getByText("The submit button does not work.")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("listitem"));
+  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Review 1 message" }));
   expect(await screen.findByText("The submit button does not work on my phone.")).toBeInTheDocument();
   expect(screen.getByText("screenshot.png · 2 KB")).toBeInTheDocument();
-  expect(screen.getByText(/original Outlook thread remains linked/)).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("Task priority"), { target: { value: "high" } });
-  fireEvent.click(screen.getByRole("button", { name: "Import as task" }));
+  expect(screen.getByText(/Original threads and attachments remain separate/)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "high" } });
+  fireEvent.click(screen.getByRole("button", { name: "Import 1 email as one task" }));
 
   await waitFor(() => expect(imported).toHaveBeenCalledOnce());
-  const request = requests.find((item) => item.url.endsWith("/messages/message-1/import"));
-  expect(JSON.parse(request?.body ?? "{}")).toEqual({ priority: "high" });
-  expect(await screen.findByText("Email added as a draft task.")).toBeInTheDocument();
+  const request = requests.find((item) => item.url.endsWith("/integrations/email/import"));
+  expect(JSON.parse(request?.body ?? "{}")).toMatchObject({ message_ids: ["message-1"], priority: "high", worker_id: null, state: "draft" });
+  expect(await screen.findByText("1 email added as one task.")).toBeInTheDocument();
 });
 
 test("loads inline images through the private preview endpoint and hides cid markers", async () => {
@@ -78,7 +79,9 @@ test("loads inline images through the private preview endpoint and hides cid mar
   }));
 
   render(<EmailTaskIntake operatorToken="operator-token" onImported={vi.fn()} />);
-  fireEvent.click(await screen.findByRole("listitem"));
+  await screen.findByRole("listitem");
+  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Review 1 message" }));
 
   const image = await screen.findByRole("img", { name: "screen.png" });
   expect(image).toHaveAttribute("src", "blob:private-inline-image");

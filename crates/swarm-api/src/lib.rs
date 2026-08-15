@@ -1990,6 +1990,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/integrations/email/messages/{message_id}/import",
             post(import_email_message),
         )
+        .route("/api/v1/integrations/email/import", post(import_email_task))
         .route(
             "/api/v1/integrations/email/task-links",
             get(email_task_sources),
@@ -4352,6 +4353,18 @@ struct ImportEmailRequest {
 }
 
 #[derive(Deserialize)]
+struct ImportEmailTaskRequest {
+    message_ids: Vec<String>,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    priority: TaskPriority,
+    worker_id: Option<WorkerId>,
+    state: Option<TaskState>,
+}
+
+#[derive(Deserialize)]
 struct RecordDeploymentRequest {
     environment: String,
     reference: String,
@@ -4731,6 +4744,127 @@ async fn import_email_message(
         .into_response())
 }
 
+async fn import_email_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<ImportEmailTaskRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    if request.message_ids.is_empty() || request.message_ids.len() > 20 {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_email_selection",
+            "choose between 1 and 20 Inbox messages",
+        ));
+    }
+    let unique = request
+        .message_ids
+        .iter()
+        .collect::<std::collections::HashSet<_>>();
+    if unique.len() != request.message_ids.len() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_email_selection",
+            "each Inbox message may be selected only once",
+        ));
+    }
+    let outlook = state.outlook.read().await.clone();
+    let attachment_store = state.email_attachment_store.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "email_attachment_store_unconfigured",
+            "private email attachment storage is not configured",
+        )
+    })?;
+    let mut messages = Vec::with_capacity(request.message_ids.len());
+    let mut stored_by_message = Vec::with_capacity(request.message_ids.len());
+    for message_id in &request.message_ids {
+        let message = outlook.message(message_id).await.map_err(outlook_error)?;
+        let mut stored = Vec::with_capacity(message.attachments.len());
+        for attachment in &message.attachments {
+            let content = outlook
+                .attachment(message_id, &attachment.id)
+                .await
+                .map_err(outlook_error)?;
+            let storage_name = attachment_store
+                .save(&content.metadata.media_type, &content.bytes)
+                .await
+                .map_err(email_attachment_error)?;
+            stored.push(StoredEmailAttachment {
+                storage_name,
+                display_name: content.metadata.name,
+                media_type: content.metadata.media_type,
+                byte_size: content.bytes.len() as u64,
+                inline: content.metadata.inline,
+                content_id: content.metadata.content_id,
+            });
+        }
+        messages.push(message);
+        stored_by_message.push(stored);
+    }
+    let attachment_snapshots = stored_by_message
+        .iter()
+        .map(|stored| {
+            stored
+                .iter()
+                .map(|attachment| swarm_persistence::EmailAttachmentSnapshot {
+                    storage_name: &attachment.storage_name,
+                    display_name: &attachment.display_name,
+                    media_type: &attachment.media_type,
+                    byte_size: attachment.byte_size,
+                    inline: attachment.inline,
+                    content_id: attachment.content_id.as_deref(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let snapshots = messages
+        .iter()
+        .zip(&attachment_snapshots)
+        .map(|(message, attachments)| {
+            let summary = &message.summary;
+            swarm_persistence::EmailMessageSnapshot {
+                integration_id: &message.integration_id,
+                message_id: &summary.id,
+                conversation_id: &summary.conversation_id,
+                internet_message_id: summary.internet_message_id.as_deref(),
+                subject: &summary.subject,
+                sender_name: &summary.sender_name,
+                sender_address: &summary.sender_address,
+                received_at: summary.received_at,
+                web_url: &summary.web_url,
+                body_text: &message.body_text,
+                attachments,
+            }
+        })
+        .collect::<Vec<_>>();
+    let imported = task_store(&state)?
+        .import_email_messages(
+            &snapshots,
+            &swarm_persistence::EmailTaskDraft {
+                title: &request.title,
+                description: &request.description,
+                priority: request.priority,
+                worker_id: request.worker_id,
+                state: request.state.unwrap_or(TaskState::Draft),
+            },
+        )
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    state.deliver_coordination().await;
+    let status = if imported.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(imported),
+    )
+        .into_response())
+}
+
 async fn email_task_source(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -4769,19 +4903,19 @@ async fn download_email_attachment(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let task_id = parse_task_id(&task_id)?;
-    let source = task_store(&state)?
-        .email_task_link(task_id)
-        .map_err(|error| task_store_error(&error))?
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::NOT_FOUND,
-                "email_source_not_found",
-                "this task was not imported from email",
-            )
-        })?;
-    let attachment = source
-        .attachments
+    let sources = task_store(&state)?
+        .email_task_links_for_task(task_id)
+        .map_err(|error| task_store_error(&error))?;
+    if sources.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "email_source_not_found",
+            "this task was not imported from email",
+        ));
+    }
+    let attachment = sources
         .iter()
+        .flat_map(|source| &source.attachments)
         .find(|attachment| attachment.storage_name == storage_name)
         .ok_or_else(|| {
             ApiError::new(
@@ -6330,6 +6464,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         | TaskStoreError::InvalidEmailReply => ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_email_workflow",
+            error.to_string(),
+        ),
+        TaskStoreError::EmailMergeConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "email_merge_conflict",
             error.to_string(),
         ),
         TaskStoreError::EmailSourceNotFound => ApiError::new(

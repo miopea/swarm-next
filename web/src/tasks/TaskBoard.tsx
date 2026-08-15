@@ -274,7 +274,7 @@ export default function TaskBoard({
           <button disabled={busy || !title.trim() || !workerId}>Create draft</button>
         </form>}
         {jiraOpen ? <div id="jira-work-source"><JiraTaskIntake operatorToken={operatorToken} onImported={onJiraImported} /></div> : null}
-        {emailOpen ? <div id="email-work-source"><EmailTaskIntake operatorToken={operatorToken} onImported={onEmailImported} /></div> : null}
+        {emailOpen ? <div id="email-work-source"><EmailTaskIntake operatorToken={operatorToken} workers={workers} onImported={onEmailImported} /></div> : null}
       </section>
 
       <details className="task-mobile-controls">

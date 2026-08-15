@@ -1,31 +1,41 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   fetchEmailInbox,
   fetchEmailAttachmentPreview,
   fetchEmailMessage,
   fetchEmailReadiness,
-  importEmailMessage,
+  importEmailTask,
   type EmailMessage,
   type EmailMessageSummary,
   type EmailReadiness,
   type TaskPriority,
+  type Worker,
 } from "../api";
 
 type Props = {
   operatorToken: string;
+  workers?: Worker[];
   onImported: () => Promise<void>;
 };
 
-export default function EmailTaskIntake({ operatorToken, onImported }: Props) {
+export default function EmailTaskIntake({ operatorToken, workers = [], onImported }: Props) {
   const [readiness, setReadiness] = useState<EmailReadiness>();
   const [messages, setMessages] = useState<EmailMessageSummary[]>([]);
-  const [selected, setSelected] = useState<EmailMessage>();
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedMessages, setSelectedMessages] = useState<EmailMessage[]>([]);
+  const [previewIndex, setPreviewIndex] = useState(0);
   const [query, setQuery] = useState("");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<TaskPriority>("normal");
+  const [initialState, setInitialState] = useState<"draft" | "ready">("draft");
+  const [workerId, setWorkerId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const assignableWorkers = useMemo(() => workers.filter((worker) => worker.role !== "queen"), [workers]);
+  const preview = selectedMessages[previewIndex];
 
   useEffect(() => {
     let cancelled = false;
@@ -36,7 +46,7 @@ export default function EmailTaskIntake({ operatorToken, onImported }: Props) {
   }, [operatorToken]);
 
   useEffect(() => {
-    if (readiness?.connection !== "ready" || selected) return;
+    if (readiness?.connection !== "ready" || selectedMessages.length) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setBusy(true);
@@ -54,18 +64,18 @@ export default function EmailTaskIntake({ operatorToken, onImported }: Props) {
         .finally(() => { if (!cancelled) setBusy(false); });
     }, query.trim() ? 250 : 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [operatorToken, query, readiness?.connection, selected]);
+  }, [operatorToken, query, readiness?.connection, selectedMessages.length]);
 
   useEffect(() => {
     const urls: string[] = [];
     setImageUrls({});
-    if (!selected) return;
+    if (!preview) return;
     let cancelled = false;
-    const previews = selected.attachments.filter((attachment) =>
+    const previews = preview.attachments.filter((attachment) =>
       attachment.inline && ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(attachment.media_type),
     );
     void Promise.all(previews.map(async (attachment) => {
-      const blob = await fetchEmailAttachmentPreview(operatorToken, selected.summary.id, attachment.id);
+      const blob = await fetchEmailAttachmentPreview(operatorToken, preview.summary.id, attachment.id);
       const url = URL.createObjectURL(blob);
       urls.push(url);
       return [attachment.id, url] as const;
@@ -78,36 +88,76 @@ export default function EmailTaskIntake({ operatorToken, onImported }: Props) {
       cancelled = true;
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [operatorToken, selected]);
+  }, [operatorToken, preview]);
 
-  async function choose(summary: EmailMessageSummary) {
+  function toggle(messageId: string) {
+    setSelectedIds((current) => current.includes(messageId)
+      ? current.filter((id) => id !== messageId)
+      : current.length < 20 ? [...current, messageId] : current);
+  }
+
+  async function reviewSelection() {
+    if (!selectedIds.length) return;
     setBusy(true);
     setMessage("");
     try {
-      setSelected(await fetchEmailMessage(operatorToken, summary.id));
+      const selected = await Promise.all(selectedIds.map((id) => fetchEmailMessage(operatorToken, id)));
+      setSelectedMessages(selected);
+      setPreviewIndex(0);
+      setTitle(selected.length === 1
+        ? selected[0].summary.subject || "Email request"
+        : `${selected[0].summary.subject || "Related email requests"} (+${selected.length - 1} related)`);
+      setDescription(selected.map((item) => [
+        `From: ${item.summary.sender_name || item.summary.sender_address} <${item.summary.sender_address}>`,
+        `Received: ${formatReceived(item.summary.received_at)}`,
+        item.body_text || item.summary.preview || "No readable message body.",
+      ].join("\n")).join("\n\n--- Related email ---\n\n"));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "That message could not be opened.");
+      setMessage(error instanceof Error ? error.message : "The selected messages could not be opened.");
     } finally {
       setBusy(false);
     }
   }
 
   async function importSelected() {
-    if (!selected) return;
+    if (!selectedMessages.length || !title.trim()) return;
     setBusy(true);
     setMessage("");
     try {
-      const imported = await importEmailMessage(operatorToken, selected.summary.id, priority);
+      const imported = await importEmailTask(operatorToken, {
+        message_ids: selectedMessages.map((item) => item.summary.id),
+        title: title.trim(),
+        description: description.trim(),
+        priority,
+        worker_id: workerId || null,
+        state: initialState,
+      });
       await onImported();
-      setMessages((current) => current.filter((item) => item.id !== selected.summary.id));
-      setSelected(undefined);
+      const importedIds = new Set(selectedMessages.map((item) => item.summary.id));
+      setMessages((current) => current.filter((item) => !importedIds.has(item.id)));
+      setSelectedIds([]);
+      setSelectedMessages([]);
+      setPreviewIndex(0);
+      setTitle("");
+      setDescription("");
       setPriority("normal");
-      setMessage(imported.created ? "Email added as a draft task." : "That email was already on the board; its existing task was kept.");
+      setInitialState("draft");
+      setWorkerId("");
+      setMessage(imported.created
+        ? `${imported.sources.length} email${imported.sources.length === 1 ? "" : "s"} added as one task.`
+        : "Those emails were already on the board; their existing task was kept.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "That email could not be imported.");
+      setMessage(error instanceof Error ? error.message : "Those emails could not be imported.");
     } finally {
       setBusy(false);
     }
+  }
+
+  function backToInbox() {
+    setSelectedMessages([]);
+    setPreviewIndex(0);
+    setImageUrls({});
+    setMessage("");
   }
 
   if (readiness?.connection !== "ready") {
@@ -122,61 +172,56 @@ export default function EmailTaskIntake({ operatorToken, onImported }: Props) {
   return (
     <section className="email-task-source" aria-labelledby="email-work-heading">
       <div className="email-intake-heading">
-        <div><p className="eyebrow">Email work</p><h3 id="email-work-heading">Choose a message from Inbox</h3></div>
-        <span>{messages.length ? `${messages.length} recent messages` : "Inbox"} · {readiness.account_address}</span>
+        <div><p className="eyebrow">Email work</p><h3 id="email-work-heading">{selectedMessages.length ? "Review the task before import" : "Choose messages from Inbox"}</h3></div>
+        <span>{selectedMessages.length ? `${selectedMessages.length} source thread${selectedMessages.length === 1 ? "" : "s"}` : `${messages.length || "Inbox"} · ${readiness.account_address}`}</span>
       </div>
-      {!selected ? (
+      {!selectedMessages.length ? (
         <>
           <label className="jira-intake-filter">
             <span>Find a message</span>
             <input value={query} placeholder="Subject, sender, or message text" autoComplete="off" onChange={(event) => setQuery(event.target.value)} />
           </label>
-          <div className="email-message-list" role="list" aria-label="Inbox messages">
+          <div className="email-message-list email-message-selection" role="list" aria-label="Inbox messages">
             {messages.map((item) => (
-              <button key={item.id} type="button" role="listitem" disabled={busy} onClick={() => void choose(item)}>
+              <label key={item.id} role="listitem" className={selectedIds.includes(item.id) ? "selected" : ""}>
+                <input type="checkbox" checked={selectedIds.includes(item.id)} disabled={busy} onChange={() => toggle(item.id)} />
                 <span className="email-message-sender">{item.sender_name || item.sender_address}</span>
                 <span className="email-message-content"><strong>{item.subject || "(No subject)"}</strong><small>{item.preview || "No message preview"}</small></span>
                 <time dateTime={new Date(item.received_at * 1000).toISOString()}>{formatReceived(item.received_at)}</time>
                 {item.has_attachments ? <span className="email-attachment-mark">Attachments</span> : null}
-              </button>
+              </label>
             ))}
             {!busy && messages.length === 0 ? <p className="jira-intake-empty">No Inbox messages match this view.</p> : null}
           </div>
+          <div className="email-selection-actions">
+            <span>{selectedIds.length ? `${selectedIds.length} selected` : "Select one message, or combine related reports."}</span>
+            <button className="primary-action" type="button" disabled={busy || !selectedIds.length} onClick={() => void reviewSelection()}>{busy ? "Opening…" : `Review ${selectedIds.length || ""} message${selectedIds.length === 1 ? "" : "s"}`}</button>
+          </div>
         </>
       ) : (
-        <article className="email-message-detail">
+        <div className="email-import-review">
           <div className="email-detail-toolbar">
-            <button className="text-button" type="button" onClick={() => { setSelected(undefined); setMessage(""); }}>← Inbox</button>
-            <a href={selected.summary.web_url} target="_blank" rel="noreferrer">Open original</a>
+            <button className="text-button" type="button" onClick={backToInbox}>← Inbox</button>
+            <span>Original threads and attachments remain separate inside this task.</span>
           </div>
-          <header>
-            <h4>{selected.summary.subject || "(No subject)"}</h4>
-            <p>{selected.summary.sender_name || selected.summary.sender_address} · {selected.summary.sender_address}</p>
-            <small>{formatReceived(selected.summary.received_at)}</small>
-          </header>
-          <div className="email-body-preview">{readableBody(selected.body_text || selected.summary.preview || "No readable message body.")}</div>
-          {Object.keys(imageUrls).length ? (
-            <div className="email-inline-images" aria-label="Images in this message">
-              {selected.attachments.filter((attachment) => imageUrls[attachment.id]).map((attachment) => (
-                <figure key={attachment.id}>
-                  <img src={imageUrls[attachment.id]} alt={attachment.name || "Image from email"} />
-                  <figcaption>{attachment.name}</figcaption>
-                </figure>
-              ))}
-            </div>
-          ) : null}
-          {selected.attachments.length ? (
-            <div className="email-attachment-list">
-              <strong>{selected.attachments.length} attachment{selected.attachments.length === 1 ? "" : "s"}</strong>
-              {selected.attachments.map((attachment) => <span key={attachment.id}>{attachment.name} · {formatBytes(attachment.byte_size)}</span>)}
-            </div>
-          ) : null}
-          <div className="email-import-actions">
-            <label><span>Task priority</span><select value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
-            <button className="primary-action" type="button" disabled={busy} onClick={() => void importSelected()}>{busy ? "Importing message…" : "Import as task"}</button>
+          <div className="email-source-tabs" role="tablist" aria-label="Selected source emails">
+            {selectedMessages.map((item, index) => <button key={item.summary.id} role="tab" aria-selected={index === previewIndex} onClick={() => setPreviewIndex(index)}><strong>{item.summary.subject || "(No subject)"}</strong><small>{item.summary.sender_name || item.summary.sender_address}</small></button>)}
           </div>
-          <small className="privacy-note">Swarm stores a readable snapshot and private attachment copies. The original Outlook thread remains linked for the final reviewed reply.</small>
-        </article>
+          {preview ? <article className="email-message-detail email-source-preview">
+            <div className="email-detail-toolbar"><span>{formatReceived(preview.summary.received_at)}</span><a href={preview.summary.web_url} target="_blank" rel="noreferrer">Open original</a></div>
+            <div className="email-body-preview">{readableBody(preview.body_text || preview.summary.preview || "No readable message body.")}</div>
+            {Object.keys(imageUrls).length ? <div className="email-inline-images" aria-label="Images in this message">{preview.attachments.filter((attachment) => imageUrls[attachment.id]).map((attachment) => <figure key={attachment.id}><img src={imageUrls[attachment.id]} alt={attachment.name || "Image from email"} /><figcaption>{attachment.name}</figcaption></figure>)}</div> : null}
+            {preview.attachments.length ? <div className="email-attachment-list"><strong>{preview.attachments.length} attachment{preview.attachments.length === 1 ? "" : "s"}</strong>{preview.attachments.map((attachment) => <span key={attachment.id}>{attachment.name} · {formatBytes(attachment.byte_size)}</span>)}</div> : null}
+          </article> : null}
+          <div className="email-task-fields">
+            <label className="email-task-title"><span>Task title</span><input value={title} maxLength={240} onChange={(event) => setTitle(event.target.value)} /></label>
+            <label className="email-task-description"><span>Task description</span><textarea value={description} rows={8} onChange={(event) => setDescription(event.target.value)} /></label>
+            <label><span>Priority</span><select value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
+            <label><span>Starting status</span><select value={initialState} onChange={(event) => setInitialState(event.target.value as "draft" | "ready")}><option value="draft">Draft — review later</option><option value="ready">Ready — available to work</option></select></label>
+            <label><span>Worker</span><select value={workerId} onChange={(event) => setWorkerId(event.target.value)}><option value="">Unassigned</option>{assignableWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {worker.attention_state}</option>)}</select></label>
+          </div>
+          <div className="email-import-actions"><small>Each original thread stays linked to the task for a reviewed plain-language resolution after completion and deployment.</small><button className="primary-action" type="button" disabled={busy || !title.trim()} onClick={() => void importSelected()}>{busy ? "Importing…" : `Import ${selectedMessages.length} email${selectedMessages.length === 1 ? "" : "s"} as one task`}</button></div>
+        </div>
       )}
       {message ? <p className="settings-message" role="status">{message}</p> : null}
     </section>

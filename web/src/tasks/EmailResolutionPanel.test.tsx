@@ -17,7 +17,7 @@ const task: Task = {
 };
 
 const source: EmailTaskSource = {
-  task_id: "task-1", integration_id: "operator-outlook", message_id: "message-1", conversation_id: "thread-1",
+  id: "source-1", task_id: "task-1", integration_id: "operator-outlook", message_id: "message-1", conversation_id: "thread-1",
   internet_message_id: "<one@example.com>", sender_name: "Alex", sender_address: "alex@example.com", received_at: 1,
   web_url: "https://outlook.test/message-1", imported_at: 2,
   attachments: [{ storage_name: "sha256-screen.png", display_name: "screen.png", media_type: "image/png", byte_size: 2048, inline: false, content_id: null }],

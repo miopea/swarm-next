@@ -415,6 +415,7 @@ export type EmailTaskAttachment = {
   content_id: string | null;
 };
 export type EmailTaskSource = {
+  id: string;
   task_id: string;
   integration_id: string;
   message_id: string;
@@ -427,7 +428,15 @@ export type EmailTaskSource = {
   imported_at: number;
   attachments: EmailTaskAttachment[];
 };
-export type EmailImport = { task: Task; source: EmailTaskSource; created: boolean };
+export type EmailImport = { task: Task; source: EmailTaskSource; sources: EmailTaskSource[]; created: boolean };
+export type EmailTaskImportInput = {
+  message_ids: string[];
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  worker_id: string | null;
+  state: "draft" | "ready";
+};
 export type TaskDeployment = {
   id: string;
   task_id: string;
@@ -1340,6 +1349,15 @@ export async function importEmailMessage(operatorToken: string, messageId: strin
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ priority }),
+  });
+  return response.json() as Promise<EmailImport>;
+}
+
+export async function importEmailTask(operatorToken: string, input: EmailTaskImportInput): Promise<EmailImport> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
   });
   return response.json() as Promise<EmailImport>;
 }

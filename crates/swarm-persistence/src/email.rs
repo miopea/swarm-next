@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use swarm_domain::{Task, TaskId, TaskPriority, TaskState};
+use swarm_domain::{Task, TaskId, TaskPriority, TaskState, WorkerId};
 use uuid::Uuid;
 
 use crate::{
@@ -25,6 +25,7 @@ const MAX_CONTENT_ID_BYTES: usize = 512;
 const MAX_DEPLOYMENT_FIELD_BYTES: usize = 512;
 const MAX_EMAIL_REPLY_BYTES: usize = 10_000;
 const MAX_PENDING_EMAIL_REPLIES: i64 = 256;
+const MAX_EMAIL_MESSAGES_PER_TASK: usize = 20;
 
 #[derive(Clone, Copy, Debug)]
 pub struct EmailAttachmentSnapshot<'a> {
@@ -64,6 +65,7 @@ pub struct EmailTaskAttachment {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EmailTaskLink {
+    pub id: String,
     pub task_id: TaskId,
     pub integration_id: String,
     pub message_id: String,
@@ -81,7 +83,17 @@ pub struct EmailTaskLink {
 pub struct EmailImport {
     pub task: Task,
     pub source: EmailTaskLink,
+    pub sources: Vec<EmailTaskLink>,
     pub created: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct EmailTaskDraft<'a> {
+    pub title: &'a str,
+    pub description: &'a str,
+    pub priority: TaskPriority,
+    pub worker_id: Option<WorkerId>,
+    pub state: TaskState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -183,26 +195,84 @@ impl TaskStore {
         message: &EmailMessageSnapshot<'_>,
         priority: TaskPriority,
     ) -> Result<EmailImport, TaskStoreError> {
-        validate_email_message(message)?;
+        let title = email_task_title(message);
+        self.import_email_messages(
+            std::slice::from_ref(message),
+            &EmailTaskDraft {
+                title: &title,
+                description: message.body_text.trim(),
+                priority,
+                worker_id: None,
+                state: TaskState::Draft,
+            },
+        )
+    }
+
+    /// Imports one or more immutable email threads into one task atomically.
+    /// Every source remains independently addressable for attachments and linked context.
+    ///
+    /// # Errors
+    /// Rejects invalid content, mixed existing ownership, unsupported initial states,
+    /// unknown workers, exhausted dispatch capacity, or unavailable persistence.
+    pub fn import_email_messages(
+        &self,
+        messages: &[EmailMessageSnapshot<'_>],
+        draft: &EmailTaskDraft<'_>,
+    ) -> Result<EmailImport, TaskStoreError> {
+        if messages.is_empty() || messages.len() > MAX_EMAIL_MESSAGES_PER_TASK {
+            return Err(TaskStoreError::InvalidEmailMessage);
+        }
+        for message in messages {
+            validate_email_message(message)?;
+        }
+        let title = draft.title.trim();
+        let description = draft.description.trim();
+        validate_text(title, "email://inbox")?;
+        validate_description(description)?;
+        if !matches!(draft.state, TaskState::Draft | TaskState::Ready) {
+            return Err(TaskStoreError::InvalidTransition {
+                from: TaskState::Draft,
+                to: draft.state,
+            });
+        }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        if let Some(existing_task_id) = transaction
-            .query_row(
-                "SELECT task_id FROM email_message_links
+        let mut existing_task_ids = Vec::new();
+        let mut existing_message_count = 0_usize;
+        for message in messages {
+            if let Some(existing_task_id) = transaction
+                .query_row(
+                    "SELECT task_id FROM email_message_links
                  WHERE integration_id = ?1 AND message_id = ?2",
-                params![message.integration_id.trim(), message.message_id.trim()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
+                    params![message.integration_id.trim(), message.message_id.trim()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+            {
+                existing_message_count += 1;
+                existing_task_ids.push(existing_task_id);
+            }
+        }
+        existing_task_ids.sort();
+        existing_task_ids.dedup();
+        if existing_task_ids.len() > 1
+            || (!existing_task_ids.is_empty() && existing_message_count != messages.len())
         {
+            return Err(TaskStoreError::EmailMergeConflict);
+        }
+        if let Some(existing_task_id) = existing_task_ids.first() {
             let task_id = parse_domain_id::<TaskId>(&existing_task_id)?;
             transaction.commit()?;
             drop(connection);
+            let sources = self.email_task_links_for_task(task_id)?;
+            let source = sources
+                .first()
+                .cloned()
+                .ok_or(TaskStoreError::EmailSourceNotFound)?;
             return Ok(EmailImport {
                 task: self.get_task(task_id)?,
-                source: self
-                    .email_task_link(task_id)?
-                    .ok_or(TaskStoreError::EmailSourceNotFound)?,
+                source,
+                sources,
                 created: false,
             });
         }
@@ -213,70 +283,138 @@ impl TaskStore {
             |row| row.get(0),
         )?;
         let task_id = TaskId::new();
-        let subject = email_task_title(message);
-        let body = message.body_text.trim();
+        let (workspace, session_id) = if let Some(worker_id) = draft.worker_id {
+            transaction
+                .query_row(
+                    "SELECT profile.workspace, session.session_id
+                     FROM worker_profiles profile
+                     LEFT JOIN worker_sessions session
+                       ON session.worker_id = profile.id AND session.ended_at IS NULL
+                     WHERE profile.id = ?1 AND profile.role != 'queen'",
+                    [worker_id.to_string()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .optional()?
+                .ok_or(TaskStoreError::WorkerNotFound)?
+        } else {
+            ("email://inbox".to_string(), None)
+        };
         transaction.execute(
             "INSERT INTO tasks (
-                 id, hive_id, title, description, priority, workspace, state, position
-             ) VALUES (?1, ?2, ?3, ?4, ?5, 'email://inbox', 'draft',
+                 id, hive_id, title, description, priority, workspace, state,
+                 assigned_worker_id, position
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                  COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0))",
             params![
                 task_id.to_string(),
                 hive_id,
-                subject,
-                body,
-                priority.to_string(),
+                title,
+                description,
+                draft.priority.to_string(),
+                workspace,
+                draft.state.to_string(),
+                draft.worker_id.map(|id| id.to_string()),
             ],
         )?;
         transaction.execute(
             "INSERT INTO task_activity (task_id, kind, to_state, note)
-             VALUES (?1, 'created', 'draft', 'Imported from email')",
-            [task_id.to_string()],
-        )?;
-        transaction.execute(
-            "INSERT INTO email_message_links (
-                 task_id, integration_id, message_id, conversation_id,
-                 internet_message_id, sender_name, sender_address, received_at, web_url
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             VALUES (?1, 'created', 'draft', ?2)",
             params![
                 task_id.to_string(),
-                message.integration_id.trim(),
-                message.message_id.trim(),
-                message.conversation_id.trim(),
-                message.internet_message_id.map(str::trim),
-                message.sender_name.trim(),
-                message.sender_address.trim(),
-                message.received_at,
-                message.web_url.trim(),
+                format!(
+                    "Imported from {} email{}",
+                    messages.len(),
+                    if messages.len() == 1 { "" } else { "s" }
+                )
             ],
         )?;
-        for attachment in message.attachments {
+        if draft.state == TaskState::Ready {
             transaction.execute(
-                "INSERT INTO email_task_attachments (
-                     id, task_id, storage_name, display_name, media_type,
-                     byte_size, is_inline, content_id
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO task_activity (task_id, kind, from_state, to_state)
+                 VALUES (?1, 'transitioned', 'draft', 'ready')",
+                [task_id.to_string()],
+            )?;
+        }
+        if draft.worker_id.is_some() {
+            transaction.execute(
+                "INSERT INTO task_activity (task_id, kind) VALUES (?1, 'assigned')",
+                [task_id.to_string()],
+            )?;
+        }
+        if let (Some(worker_id), Some(session_id)) = (draft.worker_id, session_id) {
+            let queued: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
+                [],
+                |row| row.get(0),
+            )?;
+            if queued >= 256 {
+                return Err(TaskStoreError::TaskDispatchQueueFull);
+            }
+            let assignment_id = Uuid::now_v7().to_string();
+            transaction.execute(
+                "INSERT INTO task_assignments (id, task_id, worker_session_id)
+                 VALUES (?1, ?2, ?3)",
+                params![assignment_id, task_id.to_string(), session_id],
+            )?;
+            transaction.execute(
+                "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
+                 VALUES (?1, ?2, ?3, 'queued')",
+                params![assignment_id, task_id.to_string(), worker_id.to_string()],
+            )?;
+        }
+        for message in messages {
+            let source_id = Uuid::now_v7().to_string();
+            transaction.execute(
+                "INSERT INTO email_message_links (
+                     id, task_id, integration_id, message_id, conversation_id,
+                     internet_message_id, sender_name, sender_address, received_at, web_url
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
-                    Uuid::now_v7().to_string(),
+                    source_id,
                     task_id.to_string(),
-                    attachment.storage_name.trim(),
-                    attachment.display_name.trim(),
-                    attachment.media_type.trim(),
-                    i64::try_from(attachment.byte_size)
-                        .map_err(|_| TaskStoreError::InvalidEmailAttachment)?,
-                    attachment.inline,
-                    attachment.content_id.map(str::trim),
+                    message.integration_id.trim(),
+                    message.message_id.trim(),
+                    message.conversation_id.trim(),
+                    message.internet_message_id.map(str::trim),
+                    message.sender_name.trim(),
+                    message.sender_address.trim(),
+                    message.received_at,
+                    message.web_url.trim(),
                 ],
             )?;
+            for attachment in message.attachments {
+                transaction.execute(
+                    "INSERT INTO email_task_attachments (
+                         id, source_id, task_id, storage_name, display_name, media_type,
+                         byte_size, is_inline, content_id
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        Uuid::now_v7().to_string(),
+                        source_id,
+                        task_id.to_string(),
+                        attachment.storage_name.trim(),
+                        attachment.display_name.trim(),
+                        attachment.media_type.trim(),
+                        i64::try_from(attachment.byte_size)
+                            .map_err(|_| TaskStoreError::InvalidEmailAttachment)?,
+                        attachment.inline,
+                        attachment.content_id.map(str::trim),
+                    ],
+                )?;
+            }
         }
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         drop(connection);
+        let sources = self.email_task_links_for_task(task_id)?;
+        let source = sources
+            .first()
+            .cloned()
+            .ok_or(TaskStoreError::EmailSourceNotFound)?;
         Ok(EmailImport {
             task: self.get_task(task_id)?,
-            source: self
-                .email_task_link(task_id)?
-                .ok_or(TaskStoreError::EmailSourceNotFound)?,
+            source,
+            sources,
             created: true,
         })
     }
@@ -289,28 +427,40 @@ impl TaskStore {
         &self,
         task_id: TaskId,
     ) -> Result<Option<EmailTaskLink>, TaskStoreError> {
+        Ok(self.email_task_links_for_task(task_id)?.into_iter().next())
+    }
+
+    /// Returns every immutable source thread attached to one task.
+    ///
+    /// # Errors
+    /// Returns an error when source metadata is corrupt or persistence is unavailable.
+    pub fn email_task_links_for_task(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<EmailTaskLink>, TaskStoreError> {
         let connection = self.connection()?;
-        let source = connection
-            .query_row(
-                "SELECT task_id, integration_id, message_id, conversation_id,
+        let mut sources = {
+            let mut statement = connection.prepare(
+                "SELECT id, task_id, integration_id, message_id, conversation_id,
                         internet_message_id, sender_name, sender_address, received_at,
                         web_url, imported_at
-                 FROM email_message_links WHERE task_id = ?1",
-                [task_id.to_string()],
-                email_task_link_from_row,
-            )
-            .optional()?;
-        let Some(mut source) = source else {
-            return Ok(None);
+                 FROM email_message_links WHERE task_id = ?1
+                 ORDER BY received_at, imported_at, id",
+            )?;
+            statement
+                .query_map([task_id.to_string()], email_task_link_from_row)?
+                .collect::<Result<Vec<_>, _>>()?
         };
         let mut statement = connection.prepare(
             "SELECT storage_name, display_name, media_type, byte_size, is_inline, content_id
-             FROM email_task_attachments WHERE task_id = ?1 ORDER BY created_at, id",
+             FROM email_task_attachments WHERE source_id = ?1 ORDER BY created_at, id",
         )?;
-        source.attachments = statement
-            .query_map([task_id.to_string()], email_attachment_from_row)?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Some(source))
+        for source in &mut sources {
+            source.attachments = statement
+                .query_map([&source.id], email_attachment_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+        }
+        Ok(sources)
     }
 
     /// Lists immutable email sources attached to tasks, newest imports first.
@@ -321,7 +471,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut sources = {
             let mut statement = connection.prepare(
-                "SELECT task_id, integration_id, message_id, conversation_id,
+                "SELECT id, task_id, integration_id, message_id, conversation_id,
                         internet_message_id, sender_name, sender_address, received_at,
                         web_url, imported_at
                  FROM email_message_links ORDER BY imported_at DESC, task_id DESC",
@@ -332,11 +482,11 @@ impl TaskStore {
         };
         let mut attachment_statement = connection.prepare(
             "SELECT storage_name, display_name, media_type, byte_size, is_inline, content_id
-             FROM email_task_attachments WHERE task_id = ?1 ORDER BY created_at, id",
+             FROM email_task_attachments WHERE source_id = ?1 ORDER BY created_at, id",
         )?;
         for source in &mut sources {
             source.attachments = attachment_statement
-                .query_map([source.task_id.to_string()], email_attachment_from_row)?
+                .query_map([&source.id], email_attachment_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
         }
         Ok(sources)
@@ -672,7 +822,8 @@ pub(crate) fn migrate_email_intake(
 ) -> rusqlite::Result<()> {
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS email_message_links (
-             task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+             id TEXT PRIMARY KEY,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
              integration_id TEXT NOT NULL,
              message_id TEXT NOT NULL,
              conversation_id TEXT NOT NULL,
@@ -686,9 +837,12 @@ pub(crate) fn migrate_email_intake(
          );
          CREATE INDEX IF NOT EXISTS email_messages_by_conversation
              ON email_message_links(integration_id, conversation_id, received_at DESC);
+         CREATE INDEX IF NOT EXISTS email_messages_by_task
+             ON email_message_links(task_id, received_at, imported_at, id);
          CREATE TABLE IF NOT EXISTS email_task_attachments (
              id TEXT PRIMARY KEY,
-             task_id TEXT NOT NULL REFERENCES email_message_links(task_id) ON DELETE CASCADE,
+             source_id TEXT NOT NULL REFERENCES email_message_links(id) ON DELETE CASCADE,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
              storage_name TEXT NOT NULL,
              display_name TEXT NOT NULL,
              media_type TEXT NOT NULL,
@@ -696,8 +850,10 @@ pub(crate) fn migrate_email_intake(
              is_inline INTEGER NOT NULL CHECK (is_inline IN (0,1)),
              content_id TEXT,
              created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-             UNIQUE (task_id, storage_name)
+             UNIQUE (source_id, storage_name)
          );
+         CREATE INDEX IF NOT EXISTS email_attachments_by_task
+             ON email_task_attachments(task_id, created_at, id);
          CREATE TABLE IF NOT EXISTS task_deployments (
              id TEXT PRIMARY KEY,
              task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -712,7 +868,7 @@ pub(crate) fn migrate_email_intake(
              ON task_deployments(task_id, deployed_at DESC);
          CREATE TABLE IF NOT EXISTS email_reply_deliveries (
              id TEXT PRIMARY KEY,
-             task_id TEXT NOT NULL UNIQUE REFERENCES email_message_links(task_id) ON DELETE CASCADE,
+             task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
              body TEXT NOT NULL,
              state TEXT NOT NULL CHECK (
                  state IN ('draft','queued','dispatching','delivered','uncertain','cancelled')
@@ -739,7 +895,112 @@ pub(crate) fn migrate_email_intake(
                  WHERE task.id = NEW.task_id AND task.state = 'completed'
              )
              BEGIN SELECT RAISE(ABORT, 'Email replies require completed deployed work'); END;
-         PRAGMA user_version = 40;",
+         PRAGMA user_version = 41;",
+    )
+}
+
+pub(crate) fn migrate_email_multi_source(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "DROP TRIGGER IF EXISTS email_reply_requires_completed_deployment;
+         ALTER TABLE email_reply_deliveries RENAME TO email_reply_deliveries_v40;
+         ALTER TABLE email_task_attachments RENAME TO email_task_attachments_v40;
+         ALTER TABLE email_message_links RENAME TO email_message_links_v40;
+         DROP INDEX IF EXISTS email_reply_delivery_queue;
+         DROP INDEX IF EXISTS email_messages_by_conversation;
+         DROP INDEX IF EXISTS email_messages_by_task;
+         DROP INDEX IF EXISTS email_attachments_by_task;
+
+         CREATE TABLE email_message_links (
+             id TEXT PRIMARY KEY,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             integration_id TEXT NOT NULL,
+             message_id TEXT NOT NULL,
+             conversation_id TEXT NOT NULL,
+             internet_message_id TEXT,
+             sender_name TEXT NOT NULL,
+             sender_address TEXT NOT NULL,
+             received_at INTEGER NOT NULL,
+             web_url TEXT NOT NULL,
+             imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             UNIQUE (integration_id, message_id)
+         );
+         INSERT INTO email_message_links (
+             id, task_id, integration_id, message_id, conversation_id,
+             internet_message_id, sender_name, sender_address, received_at,
+             web_url, imported_at
+         ) SELECT task_id, task_id, integration_id, message_id, conversation_id,
+                  internet_message_id, sender_name, sender_address, received_at,
+                  web_url, imported_at
+             FROM email_message_links_v40;
+         CREATE INDEX email_messages_by_task
+             ON email_message_links(task_id, received_at, imported_at, id);
+         CREATE INDEX email_messages_by_conversation
+             ON email_message_links(integration_id, conversation_id, received_at DESC);
+
+         CREATE TABLE email_task_attachments (
+             id TEXT PRIMARY KEY,
+             source_id TEXT NOT NULL REFERENCES email_message_links(id) ON DELETE CASCADE,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             storage_name TEXT NOT NULL,
+             display_name TEXT NOT NULL,
+             media_type TEXT NOT NULL,
+             byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+             is_inline INTEGER NOT NULL CHECK (is_inline IN (0,1)),
+             content_id TEXT,
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             UNIQUE (source_id, storage_name)
+         );
+         INSERT INTO email_task_attachments (
+             id, source_id, task_id, storage_name, display_name, media_type,
+             byte_size, is_inline, content_id, created_at
+         ) SELECT id, task_id, task_id, storage_name, display_name, media_type,
+                  byte_size, is_inline, content_id, created_at
+             FROM email_task_attachments_v40;
+         CREATE INDEX email_attachments_by_task
+             ON email_task_attachments(task_id, created_at, id);
+
+         CREATE TABLE email_reply_deliveries (
+             id TEXT PRIMARY KEY,
+             task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+             body TEXT NOT NULL,
+             state TEXT NOT NULL CHECK (
+                 state IN ('draft','queued','dispatching','delivered','uncertain','cancelled')
+             ),
+             idempotency_key TEXT NOT NULL UNIQUE,
+             attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 3),
+             available_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             attempted_at INTEGER,
+             delivered_at INTEGER,
+             provider_reply_id TEXT,
+             last_error TEXT,
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             CHECK ((state = 'delivered' AND delivered_at IS NOT NULL AND provider_reply_id IS NOT NULL)
+                 OR state <> 'delivered')
+         );
+         INSERT INTO email_reply_deliveries (
+             id, task_id, body, state, idempotency_key, attempts, available_at,
+             attempted_at, delivered_at, provider_reply_id, last_error, created_at, updated_at
+         ) SELECT id, task_id, body, state, idempotency_key, attempts, available_at,
+                  attempted_at, delivered_at, provider_reply_id, last_error, created_at, updated_at
+             FROM email_reply_deliveries_v40;
+         CREATE INDEX email_reply_delivery_queue
+             ON email_reply_deliveries(state, available_at, created_at);
+         CREATE TRIGGER email_reply_requires_completed_deployment
+             BEFORE INSERT ON email_reply_deliveries
+             WHEN NOT EXISTS (
+                 SELECT 1 FROM tasks task
+                 JOIN task_deployments deployment ON deployment.task_id = task.id
+                 WHERE task.id = NEW.task_id AND task.state = 'completed'
+             )
+             BEGIN SELECT RAISE(ABORT, 'Email replies require completed deployed work'); END;
+
+         DROP TABLE email_reply_deliveries_v40;
+         DROP TABLE email_task_attachments_v40;
+         DROP TABLE email_message_links_v40;
+         PRAGMA user_version = 41;",
     )
 }
 
@@ -812,16 +1073,17 @@ fn bounded_text(value: &str, maximum: usize) -> bool {
 
 fn email_task_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmailTaskLink> {
     Ok(EmailTaskLink {
-        task_id: parse_domain_id::<TaskId>(&row.get::<_, String>(0)?)?,
-        integration_id: row.get(1)?,
-        message_id: row.get(2)?,
-        conversation_id: row.get(3)?,
-        internet_message_id: row.get(4)?,
-        sender_name: row.get(5)?,
-        sender_address: row.get(6)?,
-        received_at: row.get(7)?,
-        web_url: row.get(8)?,
-        imported_at: row.get(9)?,
+        id: row.get(0)?,
+        task_id: parse_domain_id::<TaskId>(&row.get::<_, String>(1)?)?,
+        integration_id: row.get(2)?,
+        message_id: row.get(3)?,
+        conversation_id: row.get(4)?,
+        internet_message_id: row.get(5)?,
+        sender_name: row.get(6)?,
+        sender_address: row.get(7)?,
+        received_at: row.get(8)?,
+        web_url: row.get(9)?,
+        imported_at: row.get(10)?,
         attachments: Vec::new(),
     })
 }
@@ -932,6 +1194,172 @@ mod tests {
             vec![first.source.clone()]
         );
         assert_eq!(store.list_tasks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn related_emails_merge_into_one_task_without_losing_source_identity() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = message(&[]);
+        let second = EmailMessageSnapshot {
+            integration_id: "operator-outlook",
+            message_id: "AAMk-message-2",
+            conversation_id: "AAQk-conversation-2",
+            internet_message_id: Some("<issue-2@example.test>"),
+            subject: "More detail about the member form",
+            sender_name: "A Member",
+            sender_address: "member@example.test",
+            received_at: 1_786_730_100,
+            web_url: "https://outlook.office.com/mail/inbox/id/AAMk-message-2",
+            body_text: "This also happens after changing the country.",
+            attachments: &[],
+        };
+        let draft = EmailTaskDraft {
+            title: "Fix the member form reports",
+            description: "Two related reports describe the same outcome.",
+            priority: TaskPriority::High,
+            worker_id: None,
+            state: TaskState::Ready,
+        };
+        let imported = store
+            .import_email_messages(&[first, second], &draft)
+            .unwrap();
+
+        assert!(imported.created);
+        assert_eq!(imported.task.title, draft.title);
+        assert_eq!(imported.task.state, TaskState::Ready);
+        assert_eq!(imported.sources.len(), 2);
+        assert_ne!(imported.sources[0].id, imported.sources[1].id);
+        assert_eq!(imported.sources[0].task_id, imported.task.id);
+        assert_eq!(imported.sources[1].task_id, imported.task.id);
+        assert_eq!(store.list_tasks().unwrap().len(), 1);
+
+        let existing = store
+            .import_email_messages(
+                &[
+                    message(&[]),
+                    EmailMessageSnapshot {
+                        integration_id: "operator-outlook",
+                        message_id: "AAMk-message-2",
+                        conversation_id: "AAQk-conversation-2",
+                        internet_message_id: Some("<issue-2@example.test>"),
+                        subject: "More detail about the member form",
+                        sender_name: "A Member",
+                        sender_address: "member@example.test",
+                        received_at: 1_786_730_100,
+                        web_url: "https://outlook.office.com/mail/inbox/id/AAMk-message-2",
+                        body_text: "This also happens after changing the country.",
+                        attachments: &[],
+                    },
+                ],
+                &draft,
+            )
+            .unwrap();
+        assert!(!existing.created);
+        assert_eq!(existing.task.id, imported.task.id);
+        assert_eq!(existing.sources.len(), 2);
+    }
+
+    #[test]
+    fn schema_v40_email_sources_migrate_without_losing_tasks_or_attachments() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Legacy email task", "email://inbox")
+            .unwrap();
+        let mut connection = store.connection().unwrap();
+        let transaction = connection.transaction().unwrap();
+        transaction.execute_batch(
+            "DROP TRIGGER email_reply_requires_completed_deployment;
+             DROP INDEX email_reply_delivery_queue;
+             DROP INDEX email_messages_by_task;
+             DROP INDEX email_messages_by_conversation;
+             DROP INDEX email_attachments_by_task;
+             DROP TABLE email_reply_deliveries;
+             DROP TABLE email_task_attachments;
+             DROP TABLE email_message_links;
+             CREATE TABLE email_message_links (
+                 task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+                 integration_id TEXT NOT NULL,
+                 message_id TEXT NOT NULL,
+                 conversation_id TEXT NOT NULL,
+                 internet_message_id TEXT,
+                 sender_name TEXT NOT NULL,
+                 sender_address TEXT NOT NULL,
+                 received_at INTEGER NOT NULL,
+                 web_url TEXT NOT NULL,
+                 imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 UNIQUE (integration_id, message_id)
+             );
+             CREATE INDEX email_messages_by_conversation
+                 ON email_message_links(integration_id, conversation_id, received_at DESC);
+             CREATE TABLE email_task_attachments (
+                 id TEXT PRIMARY KEY,
+                 task_id TEXT NOT NULL REFERENCES email_message_links(task_id) ON DELETE CASCADE,
+                 storage_name TEXT NOT NULL,
+                 display_name TEXT NOT NULL,
+                 media_type TEXT NOT NULL,
+                 byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+                 is_inline INTEGER NOT NULL CHECK (is_inline IN (0,1)),
+                 content_id TEXT,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 UNIQUE (task_id, storage_name)
+             );
+             CREATE TABLE email_reply_deliveries (
+                 id TEXT PRIMARY KEY,
+                 task_id TEXT NOT NULL UNIQUE REFERENCES email_message_links(task_id) ON DELETE CASCADE,
+                 body TEXT NOT NULL,
+                 state TEXT NOT NULL,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 attempts INTEGER NOT NULL DEFAULT 0,
+                 available_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 attempted_at INTEGER,
+                 delivered_at INTEGER,
+                 provider_reply_id TEXT,
+                 last_error TEXT,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );
+             CREATE INDEX email_reply_delivery_queue
+                 ON email_reply_deliveries(state, available_at, created_at);",
+        ).unwrap();
+        transaction
+            .execute(
+                "INSERT INTO email_message_links (
+                 task_id, integration_id, message_id, conversation_id, internet_message_id,
+                 sender_name, sender_address, received_at, web_url
+             ) VALUES (?1, 'operator-outlook', 'legacy-message', 'legacy-thread',
+                       '<legacy@example.test>', 'Reporter', 'reporter@example.test',
+                       1786730000, 'https://outlook.office.com/mail/legacy-message')",
+                [task.id.to_string()],
+            )
+            .unwrap();
+        transaction.execute(
+            "INSERT INTO email_task_attachments (
+                 id, task_id, storage_name, display_name, media_type, byte_size, is_inline
+             ) VALUES ('attachment-1', ?1, 'sha256-screen.png', 'screen.png', 'image/png', 1024, 0)",
+            [task.id.to_string()],
+        ).unwrap();
+        transaction
+            .execute(
+                "INSERT INTO email_reply_deliveries (
+                 id, task_id, body, state, idempotency_key
+             ) VALUES ('reply-1', ?1, 'A preserved draft.', 'draft', 'email-reply:legacy')",
+                [task.id.to_string()],
+            )
+            .unwrap();
+        migrate_email_multi_source(&transaction).unwrap();
+        transaction.commit().unwrap();
+        drop(connection);
+
+        let sources = store.email_task_links_for_task(task.id).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].id, task.id.to_string());
+        assert_eq!(sources[0].message_id, "legacy-message");
+        assert_eq!(sources[0].attachments[0].display_name, "screen.png");
+        assert_eq!(
+            store.email_reply_for_task(task.id).unwrap().unwrap().body,
+            "A preserved draft."
+        );
+        assert_eq!(store.get_task(task.id).unwrap().title, "Legacy email task");
     }
 
     #[test]
