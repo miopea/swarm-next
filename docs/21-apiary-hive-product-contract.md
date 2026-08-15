@@ -231,28 +231,30 @@ signed-digest project manifest into the invited Hive. Per-Hive Jira access and
 workflow mapping are derived from private local bindings and presented per
 project; manifest presence alone never claims that a remote Hive is ready.
 
-Every Apiary permanently chooses one canonical shared-work backend:
+Every Apiary permanently chooses one canonical provider-work backend:
 
-- **Jira-backed Apiary**: Jira is canonical and every active Hive connects its
+- **Jira-backed Apiary**: Jira is canonical for Jira issues and every active Hive connects its
   operator Jira identity and receives all promoted Apiary projects. Each Hive
   reads and writes Jira directly; issue bodies, comments, statuses, and
   assignees do not relay through Keeper. Keeper distributes only the bounded
   project catalog, policy, membership, and cross-Hive coordination facts.
-- **Native Apiary**: Swarm is canonical and supplies first-class distributed
+- **Native Apiary**: Swarm is canonical for all shared work and supplies first-class distributed
   task synchronization, ownership, event propagation, offline queues,
   reconciliation, and conflict handling. Member Hives retrieve that shared
   work by polling Keeper and submit ordered changes over the same outbound
   route.
 
-Mixed mode and backend conversion are not supported. Native is a substantial
-later capability, not a free fallback. Private Hive tasks and Hive-owned Jira
-projects remain available in either mode because they are outside Apiary shared
-work.
+Mixed provider backends and backend conversion are not supported. Native is a
+substantial later capability, not a free fallback. Swarm-generated Apiary tasks
+are a platform coordination source in every Apiary: Keeper is canonical for
+them and member Hives retrieve them by polling Keeper. They never contain or
+proxy Jira issue content. Private Hive tasks and Hive-owned Jira projects remain
+available because they are outside Apiary shared work.
 
 All Swarm-to-Swarm federation traffic is member initiated. A member Hive polls
 the reachable Keeper HTTPS endpoint for invitations, policy/catalog changes,
-Steward authority, coordination, and—only for a Native Apiary—shared task
-state. Keeper never requires an inbound route to a member machine. This is
+Steward authority, coordination, and Swarm-generated Apiary task state. Keeper
+never requires an inbound route to a member machine. This is
 separate from Jira-backed issue synchronization, where every Hive talks to
 Jira directly using its own operator identity.
 

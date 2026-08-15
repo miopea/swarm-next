@@ -2,15 +2,16 @@ use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinLink,
     ApiaryJoinLinkBundle, ApiaryJoinLinkId, ApiaryJoinLinkPoll, ApiaryJoinReadiness,
-    ApiaryKeeperLink, ApiaryMemberSummary, DecisionRequest, DecisionRequestId, DecisionRequestKind,
-    DecisionUrgency, FederationCatalogAcknowledgement, FederationCatalogReadiness,
-    FederationCatalogSnapshot, FederationClaimId, FederationJoinAcceptance,
-    FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
-    FederationMemberConnection, FederationSharedClaim, FederationSyncCondition,
-    FederationSyncHealth, HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId,
-    LocalApiaryContext, LocalApiaryRole, OperatorId, OperatorPresence, PresenceDeviceClass,
-    PresenceDeviceId, PresenceMode, PresenceObservationState, SharedWorkBackend, StewardCapability,
-    Stewardship, StewardshipId, Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId,
+    ApiaryKeeperLink, ApiaryMemberSummary, ApiaryTask, DecisionRequest, DecisionRequestId,
+    DecisionRequestKind, DecisionUrgency, FederationCatalogAcknowledgement,
+    FederationCatalogReadiness, FederationCatalogSnapshot, FederationClaimId,
+    FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
+    FederationJoinSubmission, FederationMemberConnection, FederationSharedClaim,
+    FederationSyncCondition, FederationSyncHealth, FederationTaskPage, FederationTaskSyncStatus,
+    HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
+    LocalApiaryRole, OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId,
+    PresenceMode, PresenceObservationState, SharedWorkBackend, StewardCapability, Stewardship,
+    StewardshipId, Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId,
     WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
@@ -85,6 +86,78 @@ impl ApiaryService {
     ) -> Result<FederationCatalogSnapshot, ApplicationError> {
         self.store
             .signed_federation_catalog(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns one authenticated, bounded Keeper-canonical Swarm task page.
+    /// Jira issue content never enters this path.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials/cursors, non-Keepers, and persistence failures.
+    pub fn federation_task_page(
+        &self,
+        node_credential: &str,
+        after: i64,
+        now: i64,
+    ) -> Result<FederationTaskPage, ApplicationError> {
+        self.store
+            .federation_task_page(node_credential, after, now)
+            .map_err(Into::into)
+    }
+
+    /// Applies one ordered Keeper page to the Member's durable projection.
+    ///
+    /// # Errors
+    /// Rejects non-Members, foreign or gapped pages, and persistence failures.
+    pub fn apply_federation_task_page(
+        &self,
+        page: &FederationTaskPage,
+        now: i64,
+    ) -> Result<FederationTaskSyncStatus, ApplicationError> {
+        self.store
+            .apply_federation_task_page(page, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns content-free evidence for the local Apiary task projection.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable projection state.
+    pub fn federation_task_sync_status(
+        &self,
+    ) -> Result<FederationTaskSyncStatus, ApplicationError> {
+        self.store.federation_task_sync_status().map_err(Into::into)
+    }
+
+    /// Lists the member-local Keeper task projection without contacting Keeper.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable projection state.
+    pub fn local_apiary_tasks(&self) -> Result<Vec<ApiaryTask>, ApplicationError> {
+        self.store.list_local_apiary_tasks().map_err(Into::into)
+    }
+
+    /// Lists canonical Keeper tasks or the Member's durable local projection.
+    ///
+    /// # Errors
+    /// Returns an error for invalid membership or unavailable state.
+    pub fn visible_apiary_tasks(&self) -> Result<Vec<ApiaryTask>, ApplicationError> {
+        self.store.list_visible_apiary_tasks().map_err(Into::into)
+    }
+
+    /// Creates one Swarm-generated Apiary task on the Keeper.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, invalid content, capacity exhaustion, and persistence failures.
+    pub fn create_apiary_task(
+        &self,
+        title: &str,
+        description: &str,
+        priority: TaskPriority,
+        now: i64,
+    ) -> Result<ApiaryTask, ApplicationError> {
+        self.store
+            .create_apiary_task(title, description, priority, now)
             .map_err(Into::into)
     }
 

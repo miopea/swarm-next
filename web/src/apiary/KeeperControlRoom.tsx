@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
-  fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships,
-  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type HiveIdentity, type Stewardship,
+  fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryTasks,
+  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type HiveIdentity, type Stewardship,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 
 type Props = { identity: HiveIdentity; operatorToken: string; onManage: () => void };
-type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; stewardships: Stewardship[] };
-const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], stewardships: [] };
+type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[] };
+const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [] };
 
 export default function KeeperControlRoom({ identity, operatorToken, onManage }: Props) {
   const context = identity.apiary_context;
@@ -17,11 +17,11 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
   const refresh = useCallback(async () => {
     setState("loading");
     try {
-      const [members, projects, sharedWork, stewardships] = await Promise.all([
+      const [members, projects, sharedWork, tasks, stewardships] = await Promise.all([
         fetchApiaryMembers(operatorToken), fetchApiaryJiraProjects(operatorToken),
-        fetchApiarySharedWork(operatorToken), fetchApiaryStewardships(operatorToken),
+        fetchApiarySharedWork(operatorToken), fetchApiaryTasks(operatorToken), fetchApiaryStewardships(operatorToken),
       ]);
-      setSnapshot({ members, projects, sharedWork, stewardships });
+      setSnapshot({ members, projects, sharedWork, tasks, stewardships });
       setState("ready");
     } catch { setState("error"); }
   }, [operatorToken]);
@@ -43,7 +43,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
       {state === "error" ? <div className="keeper-load-state" role="alert"><span>Apiary status could not be refreshed.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
       <dl className="keeper-summary" aria-label="Apiary summary">
         <div><dt>Registered Hives</dt><dd>{members.length}</dd></div><div><dt>Promoted Jira projects</dt><dd>{snapshot.projects.length}</dd></div>
-        <div><dt>Active shared claims</dt><dd>{snapshot.sharedWork.length}</dd></div><div><dt>Steward scopes</dt><dd>{snapshot.stewardships.length}</dd></div>
+        <div><dt>Active Jira claims</dt><dd>{snapshot.sharedWork.length}</dd></div><div><dt>Swarm tasks</dt><dd>{snapshot.tasks.length}</dd></div><div><dt>Steward scopes</dt><dd>{snapshot.stewardships.length}</dd></div>
       </dl>
       <div className="keeper-dashboard-grid" aria-busy={state === "loading"}>
         <article className="keeper-panel">
@@ -51,7 +51,9 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
           {state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}</small></span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span></li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
         </article>
         <article className="keeper-panel">
-          <header><div><p className="eyebrow">Shared work</p><h4>Current ownership</h4></div><small>Reservations and confirmed homes only</small></header>
+          <header><div><p className="eyebrow">Shared work</p><h4>Keeper-canonical Swarm tasks</h4></div><small>Members retrieve these by polling Keeper</small></header>
+          {snapshot.tasks.length ? <ul className="keeper-work-list" aria-label="Keeper Swarm tasks">{snapshot.tasks.map((task) => <li key={task.id}><span><strong>{task.title}</strong><small>Swarm · {task.state}</small></span><span><strong>{task.home_hive_id ? "Assigned" : "Unassigned"}</strong><small>Revision {task.revision}</small></span></li>)}</ul> : <p className="keeper-empty">No Swarm-generated Apiary tasks are waiting.</p>}
+          <header><div><p className="eyebrow">Jira ownership</p><h4>Current claims</h4></div><small>Issue data stays in Jira</small></header>
           {snapshot.sharedWork.length ? <ul className="keeper-work-list" aria-label="Keeper shared work ownership">{snapshot.sharedWork.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_key} · {claim.state === "confirmed" ? "Owned" : "Reserved"}</small></span><span><strong>{claim.home_hive_name}</strong><small>{claim.home_operator_display_name}</small></span></li>)}</ul> : <p className="keeper-empty">No shared Jira work is currently claimed by an Apiary Hive.</p>}
         </article>
         <article className="keeper-panel">

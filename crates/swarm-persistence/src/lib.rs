@@ -22,6 +22,7 @@ mod decisions;
 mod email;
 mod events;
 mod federation;
+mod federation_tasks;
 mod feedback;
 pub use federation::{
     MAX_CONNECTION_CARD_LIFETIME_SECONDS, MAX_FEDERATION_INVITATION_LIFETIME_SECONDS,
@@ -64,7 +65,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 46;
+const CURRENT_SCHEMA_VERSION: i64 = 47;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -143,6 +144,8 @@ pub enum TaskStoreError {
     InvalidFederationClaim,
     #[error("The local federation synchronization state is invalid")]
     InvalidFederationSync,
+    #[error("The Apiary task or task feed is invalid")]
+    InvalidFederationTask,
     #[error("The Jira issue is already claimed by another Hive")]
     FederationClaimConflict,
     #[error("A current invitation already exists for this pinned Hive")]
@@ -1509,6 +1512,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 46 {
         federation::migrate_local_apiary_keeper_links(transaction)?;
+    }
+    if schema_version < 47 {
+        federation_tasks::migrate_federation_tasks(transaction)?;
     }
     Ok(())
 }

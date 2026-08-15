@@ -5,7 +5,8 @@ use reqwest::{Client, Method, StatusCode, Url};
 use serde::{Serialize, de::DeserializeOwned};
 use swarm_domain::{
     ApiaryJoinLinkId, ApiaryJoinLinkPoll, FederationCatalogSnapshot, FederationClaimId,
-    FederationJoinAcceptance, FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard,
+    FederationJoinAcceptance, FederationJoinSubmission, FederationSharedClaim, FederationTaskPage,
+    HiveConnectionCard,
 };
 use thiserror::Error;
 
@@ -134,6 +135,25 @@ impl FederationHttpClient {
         self.send_json::<(), _>(
             Method::GET,
             "api/v1/federation/catalog",
+            Some(node_credential),
+            None,
+        )
+        .await
+    }
+
+    /// Fetches one ordered page of Keeper-canonical Swarm tasks. Jira issue
+    /// content is never returned by this endpoint.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, response-bound, or protocol failures.
+    pub async fn tasks(
+        &self,
+        node_credential: &str,
+        after: i64,
+    ) -> Result<FederationTaskPage, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::GET,
+            &format!("api/v1/federation/tasks?after={after}"),
             Some(node_credential),
             None,
         )

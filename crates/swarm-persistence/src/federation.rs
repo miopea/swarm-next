@@ -90,11 +90,11 @@ struct InvitedJoinApplicationContext {
     state: String,
 }
 
-struct MemberCredentialContext {
-    apiary: ApiaryId,
-    node: FederationNodeId,
-    hive: HiveId,
-    operator: OperatorId,
+pub(crate) struct MemberCredentialContext {
+    pub(crate) apiary: ApiaryId,
+    pub(crate) node: FederationNodeId,
+    pub(crate) hive: HiveId,
+    pub(crate) operator: OperatorId,
 }
 
 impl TaskStore {
@@ -2116,7 +2116,7 @@ fn catalog_acknowledgement(
     }
 }
 
-fn decode_node_credential(value: &str) -> Result<[u8; 32], TaskStoreError> {
+pub(crate) fn decode_node_credential(value: &str) -> Result<[u8; 32], TaskStoreError> {
     Base64UrlUnpadded::decode_vec(value)
         .map_err(|_| TaskStoreError::InvalidFederationCredential)?
         .try_into()
@@ -2140,7 +2140,7 @@ fn validate_claim_identity(
     Ok(())
 }
 
-fn authenticate_member_credential(
+pub(crate) fn authenticate_member_credential(
     connection: &rusqlite::Connection,
     identity: &swarm_domain::HiveIdentity,
     credential: &[u8; 32],

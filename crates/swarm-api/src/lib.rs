@@ -60,12 +60,13 @@ use swarm_application::{
 };
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinLink,
-    ApiaryJoinLinkId, ApiaryJoinReadiness, ApiaryKeeperLink, DecisionRequestId,
+    ApiaryJoinLinkId, ApiaryJoinReadiness, ApiaryKeeperLink, ApiaryTask, DecisionRequestId,
     FederationCatalogSnapshot, FederationClaimId, FederationJoinSubmission, FederationSharedClaim,
-    FederationSyncCondition, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
-    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext, OperatorId,
-    ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId,
-    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    FederationSyncCondition, FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard,
+    HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope,
+    JiraStatusMapping, LocalApiaryContext, OperatorId, ProviderKind, SharedWorkBackend,
+    StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority, TaskState,
+    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
@@ -595,6 +596,12 @@ impl AppState {
                 now,
                 self.control_room_notify.as_ref(),
             );
+            return;
+        }
+        if let Err(condition) =
+            reconcile_federation_tasks(&service, &client, &connection.node_credential, now).await
+        {
+            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
             return;
         }
         match service.record_federation_sync_success(now) {
@@ -1359,6 +1366,21 @@ struct ReserveFederationClaimRequest {
     issue_key: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct FederationTaskPageQuery {
+    #[serde(default)]
+    after: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateApiaryTaskRequest {
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    priority: TaskPriority,
+}
+
 #[derive(Debug, Serialize)]
 struct FederationClaimRollupView {
     #[serde(flatten)]
@@ -1694,6 +1716,7 @@ fn api_router(state: AppState) -> Router {
             post(poll_federation_bootstrap),
         )
         .route("/api/v1/federation/catalog", get(federation_catalog))
+        .route("/api/v1/federation/tasks", get(federation_tasks))
         .route("/api/v1/federation/claims", post(reserve_federation_claim))
         .route(
             "/api/v1/federation/claims/{claim_id}",
@@ -1710,6 +1733,14 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/apiary/catalog-readiness",
             get(get_federation_catalog_readiness),
+        )
+        .route(
+            "/api/v1/apiary/tasks",
+            get(get_apiary_tasks).post(create_apiary_task),
+        )
+        .route(
+            "/api/v1/apiary/task-sync-status",
+            get(get_federation_task_sync_status),
         )
         .route(
             "/api/v1/apiary/collapse-readiness",
@@ -2571,6 +2602,18 @@ async fn federation_catalog(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
 }
 
+async fn federation_tasks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<FederationTaskPageQuery>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let page: FederationTaskPage = apiary_service(&state)?
+        .federation_task_page(credential, query.after, unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(page)).into_response())
+}
+
 async fn reserve_federation_claim(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2658,6 +2701,51 @@ async fn get_federation_catalog_readiness(
         .federation_catalog_readiness(jira.connection, unix_timestamp())
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(readiness)).into_response())
+}
+
+async fn get_apiary_tasks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let tasks: Vec<ApiaryTask> = apiary_service(&state)?
+        .visible_apiary_tasks()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
+}
+
+async fn create_apiary_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateApiaryTaskRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task = apiary_service(&state)?
+        .create_apiary_task(
+            &request.title,
+            &request.description,
+            request.priority,
+            unix_timestamp(),
+        )
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(task),
+    )
+        .into_response())
+}
+
+async fn get_federation_task_sync_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let status: FederationTaskSyncStatus = apiary_service(&state)?
+        .federation_task_sync_status()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
 }
 
 async fn create_apiary(
@@ -4144,6 +4232,39 @@ fn record_federation_failure(
     }
 }
 
+async fn reconcile_federation_tasks(
+    service: &ApiaryService,
+    client: &federation_http::FederationHttpClient,
+    node_credential: &str,
+    now: i64,
+) -> Result<(), FederationSyncCondition> {
+    let mut cursor = service.federation_task_sync_status().map_or_else(
+        |error| {
+            tracing::warn!(%error, "federation task cursor could not be read");
+            Err(FederationSyncCondition::Incompatible)
+        },
+        |status| Ok(status.cursor),
+    )?;
+    for _ in 0..10 {
+        let page = client
+            .tasks(node_credential, cursor)
+            .await
+            .map_err(federation_sync_condition)?;
+        let has_more = page.has_more;
+        cursor = service
+            .apply_federation_task_page(&page, now)
+            .map_err(|error| {
+                tracing::warn!(%error, "Keeper returned an incompatible federation task page");
+                FederationSyncCondition::Incompatible
+            })?
+            .cursor;
+        if !has_more {
+            break;
+        }
+    }
+    Ok(())
+}
+
 fn federation_http_error(error: federation_http::FederationHttpError) -> ApiError {
     use federation_http::FederationHttpError;
     match error {
@@ -4511,6 +4632,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::InvalidFederationSync => ApiError::new(
             StatusCode::FORBIDDEN,
             "apiary_member_required",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidFederationTask => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_federation_task",
             error.to_string(),
         ),
         TaskStoreError::FederationClaimConflict => ApiError::new(
@@ -5901,6 +6027,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn invited_hive_joins_through_one_outbound_signed_request() {
         let jira_address = start_ready_jira_test_server().await;
 
@@ -5913,6 +6040,14 @@ mod tests {
                 "Wildflower Garden",
                 SharedWorkBackend::Jira,
                 now.saturating_sub(1),
+            )
+            .unwrap();
+        keeper
+            .create_apiary_task(
+                "Coordinate the release across Hives",
+                "Swarm-generated work stays on Keeper.",
+                TaskPriority::High,
+                now,
             )
             .unwrap();
         keeper.pin_hive_candidate(&invited_card, now).unwrap();
@@ -5997,12 +6132,20 @@ mod tests {
             invited.federation_sync_health().unwrap().condition,
             FederationSyncCondition::Current
         );
+        let task_sync = invited.federation_task_sync_status().unwrap();
+        assert_eq!(task_sync.cursor, 1);
+        assert_eq!(task_sync.task_count, 1);
+        assert!(task_sync.last_applied_at.is_some());
+        let projected = invited.list_local_apiary_tasks().unwrap();
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].title, "Coordinate the release across Hives");
 
         keeper_server.abort();
         let _ = keeper_server.await;
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn signed_one_time_federation_join_is_publicly_consumed_once_without_browser_auth() {
         let now = unix_timestamp();
         let invited = TaskStore::in_memory().unwrap();
@@ -6014,6 +6157,14 @@ mod tests {
                 "Wildflower Garden",
                 SharedWorkBackend::Jira,
                 now.saturating_sub(1),
+            )
+            .unwrap();
+        keeper
+            .create_apiary_task(
+                "Prepare the shared release brief",
+                "This is a Swarm task, not a Jira issue.",
+                TaskPriority::Normal,
+                now,
             )
             .unwrap();
         keeper.pin_hive_candidate(&invited_card, now).unwrap();
@@ -6087,6 +6238,8 @@ mod tests {
 
         let credential = first_json["node_credential"].as_str().unwrap();
         assert_federation_catalog_endpoint(app.clone(), credential, invited_card.payload.node_id)
+            .await;
+        assert_federation_task_endpoint(app.clone(), credential, invited_card.payload.node_id)
             .await;
         let acceptance: swarm_domain::FederationJoinAcceptance =
             serde_json::from_value(first_json.clone()).unwrap();
@@ -6240,6 +6393,55 @@ mod tests {
         let serialized = json.to_string();
         assert!(!serialized.contains("node_credential"));
         assert!(!serialized.contains("receipt"));
+    }
+
+    async fn assert_federation_task_endpoint(
+        app: Router,
+        credential: &str,
+        member_node_id: swarm_domain::FederationNodeId,
+    ) {
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/federation/tasks?after=0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        let request = || {
+            Request::builder()
+                .uri("/api/v1/federation/tasks?after=0")
+                .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        let first = app.clone().oneshot(request()).await.unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[header::CACHE_CONTROL], "no-store");
+        let first_json = response_json(first).await;
+        assert_eq!(first_json["member_node_id"], member_node_id.to_string());
+        assert_eq!(first_json["next_cursor"], 1);
+        assert_eq!(first_json["has_more"], false);
+        assert_eq!(first_json["events"].as_array().unwrap().len(), 1);
+        assert_eq!(first_json["events"][0]["task"]["source"], "swarm");
+        assert_eq!(
+            first_json["events"][0]["task"]["title"],
+            "Prepare the shared release brief"
+        );
+        let retry = app.oneshot(request()).await.unwrap();
+        assert_eq!(response_json(retry).await, first_json);
+        let serialized = first_json.to_string();
+        for forbidden in [
+            "jira_status",
+            "jira_assignee",
+            "node_credential",
+            "endpoint",
+        ] {
+            assert!(!serialized.contains(forbidden));
+        }
     }
 
     async fn assert_federation_claim_endpoints(app: Router, keeper: &TaskStore, credential: &str) {

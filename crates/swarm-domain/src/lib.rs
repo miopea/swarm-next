@@ -45,6 +45,7 @@ domain_id!(ApiaryJoinLinkId);
 domain_id!(FederationNodeId);
 domain_id!(FederationMembershipReceiptId);
 domain_id!(FederationClaimId);
+domain_id!(ApiaryTaskId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
@@ -245,6 +246,7 @@ pub const FEDERATION_CONNECTION_CARD_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_INVITATION_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_MEMBERSHIP_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_CATALOG_SCHEMA_VERSION: u16 = 1;
+pub const FEDERATION_TASK_FEED_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_PROTOCOL_VERSION: u16 = 1;
 
 /// Public, signed identity material that one Hive can deliberately share with
@@ -448,6 +450,66 @@ pub struct FederationCatalogSnapshotPayload {
 pub struct FederationCatalogSnapshot {
     pub payload: FederationCatalogSnapshotPayload,
     pub signature: String,
+}
+
+/// The canonical source of an Apiary-visible work item. Jira issue content is
+/// never carried by the Swarm task feed; every Hive reads that work from Jira
+/// with its own operator identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiaryTaskSource {
+    Swarm,
+}
+
+/// Keeper-canonical shared work created inside Swarm. The home Hive is absent
+/// until the Keeper or a governed claim assigns it. Worker assignment remains
+/// private to the home Hive and therefore never appears here.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryTask {
+    pub id: ApiaryTaskId,
+    pub apiary_id: ApiaryId,
+    pub source: ApiaryTaskSource,
+    pub title: String,
+    pub description: String,
+    pub priority: TaskPriority,
+    pub state: TaskState,
+    pub home_node_id: Option<FederationNodeId>,
+    pub home_hive_id: Option<HiveId>,
+    pub revision: u64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// One ordered Keeper event. Carrying the complete bounded task snapshot makes
+/// member retries idempotent and permits deterministic projection repair.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryTaskEvent {
+    pub sequence: i64,
+    pub task: ApiaryTask,
+}
+
+/// A bounded task page addressed to one authenticated member node. `next_cursor`
+/// is the largest event sequence included (or the requested cursor for an empty
+/// page); `has_more` requires another immediate poll.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationTaskPage {
+    pub schema_version: u16,
+    pub protocol_version: u16,
+    pub apiary_id: ApiaryId,
+    pub member_node_id: FederationNodeId,
+    pub events: Vec<ApiaryTaskEvent>,
+    pub next_cursor: i64,
+    pub has_more: bool,
+    pub generated_at: i64,
+}
+
+/// Durable member-local evidence for the Keeper task projection. This is safe
+/// for operator UI because it contains no task content or transport secrets.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationTaskSyncStatus {
+    pub cursor: i64,
+    pub task_count: usize,
+    pub last_applied_at: Option<i64>,
 }
 
 /// Durable Member-side evidence that one exact Keeper catalog was verified.

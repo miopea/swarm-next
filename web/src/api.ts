@@ -6,6 +6,7 @@ import {
 } from "./api/request";
 import type { PresenceDeviceClass } from "./api/presence";
 import type { JiraConnectionState } from "./api/jira";
+import type { TaskPriority, TaskState } from "./api/tasks";
 
 export {
   authenticatedFetch,
@@ -275,6 +276,25 @@ export type FederationSyncHealth = {
   last_success_at: number | null;
   consecutive_failures: number;
   next_attempt_at: number | null;
+};
+export type ApiaryTask = {
+  id: string;
+  apiary_id: string;
+  source: "swarm";
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  state: TaskState;
+  home_node_id: string | null;
+  home_hive_id: string | null;
+  revision: number;
+  created_at: number;
+  updated_at: number;
+};
+export type FederationTaskSyncStatus = {
+  cursor: number;
+  task_count: number;
+  last_applied_at: number | null;
 };
 export type FederationTransportReadiness = {
   configured: boolean;
@@ -654,6 +674,18 @@ export async function fetchFederationSyncHealth(
 ): Promise<FederationSyncHealth> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/sync-health");
   return response.json() as Promise<FederationSyncHealth>;
+}
+
+export async function fetchApiaryTasks(operatorToken: string): Promise<ApiaryTask[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/tasks");
+  return response.json() as Promise<ApiaryTask[]>;
+}
+
+export async function fetchFederationTaskSyncStatus(
+  operatorToken: string,
+): Promise<FederationTaskSyncStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/task-sync-status");
+  return response.json() as Promise<FederationTaskSyncStatus>;
 }
 
 export async function fetchFederationCatalogReadiness(

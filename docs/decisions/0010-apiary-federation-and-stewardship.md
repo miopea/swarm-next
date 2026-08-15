@@ -108,7 +108,9 @@ because another Hive leaves.
 - Apiary availability must not stop a Hive from continuing already-owned local
   work. New shared claims require an authoritative shared backend connection.
 - Native and Jira-backed Apiaries share product concepts but use different
-  synchronization adapters and cannot be combined or converted.
+  provider-work adapters and cannot be converted. Swarm-generated coordination
+  tasks remain Keeper-canonical in either backend and are polled outbound by
+  members; Jira issue synchronization remains direct from each Hive to Jira.
 
 ## Alternatives considered
 

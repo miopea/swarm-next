@@ -26,9 +26,11 @@ by rebuilding legacy behavior in advance.
 5. **Membership: exclusive and non-migrating.** A Hive belongs to zero or one
    Apiary, leaves before joining another, and never moves shared tasks between
    Apiaries automatically. A safe sole-Hive collapse is explicit.
-6. **Shared authority: one immutable backend per Apiary.** Jira-backed ships
-   first. Native later owns a complete distributed task protocol; mixed mode
-   and backend conversion are rejected.
+6. **Provider authority: one immutable backend per Apiary.** Jira-backed ships
+   first and every Hive talks to Jira directly. Native later owns a complete
+   provider-work protocol; backend conversion is rejected. Swarm-generated
+   coordination tasks are distinct: Keeper is canonical and members poll its
+   ordered feed in every Apiary.
 7. **Team execution: distributed, not one shared Linux account.** Hives retain
    repositories, provider identity, terminals, and execution nodes. Apiary
    coordinates shared tasks and policy.
