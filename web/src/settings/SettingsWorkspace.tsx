@@ -51,6 +51,7 @@ type Props = {
 export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onReorderWorkers, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
+  const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
   const [developmentRuntime, setDevelopmentRuntime] = useState<DevelopmentRuntime>();
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
@@ -60,9 +61,10 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   const [activeSettingsSection, setActiveSettingsSection] = useState(() => window.location.hash === "#settings-integrations" ? "settings-integrations" : "settings-crew");
   useEffect(() => {
     let cancelled = false;
+    setTerminalHostLoaded(false);
     void fetchTerminalHostStatus(operatorToken)
-      .then((status) => { if (!cancelled) setTerminalHostStatus(status); })
-      .catch(() => { if (!cancelled) setTerminalHostStatus(undefined); });
+      .then((status) => { if (!cancelled) { setTerminalHostStatus(status); setTerminalHostLoaded(true); } })
+      .catch(() => { if (!cancelled) { setTerminalHostStatus(undefined); setTerminalHostLoaded(true); } });
     return () => { cancelled = true; };
   }, [operatorToken, providers]);
   useEffect(() => {
@@ -240,7 +242,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         <div><p className="eyebrow">Runtime</p><h3 id="runtime-heading">Local system</h3></div>
         <dl className="diagnostic-list">
           <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
-          <div><dt>Worker engine</dt><dd>{workerEngineLabel(health, terminalHostStatus)}</dd></div>
+          <div><dt>Worker engine</dt><dd>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</dd></div>
           {health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? (
             <div><dt>Workers affected</dt><dd>{terminalHostStatus.running_sessions} active worker{terminalHostStatus.running_sessions === 1 ? "" : "s"} will briefly stop · conversations retained</dd></div>
           ) : null}
@@ -321,7 +323,8 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   );
 }
 
-function workerEngineLabel(health: Health | undefined, host: TerminalHostStatus | undefined) {
+function workerEngineLabel(health: Health | undefined, host: TerminalHostStatus | undefined, loaded: boolean) {
+  if (!loaded) return "Checking…";
   if (!host) return "Unavailable";
   if (health && health.version !== host.host_version) {
     return "Update ready · restart required";

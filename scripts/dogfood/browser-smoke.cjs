@@ -252,8 +252,9 @@ async function checkSurface(browser, surface) {
     }
     const provider = page.getByLabel("Coding provider");
     const codexDisabled = await provider.locator('option[value="codex"]').isDisabled();
-    await page.getByText("Worker engine", { exact: true }).waitFor();
-    const workerEngineText = await page.getByText("Worker engine", { exact: true }).locator("..").innerText();
+    const workerEngineRow = page.getByText("Worker engine", { exact: true }).locator("..");
+    await workerEngineRow.getByText(/^(Current|Update ready)/).waitFor();
+    const workerEngineText = await workerEngineRow.innerText();
     if (!/Current|Update ready/.test(workerEngineText)) {
       throw new Error(`${surface.name}: worker-engine maintenance state is unclear`);
     }
