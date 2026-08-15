@@ -12,6 +12,8 @@ import { deviceClass, presenceDeviceId } from "../presence/PresenceController";
 
 export type NotificationCapabilityState = "unsupported" | "available" | "enabling" | "enabled" | "denied" | "error";
 
+const ENABLED_INTENT_KEY = "swarm-next.notifications.enabled.v1";
+
 type SettingsCallback = (settings: NotificationSettings) => void;
 type StateCallback = (state: NotificationCapabilityState) => void;
 
@@ -45,9 +47,17 @@ export class NotificationController {
         }
       }
       const subscription = await registration?.pushManager.getSubscription();
-      if (!subscription || generation !== this.#generation) return;
-      await this.#save(subscription);
-      if (generation === this.#generation) this.#onState("enabled");
+      if (subscription) {
+        await this.#save(subscription);
+        if (generation === this.#generation) {
+          rememberEnabledIntent(true);
+          this.#onState("enabled");
+        }
+        return;
+      }
+      if (generation === this.#generation && Notification.permission === "granted" && enabledIntentRemembered()) {
+        await this.enable();
+      }
     } catch {
       if (generation === this.#generation) this.#onState("error");
     }
@@ -78,6 +88,7 @@ export class NotificationController {
         applicationServerKey: decodeUrlSafeBase64(this.#settings.vapid_public_key),
       });
       await this.#save(subscription);
+      rememberEnabledIntent(true);
       this.#onState("enabled");
       return true;
     } catch {
@@ -89,12 +100,12 @@ export class NotificationController {
 
   async disable(): Promise<void> {
     if (!this.#token) return;
+    rememberEnabledIntent(false);
     const registration = supportsPush() ? await navigator.serviceWorker.getRegistration("/") : undefined;
     const subscription = await registration?.pushManager.getSubscription();
     if (subscription) await subscription.unsubscribe();
     const settings = await recoverTransientRuntime(() => removeNotificationSubscription(this.#token!, presenceDeviceId()));
     this.#publish(settings);
-    if (registration) await registration.unregister();
     this.#onState(supportsPush() && Notification.permission !== "denied" ? "available" : "denied");
   }
 
@@ -125,6 +136,7 @@ export class NotificationController {
       const subscription = await registration?.pushManager.getSubscription();
       if (!subscription) return false;
       await this.#save(subscription);
+      rememberEnabledIntent(true);
       this.#onState("enabled");
       return true;
     } catch {
@@ -135,6 +147,23 @@ export class NotificationController {
   #publish(settings: NotificationSettings) {
     this.#settings = settings;
     this.#onSettings(settings);
+  }
+}
+
+function enabledIntentRemembered(): boolean {
+  try {
+    return window.localStorage.getItem(ENABLED_INTENT_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function rememberEnabledIntent(enabled: boolean) {
+  try {
+    if (enabled) window.localStorage.setItem(ENABLED_INTENT_KEY, "true");
+    else window.localStorage.removeItem(ENABLED_INTENT_KEY);
+  } catch {
+    // Private browsing can deny storage while push remains usable for this session.
   }
 }
 

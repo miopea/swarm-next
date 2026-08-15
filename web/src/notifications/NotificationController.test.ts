@@ -70,6 +70,46 @@ test("startup refreshes an existing push worker without requesting permission ag
   expect(Notification.requestPermission).not.toHaveBeenCalled();
 });
 
+test("startup repairs a missing subscription when this device was intentionally enabled", async () => {
+  window.localStorage.setItem("swarm-next.notifications.enabled.v1", "true");
+  vi.stubGlobal("Notification", { permission: "granted", requestPermission: vi.fn().mockResolvedValue("granted") });
+  const subscription = {
+    toJSON: () => ({ endpoint: "https://fcm.googleapis.com/push/repaired", keys: { p256dh: "key", auth: "auth" } }),
+  } as unknown as PushSubscription;
+  const pushManager = { getSubscription: vi.fn().mockResolvedValue(null), subscribe: vi.fn().mockResolvedValue(subscription) };
+  const register = vi.fn().mockResolvedValue({ pushManager });
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(undefined), register } });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ ...settings, subscription_count: 1 })));
+  const states: string[] = [];
+
+  await new NotificationController().start("token", vi.fn(), (state) => states.push(state));
+
+  expect(register).toHaveBeenCalledWith("/sw.js", { scope: "/", updateViaCache: "none" });
+  expect(pushManager.subscribe).toHaveBeenCalledOnce();
+  expect(states.at(-1)).toBe("enabled");
+});
+
+test("disable removes delivery but keeps the service worker available for repair", async () => {
+  window.localStorage.setItem("swarm-next.notifications.enabled.v1", "true");
+  const unsubscribe = vi.fn().mockResolvedValue(true);
+  const subscription = {
+    unsubscribe,
+    toJSON: () => ({ endpoint: "https://fcm.googleapis.com/push/existing", keys: { p256dh: "key", auth: "auth" } }),
+  } as unknown as PushSubscription;
+  const unregister = vi.fn();
+  const registration = { update: vi.fn(), unregister, pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) } };
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(registration), register: vi.fn() } });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ ...settings, subscription_count: 0 })));
+  const controller = new NotificationController();
+  await controller.start("token", vi.fn(), vi.fn());
+
+  await controller.disable();
+
+  expect(unsubscribe).toHaveBeenCalledOnce();
+  expect(unregister).not.toHaveBeenCalled();
+  expect(window.localStorage.getItem("swarm-next.notifications.enabled.v1")).toBeNull();
+});
+
 test("an existing browser subscription survives a transient API handoff while enabling", async () => {
   vi.useFakeTimers();
   const subscription = {

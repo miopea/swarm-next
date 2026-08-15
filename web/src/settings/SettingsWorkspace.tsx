@@ -214,7 +214,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
           {notificationState === "enabled" ? (
             <button className="secondary-button" onClick={() => void onDisableNotifications()}>Disable this device</button>
           ) : (
-            <button className="primary-action" disabled={notificationState === "unsupported" || notificationState === "denied" || notificationState === "enabling" || !notificationSettings} onClick={() => void onEnableNotifications()}>{notificationState === "enabling" ? "Enabling…" : "Enable this device"}</button>
+            <button className="primary-action" disabled={notificationState === "unsupported" || notificationState === "denied" || notificationState === "enabling" || !notificationSettings} onClick={() => void onEnableNotifications()}>{notificationState === "enabling" ? "Enabling…" : notificationState === "error" ? "Repair this device" : "Enable this device"}</button>
           )}
           <button className="secondary-button" disabled={notificationState !== "enabled"} onClick={() => void onTestNotification()}>Test this device</button>
         </div>
@@ -332,7 +332,7 @@ function notificationStateLabel(state: NotificationCapabilityState) {
   if (state === "enabling") return "Enabling this device";
   if (state === "denied") return "Browser permission blocked";
   if (state === "unsupported") return "Push unavailable in this browser";
-  if (state === "error") return "Needs another try";
+  if (state === "error") return "Connection needs repair";
   return "Available when you choose";
 }
 
@@ -341,7 +341,7 @@ function notificationStateDetail(state: NotificationCapabilityState, count: numb
   if (state === "enabling") return "Waiting for the browser and Hive to confirm the subscription.";
   if (state === "denied") return "Allow notifications in browser site settings to enable them.";
   if (state === "unsupported") return "Presence and the Needs you inbox continue to work normally.";
-  if (state === "error") return "No notification was enabled; retry when the connection is stable.";
+  if (state === "error") return "Your browser permission is unchanged. Swarm will retry at startup, or you can repair this device now.";
   return "Nothing is registered until you explicitly enable it.";
 }
 function presenceLabel(mode: PresenceMode | undefined) {
