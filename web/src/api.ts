@@ -24,6 +24,24 @@ export type {
   PresenceObservationState,
   PresenceSource,
 } from "./api/presence";
+export {
+  createWorker,
+  fetchWorkers,
+  fetchWorkspaces,
+  reorderWorkers,
+  startWorker,
+  stopWorker,
+  updateWorker,
+} from "./api/workers";
+export type {
+  CreateWorkerInput,
+  ProviderKind,
+  UpdateWorkerInput,
+  Worker,
+  WorkerAttentionState,
+  WorkerRole,
+  WorkspaceChoice,
+} from "./api/workers";
 
 export type Health = { status: "ok"; version: string; worker_engine_build_id?: string };
 export type ProcessResources = {
@@ -36,8 +54,6 @@ export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
 export type TaskState = "draft" | "ready" | "active" | "blocked" | "review" | "completed";
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
-export type WorkerRole = "queen" | "worker";
-export type ProviderKind = "claude_code" | "codex";
 export type ProviderCapabilities = { claude_code: boolean; codex: boolean };
 export type PresentationDeviceClass = "desktop" | "mobile";
 export type PresentationPreferences = {
@@ -46,7 +62,6 @@ export type PresentationPreferences = {
   terminal_keys_visible: boolean;
   configured: boolean;
 };
-export type WorkerAttentionState = "sleeping" | "resting" | "buzzing" | "with_operator" | "awaiting_operator" | "blocked";
 export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed" | "decisions_changed" | "presence_changed" | "notifications_changed";
 export type NotificationPolicy = "important_only" | "all_decisions" | "off";
 export type NotificationSettings = { policy: NotificationPolicy; subscription_count: number; vapid_public_key: string };
@@ -490,31 +505,6 @@ export type EmailReply = {
   }>;
 };
 
-export type Worker = {
-  id: string;
-  hive_id: string;
-  name: string;
-  role: WorkerRole;
-  provider: ProviderKind;
-  workspace: string;
-  autostart: boolean;
-  position: number;
-  active_session_id: string | null;
-  created_at: number;
-  updated_at: number;
-  running: boolean;
-  attention_state: WorkerAttentionState;
-  engagement_expires_at?: number;
-  runtime_error?: string;
-};
-
-export type WorkspaceChoice = {
-  name: string;
-  path: string;
-  kind: "repository" | "folder";
-  configured_worker_id: string | null;
-};
-
 export type Task = {
   id: string;
   hive_id: string;
@@ -917,16 +907,6 @@ export async function fetchSessions(operatorToken: string): Promise<SessionSumma
   return payload.sessions;
 }
 
-export async function fetchWorkers(operatorToken: string): Promise<Worker[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/workers");
-  return response.json() as Promise<Worker[]>;
-}
-
-export async function fetchWorkspaces(operatorToken: string): Promise<WorkspaceChoice[]> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/workspaces");
-  return response.json() as Promise<WorkspaceChoice[]>;
-}
-
 export async function fetchTasks(operatorToken: string): Promise<Task[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/tasks");
   return response.json() as Promise<Task[]>;
@@ -1044,71 +1024,6 @@ export async function assignTask(
     },
   );
   return response.json() as Promise<Task>;
-}
-
-export async function createWorker(
-  operatorToken: string,
-  input: { name: string; workspace: string; provider?: ProviderKind; autostart?: boolean; allow_outside_roots?: boolean },
-): Promise<Worker> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/workers", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-  return response.json() as Promise<Worker>;
-}
-
-export async function updateWorker(
-  operatorToken: string,
-  workerId: string,
-  input: { name?: string; autostart?: boolean },
-): Promise<Worker> {
-  const response = await authenticatedFetch(
-    operatorToken,
-    `/api/v1/workers/${encodeURIComponent(workerId)}`,
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    },
-  );
-  return response.json() as Promise<Worker>;
-}
-
-export async function reorderWorkers(operatorToken: string, workerIds: string[]): Promise<void> {
-  await authenticatedFetch(operatorToken, "/api/v1/workers/order", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ worker_ids: workerIds }),
-  });
-}
-
-export async function startWorker(
-  operatorToken: string,
-  workerId: string,
-): Promise<Worker> {
-  const response = await authenticatedFetch(
-    operatorToken,
-    `/api/v1/workers/${encodeURIComponent(workerId)}/start`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows: 24, columns: 80 }),
-    },
-  );
-  return response.json() as Promise<Worker>;
-}
-
-export async function stopWorker(
-  operatorToken: string,
-  workerId: string,
-): Promise<Worker> {
-  const response = await authenticatedFetch(
-    operatorToken,
-    `/api/v1/workers/${encodeURIComponent(workerId)}/session`,
-    { method: "DELETE" },
-  );
-  return response.json() as Promise<Worker>;
 }
 
 export async function startClaudeSession(operatorToken: string, workspace: string): Promise<string> {
