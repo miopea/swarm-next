@@ -261,7 +261,7 @@ async function checkSurface(browser, surface) {
         }
         await page.getByLabel("Show").selectOption("changes");
         if (await activityRows.count() === 0) throw new Error(`${surface.name}: change activity filter has no durable events`);
-        await page.getByRole("button", { name: "Refresh" }).click();
+        await page.getByRole("button", { name: "Refresh", exact: true }).click();
         await activityRows.first().waitFor();
         await page.screenshot({ path: path.join(outputRoot, `${surface.name}-activity.png`), fullPage: true });
         activityReview = true;
