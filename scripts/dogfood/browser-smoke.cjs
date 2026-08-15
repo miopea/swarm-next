@@ -427,10 +427,10 @@ async function checkSurface(browser, surface) {
     const apiaryGuideSteps = await apiaryGuide.locator(":scope > li").count();
     const personalExchange = await personalGuide.isVisible().catch(() => false);
     const firstExchangeControl = personalExchange
-      ? page.getByRole("button", { name: "Download connection card" })
-      : page.getByLabel("Choose Hive connection card");
+      ? page.getByRole("button", { name: "Copy connection link" })
+      : page.getByLabel("Hive connection link");
     const secondExchangeControl = personalExchange
-      ? page.getByLabel("Choose Apiary invitation")
+      ? page.getByLabel("Invitation link")
       : page.getByText("Hives in this Apiary", { exact: true });
     const apiaryOverflow = await page.locator("#settings-apiary").evaluate((section) => ({
       scrollWidth: section.scrollWidth,
