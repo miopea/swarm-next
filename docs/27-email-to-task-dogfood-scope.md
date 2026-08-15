@@ -1,6 +1,6 @@
 # Email-to-task dogfood scope
 
-Status: **First dogfood slice implemented; live Microsoft consent pending**
+Status: **Live dogfood intake implemented; multi-source reply fanout pending**
 
 ## Operator outcome
 
@@ -14,12 +14,14 @@ backlog.
 
 1. Link one operator-owned email integration.
 2. Open **Bring in work** from the task board and choose **Email**.
-3. Browse or search a bounded Inbox result set.
-4. Import one message into a local task, including its readable body, inline
-   images, and supported attachments as bounded task evidence.
+3. Browse or search a bounded Inbox result set and select one message or up to
+   20 related messages.
+4. Import the selection atomically into one local task, including each readable
+   body, inline image, and supported attachment as bounded task evidence.
 5. Edit task planning fields and optionally choose a worker; leaving it
    unassigned routes it through Queen like other intake.
-6. Keep the original message/thread identity and a direct **Open email** link.
+6. Keep every original message/thread identity and direct **Open email** link
+   separately inside the merged task.
 7. After the task reaches Completed *and* its approved deployment is recorded,
    prepare a plain-language resolution and reply to the original message.
 
@@ -27,6 +29,12 @@ Import is operator-initiated. It never scans the mailbox into task storage,
 auto-creates work, or gives Queen access to mailbox credentials. Reply delivery
 is a separate durable, idempotent outbox action gated by completion plus
 deployment and the configured external-send policy.
+
+The current durable reply outbox remains one delivery lifecycle per task. A
+merged task therefore does not silently send the same resolution to every
+source thread. Per-source fanout requires an additive target outbox with
+per-thread idempotency, retry, uncertainty, and migration semantics before it
+can be enabled safely.
 
 ## One-time Microsoft registration
 
@@ -74,12 +82,13 @@ Microsoft protocol reference: <https://learn.microsoft.com/en-us/entra/identity-
 
 The short implementation interview must settle:
 
-1. whether the Inbox list groups a conversation or shows each message;
-2. how much quoted history belongs in the imported evidence;
-3. the default Inbox time window and search behavior;
-4. attachment types and limits needed for real issue reports;
-5. whether the first dogfood reply is always reviewed, may be auto-sent under a
+1. how much quoted history belongs in the imported evidence;
+2. the default Inbox time window and search behavior;
+3. attachment types and limits needed for real issue reports;
+4. whether a dogfood reply is always reviewed, may be auto-sent under a
    recorded policy, or varies by sender/domain;
+5. whether a merged task replies to one selected source or every source, and
+   the operator review required before fanout;
 6. what constitutes deployment evidence for repositories without an automated
    deployment integration;
 7. how shared mailboxes should appear after the first linked account works.

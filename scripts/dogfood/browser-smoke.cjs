@@ -147,6 +147,7 @@ async function checkSurface(browser, surface) {
     let completedTaskTitle;
     let jiraIssueReview = false;
     let jiraIssueFilter = false;
+    let emailIntakeReview = false;
     for (const target of [
       { name: "needs-you", nav: /Needs you/, ready: () => page.getByRole("heading", { name: "Needs you" }) },
       { name: "tasks", nav: /Tasks/, ready: () => page.getByRole("heading", { name: "Task board" }) },
@@ -197,6 +198,39 @@ async function checkSurface(browser, surface) {
           await page.screenshot({ path: path.join(outputRoot, `${surface.name}-tasks-jira-intake.png`), fullPage: true });
           await intake.getByRole("button", { name: "Close" }).click();
           jiraIssueReview = true;
+        }
+        const emailToggle = page.locator(".task-entry-actions button").filter({ hasText: /^(Import email|Close email)$/ });
+        if (await emailToggle.count()) {
+          await emailToggle.scrollIntoViewIfNeeded();
+          if (await emailToggle.innerText() === "Close email") await emailToggle.click();
+          await page.getByRole("button", { name: "Import email" }).click();
+          const emailSource = page.locator(".email-task-source");
+          await emailSource.waitFor();
+          const inbox = emailSource.getByRole("list", { name: "Inbox messages" });
+          await inbox.waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
+          if (await inbox.isVisible().catch(() => false)) {
+            const emailChoices = inbox.getByRole("checkbox");
+            await emailChoices.first().waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
+            const emailCount = await emailChoices.count();
+            if (emailCount === 0) throw new Error(`${surface.name}: connected email intake is empty`);
+            const reviewCount = Math.min(emailCount, 2);
+            for (let index = 0; index < reviewCount; index += 1) await emailChoices.nth(index).check();
+            await emailSource.getByRole("button", {
+              name: `Review ${reviewCount} message${reviewCount === 1 ? "" : "s"}`,
+              exact: true,
+            }).click();
+            await emailSource.getByRole("heading", { name: "Review the task before import" }).waitFor();
+            const reviewBounds = await emailSource.evaluate((element) => ({
+              scrollWidth: element.scrollWidth,
+              clientWidth: element.clientWidth,
+            }));
+            if (reviewBounds.scrollWidth > reviewBounds.clientWidth + 1) {
+              throw new Error(`${surface.name}: email task review is horizontally clipped`);
+            }
+            await page.screenshot({ path: path.join(outputRoot, `${surface.name}-tasks-email-review.png`), fullPage: true });
+            emailIntakeReview = true;
+          }
+          await page.getByRole("button", { name: "Close email" }).click();
         }
         const completedTasks = page.locator("details.completed-tasks");
         if (await completedTasks.count()) {
@@ -439,7 +473,7 @@ async function checkSurface(browser, surface) {
     await page.getByRole("button", { name: "Download Hive backup" }).waitFor();
     const backup = surface.mobile ? undefined : await verifyBackupDownload(page);
     accessibleControlCount += await verifyAccessibleControls(page, `${surface.name}/settings-detail`);
-    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, apiaryGuideSteps, apiaryOverflow, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, jiraIssueFilter, backup, status: "passed" };
+    return { surface: surface.name, surfaces: surfaceResults, workerSelections, completedTaskCount, accessibleControlCount, repositoryPicker: "name-first", addWorkerShortcutVisible, commandBounds, createTaskFocused, restoreCommandVisible, settingsNavigationSize, apiaryGuideSteps, apiaryOverflow, diagnosticsTop, settingsOverflow, codexDisabled, workerEngineText, maintenanceConfirmation, feedbackImagePaste, privateSaveVisible, savedFeedbackVisible, jiraReadiness, jiraIssueReview, jiraIssueFilter, emailIntakeReview, backup, status: "passed" };
   } finally {
     await context.close();
   }
