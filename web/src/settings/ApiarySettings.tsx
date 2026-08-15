@@ -42,7 +42,7 @@ import {
   type StewardCapability,
   type Stewardship,
 } from "../api";
-import { downloadJson } from "../shared/download";
+import { createApiaryHandoffLink, readApiaryHandoffLink } from "./apiaryHandoff";
 
 const syncCopy = {
   idle: ["Not connected yet", "Automatic Keeper sync is not enabled in this build."],
@@ -80,6 +80,9 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [hiveCandidates, setHiveCandidates] = useState<ApiaryHiveCandidate[]>([]);
   const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
+  const [connectionLink, setConnectionLink] = useState("");
+  const [invitationLink, setInvitationLink] = useState("");
+  const [generatedHandoff, setGeneratedHandoff] = useState<{ kind: "connection" | "invitation"; link: string }>();
   const [jiraBindings, setJiraBindings] = useState<JiraProjectBinding[]>([]);
   const [projectLoadError, setProjectLoadError] = useState(false);
   const [candidateLoadError, setCandidateLoadError] = useState(false);
@@ -332,16 +335,29 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
-  async function downloadConnectionCard() {
+  async function copyHandoffLink(link: string): Promise<boolean> {
+    try {
+      await navigator.clipboard.writeText(link);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function createConnectionLink() {
     setWorking(true);
     setError("");
     setMessage("");
     try {
       const card = await fetchHiveConnectionCard(operatorToken);
-      downloadJson(card, `swarm-next-${safeFilename(card.payload.hive_name)}-connection.json`);
-      setMessage("Connection card downloaded. It expires in 24 hours and grants no access by itself.");
+      const link = createApiaryHandoffLink("connection", card);
+      setGeneratedHandoff({ kind: "connection", link });
+      const copied = await copyHandoffLink(link);
+      setMessage(copied
+        ? "Connection link copied. It expires in 24 hours and grants no access by itself."
+        : "Connection link created. Copy it below; it expires in 24 hours and grants no access by itself.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The connection card could not be created.");
+      setError(cause instanceof Error ? cause.message : "The connection link could not be created.");
     } finally {
       setWorking(false);
     }
@@ -406,16 +422,37 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     }
   }
 
+  async function importConnectionLink() {
+    setWorking(true);
+    setError("");
+    setMessage("");
+    try {
+      const card = readApiaryHandoffLink<HiveConnectionCard>(connectionLink, "connection");
+      const candidate = await pinApiaryHiveCandidate(operatorToken, card);
+      setHiveCandidates(await fetchApiaryHiveCandidates(operatorToken));
+      setConnectionLink("");
+      setMessage(`${candidate.hive_name} is verified and pinned. No membership or access was granted.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "That Hive connection link could not be verified.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function createInvitation(candidate: ApiaryHiveCandidate) {
     setWorking(true);
     setError("");
     setMessage("");
     try {
       const bundle = await inviteApiaryHiveCandidate(operatorToken, candidate.hive_id);
-      downloadJson(bundle, `swarm-next-${safeFilename(candidate.hive_name)}-invitation.json`);
+      const link = createApiaryHandoffLink("invitation", bundle);
+      setGeneratedHandoff({ kind: "invitation", link });
+      const copied = await copyHandoffLink(link);
       setHiveCandidates(await fetchApiaryHiveCandidates(operatorToken));
       setReadiness(await fetchApiaryCollapseReadiness(operatorToken));
-      setMessage(`Invitation for ${candidate.hive_name} downloaded. This is the only copy of its one-time secret; share it privately.`);
+      setMessage(copied
+        ? `Invitation link for ${candidate.hive_name} copied. It is bound to that Hive, expires, and can be used only once.`
+        : `Invitation link for ${candidate.hive_name} created. Copy it below and share it privately.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The one-time invitation could not be created.");
     } finally {
@@ -437,6 +474,22 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     } catch (cause) {
       setInvitationPreview(undefined);
       setError(cause instanceof Error ? cause.message : "That Apiary invitation could not be read.");
+    }
+  }
+
+  function previewJoinInvitationLink() {
+    setError("");
+    setMessage("");
+    try {
+      const bundle = readApiaryHandoffLink<ApiaryInvitationBundle>(invitationLink, "invitation");
+      if (!bundle?.keeper_connection_card?.payload || !bundle?.invitation?.payload || !bundle.one_time_secret) {
+        throw new Error("That link is not a Swarm Apiary invitation.");
+      }
+      setInvitationPreview(bundle);
+      setInvitationLink("");
+    } catch (cause) {
+      setInvitationPreview(undefined);
+      setError(cause instanceof Error ? cause.message : "That Apiary invitation link could not be read.");
     }
   }
 
@@ -534,25 +587,24 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
           <div className="apiary-exchange-intro">
             <span><strong>Join another Keeper's Apiary</strong><small>Three deliberate handoffs keep each operator in control. No membership or shared access changes until both Hives verify the exact identities.</small></span>
             <ol className="apiary-exchange-guide" aria-label="How to join an Apiary">
-              <ApiaryExchangeStep number="1" title="Share this Hive's identity" detail="Download the short-lived public card and give it to the Keeper. It contains no repositories, tasks, terminals, Jira access, credentials, or invitation secret.">
-                <button className="secondary-button" disabled={busy || working} onClick={() => void downloadConnectionCard()}>Download connection card</button>
+              <ApiaryExchangeStep number="1" title="Copy this Hive's connection link" detail="Send the short-lived link privately to the Keeper. Its signed identity contains no repositories, tasks, terminals, Jira access, credentials, or invitation secret.">
+                <button className="secondary-button" disabled={busy || working} onClick={() => void createConnectionLink()}>Copy connection link</button>
               </ApiaryExchangeStep>
-              <ApiaryExchangeStep number="2" title="Keeper verifies and invites" detail="The Keeper imports that card, checks your Hive and operator names, then returns one invitation file bound only to this Hive." />
-              <ApiaryExchangeStep number="3" title="Review before joining" detail="Choose the returned invitation below. Swarm verifies the Keeper, policy, Jira projects, and local readiness before it prepares any join request." />
+              <ApiaryExchangeStep number="2" title="Keeper verifies and invites" detail="The Keeper pastes the link, checks your Hive and operator names, then returns one invitation link bound only to this Hive." />
+              <ApiaryExchangeStep number="3" title="Review before joining" detail="Paste the returned link below. Swarm verifies the Keeper, policy, Jira projects, and local readiness before it prepares any join request." />
             </ol>
           </div>
+          {generatedHandoff?.kind === "connection" ? <ApiaryGeneratedLink link={generatedHandoff.link} onCopy={copyHandoffLink} /> : null}
           <div className="apiary-join-card">
             <div>
-              <strong>Review a returned invitation</strong>
-              <small>This is the file the Keeper created after verifying your connection card. Choosing it does not send anything or join the Apiary.</small>
+              <strong>Paste the Keeper's invitation link</strong>
+              <small>Reviewing the link does not send anything or join the Apiary. Its private payload stays after the # fragment and is not sent during web navigation.</small>
             </div>
-            <ApiaryFileDrop
-              ariaLabel="Choose Apiary invitation"
-              disabled={busy || working}
-              label="Choose invitation file"
-              detail="or drop the Keeper's .json invitation here"
-              onFile={(file) => void previewJoinInvitation(file)}
-            />
+            <div className="apiary-link-entry">
+              <label htmlFor="apiary-invitation-link"><span>Invitation link</span><input id="apiary-invitation-link" type="url" value={invitationLink} placeholder="Paste the complete link" onChange={(event) => setInvitationLink(event.target.value)} /></label>
+              <button className="primary-action" disabled={busy || working || !invitationLink.trim()} onClick={previewJoinInvitationLink}>Review invitation</button>
+            </div>
+            <details className="apiary-file-fallback"><summary>Use an invitation file instead</summary><ApiaryFileDrop ariaLabel="Choose Apiary invitation" disabled={busy || working} label="Choose invitation file" detail="or drop the Keeper's .json invitation here" onFile={(file) => void previewJoinInvitation(file)} /></details>
             {invitationPreview ? (
               <div className="apiary-invitation-preview" role="group" aria-label="Review Apiary invitation">
                 <div><span>Apiary</span><strong>{invitationPreview.invitation.payload.apiary_name}</strong></div>
@@ -800,20 +852,18 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
             <div className="apiary-hive-candidates">
               <div>
                 <strong>Invite a Hive</strong>
-                <small>The other operator starts by sending you her public connection card. Swarm verifies the identity before it enables an invitation.</small>
+                <small>The other operator sends you a short-lived connection link. Swarm verifies its signed identity before it enables an invitation.</small>
               </div>
               <ol className="apiary-exchange-guide apiary-keeper-exchange" aria-label="How to invite a Hive">
-                <ApiaryExchangeStep number="1" title="Receive her connection card" detail="Ask the Hive operator to download her card under Join another Keeper's Apiary and send that .json file to you." />
-                <ApiaryExchangeStep number="2" title="Verify the exact identity" detail="Choose the card below. Swarm verifies its signature and shows the Hive and operator before any invitation exists." />
-                <ApiaryExchangeStep number="3" title="Return the invitation file" detail="Create invitation downloads one bounded file for that Hive. Return it to the same operator; it grants no access by itself." />
+                <ApiaryExchangeStep number="1" title="Receive her connection link" detail="Ask the Hive operator to copy her link under Join another Keeper's Apiary and send it privately to you." />
+                <ApiaryExchangeStep number="2" title="Verify the exact identity" detail="Paste the link below. Swarm verifies its signature and shows the Hive and operator before any invitation exists." />
+                <ApiaryExchangeStep number="3" title="Return the invitation link" detail="Create invitation copies one bounded link for that exact Hive. It expires and its secret can be consumed only once." />
               </ol>
-              <ApiaryFileDrop
-                ariaLabel="Choose Hive connection card"
-                disabled={busy || working}
-                label={working ? "Verifying…" : "Choose connection card"}
-                detail="or drop the Hive's .json connection card here"
-                onFile={(file) => void importConnectionCard(file)}
-              />
+              <div className="apiary-link-entry">
+                <label htmlFor="apiary-connection-link"><span>Hive connection link</span><input id="apiary-connection-link" type="url" value={connectionLink} placeholder="Paste the complete link" onChange={(event) => setConnectionLink(event.target.value)} /></label>
+                <button className="primary-action" disabled={busy || working || !connectionLink.trim()} onClick={() => void importConnectionLink()}>{working ? "Verifying…" : "Verify Hive"}</button>
+              </div>
+              <details className="apiary-file-fallback"><summary>Use a connection file instead</summary><ApiaryFileDrop ariaLabel="Choose Hive connection card" disabled={busy || working} label={working ? "Verifying…" : "Choose connection card"} detail="or drop the Hive's .json connection card here" onFile={(file) => void importConnectionCard(file)} /></details>
               {candidateLoadError ? <p className="apiary-blockers">Pinned Hive identities could not be refreshed. No membership changed.</p> : null}
               {hiveCandidates.length > 0 ? (
                 <ul className="apiary-candidate-list" aria-label="Pinned Hive identities">
@@ -832,6 +882,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                   ))}
                 </ul>
               ) : <p className="empty-copy">No other Hive identities are pinned yet.</p>}
+              {generatedHandoff?.kind === "invitation" ? <ApiaryGeneratedLink link={generatedHandoff.link} onCopy={copyHandoffLink} /> : null}
             </div>
             <div className="apiary-projects">
               <div><strong>Apiary Jira projects</strong><small>Promote projects into the authoritative Apiary catalog. Each Hive must still receive the catalog entry and prove its own access and workflow mapping.</small></div>
@@ -931,6 +982,17 @@ function ApiaryExchangeStep({ number, title, detail, children }: ApiaryExchangeS
   );
 }
 
+function ApiaryGeneratedLink({ link, onCopy }: { link: string; onCopy: (link: string) => Promise<boolean> }) {
+  const id = useId();
+  return (
+    <div className="apiary-generated-link" role="group" aria-label="Created Apiary link">
+      <label htmlFor={id}><span>Private handoff link</span><input id={id} readOnly value={link} onFocus={(event) => event.currentTarget.select()} /></label>
+      <button className="secondary-button" onClick={() => void onCopy(link)}>Copy again</button>
+      <small>Share only with the intended operator. The signed payload expires; invitation secrets are bound to one Hive and consumed once.</small>
+    </div>
+  );
+}
+
 type ApiaryFileDropProps = {
   ariaLabel: string;
   disabled: boolean;
@@ -1013,10 +1075,6 @@ function collapseBlockers(readiness: ApiaryCollapseReadiness | undefined) {
   if (readiness.open_cross_hive_work_count) blockers.push(`${readiness.open_cross_hive_work_count} cross-Hive work item${readiness.open_cross_hive_work_count === 1 ? "" : "s"}`);
   if (readiness.departed_node_count) blockers.push(`${readiness.departed_node_count} departed node${readiness.departed_node_count === 1 ? "" : "s"}`);
   return blockers;
-}
-
-function safeFilename(value: string) {
-  return value.trim().toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "hive";
 }
 
 const stewardCapabilityChoices: { capability: StewardCapability; label: string; detail: string }[] = [

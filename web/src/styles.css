@@ -578,6 +578,14 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-network-readiness code { width: fit-content; max-width: 100%; margin-top: 3px; padding: 4px 7px; overflow-wrap: anywhere; border-radius: var(--radius-sm); color: var(--accent-ink); background: var(--panel); font-size: .7rem; }
 .apiary-join-card { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .apiary-join-card > div:first-child { display: grid; gap: 2px; }
+.apiary-link-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+.apiary-link-entry label, .apiary-generated-link label { display: grid; gap: 5px; min-width: 0; color: var(--quiet); font-size: .72rem; font-weight: 650; }
+.apiary-link-entry input, .apiary-generated-link input { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-raised); color: var(--text); font: inherit; }
+.apiary-file-fallback { padding-top: 2px; color: var(--muted); font-size: .74rem; }
+.apiary-file-fallback summary { width: max-content; cursor: pointer; }
+.apiary-file-fallback .apiary-card-drop { margin-top: 8px; }
+.apiary-generated-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent-strong) 38%, var(--line)); border-radius: var(--radius-md); background: var(--accent-soft); }
+.apiary-generated-link small { grid-column: 1 / -1; color: var(--muted); line-height: 1.4; }
 .apiary-invitation-preview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 11px; border: 1px solid var(--accent-strong); border-radius: var(--radius-md); background: var(--accent-soft); }
 .apiary-invitation-preview > div { display: grid; min-width: 0; gap: 2px; }
 .apiary-invitation-preview > div > span { color: var(--muted); font-size: .65rem; }
@@ -893,6 +901,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-summary { align-items: flex-start; flex-direction: column; }
   .apiary-exchange-guide { grid-template-columns: minmax(0, 1fr); }
   .apiary-step-action button { width: 100%; }
+  .apiary-link-entry, .apiary-generated-link { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .apiary-link-entry button, .apiary-generated-link button { width: 100%; }
   .apiary-card-drop { align-items: stretch; flex-direction: column; }
   .apiary-invitation-preview { grid-template-columns: minmax(0, 1fr); }
   .apiary-invitation-preview > p, .apiary-invitation-preview .settings-actions { grid-column: 1; }

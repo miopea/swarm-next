@@ -24,10 +24,10 @@ test("explains when this Hive has a remotely reachable Apiary URL", async () => 
   expect(screen.getByText("https://swarm2.bfgsolutions.net")).toBeInTheDocument();
   expect(screen.getByText(/must remain online for invitations and shared coordination/i)).toBeInTheDocument();
   const joinGuide = screen.getByRole("list", { name: "How to join an Apiary" });
-  expect(joinGuide).toHaveTextContent("Share this Hive's identity");
+  expect(joinGuide).toHaveTextContent("Copy this Hive's connection link");
   expect(joinGuide).toHaveTextContent("Keeper verifies and invites");
   expect(joinGuide).toHaveTextContent("Review before joining");
-  expect(screen.getByText(/Choosing it does not send anything or join the Apiary/)).toBeInTheDocument();
+  expect(screen.getByText(/Reviewing the link does not send anything or join the Apiary/)).toBeInTheDocument();
 });
 
 test("warns that a loopback Apiary URL reaches only this machine", async () => {
@@ -115,11 +115,9 @@ test("founds only a reviewed Jira-backed Apiary and refreshes Hive identity", as
   await vi.waitFor(() => expect(onHiveIdentityChange).toHaveBeenCalledWith(federated));
 });
 
-test("downloads a short-lived signed Hive card without changing membership", async () => {
-  const createObjectUrl = vi.fn(() => "blob:connection-card");
-  const revokeObjectUrl = vi.fn();
-  vi.stubGlobal("URL", { ...URL, createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
-  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+test("copies a short-lived signed Hive link without changing membership", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     if (String(input) === "/api/v1/apiary/connection-card") {
       return ok({
@@ -135,12 +133,11 @@ test("downloads a short-lived signed Hive card without changing membership", asy
   }));
 
   render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
-  fireEvent.click(screen.getByRole("button", { name: "Download connection card" }));
+  fireEvent.click(screen.getByRole("button", { name: "Copy connection link" }));
 
   expect(await screen.findByRole("status")).toHaveTextContent("expires in 24 hours and grants no access");
-  expect(createObjectUrl).toHaveBeenCalledWith(expect.any(Blob));
-  expect(click).toHaveBeenCalledOnce();
-  expect(revokeObjectUrl).toHaveBeenCalledWith("blob:connection-card");
+  expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^http:\/\/localhost:\d+\/#swarm-next-apiary-connection=/));
+  expect(screen.getByRole("group", { name: "Created Apiary link" })).toHaveTextContent(/bound to one Hive and consumed once/i);
   expect(screen.getByText(/Your personal Hive remains fully independent/)).toBeVisible();
 });
 
@@ -290,9 +287,10 @@ test("pins an imported Hive identity without implying membership or access", asy
 
   render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
   const inviteGuide = screen.getByRole("list", { name: "How to invite a Hive" });
-  expect(inviteGuide).toHaveTextContent("Receive her connection card");
+  expect(inviteGuide).toHaveTextContent("Receive her connection link");
   expect(inviteGuide).toHaveTextContent("Verify the exact identity");
-  expect(inviteGuide).toHaveTextContent("Return the invitation file");
+  expect(inviteGuide).toHaveTextContent("Return the invitation link");
+  fireEvent.click(screen.getByText("Use a connection file instead"));
   const dropTarget = screen.getByText("Choose connection card").closest("label");
   expect(dropTarget).not.toBeNull();
   fireEvent.dragEnter(dropTarget!);
@@ -307,11 +305,9 @@ test("pins an imported Hive identity without implying membership or access", asy
   expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/invitations"))).toBe(false);
 });
 
-test("downloads one invitation secret for a pinned Hive and then shows it pending", async () => {
-  const createObjectUrl = vi.fn(() => "blob:invitation");
-  const revokeObjectUrl = vi.fn();
-  vi.stubGlobal("URL", { ...URL, createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
-  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+test("copies one invitation link for a pinned Hive and then shows it pending", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
   let invited = false;
   const candidate = {
     apiary_id: "apiary-1", node_id: "node-2", hive_id: "hive-2", hive_name: "Clover Hive",
@@ -344,11 +340,9 @@ test("downloads one invitation secret for a pinned Hive and then shows it pendin
   render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: "Create invitation" }));
 
-  expect(await screen.findByRole("status")).toHaveTextContent("only copy of its one-time secret");
+  expect(await screen.findByRole("status")).toHaveTextContent("bound to that Hive, expires, and can be used only once");
   expect(screen.getByRole("button", { name: "Invitation created" })).toBeDisabled();
-  expect(createObjectUrl).toHaveBeenCalledWith(expect.any(Blob));
-  expect(click).toHaveBeenCalledOnce();
-  expect(revokeObjectUrl).toHaveBeenCalledWith("blob:invitation");
+  expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/#swarm-next-apiary-invitation=/));
 });
 
 test("reviews an invitation before explicitly pinning its exact Keeper", async () => {
