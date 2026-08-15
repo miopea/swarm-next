@@ -616,3 +616,14 @@ the independently updated terminal host through the API to worker settings:
   overflow, 346 and 318 named controls, three Apiary guide steps, worker
   selection/focus, and authentication across complete browser restarts. API
   PID advanced to `3035411`; terminal-host PID remained `2966127`.
+- Release `0.1.0-dev-8ab18cc512ca` moves task vocabulary, bounded activity,
+  ordering, creation, editing, lifecycle transitions, and assignment into one
+  core-task API module. Jira synchronization and email intake remain owned by
+  their integrations. Focused tests cover encoded task identities, activity
+  limits, explicit unassignment, ordering, editing, and guarded transitions;
+  all 209 frontend tests, strict TypeScript, and the production build passed.
+  Exact live desktop and Android acceptance passed every primary and Apiary
+  member surface with zero overflow, 346 and 318 named controls, task-board
+  review, safe empty Jira selection, three Apiary steps, and authentication
+  across browser restarts. API PID advanced to `3048085`; terminal-host PID
+  remained `2966127`.
