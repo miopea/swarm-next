@@ -130,6 +130,20 @@ its verdict. This revalidates the heavily expanded Apiary, Jira, and email UI on
 the current build; it remains a bounded checkpoint rather than the required
 24-hour promotion soak.
 
+The later exact-release checkpoint on `0.1.0-dev-43e82f295732` first exposed a
+Windows harness race: one normal short-lived Chromium helper exited between
+CDP enumeration and `Get-Process`, causing PowerShell to return failure after
+three otherwise healthy samples. The sampler now ignores only vanished helper
+IDs while still pinning the actual browser PID, with a cross-platform
+regression test. The corrected 600-second run pinned Edge PID `61700` for 59
+samples and completed nine full navigation cycles. Post-warmup browser private
+growth was 3.6 MiB at 0.31 MiB/minute; the storage service grew 0.16 MiB at
+0.02 MiB/minute; the complete owned tree grew 20.2 MiB at 2.09 MiB/minute; and
+renderer heap grew 1.55 MiB at 0.04 MiB/minute. Every growth and slope gate
+passed, browser storage remained zero bytes, DOM nodes stayed between 1,020 and
+1,059, no authenticated-page error occurred, and the isolated Edge process
+closed after the verdict.
+
 ## Read-only live observation
 
 `scripts/dogfood/observe-live-soak.sh` monitors the actual dogfood crew without
