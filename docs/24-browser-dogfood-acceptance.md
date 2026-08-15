@@ -737,3 +737,14 @@ the independently updated terminal host through the API to worker settings:
   browser restarts. API PID advanced to `3139756`; terminal-host PID remained
   `2966127`, preserving the active worker session. Every proof browser process
   closed after the run.
+- Release `0.1.0-dev-1a2e19078d34` moves content-free control-room event append,
+  bounded retention, resumable reads, and stale-cursor reset into one focused
+  persistence aggregate without changing its serialized contract. The full
+  release gate passed 331 Rust tests, Clippy with warnings denied, 213 frontend
+  tests, strict TypeScript, and the production build. Live Edge acceptance
+  passed Needs you, Tasks, Workers, Apiary, Settings, and the Apiary member
+  control room at 1,440-pixel desktop and 412-pixel Android widths with zero
+  overflow, 346 and 314 named controls, all three Apiary guide steps, and
+  authentication across complete browser restarts. API PID advanced to
+  `3152636`; terminal-host PID remained `2966127`, preserving the active worker
+  session. Every proof browser process closed after the run.
