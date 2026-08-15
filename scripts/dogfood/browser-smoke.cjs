@@ -337,7 +337,7 @@ async function checkSurface(browser, surface) {
       : page.getByLabel("Choose Hive connection card");
     const secondExchangeControl = personalExchange
       ? page.getByLabel("Choose Apiary invitation")
-      : page.getByRole("heading", { name: "Hives in this Apiary" });
+      : page.getByText("Hives in this Apiary", { exact: true });
     const apiaryOverflow = await page.locator("#settings-apiary").evaluate((section) => ({
       scrollWidth: section.scrollWidth,
       clientWidth: section.clientWidth,
