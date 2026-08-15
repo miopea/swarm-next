@@ -221,9 +221,21 @@ async function checkSurface(browser, surface) {
             }).click();
             await emailSource.getByRole("heading", { name: "Review the task before import" }).waitFor();
             await emailSource.getByRole("heading", { name: "Shape the work before it joins the board" }).waitFor();
+            await page.screenshot({ path: path.join(outputRoot, `${surface.name}-tasks-email-review.png`), fullPage: true });
             for (const field of ["Task title", "Task description", "Priority", "Starting status", "Worker"]) {
-              if (!await emailSource.getByLabel(field, { exact: true }).isVisible()) {
-                throw new Error(`${surface.name}: email import field ${field} is unavailable`);
+              const control = emailSource.getByLabel(field, { exact: true });
+              if (!await control.isVisible()) {
+                const diagnostics = await control.evaluateAll((elements) => elements.map((element) => {
+                  const bounds = element.getBoundingClientRect();
+                  const style = getComputedStyle(element);
+                  return {
+                    tag: element.tagName,
+                    bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+                    display: style.display,
+                    visibility: style.visibility,
+                  };
+                }));
+                throw new Error(`${surface.name}: email import field ${field} is unavailable (${JSON.stringify(diagnostics)})`);
               }
             }
             if (surface.mobile) {
@@ -240,7 +252,6 @@ async function checkSurface(browser, surface) {
             if (reviewBounds.scrollWidth > reviewBounds.clientWidth + 1) {
               throw new Error(`${surface.name}: email task review is horizontally clipped`);
             }
-            await page.screenshot({ path: path.join(outputRoot, `${surface.name}-tasks-email-review.png`), fullPage: true });
             emailIntakeReview = true;
           }
           await page.getByRole("button", { name: "Close email" }).click();
