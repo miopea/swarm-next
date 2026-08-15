@@ -1347,7 +1347,7 @@ mod tests {
     #[test]
     fn retained_checkpoint_and_output_records_rebuild_canonical_state() {
         let temp = TempDir::new().unwrap();
-        let limits = HistoryLimits::new(512, 640, 1280, 1280, 60);
+        let limits = HistoryLimits::new(4096, 4608, 9216, 9216, 60);
         let store = HistoryStore::open(temp.path().join("history"), limits).unwrap();
         let id = WorkerSessionId::new();
         let mut canonical =
@@ -1368,7 +1368,11 @@ mod tests {
         for record in store.read_session(id).unwrap() {
             match record {
                 HistoryRecord::Checkpoint { snapshot, .. } => {
-                    let mut parser = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
+                    let mut parser = vt100::Parser::new(
+                        snapshot.rows,
+                        snapshot.columns,
+                        crate::CANONICAL_SCROLLBACK_ROWS,
+                    );
                     parser.process(&snapshot.bytes);
                     replay = Some(parser);
                 }
@@ -1378,10 +1382,19 @@ mod tests {
             }
         }
         let replay = replay.expect("retained history must begin with a checkpoint");
-        assert_eq!(
-            replay.screen().state_formatted(),
-            canonical.snapshot().bytes
+        let expected_snapshot = canonical.snapshot();
+        let mut expected = vt100::Parser::new(
+            expected_snapshot.rows,
+            expected_snapshot.columns,
+            crate::CANONICAL_SCROLLBACK_ROWS,
         );
+        expected.process(&expected_snapshot.bytes);
+        assert_eq!(replay.screen().contents(), expected.screen().contents());
+        let mut replay_history = replay.screen().clone();
+        replay_history.set_scrollback(usize::MAX);
+        let mut expected_history = expected.screen().clone();
+        expected_history.set_scrollback(usize::MAX);
+        assert_eq!(replay_history.contents(), expected_history.contents());
     }
 
     #[test]

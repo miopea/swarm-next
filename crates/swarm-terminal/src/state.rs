@@ -94,11 +94,15 @@ impl CanonicalTerminalState {
     pub fn snapshot(&self) -> TerminalSnapshot {
         let screen = self.parser.screen();
         let (rows, columns) = screen.size();
-        let mut bytes = Vec::new();
+        let visible = screen.state_formatted();
+        let mut bytes = formatted_scrollback(
+            screen,
+            MAX_CANONICAL_SNAPSHOT_BYTES.saturating_sub(visible.len()),
+        );
         if screen.alternate_screen() {
             bytes.extend_from_slice(b"\x1b[?1049h");
         }
-        bytes.extend(screen.state_formatted());
+        bytes.extend(visible);
         TerminalSnapshot {
             sequence: self.journal.latest_sequence(),
             rows,
@@ -135,6 +139,170 @@ impl CanonicalTerminalState {
         self.parser = parser;
         self.bytes_since_compaction = 0;
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CellStyle {
+    foreground: vt100::Color,
+    background: vt100::Color,
+    modes: u8,
+}
+
+impl CellStyle {
+    fn from_cell(cell: &vt100::Cell) -> Self {
+        let modes = u8::from(cell.bold())
+            | (u8::from(cell.dim()) << 1)
+            | (u8::from(cell.italic()) << 2)
+            | (u8::from(cell.underline()) << 3)
+            | (u8::from(cell.inverse()) << 4);
+        Self {
+            foreground: cell.fgcolor(),
+            background: cell.bgcolor(),
+            modes,
+        }
+    }
+
+    fn is_default(self) -> bool {
+        self == Self {
+            foreground: vt100::Color::Default,
+            background: vt100::Color::Default,
+            modes: 0,
+        }
+    }
+
+    fn write_sgr(self, bytes: &mut Vec<u8>) {
+        bytes.extend_from_slice(b"\x1b[0");
+        if self.modes & 1 != 0 {
+            bytes.extend_from_slice(b";1");
+        }
+        if self.modes & (1 << 1) != 0 {
+            bytes.extend_from_slice(b";2");
+        }
+        if self.modes & (1 << 2) != 0 {
+            bytes.extend_from_slice(b";3");
+        }
+        if self.modes & (1 << 3) != 0 {
+            bytes.extend_from_slice(b";4");
+        }
+        if self.modes & (1 << 4) != 0 {
+            bytes.extend_from_slice(b";7");
+        }
+        write_color_sgr(bytes, self.foreground, true);
+        write_color_sgr(bytes, self.background, false);
+        bytes.push(b'm');
+    }
+}
+
+fn write_color_sgr(bytes: &mut Vec<u8>, color: vt100::Color, foreground: bool) {
+    match color {
+        vt100::Color::Default => {}
+        vt100::Color::Idx(index @ 0..=7) => {
+            bytes.extend_from_slice(
+                format!(";{}", if foreground { 30 + index } else { 40 + index }).as_bytes(),
+            );
+        }
+        vt100::Color::Idx(index @ 8..=15) => {
+            bytes.extend_from_slice(
+                format!(";{}", if foreground { 82 + index } else { 92 + index }).as_bytes(),
+            );
+        }
+        vt100::Color::Idx(index) => {
+            bytes.extend_from_slice(
+                format!(";{};5;{index}", if foreground { 38 } else { 48 }).as_bytes(),
+            );
+        }
+        vt100::Color::Rgb(red, green, blue) => {
+            bytes.extend_from_slice(
+                format!(
+                    ";{};2;{red};{green};{blue}",
+                    if foreground { 38 } else { 48 }
+                )
+                .as_bytes(),
+            );
+        }
+    }
+}
+
+fn formatted_scrollback(screen: &vt100::Screen, max_bytes: usize) -> Vec<u8> {
+    let mut history = screen.clone();
+    history.set_scrollback(usize::MAX);
+    let retained_rows = history.scrollback();
+    let (visible_rows, columns) = history.size();
+    let structural_bytes = 7usize
+        .saturating_add(usize::from(visible_rows.saturating_sub(1)).saturating_mul(2))
+        .saturating_add(20);
+    if retained_rows == 0 || max_bytes <= structural_bytes {
+        return Vec::new();
+    }
+
+    let row_budget = max_bytes - structural_bytes;
+    let mut rows = Vec::with_capacity(retained_rows);
+    let mut retained_bytes = 0usize;
+    for offset in (1..=retained_rows).rev() {
+        history.set_scrollback(offset);
+        let mut row = formatted_history_row(&history, columns);
+        row.extend_from_slice(b"\x1b[0m\r\n");
+        retained_bytes = retained_bytes.saturating_add(row.len());
+        rows.push(row);
+        while retained_bytes > row_budget {
+            let removed = rows.remove(0);
+            retained_bytes = retained_bytes.saturating_sub(removed.len());
+            if rows.is_empty() {
+                break;
+            }
+        }
+    }
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let mut bytes = Vec::with_capacity(retained_bytes.saturating_add(32));
+    bytes.extend_from_slice(b"\x1b[?7l");
+    for row in rows {
+        bytes.extend(row);
+    }
+    for _ in 0..visible_rows.saturating_sub(1) {
+        bytes.extend_from_slice(b"\r\n");
+    }
+    bytes.extend_from_slice(b"\x1b[?7h\x1b[0m\x1b[2J\x1b[H");
+    bytes
+}
+
+fn formatted_history_row(screen: &vt100::Screen, columns: u16) -> Vec<u8> {
+    let last_meaningful = (0..columns).rev().find(|column| {
+        screen
+            .cell(0, *column)
+            .is_some_and(|cell| cell.has_contents() || !CellStyle::from_cell(cell).is_default())
+    });
+    let Some(last_meaningful) = last_meaningful else {
+        return Vec::new();
+    };
+
+    let mut bytes = Vec::new();
+    let mut previous_style = CellStyle {
+        foreground: vt100::Color::Default,
+        background: vt100::Color::Default,
+        modes: 0,
+    };
+    for column in 0..=last_meaningful {
+        let Some(cell) = screen.cell(0, column) else {
+            continue;
+        };
+        if cell.is_wide_continuation() {
+            continue;
+        }
+        let style = CellStyle::from_cell(cell);
+        if style != previous_style {
+            style.write_sgr(&mut bytes);
+            previous_style = style;
+        }
+        if cell.has_contents() {
+            bytes.extend_from_slice(cell.contents().as_bytes());
+        } else {
+            bytes.push(b' ');
+        }
+    }
+    bytes
 }
 
 #[cfg(test)]
@@ -187,6 +355,60 @@ mod tests {
         assert_eq!(
             restored.screen().cell(0, 12).unwrap().fgcolor(),
             vt100::Color::Rgb(91, 143, 211),
+        );
+    }
+
+    #[test]
+    fn fresh_attachment_preserves_bounded_colored_scrollback() {
+        let mut state =
+            CanonicalTerminalState::new(JournalLimits::new(4096, 64), TerminalSize::new(3, 20));
+        state.push(
+            b"first\r\n\x1b[38;2;91;143;211msecond\x1b[m\r\nthird\r\nfourth\r\nfifth".to_vec(),
+        );
+
+        let snapshot = state.snapshot();
+        let mut restored =
+            vt100::Parser::new(snapshot.rows, snapshot.columns, CANONICAL_SCROLLBACK_ROWS);
+        restored.process(&snapshot.bytes);
+        assert_eq!(
+            restored.screen().contents(),
+            state.parser.screen().contents()
+        );
+
+        let mut restored_history = restored.screen().clone();
+        restored_history.set_scrollback(usize::MAX);
+        assert!(restored_history.scrollback() >= 2);
+        assert!(restored_history.contents().contains("first"));
+        assert_eq!(
+            restored_history.cell(1, 0).unwrap().fgcolor(),
+            vt100::Color::Rgb(91, 143, 211),
+        );
+    }
+
+    #[test]
+    fn scrollback_snapshot_stays_within_the_canonical_memory_bound() {
+        let mut state = CanonicalTerminalState::new(
+            JournalLimits::new(8 * 1024 * 1024, 16_384),
+            TerminalSize::new(4, 200),
+        );
+        for row in 0..2_000 {
+            state.push(
+                format!(
+                    "\x1b[38;2;91;143;211m{row:04} {}\x1b[m\r\n",
+                    "x".repeat(190)
+                )
+                .into_bytes(),
+            );
+        }
+
+        let snapshot = state.snapshot();
+        assert!(snapshot.bytes.len() <= MAX_CANONICAL_SNAPSHOT_BYTES);
+        let mut restored =
+            vt100::Parser::new(snapshot.rows, snapshot.columns, CANONICAL_SCROLLBACK_ROWS);
+        restored.process(&snapshot.bytes);
+        assert_eq!(
+            restored.screen().contents(),
+            state.parser.screen().contents()
         );
     }
 
