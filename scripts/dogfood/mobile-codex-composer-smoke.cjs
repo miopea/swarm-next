@@ -50,21 +50,24 @@ async function main() {
     }
     await page.locator(".connection-connected").waitFor({ timeout: 30_000 });
     await page.locator(".xterm-rows").waitFor();
-    await page.waitForFunction(
-      () => document.querySelector(".xterm-rows")?.textContent?.includes("OpenAI Codex"),
-      undefined,
-      { timeout: 30_000 },
-    );
-    // Let provider startup finish before acting like an operator at the prompt.
-    await page.waitForTimeout(2_000);
+    // A resumed terminal may restore directly at the prompt without retaining
+    // the startup banner in its visible rows. Connection plus a bounded settle
+    // interval is the stable readiness boundary available to an operator.
+    await page.waitForTimeout(6_000);
     const composer = page.getByLabel("Message worker");
     await composer.fill("Output the uppercase version of mobile_codex_submit_gamma only. Do not modify files.");
     await page.getByRole("button", { name: "Send" }).click();
-    await page.waitForFunction(
-      (marker) => document.querySelector(".xterm-rows")?.textContent?.includes(marker),
-      expectedMarker,
-      { timeout: 45_000 },
-    );
+    try {
+      await page.waitForFunction(
+        (marker) => document.querySelector(".xterm-rows")?.textContent?.includes(marker),
+        expectedMarker,
+        { timeout: 45_000 },
+      );
+    } catch {
+      const visibleTerminal = await page.locator(".xterm-rows").textContent().catch(() => "");
+      await page.screenshot({ path: path.join(outputRoot, "android-codex-submit-failed.png"), fullPage: false });
+      throw new Error(`Codex mobile submission marker was not visible; terminal tail: ${visibleTerminal?.slice(-800)}`);
+    }
     if (errors.length) throw new Error(`browser errors: ${errors.join(" | ")}`);
     await page.screenshot({ path: path.join(outputRoot, "android-codex-submitted.png"), fullPage: false });
     process.stdout.write(`${JSON.stringify({ baseUrl, workerName, expectedMarker, wokeWorker, status: "passed" }, null, 2)}\n`);

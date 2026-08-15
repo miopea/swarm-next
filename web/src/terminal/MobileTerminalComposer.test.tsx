@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
@@ -11,14 +11,15 @@ import {
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
 
-test("sends slash commands and Enter as separate terminal frames", () => {
+test("sends slash commands and Enter as separated terminal frames", async () => {
   const onInput = vi.fn();
   render(<MobileTerminalComposer connectionState="connected" onInput={onInput} />);
 
   fireEvent.change(screen.getByLabelText(/Message worker/), { target: { value: "/status" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-  expect(onInput.mock.calls.map(([value]) => value)).toEqual(["/status", MOBILE_TERMINAL_KEYS.enter]);
+  expect(onInput.mock.calls.map(([value]) => value)).toEqual(["/status"]);
+  await waitFor(() => expect(onInput.mock.calls.map(([value]) => value)).toEqual(["/status", MOBILE_TERMINAL_KEYS.enter]));
   expect(screen.getByLabelText(/Message worker/)).toHaveValue("");
 });
 

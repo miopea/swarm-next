@@ -3,6 +3,7 @@ import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import type { TerminalConnectionState } from "./TerminalConnection";
 
 export const MAX_TERMINAL_DRAFT_LENGTH = 16_384;
+export const MOBILE_SUBMIT_KEY_DELAY_MS = 75;
 
 export const MOBILE_TERMINAL_KEYS = {
   up: "\u001b[A",
@@ -56,11 +57,12 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
     if (!connected || draft.length === 0) return;
     const [content, submitKey] = composeTerminalSubmission(draft);
     // Provider TUIs distinguish pasted text from an Enter key event. Keep
-    // these as separate WebSocket frames so Codex submits the composed message
-    // instead of leaving it in the prompt; Claude accepts the same terminal
-    // semantics, including bracketed multiline paste.
+    // these as separate WebSocket frames with a brief bounded pause so Codex's
+    // paste-burst guard sees a human-style submit instead of leaving the text
+    // in its prompt. Claude accepts the same terminal semantics, including
+    // bracketed multiline paste.
     onInput(content);
-    onInput(submitKey);
+    window.setTimeout(() => onInput(submitKey), MOBILE_SUBMIT_KEY_DELAY_MS);
     setDraft("");
     requestAnimationFrame(() => textarea.current?.focus());
   }
