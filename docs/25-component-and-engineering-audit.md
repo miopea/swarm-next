@@ -99,6 +99,11 @@ These abstractions are justified by shared behavior, not visual resemblance.
   readiness, OAuth entry, project/workflow configuration, bounded issue review,
   task links, comments, sync commands, and reconciliation now share
   `web/src/api/jira.ts`; malformed rolling-update link responses fail closed.
+  Email configuration, bounded inbox and message reads, attachment previews,
+  multi-source task import, source links, deployment evidence, and the reviewed
+  reply outbox now share `web/src/api/email.ts`. Contract tests exercise the
+  transport boundary without reading, importing, replying to, or otherwise
+  mutating real mail.
 - `web/src/styles.css` is roughly 1,165 lines in one global
   cascade, making component ownership and mobile regressions harder to see.
 
@@ -111,9 +116,10 @@ Required next extractions are vertical and behavior-led:
 2. Extract personal-Hive joining as its own vertical feature component when its
    next behavior lands. Keeper invitation management is already separated, and
    shared cryptographic handoff parsing remains independent of both views.
-3. Apply the same boundary to email only when that independently complex
-   integration is next changed; presence, workers, core tasks, and Jira are now
-   split over the shared request helper.
+3. Presence, workers, core tasks, Jira, and email are now split over the shared
+   request helper. Add another domain module only when a remaining behavior is
+   independently complex; do not turn the barrel into a directory-per-endpoint
+   exercise.
 4. CSS moves with extracted feature components after their visual contracts are
    stable. A wholesale CSS-module migration is not justified during alpha.
 
