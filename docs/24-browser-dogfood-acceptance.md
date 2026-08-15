@@ -713,3 +713,15 @@ the independently updated terminal host through the API to worker settings:
   authentication across full browser restarts. API PID advanced to `3110299`;
   terminal-host PID remained `2966127`, preserving the active worker session.
   Every proof browser process closed after the run.
+- Release `0.1.0-dev-43e82f295732` moves the Queen's At Hive, Away, and Night
+  Watch autonomy ceilings behind a focused orchestration HTTP owner while
+  persistence remains authoritative and actual conductor execution remains
+  gated by repository/environment policy. The code release passed 331 Rust
+  tests, Clippy with warnings denied, 213 frontend tests, strict TypeScript,
+  and the production build before activation. Read-only live Edge acceptance
+  passed every primary and Apiary member surface at 1,440-pixel desktop and
+  412-pixel Android widths with zero overflow, 346 and 315 named controls, all
+  three Apiary guide steps, and authentication across complete browser
+  restarts. API PID advanced to `3118527`; terminal-host PID remained
+  `2966127`, preserving the active worker session. Every proof browser process
+  closed after the run.
