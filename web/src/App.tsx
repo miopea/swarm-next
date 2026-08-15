@@ -71,6 +71,7 @@ import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRo
 import HiveContextIndicator from "./controlRoom/HiveContextIndicator";
 import { useControlRoomModel } from "./controlRoom/useControlRoomModel";
 import SettingsWorkspace from "./settings/SettingsWorkspace";
+import { clearSettingsSection, navigateToSettingsSection, readSettingsSection, type SettingsSection } from "./settings/settingsNavigation";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
 import TaskBoard, { workerName } from "./tasks/TaskBoard";
@@ -138,7 +139,10 @@ export function App() {
   const presentationDevice = useMemo<PresentationDeviceClass>(() => deviceClass(), []);
 
   useEffect(() => applyColorTheme(colorTheme), [colorTheme]);
-  useEffect(() => saveSurface(surface), [surface]);
+  useEffect(() => {
+    saveSurface(surface);
+    if (surface !== "settings") clearSettingsSection();
+  }, [surface]);
   useEffect(() => {
     if (surface === "apiary" && hiveIdentity && !federated) setSurface("tasks");
   }, [federated, hiveIdentity, surface]);
@@ -717,15 +721,19 @@ export function App() {
     url: jiraProjectUrl(link),
   }])).values()].sort((left, right) => left.name.localeCompare(right.name)), [jiraTaskLinks]);
   const activeTask = activeSession ? tasksBySession.get(activeSession.session_id) : undefined;
-  const openApiarySettings = () => { window.location.hash = "settings-apiary"; setSurface("settings"); };
+  const openSettings = (section: SettingsSection = "settings-crew") => {
+    navigateToSettingsSection(section);
+    setSurface("settings");
+  };
+  const openApiarySettings = () => openSettings("settings-apiary");
   const commandChoices = useMemo<CommandChoice[]>(() => [
     { id: "decisions", label: "Needs you", detail: `${pendingDecisionCount} pending`, group: "Go to", run: () => setSurface("decisions") },
     { id: "tasks", label: "Tasks", detail: `${openTaskCount} open`, group: "Go to", run: () => setSurface("tasks") },
     { id: "new-task", label: "Create task", detail: "Plan work for a worker", group: "Go to", run: () => { setTaskComposeRequest((current) => current + 1); setSurface("tasks"); } },
     { id: "workers", label: "Workers", detail: `${workers.filter((worker) => worker.running).length} running`, group: "Go to", run: () => setSurface("workers") },
     ...(federated ? [{ id: "apiary", label: "Apiary", detail: keeper ? "Keeper overview" : "Membership overview", group: "Go to" as const, run: () => setSurface("apiary") }] : []),
-    { id: "add-worker", label: "Add worker", detail: "Configure a repository worker", group: "Go to", run: () => setSurface("settings") },
-    { id: "settings", label: "Settings", detail: "Preferences and diagnostics", group: "Go to", run: () => setSurface("settings") },
+    { id: "add-worker", label: "Add worker", detail: "Configure a repository worker", group: "Go to", run: () => openSettings("settings-crew") },
+    { id: "settings", label: "Settings", detail: "Preferences and diagnostics", group: "Go to", run: () => openSettings() },
     ...workers.map((worker) => ({
       id: `worker-${worker.id}`,
       label: worker.name,
@@ -799,7 +807,7 @@ export function App() {
                 <span><TerminalIcon /> Workers</span><small>{liveWorkerCount}/{rosterWorkerCount}</small>
               </button>
               {federated ? <button className={`apiary-nav-button${surface === "apiary" ? " selected" : ""}`} aria-current={surface === "apiary" ? "page" : undefined} onClick={() => setSurface("apiary")}><span><ApiaryIcon /> Apiary</span></button> : null}
-              <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => setSurface("settings")}>
+              <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => openSettings()}>
                 <span><SettingsIcon /> Settings</span>
               </button>
             </nav>
@@ -847,7 +855,7 @@ export function App() {
 
             {surface === "workers" && (
               <div className="start-worker-disclosure">
-                <button type="button" onClick={() => setSurface("settings")}>Manage workers</button>
+                <button type="button" onClick={() => openSettings("settings-crew")}>Manage workers</button>
               </div>
             )}
           </>
@@ -924,7 +932,7 @@ export function App() {
                   </button>
                 ))}
               </div>
-              <button className="secondary-button mobile-manage-workers" type="button" onClick={() => { setShowMobileWorkers(false); setSurface("settings"); }}>Manage workers</button>
+              <button className="secondary-button mobile-manage-workers" type="button" onClick={() => { setShowMobileWorkers(false); openSettings("settings-crew"); }}>Manage workers</button>
             </section>
           </div>
         ) : null}
@@ -1089,7 +1097,7 @@ function RuntimeStatus({ state }: { state: LoadState }) {
 
 function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>; }
 function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
-function readSavedSurface(): Surface { try { const linked = new URLSearchParams(window.location.search).get("surface"); if (linked === "decisions" || linked === "tasks" || linked === "workers" || linked === "apiary" || linked === "settings") return linked; const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "decisions" || saved === "workers" || saved === "apiary" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
+function readSavedSurface(): Surface { try { if (readSettingsSection()) return "settings"; const linked = new URLSearchParams(window.location.search).get("surface"); if (linked === "decisions" || linked === "tasks" || linked === "workers" || linked === "apiary" || linked === "settings") return linked; const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "decisions" || saved === "workers" || saved === "apiary" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
 function saveSurface(surface: Surface) { try { window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface); } catch { /* Surface persistence is a non-critical convenience. */ } }
 function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }
 function SettingsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>; }

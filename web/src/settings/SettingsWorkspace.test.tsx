@@ -95,6 +95,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
   expect(screen.getByRole("button", { name: "Diagnostics" })).toHaveAttribute("aria-current", "location");
   expect(screen.getByRole("button", { name: "Crew" })).not.toHaveAttribute("aria-current");
+  expect(window.location.hash).toBe("#settings-diagnostics");
 
   expect(screen.getAllByRole("status")[0]).toHaveTextContent("AwayComputer lock detected");
   fireEvent.change(screen.getByLabelText("Presence policy"), { target: { value: "night_watch" } });

@@ -15,6 +15,7 @@ import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import EmailSettings from "./EmailSettings";
 import JiraSettings from "./JiraSettings";
 import WorkerSettings from "./WorkerSettings";
+import { navigateToSettingsSection, readSettingsSection, SETTINGS_SECTIONS } from "./settingsNavigation";
 
 type Props = {
   busy: boolean;
@@ -60,7 +61,18 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   const [emailReadiness, setEmailReadiness] = useState<EmailReadiness>();
   const [emailUnavailable, setEmailUnavailable] = useState(false);
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
-  const [activeSettingsSection, setActiveSettingsSection] = useState(() => window.location.hash === "#settings-integrations" ? "settings-integrations" : "settings-crew");
+  const [activeSettingsSection, setActiveSettingsSection] = useState(() => readSettingsSection() ?? "settings-crew");
+  useEffect(() => {
+    const selectLinkedSection = () => {
+      const section = readSettingsSection();
+      if (!section) return;
+      setActiveSettingsSection(section);
+      window.requestAnimationFrame(() => document.getElementById(section)?.scrollIntoView?.({ behavior: "auto", block: "start" }));
+    };
+    selectLinkedSection();
+    window.addEventListener("hashchange", selectLinkedSection);
+    return () => window.removeEventListener("hashchange", selectLinkedSection);
+  }, []);
   useEffect(() => {
     let cancelled = false;
     setTerminalHostLoaded(false);
@@ -92,17 +104,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   return (
     <div className="settings-workspace">
       <nav className="settings-section-nav" aria-label="Settings sections">
-        {([
-          ["settings-crew", "Crew"],
-          ["settings-presence", "Presence"],
-          ["settings-queen", "Queen"],
-          ["settings-notifications", "Alerts"],
-          ["settings-runtime", "System"],
-          ["settings-apiary", "Apiary"],
-          ["settings-integrations", "Integrations"],
-          ["settings-backup", "Backup"],
-          ["settings-diagnostics", "Diagnostics"],
-        ] as const).map(([id, label]) => (
+        {SETTINGS_SECTIONS.map(([id, label]) => (
           <button
             key={id}
             type="button"
@@ -110,6 +112,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
             aria-current={activeSettingsSection === id ? "location" : undefined}
             onClick={() => {
               setActiveSettingsSection(id);
+              navigateToSettingsSection(id);
               document.getElementById(id)?.scrollIntoView?.({ behavior: "auto", block: "start" });
             }}
           >{label}</button>

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 vi.mock("./terminal/XtermSurface", () => ({ XtermSurface: class {} }));
@@ -153,6 +153,15 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
     }));
     if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [] }));
     if (["/api/v1/workers", "/api/v1/workspaces", "/api/v1/tasks", "/api/v1/decisions"].includes(url)) return Promise.resolve(ok([]));
+    if (url === "/api/v1/integrations/jira/bindings") return Promise.resolve(ok([]));
+    if (url === "/api/v1/apiary/join-links") return Promise.resolve(ok([]));
+    if (url === "/api/v1/integrations/jira/readiness") return Promise.resolve(ok({ configured: false, connection: "not_connected", account_name: null }));
+    if (url === "/api/v1/integrations/email/readiness") return Promise.resolve(ok({ configured: false, connection: "not_connected", account_name: null }));
+    if (url.includes("/api/v1/feedback/reports")) return Promise.resolve(ok([]));
+    if (url === "/api/v1/terminal-host") return Promise.resolve(ok({ type: "host_status", status: { protocol_version: 7, host_version: "0.1.0", draining: false, running_sessions: 0, retained_sessions: 0 } }));
+    if (url === "/api/v1/runtime/development") return Promise.resolve(ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false }));
+    if (url === "/api/v1/runtime/resources") return Promise.resolve(ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 268435456, critical_bytes: 536870912 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" } }));
+    if (url === "/api/v1/terminal/history/diagnostics") return Promise.resolve(ok({ type: "history_diagnostics", diagnostics: null }));
     if (url.endsWith("/apiary/members")) return Promise.resolve(ok([{ hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true }]));
     if (url.endsWith("/apiary/jira-projects") || url.endsWith("/apiary/shared-work") || url.endsWith("/apiary/stewardships")) return Promise.resolve(ok([]));
     if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
@@ -171,7 +180,17 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
   expect(apiary).toHaveAttribute("aria-current", "page");
   expect(screen.getByText("Registration, not live presence")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Manage Apiary" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Manage Apiary" }));
+  expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+  expect(window.location.hash).toBe("#settings-apiary");
+  expect(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Apiary" })).toHaveAttribute("aria-current", "location");
+
+  cleanup();
+  window.sessionStorage.clear();
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+  expect(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Apiary" })).toHaveAttribute("aria-current", "location");
+  expect(window.location.hash).toBe("#settings-apiary");
 });
 
 test("gives a Member Hive a first-class Apiary membership surface", async () => {
