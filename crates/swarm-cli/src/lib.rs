@@ -408,6 +408,7 @@ mod tests {
         let error = validate_status(TerminalHostStatus {
             protocol_version: PROTOCOL_VERSION + 1,
             host_version: "future".into(),
+            host_build_id: None,
             draining: false,
             running_sessions: 0,
             retained_sessions: 0,
@@ -422,6 +423,7 @@ mod tests {
         let output = format_status(&TerminalHostStatus {
             protocol_version: PROTOCOL_VERSION,
             host_version: "0.1.0".into(),
+            host_build_id: None,
             draining: true,
             running_sessions: 1,
             retained_sessions: 2,

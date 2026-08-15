@@ -6,7 +6,8 @@ base_version=$(sed -n 's/^version = "\([0-9][0-9.]*\)"/\1/p' "$repo_root/Cargo.t
 revision=$(git -C "$repo_root" rev-parse --short=12 HEAD)
 version="$base_version-$revision"
 protocol=$(sed -n 's/^pub const PROTOCOL_VERSION: u16 = \([0-9][0-9]*\);/\1/p' "$repo_root/crates/swarm-terminal/src/ipc.rs" | tr -d '\r')
-[ -n "$base_version" ] && [ -n "$revision" ] && [ -n "$protocol" ] || { echo "could not determine package metadata" >&2; exit 1; }
+worker_engine_build_id=$(sh "$repo_root/packaging/linux/worker-engine-build-id.sh" "$repo_root")
+[ -n "$base_version" ] && [ -n "$revision" ] && [ -n "$protocol" ] && [ -n "$worker_engine_build_id" ] || { echo "could not determine package metadata" >&2; exit 1; }
 git -C "$repo_root" diff --quiet && git -C "$repo_root" diff --cached --quiet || {
   echo "refusing to package a dirty worktree" >&2
   exit 1
@@ -17,7 +18,7 @@ bundle="$output/swarm-next-$version-linux-x86_64"
 rm -rf -- "$bundle"
 mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 
-(cd "$repo_root" && SWARM_BUILD_VERSION="$version" cargo build --release --locked --workspace)
+(cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" cargo build --release --locked --workspace)
 if [ "${SWARM_SKIP_WEB_BUILD:-0}" != "1" ]; then
   (cd "$repo_root" && "${SWARM_PNPM_BIN:-pnpm}" --dir web build)
 fi

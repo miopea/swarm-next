@@ -1,4 +1,4 @@
-export type Health = { status: "ok"; version: string };
+export type Health = { status: "ok"; version: string; worker_engine_build_id?: string };
 export const BROWSER_SESSION_AUTH = "browser-session-cookie";
 const TRANSIENT_RUNTIME_STATUSES = new Set([502, 503, 504]);
 export type ProcessResources = {
@@ -37,6 +37,7 @@ export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: nu
 export type TerminalHostStatus = {
   protocol_version: number;
   host_version: string;
+  host_build_id?: string | null;
   draining: boolean;
   running_sessions: number;
   retained_sessions: number;

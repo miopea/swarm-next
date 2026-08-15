@@ -44,6 +44,7 @@ pub struct HostServer {
     socket_path: PathBuf,
     registry: Arc<SessionRegistry>,
     host_version: Arc<str>,
+    host_build_id: Arc<str>,
     connection_limit: Arc<Semaphore>,
 }
 
@@ -67,7 +68,12 @@ impl HostServer {
         socket_path: impl Into<PathBuf>,
         registry: Arc<SessionRegistry>,
     ) -> Result<Self, HostServerError> {
-        Self::bind_with_version(socket_path, registry, build_version())
+        Self::bind_with_identity(
+            socket_path,
+            registry,
+            build_version(),
+            worker_engine_build_id(),
+        )
     }
 
     /// Binds a host that reports an explicit release identity.
@@ -82,6 +88,26 @@ impl HostServer {
         socket_path: impl Into<PathBuf>,
         registry: Arc<SessionRegistry>,
         host_version: impl Into<Arc<str>>,
+    ) -> Result<Self, HostServerError> {
+        let host_version = host_version.into();
+        Self::bind_with_identity(
+            socket_path,
+            registry,
+            Arc::clone(&host_version),
+            host_version,
+        )
+    }
+
+    /// Binds a host with independently comparable release and engine identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same secure socket and filesystem failures as [`Self::bind`].
+    pub fn bind_with_identity(
+        socket_path: impl Into<PathBuf>,
+        registry: Arc<SessionRegistry>,
+        host_version: impl Into<Arc<str>>,
+        host_build_id: impl Into<Arc<str>>,
     ) -> Result<Self, HostServerError> {
         let socket_path = socket_path.into();
         let parent = socket_path
@@ -98,6 +124,7 @@ impl HostServer {
             socket_path,
             registry,
             host_version: host_version.into(),
+            host_build_id: host_build_id.into(),
             connection_limit: Arc::new(Semaphore::new(64)),
         })
     }
@@ -118,9 +145,12 @@ impl HostServer {
             let (stream, _) = self.listener.accept().await?;
             let registry = Arc::clone(&self.registry);
             let host_version = Arc::clone(&self.host_version);
+            let host_build_id = Arc::clone(&self.host_build_id);
             tokio::spawn(async move {
                 let _permit = permit;
-                if let Err(error) = serve_connection(stream, registry, host_version).await {
+                if let Err(error) =
+                    serve_connection(stream, registry, host_version, host_build_id).await
+                {
                     warn!(%error, "terminal host rejected connection");
                 }
             });
@@ -164,6 +194,7 @@ async fn serve_connection(
     stream: UnixStream,
     registry: Arc<SessionRegistry>,
     host_version: Arc<str>,
+    host_build_id: Arc<str>,
 ) -> Result<(), HostServerError> {
     let credentials = stream.peer_cred()?;
     if credentials.uid() != Uid::effective().as_raw() {
@@ -188,11 +219,11 @@ async fn serve_connection(
         match serde_json::from_slice::<HostRequest>(&payload) {
             Ok(request) if matches!(&request, HostRequest::Wait { .. }) => {
                 tokio::select! {
-                    response = dispatch(registry, host_version, request) => response,
+                    response = dispatch(registry, host_version, host_build_id, request) => response,
                     _ = reader.read_u8() => return Ok(()),
                 }
             }
-            Ok(request) => dispatch(registry, host_version, request).await,
+            Ok(request) => dispatch(registry, host_version, host_build_id, request).await,
             Err(error) => error_response("invalid_request", &error.to_string()),
         }
     };
@@ -212,6 +243,7 @@ async fn serve_connection(
 async fn dispatch(
     registry: Arc<SessionRegistry>,
     host_version: Arc<str>,
+    host_build_id: Arc<str>,
     request: HostRequest,
 ) -> HostResponse {
     match request {
@@ -220,7 +252,7 @@ async fn dispatch(
             after_sequence,
         } => dispatch_wait(&registry, session_id, after_sequence).await,
         request => tokio::task::spawn_blocking(move || {
-            dispatch_blocking(&registry, &host_version, request)
+            dispatch_blocking(&registry, &host_version, &host_build_id, request)
         })
         .await
         .unwrap_or_else(|error| error_response("host_task_failed", &error.to_string())),
@@ -262,6 +294,7 @@ async fn dispatch_wait(
 fn dispatch_blocking(
     registry: &SessionRegistry,
     host_version: &str,
+    host_build_id: &str,
     request: HostRequest,
 ) -> HostResponse {
     let result = match request {
@@ -270,7 +303,7 @@ fn dispatch_blocking(
                 protocol_version: PROTOCOL_VERSION,
             };
         }
-        HostRequest::HostStatus => terminal_host_status(registry, host_version)
+        HostRequest::HostStatus => terminal_host_status(registry, host_version, host_build_id)
             .map(|status| HostResponse::HostStatus { status })
             .map_err(|error| error.to_string()),
         HostRequest::ProviderCapabilities => Ok(HostResponse::ProviderCapabilities {
@@ -279,12 +312,12 @@ fn dispatch_blocking(
         }),
         HostRequest::BeginDrain => registry
             .begin_drain()
-            .and_then(|_| terminal_host_status(registry, host_version))
+            .and_then(|_| terminal_host_status(registry, host_version, host_build_id))
             .map(|status| HostResponse::HostStatus { status })
             .map_err(|error| error.to_string()),
         HostRequest::CancelDrain => registry
             .cancel_drain()
-            .and_then(|()| terminal_host_status(registry, host_version))
+            .and_then(|()| terminal_host_status(registry, host_version, host_build_id))
             .map(|status| HostResponse::HostStatus { status })
             .map_err(|error| error.to_string()),
         HostRequest::StartClaude {
@@ -394,10 +427,12 @@ fn executable_in_path(name: &str) -> bool {
 fn terminal_host_status(
     registry: &SessionRegistry,
     host_version: &str,
+    host_build_id: &str,
 ) -> Result<TerminalHostStatus, swarm_terminal::SessionRegistryError> {
     Ok(TerminalHostStatus {
         protocol_version: PROTOCOL_VERSION,
         host_version: host_version.into(),
+        host_build_id: Some(host_build_id.into()),
         draining: registry.is_draining(),
         running_sessions: registry.running_session_count()?,
         retained_sessions: registry.len()?,
@@ -407,6 +442,10 @@ fn terminal_host_status(
 
 fn build_version() -> &'static str {
     option_env!("SWARM_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
+fn worker_engine_build_id() -> &'static str {
+    option_env!("SWARM_WORKER_ENGINE_BUILD_ID").unwrap_or(build_version())
 }
 
 fn error_response(code: &str, message: &str) -> HostResponse {
@@ -539,6 +578,10 @@ mod tests {
         assert_eq!(status.running_sessions, 1);
         assert_eq!(status.retained_sessions, 1);
         assert_eq!(status.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(
+            status.host_build_id.as_deref(),
+            Some(worker_engine_build_id())
+        );
         assert!(matches!(
             registry.spawn(&command, TerminalSize::default()),
             Err(swarm_terminal::SessionRegistryError::HostDraining)
@@ -597,6 +640,7 @@ mod tests {
             server,
             Arc::clone(&registry),
             Arc::from(build_version()),
+            Arc::from(worker_engine_build_id()),
         ));
         let mut request = serde_json::to_vec(&HostRequest::Wait {
             session_id: session.id(),

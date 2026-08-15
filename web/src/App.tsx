@@ -77,6 +77,7 @@ import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 import WorkerRosterItem from "./workers/WorkerRosterItem";
 import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
+import { workerEngineMatches } from "./runtime/workerEngine";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
@@ -591,7 +592,7 @@ export function App() {
             fetchTerminalHostStatus(operatorToken),
           ]);
           if ((!targetVersion || health.version === targetVersion)
-            && host.host_version === health.version
+            && workerEngineMatches(health, host)
             && !host.draining) {
             ready = true;
             break;

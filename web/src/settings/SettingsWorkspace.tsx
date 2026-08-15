@@ -7,6 +7,7 @@ import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
 import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
+import { workerEngineUpdateRequired } from "../runtime/workerEngine";
 import ApiarySettings from "./ApiarySettings";
 import DevelopmentReloadAction from "./DevelopmentReloadAction";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
@@ -92,6 +93,8 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
     const blob = await downloadDatabaseBackup(operatorToken);
     downloadBlob(blob, `swarm-next-hive-${new Date().toISOString().slice(0, 10)}.sqlite3`);
   }
+  const workerEngineNeedsUpdate = workerEngineUpdateRequired(health, terminalHostStatus);
+  const activeWorkerCount = terminalHostStatus?.running_sessions ?? 0;
   return (
     <div className="settings-workspace">
       <nav className="settings-section-nav" aria-label="Settings sections">
@@ -247,16 +250,16 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
           <div><dt>Retained sessions</dt><dd>{sessions.length}</dd></div>
         </dl>
         <div className="runtime-subsystem-grid">
-          <article className={`runtime-subsystem-card ${health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? "runtime-subsystem-restart" : "runtime-subsystem-current"}`} aria-label="Worker engine status">
-            <header><div><span className="runtime-component-name">Worker engine</span><strong>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</strong></div><span className={`runtime-status-badge ${health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? "restart" : "current"}`}>{health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? "Restart required" : "Current"}</span></header>
-            {health && terminalHostStatus && health.version !== terminalHostStatus.host_version ? <>
-              <p>Updating this layer briefly stops {terminalHostStatus.running_sessions} active worker{terminalHostStatus.running_sessions === 1 ? "" : "s"}, then revives Queen and configured always-active workers from their saved conversations.</p>
+          <article className={`runtime-subsystem-card ${workerEngineNeedsUpdate ? "runtime-subsystem-restart" : "runtime-subsystem-current"}`} aria-label="Worker engine status">
+            <header><div><span className="runtime-component-name">Worker engine</span><strong>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</strong></div><span className={`runtime-status-badge ${workerEngineNeedsUpdate ? "restart" : "current"}`}>{workerEngineNeedsUpdate ? "Restart required" : "Current"}</span></header>
+            {workerEngineNeedsUpdate ? <>
+              <p>Updating this layer briefly stops {activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"}, then revives Queen and configured always-active workers from their saved conversations.</p>
               <small><strong>Active commands can be interrupted.</strong> Wait for workers to rest when practical. Identities, provider conversations, tasks, ownership, and terminal history remain durable.</small>
             {!confirmMaintenance ? (
               <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(true)}>Prepare worker engine update</button>
             ) : (
               <div className="maintenance-confirmation" role="group" aria-label="Confirm worker engine update">
-                <strong>Restart {terminalHostStatus.running_sessions} active worker{terminalHostStatus.running_sessions === 1 ? "" : "s"} now?</strong>
+                <strong>Restart {activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"} now?</strong>
                 <span>Claude/Codex processes will close. Worker identities, tasks, and known conversation IDs remain durable.</span>
                 <div className="settings-actions">
                   <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(false)}>Not now</button>
@@ -311,7 +314,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
 function workerEngineLabel(health: Health | undefined, host: TerminalHostStatus | undefined, loaded: boolean) {
   if (!loaded) return "Checking…";
   if (!host) return "Unavailable";
-  if (health && health.version !== host.host_version) {
+  if (workerEngineUpdateRequired(health, host)) {
     return "Update ready · restart required";
   }
   return `Current · ${host.running_sessions} active`;

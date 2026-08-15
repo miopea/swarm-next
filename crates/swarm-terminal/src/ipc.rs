@@ -89,6 +89,8 @@ pub struct HostSessionSummary {
 pub struct TerminalHostStatus {
     pub protocol_version: u16,
     pub host_version: String,
+    #[serde(default)]
+    pub host_build_id: Option<String>,
     pub draining: bool,
     pub running_sessions: usize,
     pub retained_sessions: usize,
@@ -208,6 +210,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(status.protocol_version, PROTOCOL_VERSION);
+        assert_eq!(status.host_build_id, None);
         assert_eq!(status.resources, None);
     }
 }

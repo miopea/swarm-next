@@ -1190,6 +1190,7 @@ impl Default for AppState {
 struct HealthResponse {
     status: &'static str,
     version: &'static str,
+    worker_engine_build_id: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -2086,11 +2087,16 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
         version: build_version(),
+        worker_engine_build_id: worker_engine_build_id(),
     })
 }
 
 fn build_version() -> &'static str {
     option_env!("SWARM_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
+fn worker_engine_build_id() -> &'static str {
+    option_env!("SWARM_WORKER_ENGINE_BUILD_ID").unwrap_or(build_version())
 }
 
 async fn get_browser_session(
@@ -3394,7 +3400,7 @@ async fn maintain_terminal_host_locked(
         )
     })?;
     let previous = host_status_snapshot(state).await?;
-    if previous.host_version == build_version() {
+    if !worker_engine_update_required(&previous) {
         return Ok(WorkerEngineMaintenanceResponse {
             previous_version: previous.host_version.clone(),
             current_version: previous.host_version,
@@ -3451,7 +3457,7 @@ async fn maintain_terminal_host_locked(
         loop {
             sleep(Duration::from_millis(200)).await;
             if let Ok(status) = host_status_snapshot(state).await
-                && status.host_version == build_version()
+                && !worker_engine_update_required(&status)
                 && !status.draining
             {
                 return status;
@@ -3473,6 +3479,13 @@ async fn maintain_terminal_host_locked(
         stopped_sessions: running.len(),
         restarted_workers: 0,
     })
+}
+
+fn worker_engine_update_required(status: &swarm_terminal::TerminalHostStatus) -> bool {
+    status.host_build_id.as_deref().map_or_else(
+        || status.host_version != build_version(),
+        |host_build_id| host_build_id != worker_engine_build_id(),
+    )
 }
 
 async fn host_status_snapshot(
@@ -6874,6 +6887,7 @@ mod tests {
         let json = response_json(response).await;
         assert_eq!(json["status"], "ok");
         assert_eq!(json["version"], build_version());
+        assert_eq!(json["worker_engine_build_id"], worker_engine_build_id());
     }
 
     #[tokio::test]
@@ -10192,8 +10206,13 @@ mod tests {
             )
             .unwrap();
         let socket = runtime.path().join("terminal.sock");
-        let server =
-            HostServer::bind_with_version(&socket, Arc::clone(&registry), "old-host").unwrap();
+        let server = HostServer::bind_with_identity(
+            &socket,
+            Arc::clone(&registry),
+            "old-host",
+            "old-engine",
+        )
+        .unwrap();
         let old_server_task = tokio::spawn(server.run());
         let maintenance_request = runtime.path().join("worker-engine-maintenance.request");
         let watched_request = maintenance_request.clone();
@@ -10208,10 +10227,11 @@ mod tests {
             }
             old_server_task.abort();
             let _ = old_server_task.await;
-            let replacement = HostServer::bind_with_version(
+            let replacement = HostServer::bind_with_identity(
                 replacement_socket,
                 replacement_registry,
                 build_version(),
+                worker_engine_build_id(),
             )
             .unwrap();
             let replacement_task = tokio::spawn(replacement.run());
@@ -10235,8 +10255,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        let status = response.status();
         let response = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{response:?}");
         assert_eq!(response["previous_version"], "old-host");
         assert_eq!(response["current_version"], build_version());
         assert_eq!(response["stopped_sessions"], 1);
@@ -10255,6 +10276,63 @@ mod tests {
         let replacement_task = replacement_receiver.await.unwrap();
         replacement_task.abort();
         let _ = replacement_task.await;
+    }
+
+    #[tokio::test]
+    async fn app_only_release_does_not_restart_a_matching_worker_engine() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 1, [workspace.clone()]).unwrap(),
+        );
+        let session = registry
+            .spawn(
+                &ProviderCommand {
+                    executable: PathBuf::from("/bin/sh"),
+                    arguments: vec!["-lc".into(), "sleep 10".into()],
+                    working_directory: workspace,
+                },
+                TerminalSize::default(),
+            )
+            .unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind_with_identity(
+            &socket,
+            registry,
+            "older-app-release",
+            worker_engine_build_id(),
+        )
+        .unwrap();
+        let server_task = tokio::spawn(server.run());
+        tokio::task::yield_now().await;
+        let maintenance_request = runtime.path().join("worker-engine-maintenance.request");
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new(&socket), "secret")
+                .with_task_store(TaskStore::in_memory().unwrap())
+                .with_maintenance_request_path(maintenance_request.clone()),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/runtime/terminal-host/maintenance")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let response = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{response:?}");
+        assert_eq!(response["stopped_sessions"], 0);
+        assert!(session.is_running().unwrap());
+        assert!(!maintenance_request.exists());
+
+        server_task.abort();
+        let _ = server_task.await;
     }
 
     #[tokio::test]
