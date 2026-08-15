@@ -19,6 +19,7 @@ mod presence;
 mod presentation;
 mod provider_activity;
 mod runtime;
+mod session_history;
 mod tasks;
 mod terminal_socket;
 mod workers;
@@ -73,8 +74,8 @@ use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, MAX_CANONICAL_SNAPSHOT_BYTES, ProcessResourceSample,
 };
 use swarm_terminal::{
-    ClaudeConversationStart, CodexConversationStart, HistoryCursor, HostClient, HostRequest,
-    HostResponse, JournalLimits, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
+    ClaudeConversationStart, CodexConversationStart, HostClient, HostRequest, HostResponse,
+    JournalLimits, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
     MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProviderActivity, TerminalSize,
 };
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore};
@@ -1439,12 +1440,6 @@ struct JiraTaskLinkView {
     outbound_state: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct HistoryQuery {
-    segment: Option<u64>,
-    record: Option<u32>,
-}
-
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
@@ -1839,19 +1834,19 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/terminal/sessions",
-            get(list_sessions).post(start_session),
+            get(session_history::list_live_sessions).post(start_session),
         )
         .route(
             "/api/v1/terminal/history/diagnostics",
-            get(history_diagnostics),
+            get(session_history::diagnostics),
         )
         .route(
             "/api/v1/terminal/history/sessions",
-            get(list_history_sessions),
+            get(session_history::list_retained_sessions),
         )
         .route(
             "/api/v1/terminal/history/sessions/{session_id}",
-            get(read_history),
+            get(session_history::read),
         )
         .route(
             "/api/v1/terminal/sessions/{session_id}",
@@ -3729,69 +3724,6 @@ fn jira_issue_snapshot(issue: &jira::JiraIssue) -> JiraIssueSnapshot<'_> {
         assignee_name: issue.assignee_name.as_deref(),
         remote_updated_at: &issue.updated_at,
     }
-}
-
-async fn list_sessions(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Json<HostResponse>, ApiError> {
-    authorize(&state, &headers)?;
-    let response = request_host(&state, HostRequest::ListSessions).await?;
-    let HostResponse::Sessions { sessions } = response else {
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "unexpected_host_response",
-            "terminal host returned an unexpected response",
-        ));
-    };
-    Ok(Json(HostResponse::Sessions {
-        sessions: sessions
-            .into_iter()
-            .filter(|session| session.running)
-            .collect(),
-    }))
-}
-
-async fn history_diagnostics(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorized_no_store_request(&state, &headers, HostRequest::HistoryDiagnostics).await
-}
-
-async fn list_history_sessions(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorized_no_store_request(&state, &headers, HostRequest::ListHistorySessions).await
-}
-
-async fn read_history(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(session_id): Path<String>,
-    Query(query): Query<HistoryQuery>,
-) -> Result<Response, ApiError> {
-    let cursor = match (query.segment, query.record) {
-        (None, None) => None,
-        (Some(segment), Some(record)) => Some(HistoryCursor { segment, record }),
-        _ => {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_history_cursor",
-                "history cursor requires both segment and record",
-            ));
-        }
-    };
-    authorized_no_store_request(
-        &state,
-        &headers,
-        HostRequest::ReadHistory {
-            session_id: parse_session_id(&session_id)?,
-            cursor,
-        },
-    )
-    .await
 }
 
 async fn start_session(
