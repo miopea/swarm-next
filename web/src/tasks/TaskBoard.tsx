@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 
 import { fetchEmailTaskSources, type EmailTaskSource, type JiraComment, type JiraTaskLink, type SessionSummary, type Task, type TaskActivityPage, type TaskDraftInput, type TaskPriority, type TaskState, type TaskUpdateInput, type Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -167,8 +167,12 @@ export default function TaskBoard({
     setEmailOpen(false);
   }, [composeRequest]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!composeRequest || !composeOpen) return;
+    titleInput.current?.focus();
+    // Closing the command dialog can restore focus to its former control after
+    // this panel mounts, especially in mobile Chromium. Reassert focus after
+    // that teardown so the newly requested task field remains the destination.
     const frame = requestAnimationFrame(() => titleInput.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [composeOpen, composeRequest]);
