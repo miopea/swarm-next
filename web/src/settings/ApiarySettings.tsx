@@ -361,7 +361,7 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
       {personal ? (
         <>
           <p>Your personal Hive remains fully independent. Form an Apiary only when separate one-operator Hives should share Jira work and coordination.</p>
-          <PersonalHiveJoin busy={busy || working} operatorToken={operatorToken} onMessage={setMessage} onError={setError} />
+          <PersonalHiveJoin busy={busy || working} operatorToken={operatorToken} onMessage={setMessage} onError={setError} onJoined={refreshIdentity} />
           <label className="field-stack" htmlFor="apiary-name">
             <span>Apiary name</span>
             <input id="apiary-name" value={name} maxLength={120} placeholder="Wildflower Garden" onChange={(event) => { setName(event.target.value); setConfirmCreate(false); }} />

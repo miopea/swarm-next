@@ -6,7 +6,7 @@ import {
   fetchFederationJoinInvitations,
   importFederationJoinInvitation,
   pollApiaryKeeperLink,
-  prepareFederationJoin,
+  joinFederationApiary,
   saveApiaryKeeperLink,
   type ApiaryInvitationBundle,
   type ApiaryKeeperJoinCapability,
@@ -24,9 +24,10 @@ type Props = {
   operatorToken: string;
   onError: (message: string) => void;
   onMessage: (message: string) => void;
+  onJoined: () => Promise<void>;
 };
 
-export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessage }: Props) {
+export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessage, onJoined }: Props) {
   const [keeperLinks, setKeeperLinks] = useState<ApiaryKeeperLink[]>([]);
   const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
@@ -155,15 +156,15 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     }
   }
 
-  async function prepareJoinRequest(invitation: FederationJoinInvitationOverview) {
+  async function joinApiary(invitation: FederationJoinInvitationOverview) {
     setWorking(true);
     clearFeedback();
     try {
-      await prepareFederationJoin(operatorToken, invitation.invitation_id);
-      setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
-      onMessage(`The signed join request for ${invitation.apiary_name} is prepared locally. Nothing has been sent to the Keeper yet.`);
+      await joinFederationApiary(operatorToken, invitation.invitation_id);
+      await onJoined();
+      onMessage(`This Hive joined ${invitation.apiary_name}. Jira continues syncing directly; Swarm coordination now polls the Keeper.`);
     } catch (cause) {
-      onError(cause instanceof Error ? cause.message : "The join request could not be prepared.");
+      onError(cause instanceof Error ? cause.message : "This Hive could not join the Apiary.");
     } finally {
       setWorking(false);
     }
@@ -198,7 +199,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
         {joinInvitations.length > 0 ? (
           <ul className="apiary-join-list" aria-label="Saved Apiary invitations">
             {joinInvitations.map((invitation) => (
-              <InvitationReadiness key={invitation.invitation_id} invitation={invitation} working={working} onAccept={() => void acceptPolicy(invitation)} onPrepare={() => void prepareJoinRequest(invitation)} />
+              <InvitationReadiness key={invitation.invitation_id} invitation={invitation} working={working} onAccept={() => void acceptPolicy(invitation)} onJoin={() => void joinApiary(invitation)} />
             ))}
           </ul>
         ) : <p className="empty-copy">No Apiary invitation is saved on this Hive.</p>}
@@ -231,7 +232,7 @@ function InvitationPreview({ bundle, working, onCancel, onTrust }: { bundle: Api
   );
 }
 
-function InvitationReadiness({ invitation, working, onAccept, onPrepare }: { invitation: FederationJoinInvitationOverview; working: boolean; onAccept: () => void; onPrepare: () => void }) {
+function InvitationReadiness({ invitation, working, onAccept, onJoin }: { invitation: FederationJoinInvitationOverview; working: boolean; onAccept: () => void; onJoin: () => void }) {
   const ready = invitation.readiness.blockers.length === 0;
   return (
     <li>
@@ -242,9 +243,9 @@ function InvitationReadiness({ invitation, working, onAccept, onPrepare }: { inv
       <div className="apiary-policy-acknowledgement">
         <span><strong>Policy revision {invitation.required_policy_revision}</strong><small>Jira-backed shared work · {invitation.promoted_projects.length} signed {invitation.promoted_projects.length === 1 ? "project" : "projects"} · Keeper identity pinned</small></span>
         {invitation.readiness_compatibility_fallback ? <button className="secondary-button" disabled>Waiting for runtime</button>
-          : invitation.state === "submitted" ? <span className="readiness-ready">Join request prepared</span>
+          : invitation.state === "submitted" ? <button className="primary-action" disabled={working} onClick={onJoin}>{working ? "Joining…" : "Retry joining"}</button>
           : invitation.state === "keeper_pinned" ? <button className="secondary-button" disabled={working} onClick={onAccept}>Acknowledge revision {invitation.required_policy_revision}</button>
-          : ready ? <button className="primary-action" disabled={working} onClick={onPrepare}>{working ? "Preparing…" : "Prepare join request"}</button>
+          : ready ? <button className="primary-action" disabled={working} onClick={onJoin}>{working ? "Joining…" : "Join Apiary"}</button>
           : <span className="readiness-ready">Acknowledged</span>}
       </div>
       <ul className="apiary-project-readiness" aria-label={`Jira readiness for ${invitation.apiary_name}`}>
@@ -255,7 +256,7 @@ function InvitationReadiness({ invitation, working, onAccept, onPrepare }: { inv
         })}
       </ul>
       {invitation.readiness.jira_connection !== "ready" ? <p className="readiness-blocked">Connect Jira on this Hive before it can join.</p> : null}
-      <small>{invitation.state === "submitted" ? "The signed request is durable and retry-stable. Delivery to the Keeper is not enabled yet." : "Nothing is sent to the Keeper and no membership is granted at this step."}</small>
+      <small>{invitation.state === "submitted" ? "The signed request is durable and retry-stable. Retry after a temporary Keeper outage." : "Joining sends one signed request to the Keeper; Jira credentials and private Hive data stay local."}</small>
     </li>
   );
 }

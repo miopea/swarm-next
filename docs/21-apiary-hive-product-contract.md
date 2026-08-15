@@ -120,15 +120,18 @@ credential. Identical lost-response retries return the same durable result;
 altered replay fails closed. The invited Hive now verifies that result against
 its pinned Keeper and exact invitation, then atomically stores the private
 credential, mirrors public Apiary identity, becomes a Member, and revokes
-competing invitations. The bounded outbound HTTPS adapter remains the next
-handshake slice.
+competing invitations.
 
-The invited operator can now prepare that signed submission through a private
-browser command once the server-derived preflight is clear. The response
-returns only the refreshed invitation overview: the bearer secret, signature,
-and signed submission remain host-private. The UI labels this as prepared and
-durable, never delivered or joined. Repeating the command reuses the exact
-stored submission; no network request is made by this slice.
+The invited operator completes that handshake with one explicit private
+browser command once the server-derived preflight is clear. The member API
+seals or reuses the retry-stable submission, sends it outbound to the bounded
+Keeper endpoint, verifies the signed acceptance, and applies membership
+atomically. The response returns only the public local Apiary context: the
+bearer secret, signatures, signed submission, and node credential remain
+host-private. A temporary Keeper outage leaves the exact submission durable so
+the operator can retry without creating a second membership. Jira continues to
+sync directly from this Hive; the Keeper connection carries only federation
+state and later Native Apiary work.
 
 Both Keeper and Member Hives can now read a deliberately narrow Apiary roster:
 Hive name and ID, operator name and ID, Keeper/member role, and which row is

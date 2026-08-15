@@ -2417,20 +2417,31 @@ async fn prepare_imported_apiary_join(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let invitation_id = parse_apiary_invitation_id(&invitation_id)?;
+    let now = unix_timestamp();
     let jira = state.jira_readiness.readiness().await;
-    apiary_service(&state)?
-        .prepare_imported_join_submission(invitation_id, jira.connection, unix_timestamp())
-        .map_err(application_error)?;
-    let overview = apiary_service(&state)?
-        .imported_invitations(jira.connection, unix_timestamp())
+    let service = apiary_service(&state)?;
+    let invitation = service
+        .imported_invitations(jira.connection, now)
         .map_err(application_error)?
         .into_iter()
         .find(|overview| overview.invitation.invitation_id == invitation_id)
         .ok_or_else(|| task_store_error(&TaskStoreError::ApiaryInvitationNotFound))?;
+    let submission = service
+        .prepare_imported_join_submission(invitation_id, jira.connection, now)
+        .map_err(application_error)?;
+    let acceptance =
+        federation_http::FederationHttpClient::new(&invitation.invitation.keeper_endpoint)
+            .map_err(federation_http_error)?
+            .join(&submission)
+            .await
+            .map_err(federation_http_error)?;
+    let context = service
+        .apply_remote_join_acceptance(invitation_id, &acceptance, now)
+        .map_err(application_error)?;
     Ok((
-        StatusCode::ACCEPTED,
+        StatusCode::CREATED,
         [(header::CACHE_CONTROL, "no-store")],
-        Json(FederationJoinInvitationView::from(overview)),
+        Json(context),
     )
         .into_response())
 }
@@ -5721,10 +5732,9 @@ mod tests {
         assert_imported_policy_acceptance(app, bundle.invitation.payload.invitation_id).await;
     }
 
-    #[tokio::test]
-    async fn invited_hive_prepares_join_privately_without_exposing_transport_material() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
+    async fn start_ready_jira_test_server() -> std::net::SocketAddr {
+        let jira_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let jira_address = jira_listener.local_addr().unwrap();
         let jira_server = axum::Router::new()
             .route(
                 "/rest/api/3/project/search",
@@ -5739,7 +5749,30 @@ mod tests {
                     }))
                 }),
             );
-        tokio::spawn(async move { axum::serve(listener, jira_server).await.unwrap() });
+        tokio::spawn(async move { axum::serve(jira_listener, jira_server).await.unwrap() });
+        jira_address
+    }
+
+    async fn start_keeper_join_test_server(
+        keeper: TaskStore,
+    ) -> (String, tokio::task::JoinHandle<Result<(), std::io::Error>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let app = router(
+            AppState::default()
+                .with_terminal_host(
+                    HostClient::new("/unreachable/terminal.sock"),
+                    "keeper-secret",
+                )
+                .with_task_store(keeper),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        (endpoint, server)
+    }
+
+    #[tokio::test]
+    async fn invited_hive_joins_through_one_outbound_signed_request() {
+        let jira_address = start_ready_jira_test_server().await;
 
         let now = unix_timestamp();
         let invited = TaskStore::in_memory().unwrap();
@@ -5753,10 +5786,11 @@ mod tests {
             )
             .unwrap();
         keeper.pin_hive_candidate(&invited_card, now).unwrap();
+        let (keeper_endpoint, keeper_server) = start_keeper_join_test_server(keeper.clone()).await;
         let bundle = keeper
             .issue_apiary_invitation_bundle(
                 invited_card.payload.hive_id,
-                "https://keeper.example.test/swarm",
+                &keeper_endpoint,
                 now,
                 3_600,
             )
@@ -5769,9 +5803,9 @@ mod tests {
             .unwrap();
         let state = AppState::default()
             .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
-            .with_task_store(invited)
+            .with_task_store(invited.clone())
             .with_jira_configuration(
-                &format!("http://{address}"),
+                &format!("http://{jira_address}"),
                 "operator@example.test",
                 "api-token",
             )
@@ -5806,14 +5840,25 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(response.status(), StatusCode::CREATED);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let json = response_json(response).await;
-        assert_eq!(json["state"], "submitted");
+        assert_eq!(json["mode"], "federated");
+        assert_eq!(json["local_role"], "member");
         let serialized = json.to_string();
         assert!(!serialized.contains(&bundle.one_time_secret));
         assert!(!serialized.contains("signature"));
-        assert!(!serialized.contains("submission"));
+        assert!(!serialized.contains("credential"));
+        assert!(matches!(
+            invited.local_apiary_context().unwrap(),
+            swarm_domain::LocalApiaryContext::Federated {
+                local_role: swarm_domain::LocalApiaryRole::Member,
+                ..
+            }
+        ));
+
+        keeper_server.abort();
+        let _ = keeper_server.await;
     }
 
     #[tokio::test]
