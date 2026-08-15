@@ -88,6 +88,12 @@ capabilities. The responsive Keeper UI exposes only public member identity and
 states that remote delivery still depends on federation synchronization.
 Enforcement of Steward-scoped remote actions remains staged work.
 
+Keeper control-room checkpoint: a federated Keeper receives a first-class,
+read-only Apiary surface outside Settings. It summarizes registered membership,
+promoted Jira projects, active reservations or durable home-Hive ownership, and
+Steward scopes from the existing private contracts. Routine worker activity
+remains inside each Hive; invitations and configuration stay in Settings.
+
 ## Platform and administration
 
 | Capability | Decision | Rationale and intended direction |

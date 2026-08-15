@@ -156,12 +156,16 @@ async function checkSurface(browser, surface) {
     let jiraIssueReview = false;
     let jiraIssueFilter = false;
     let emailIntakeReview = false;
-    for (const target of [
+    const navigationTargets = [
       { name: "needs-you", nav: /Needs you/, ready: () => page.getByRole("heading", { name: "Needs you" }) },
       { name: "tasks", nav: /Tasks/, ready: () => page.getByRole("heading", { name: "Task board" }) },
       { name: "workers", nav: /Workers/, ready: () => page.locator(".terminal-panel") },
       { name: "settings", nav: /Settings/, ready: () => page.getByRole("heading", { name: "Settings" }) },
-    ]) {
+    ];
+    if (await page.getByRole("button", { name: "Apiary", exact: true }).count()) {
+      navigationTargets.splice(3, 0, { name: "apiary", nav: /^Apiary$/, ready: () => page.locator(".keeper-control-room") });
+    }
+    for (const target of navigationTargets) {
       await page.getByRole("button", { name: target.nav }).click();
       await target.ready().first().waitFor();
       if (target.name === "tasks") {

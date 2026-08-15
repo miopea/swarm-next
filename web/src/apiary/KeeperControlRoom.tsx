@@ -1,0 +1,68 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import {
+  fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships,
+  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type HiveIdentity, type Stewardship,
+} from "../api";
+import BeeMascot from "../brand/BeeMascot";
+
+type Props = { identity: HiveIdentity; operatorToken: string; onManage: () => void };
+type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; stewardships: Stewardship[] };
+const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], stewardships: [] };
+
+export default function KeeperControlRoom({ identity, operatorToken, onManage }: Props) {
+  const context = identity.apiary_context;
+  const [snapshot, setSnapshot] = useState(emptySnapshot);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const refresh = useCallback(async () => {
+    setState("loading");
+    try {
+      const [members, projects, sharedWork, stewardships] = await Promise.all([
+        fetchApiaryMembers(operatorToken), fetchApiaryJiraProjects(operatorToken),
+        fetchApiarySharedWork(operatorToken), fetchApiaryStewardships(operatorToken),
+      ]);
+      setSnapshot({ members, projects, sharedWork, stewardships });
+      setState("ready");
+    } catch { setState("error"); }
+  }, [operatorToken]);
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const members = useMemo(() => [...snapshot.members].sort((left, right) => Number(right.is_local) - Number(left.is_local) || left.hive_name.localeCompare(right.hive_name)), [snapshot.members]);
+  const memberByOperator = useMemo(() => new Map(members.map((member) => [member.operator_id, member])), [members]);
+  const memberByHive = useMemo(() => new Map(members.map((member) => [member.hive_id, member])), [members]);
+  if (context?.mode !== "federated" || context.local_role !== "keeper") return null;
+
+  return (
+    <section className="keeper-control-room" aria-labelledby="keeper-control-heading">
+      <header className="keeper-hero">
+        <div className="keeper-hero-mark"><BeeMascot role="queen" expression="focused" /></div>
+        <div><p className="eyebrow">Keeper overview</p><h3 id="keeper-control-heading">{context.apiary.name}</h3><p>See durable Apiary ownership without pulling routine worker activity out of each Hive.</p></div>
+        <span className="apiary-backend-badge">{context.apiary.shared_work_backend === "jira" ? "Jira-backed" : "Native"}</span>
+        <button className="secondary-button" type="button" onClick={onManage}>Manage Apiary</button>
+      </header>
+      {state === "error" ? <div className="keeper-load-state" role="alert"><span>Apiary status could not be refreshed.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
+      <dl className="keeper-summary" aria-label="Apiary summary">
+        <div><dt>Registered Hives</dt><dd>{members.length}</dd></div><div><dt>Promoted Jira projects</dt><dd>{snapshot.projects.length}</dd></div>
+        <div><dt>Active shared claims</dt><dd>{snapshot.sharedWork.length}</dd></div><div><dt>Steward scopes</dt><dd>{snapshot.stewardships.length}</dd></div>
+      </dl>
+      <div className="keeper-dashboard-grid" aria-busy={state === "loading"}>
+        <article className="keeper-panel">
+          <header><div><p className="eyebrow">People and Hives</p><h4>Apiary Hives</h4></div><small>Registration, not live presence</small></header>
+          {state === "loading" && members.length === 0 ? <p className="keeper-empty">Gathering the Apiary roster…</p> : members.length ? <ul className="keeper-hive-list" aria-label="Keeper Apiary Hives">{members.map((member) => <li key={member.hive_id}><span className="worker-avatar"><BeeMascot role={member.role === "keeper" ? "queen" : "worker"} expression="available" /></span><span><strong>{member.hive_name}</strong><small>{member.operator_display_name}</small></span><span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : "Hive"}{member.is_local ? " · This Hive" : ""}</span></li>)}</ul> : <p className="keeper-empty">No registered Hives are visible yet.</p>}
+        </article>
+        <article className="keeper-panel">
+          <header><div><p className="eyebrow">Shared work</p><h4>Current ownership</h4></div><small>Reservations and confirmed homes only</small></header>
+          {snapshot.sharedWork.length ? <ul className="keeper-work-list" aria-label="Keeper shared work ownership">{snapshot.sharedWork.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_key} · {claim.state === "confirmed" ? "Owned" : "Reserved"}</small></span><span><strong>{claim.home_hive_name}</strong><small>{claim.home_operator_display_name}</small></span></li>)}</ul> : <p className="keeper-empty">No shared Jira work is currently claimed by an Apiary Hive.</p>}
+        </article>
+        <article className="keeper-panel">
+          <header><div><p className="eyebrow">Shared catalog</p><h4>Promoted Jira projects</h4></div><small>Available to every joined Hive</small></header>
+          {snapshot.projects.length ? <ul className="keeper-project-list" aria-label="Keeper promoted Jira projects">{snapshot.projects.map((project) => <li key={project.project_id}><strong>{project.project_key}</strong><span>{project.project_name}</span></li>)}</ul> : <p className="keeper-empty">No Jira projects have been promoted to this Apiary.</p>}
+        </article>
+        <article className="keeper-panel">
+          <header><div><p className="eyebrow">Delegation</p><h4>Stewards</h4></div><small>Durable scopes, not routine noise</small></header>
+          {snapshot.stewardships.length ? <ul className="keeper-steward-list" aria-label="Keeper Steward scopes">{snapshot.stewardships.map((scope) => { const steward = memberByOperator.get(scope.steward_operator_id); const hives = scope.managed_hive_ids.map((id) => memberByHive.get(id)?.hive_name ?? "Unknown Hive"); return <li key={scope.id}><span><strong>{steward?.operator_display_name ?? "Steward"}</strong><small>{steward?.hive_name ?? "Registered operator"}</small></span><span>{hives.join(", ") || "No Hives assigned"}</span></li>; })}</ul> : <p className="keeper-empty">No Stewards are delegated. Member Hives escalate directly to you.</p>}
+        </article>
+      </div>
+    </section>
+  );
+}

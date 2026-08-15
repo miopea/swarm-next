@@ -141,6 +141,39 @@ test("restores tasks and workers after a refresh", async () => {
   expect(screen.queryByRole("button", { name: "Settings 3" })).not.toBeInTheDocument();
 });
 
+test("gives a Keeper a first-class Apiary control-room surface", async () => {
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url === "/api/v1/hive") return Promise.resolve(ok({
+      operator: { id: "operator-1", display_name: "Bea" },
+      hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: "apiary-1" },
+      apiary_context: { mode: "federated", apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" }, local_role: "keeper" },
+    }));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [] }));
+    if (["/api/v1/workers", "/api/v1/workspaces", "/api/v1/tasks", "/api/v1/decisions"].includes(url)) return Promise.resolve(ok([]));
+    if (url.endsWith("/apiary/members")) return Promise.resolve(ok([{ hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true }]));
+    if (url.endsWith("/apiary/jira-projects") || url.endsWith("/apiary/shared-work") || url.endsWith("/apiary/stewardships")) return Promise.resolve(ok([]));
+    if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
+    if (url.includes("/api/v1/providers")) return Promise.resolve(ok({ claude_code: true, codex: false }));
+    if (url.includes("/api/v1/preferences/presentation/desktop")) return Promise.resolve(ok({ device_class: "desktop", color_theme: "light", terminal_keys_visible: true, configured: true }));
+    if (url.includes("/api/v1/integrations/jira/task-links")) return Promise.resolve(ok([]));
+    return Promise.resolve(ok({ policy: "important_only", subscription_count: 0 }));
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+
+  const apiary = await screen.findByRole("button", { name: "Apiary" });
+  fireEvent.click(apiary);
+
+  expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
+  expect(apiary).toHaveAttribute("aria-current", "page");
+  expect(screen.getByText("Registration, not live presence")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Manage Apiary" })).toBeInTheDocument();
+});
+
 test("recovers runtime status and saved authentication after an update handoff", async () => {
   let healthAttempts = 0;
   let sessionAttempts = 0;

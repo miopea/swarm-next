@@ -226,6 +226,37 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .mobile-worker-choice-copy > small { color: var(--muted); }
 .mobile-manage-workers { width: 100%; }
 
+.keeper-control-room { width: 100%; min-height: 0; padding: 28px; overflow-y: auto; }
+.keeper-hero { display: grid; max-width: 1500px; grid-template-columns: 62px minmax(0, 1fr) auto auto; align-items: center; gap: 16px; margin: 0 auto 18px; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: var(--shadow); }
+.keeper-hero-mark { display: grid; width: 62px; height: 62px; place-items: center; overflow: hidden; border-radius: 50%; background: var(--accent-soft); }
+.keeper-hero-mark .bee-mascot { width: 68px; height: 68px; transform: translateY(7px); }
+.keeper-hero h3 { margin: 0 0 4px; font-size: 1.35rem; }
+.keeper-hero p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.45; }
+.keeper-summary { display: grid; max-width: 1500px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 auto 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
+.keeper-summary > div { display: grid; gap: 4px; padding: 15px 17px; border-right: 1px solid var(--line); }
+.keeper-summary > div:last-child { border-right: 0; }
+.keeper-summary dt { color: var(--quiet); font-size: .65rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.keeper-summary dd { margin: 0; font-size: 1.15rem; font-weight: 650; }
+.keeper-dashboard-grid { display: grid; max-width: 1500px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 auto; gap: 16px; }
+.keeper-panel { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
+.keeper-panel > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.keeper-panel h4 { margin: 0; font-size: 1rem; }
+.keeper-panel > header > small { max-width: 190px; color: var(--quiet); font-size: .67rem; line-height: 1.4; text-align: right; }
+.keeper-hive-list, .keeper-work-list, .keeper-project-list, .keeper-steward-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.keeper-hive-list li { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 9px 0; border-top: 1px solid var(--line); }
+.keeper-hive-list li > span:nth-child(2), .keeper-work-list li > span, .keeper-steward-list li > span:first-child { display: grid; min-width: 0; gap: 3px; }
+.keeper-hive-list strong, .keeper-hive-list small, .keeper-work-list strong, .keeper-work-list small, .keeper-steward-list strong, .keeper-steward-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keeper-hive-list small, .keeper-work-list small, .keeper-steward-list small { color: var(--muted); font-size: .7rem; }
+.keeper-role-badge { padding: 3px 7px; border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .6rem; font-weight: 700; text-transform: uppercase; }
+.keeper-role-badge.keeper { color: var(--blocked); background: var(--blocked-soft); }
+.keeper-work-list li, .keeper-steward-list li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; padding: 11px 0; border-top: 1px solid var(--line); }
+.keeper-work-list li > span:last-child { text-align: right; }
+.keeper-project-list li { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.keeper-project-list strong { color: var(--accent-strong); }
+.keeper-steward-list li > span:last-child { color: var(--muted); font-size: .74rem; line-height: 1.4; text-align: right; }
+.keeper-empty { margin: 0; padding: 17px 0 4px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.keeper-load-state { display: flex; max-width: 1500px; align-items: center; justify-content: space-between; gap: 12px; margin: 0 auto 16px; padding: 11px 14px; border: 1px solid var(--bad); border-radius: var(--radius-sm); background: var(--bad-soft); }
+
 .unlock-panel { display: grid; width: min(430px, calc(100% - 40px)); margin: auto; padding: 38px; gap: 11px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: var(--shadow); }
 .unlock-symbol { width: 76px; height: 76px; margin-bottom: 8px; }
 .unlock-symbol .bee-mascot { width: 76px; height: 76px; }
@@ -818,6 +849,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .app-shell { grid-template-columns: clamp(220px, var(--rail-width, 286px), 40vw) minmax(0, 1fr); }
 }
 @media (max-width: 900px) {
+  .keeper-dashboard-grid { grid-template-columns: minmax(0, 1fr); }
   .task-grid { grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 12px; }
   .task-card { display: flex; min-height: 190px; flex-direction: column; padding: 17px; border-top: 3px solid color-mix(in srgb, var(--state, var(--line-strong)) 70%, var(--line)); border-left-width: 1px; }
   .task-metadata-panel { width: 100%; align-self: auto; padding: 10px; border: 0; border-radius: var(--radius-sm); background: var(--surface-soft); }
@@ -849,6 +881,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .brand-lockup .eyebrow { margin-bottom: 1px; font-size: .59rem; }
   .brand-lockup h1 { font-size: .9rem; }
   .surface-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .surface-nav.with-apiary { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .surface-nav.with-apiary button { position: relative; justify-content: center; font-size: .68rem; }
+  .surface-nav.with-apiary button > span { gap: 2px; }
+  .surface-nav.with-apiary button small { position: absolute; top: 0; right: 0; transform: scale(.82); }
   .surface-nav { gap: 3px; padding-bottom: 7px; }
   .surface-nav button { min-width: 0; min-height: 39px; padding-inline: 5px; font-size: .74rem; }
   .surface-nav button > span { min-width: 0; gap: 4px; white-space: nowrap; }
@@ -884,6 +920,22 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .header-actions .secondary-button { min-height: 36px; padding-inline: 10px; }
   .operator-presence-chip { width: 34px; justify-content: center; padding: 0; }
   .operator-presence-chip > span:last-child { display: none; }
+  .keeper-control-room { padding: 12px; }
+  .keeper-hero { grid-template-columns: 48px minmax(0, 1fr); padding: 14px; gap: 11px; }
+  .keeper-hero-mark { width: 48px; height: 48px; }
+  .keeper-hero-mark .bee-mascot { width: 53px; height: 53px; }
+  .keeper-hero .apiary-backend-badge { grid-column: 1; justify-self: start; }
+  .keeper-hero button { grid-column: 2; width: 100%; }
+  .keeper-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .keeper-summary > div:nth-child(2) { border-right: 0; }
+  .keeper-summary > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .keeper-panel { padding: 14px; }
+  .keeper-panel > header { align-items: flex-start; flex-direction: column; }
+  .keeper-panel > header > small { max-width: none; text-align: left; }
+  .keeper-hive-list li { grid-template-columns: 38px minmax(0, 1fr); }
+  .keeper-hive-list .keeper-role-badge { grid-column: 2; justify-self: start; }
+  .keeper-work-list li, .keeper-steward-list li { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .keeper-work-list li > span:last-child, .keeper-steward-list li > span:last-child { text-align: left; }
   .task-board { padding: 16px; }
   .task-compose { padding: 16px; }
   .task-compose-header { align-items: stretch; flex-direction: column; gap: 13px; }
