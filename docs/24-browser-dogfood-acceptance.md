@@ -863,3 +863,18 @@ the independently updated terminal host through the API to worker settings:
   API PID advanced to `3268019`; terminal-host PID remained `2966127`,
   preserving the active worker session. Every proof browser process closed
   after the run.
+- Release `0.1.0-dev-7c9df199ba91` gives one-time attachment grants, bounded
+  WebSocket upgrade, device-owned engagement release, and authenticated private
+  terminal image upload one focused Rust HTTP owner while byte streaming stays
+  in the terminal socket engine and media validation stays in the attachment
+  store. Focused tests proved attachment authorization, real WebSocket replay
+  and control, fail-closed terminal routes, and quiet-Queen coordination after
+  engagement. The full release gate passed 331 Rust tests, warnings-denied
+  Clippy, 213 frontend tests, strict TypeScript, and the production build.
+  Exact live Edge acceptance inspected the connected terminal and Android image
+  picker while passing every primary and Apiary member surface at 1,440-pixel
+  desktop and 412-pixel Android widths with zero overflow, 346 and 314 named
+  controls, all three Apiary guide steps, and authentication preserved across
+  complete browser restarts. API PID advanced to `3282775`; terminal-host PID
+  remained `2966127`, preserving the active worker session. Every proof browser
+  process closed after the run.
