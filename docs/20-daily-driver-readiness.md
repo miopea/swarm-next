@@ -27,7 +27,7 @@ mostly product operability rather than process survival.
 | Configure the product | Large multi-tab editor with overlapping concerns | Compact settings workspace covers runtime, terminal, appearance, and diagnostics preferences | Expand only where dogfood proves a durable need |
 | Handle attention | Proposals, messages, activity, notifications | Durable engagement guard, typed operator decisions, guarded worker handoffs, server-authoritative At Hive/Away/Night Watch presence, and bounded private Web Push | Complete baseline; verify install and notification delivery on Android Chrome/Edge |
 | Diagnose failures | Large logs/config surface | Browser, API, database, terminal, provider, integration, and separately owned API/terminal memory health plus a global expected-versus-observed dogfood bundle with sanitized preview/copy | Complete local capture foundation; add submission transport when selected and validate thresholds in soak |
-| Choose a coding provider | Claude workers in the original runtime | Claude keeps exact conversation UUID recovery; the Codex adapter uses its provider-owned repository thread and `resume --last` contract | Adapter and pinned CLI ready; expose Codex after a zero-session sidecar update and interactive recovery smoke |
+| Choose a coding provider | Claude workers in the original runtime | Claude keeps exact conversation UUID recovery; Codex is exposed as a durable worker provider and resumes its repository-owned thread through `resume --last` | Complete dogfood baseline; live recovery recalled the prior turn across a new process, and Android composer submission is proven against both providers |
 
 ## First dogfood cut
 

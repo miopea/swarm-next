@@ -557,3 +557,20 @@ the independently updated terminal host through the API to worker settings:
   three Apiary invitation steps, and trusted-session survival across complete
   desktop and mobile browser restarts. Both deployments preserved terminal-host
   PID `1528937` and the exact same 20 Claude processes.
+- Releases through `0.1.0-dev-e3dcea4ccf54` make development-reload detection
+  content-aware and close a real mobile focus race. Repository-fixture tests
+  prove that documentation and dogfood-script commits do not request an App/API
+  reload, while Rust, web, packaging, or manifest changes do. The live safe
+  reload advanced the App/API without changing terminal-host PID `2966127` or
+  Queen session `01a004fc-68b6-7720-9a6e-0eebf2434db1`. The complete desktop
+  and Android gate then passed all five main surfaces, Apiary member views,
+  named-control checks, and authentication across browser-process restarts.
+- Release `0.1.0-dev-aa6203df7a92` completes the first interactive Codex worker
+  proof. A durable Codex profile started CLI `0.147.0`, completed a turn, slept,
+  resumed in a different terminal process, and recalled the exact prior marker.
+  Live Android testing then exposed Codex paste-burst protection: sending a
+  composer payload and Enter as one burst left the prompt unsubmitted. The
+  composer now sends explicit bracketed paste followed by a bounded, separate
+  Enter frame. The rendered 412 by 915 flow produced an exact transformed
+  response through both Codex Clover and Claude Dogfood Clover, returned both
+  fixtures to Sleeping, and closed every Edge context after evidence capture.
