@@ -457,16 +457,16 @@ async function checkSurface(browser, surface) {
       throw new Error(`${surface.name}: worker-engine maintenance state is unclear`);
     }
     const appApiStatus = page.getByLabel("App and API status");
-    await appApiStatus.getByText(/^(App and API are current|Development reload available|Building development changes|Development build failed)$/).waitFor();
+    await appApiStatus.getByText(/^(Running build matches the working copy|Development reload available|Building development changes|Development build failed)$/).waitFor();
     const appApiText = await appApiStatus.innerText();
     const normalizedAppApiText = appApiText.toLocaleLowerCase();
     await appApiStatus.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(outputRoot, `${surface.name}-settings-runtime.png`), fullPage: true });
     if (
-      normalizedAppApiText.includes("app and api are current")
-      && (!normalizedAppApiText.includes("activated") || !normalizedAppApiText.includes("no reload is pending"))
+      normalizedAppApiText.includes("running build matches the working copy")
+      && (!normalizedAppApiText.includes("checks the working copy every 15 seconds") || !normalizedAppApiText.includes("no app/api build is waiting"))
     ) {
-      throw new Error(`${surface.name}: current App/API state does not explain its activation or detector result (${JSON.stringify(appApiText)})`);
+      throw new Error(`${surface.name}: current App/API state does not explain its source detector result (${JSON.stringify(appApiText)})`);
     }
     let maintenanceConfirmation = false;
     if (workerEngineText.includes("Update ready")) {

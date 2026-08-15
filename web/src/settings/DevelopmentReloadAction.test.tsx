@@ -40,7 +40,7 @@ test("names both revisions while a safe app reload is available", () => {
   );
 });
 
-test("explains automatic activation and intentional test-only quietness", () => {
+test("explains that the running build matches the polled working copy", () => {
   render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
     enabled: true,
     version: "0.1.0-dev-123456789abc-20260815040000-10",
@@ -51,7 +51,8 @@ test("explains automatic activation and intentional test-only quietness", () => 
   }} />);
 
   const status = screen.getByLabelText("App and API status");
-  expect(status).toHaveTextContent("Revision 1234567 activated automatically");
-  expect(status).toHaveTextContent("Only product-code changes trigger this safe swap; docs, tests, and scripts do not");
-  expect(status).toHaveTextContent("Claude, Codex, and the worker engine are not restarted");
+  expect(status).toHaveTextContent("Running build matches the working copy");
+  expect(status).toHaveTextContent("Active revision 1234567 matches the product code in this checkout");
+  expect(status).toHaveTextContent("Swarm checks the working copy every 15 seconds");
+  expect(status).toHaveTextContent("without restarting Claude, Codex, or the worker engine");
 });

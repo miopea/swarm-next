@@ -24,7 +24,7 @@ export default function DevelopmentReloadAction({ busy, runtime, onReload }: Pro
     </article>
   );
   if (!runtime.reload_available) {
-    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>App and API are current</strong></div><span className="runtime-status-badge current">Activated</span></header><p>Revision {runningRevision} activated automatically after its product-code build passed health checks. No reload is pending.</p><small>Only product-code changes trigger this safe swap; docs, tests, and scripts do not. Claude, Codex, and the worker engine are not restarted.</small></article>;
+    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Running build matches the working copy</strong></div><span className="runtime-status-badge current">Current</span></header><p>Active revision {runningRevision} matches the product code in this checkout. No App/API build is waiting.</p><small>Swarm checks the working copy every 15 seconds. When product code changes, you can build and activate it without restarting Claude, Codex, or the worker engine.</small></article>;
   }
   return (
     <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status">
