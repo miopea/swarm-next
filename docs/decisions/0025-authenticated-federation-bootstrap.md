@@ -76,7 +76,11 @@ URL (and matching QR code):
    outbound to Keeper. The one-time redemption binds the invitation to that
    exact Hive/node key before Keeper issues the existing signed invitation
    envelope.
-3. The Hive previews Apiary, Keeper, policy, backend, and promoted-project
+3. Keeper shows the bound Hive and operator identity for explicit approval.
+   The invited Hive polls that same Keeper URL outbound and receives the
+   targeted signed invitation only after approval; Keeper never calls the
+   member machine.
+4. The Hive previews Apiary, Keeper, policy, backend, and promoted-project
    requirements locally, then explicitly accepts and joins through the existing
    fail-closed protocol.
 
@@ -97,6 +101,13 @@ workers, private tasks, terminals, and their local Jira operation, queue bounded
 outbound federation events, show Apiary transport as offline, and reconcile in
 order after reconnect. Cross-Hive rollups, new shared assignments, project
 promotion, and takeover wait for Keeper reachability.
+
+For Jira-backed Apiaries, each Hive synchronizes promoted issue content,
+comments, status, and assignment directly with Jira using its own operator
+identity. Keeper polling carries membership, policy, project-catalog,
+Stewardship, and coordination facts, but is not a Jira data proxy. For Native
+Apiaries, Keeper is the canonical shared-task service, so members also retrieve
+and reconcile Apiary task events through that same outbound poll channel.
 
 ## Consequences
 

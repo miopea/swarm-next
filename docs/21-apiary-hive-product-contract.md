@@ -229,15 +229,27 @@ project; manifest presence alone never claims that a remote Hive is ready.
 Every Apiary permanently chooses one canonical shared-work backend:
 
 - **Jira-backed Apiary**: Jira is canonical and every active Hive connects its
-  operator Jira identity and receives all promoted Apiary projects.
+  operator Jira identity and receives all promoted Apiary projects. Each Hive
+  reads and writes Jira directly; issue bodies, comments, statuses, and
+  assignees do not relay through Keeper. Keeper distributes only the bounded
+  project catalog, policy, membership, and cross-Hive coordination facts.
 - **Native Apiary**: Swarm is canonical and supplies first-class distributed
   task synchronization, ownership, event propagation, offline queues,
-  reconciliation, and conflict handling.
+  reconciliation, and conflict handling. Member Hives retrieve that shared
+  work by polling Keeper and submit ordered changes over the same outbound
+  route.
 
 Mixed mode and backend conversion are not supported. Native is a substantial
 later capability, not a free fallback. Private Hive tasks and Hive-owned Jira
 projects remain available in either mode because they are outside Apiary shared
 work.
+
+All Swarm-to-Swarm federation traffic is member initiated. A member Hive polls
+the reachable Keeper HTTPS endpoint for invitations, policy/catalog changes,
+Steward authority, coordination, and—only for a Native Apiary—shared task
+state. Keeper never requires an inbound route to a member machine. This is
+separate from Jira-backed issue synchronization, where every Hive talks to
+Jira directly using its own operator identity.
 
 A sole Keeper Hive may explicitly collapse an Apiary after automatic safety
 validation. Native tasks become local while preserving identity and history;

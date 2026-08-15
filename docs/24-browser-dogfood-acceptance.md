@@ -892,3 +892,14 @@ the independently updated terminal host through the API to worker settings:
   restarts. API PID advanced to `3294941`; terminal-host PID remained
   `2966127`, preserving the active worker session. Every proof browser process
   closed after the run.
+- Release `0.1.0-dev-960dc130d9fb` gives host availability, typed IPC failure
+  handling, authenticated terminal commands, no-store reads, and content-free
+  session invalidation one shared terminal-host client boundary used by
+  runtime, history, attachment, control, maintenance, worker recovery, and
+  provider observation. The full Rust gate passed 331 tests and
+  warnings-denied Clippy. Exact live Edge acceptance passed every primary and
+  Apiary member surface at 1,440-pixel desktop and 412-pixel Android widths
+  with zero overflow, 345 and 318 named controls, all three Apiary guide steps,
+  and authentication preserved across complete browser restarts. API PID
+  advanced to `3320473`; terminal-host PID remained `2966127`, preserving the
+  active worker session. Every proof browser process closed after the run.
