@@ -639,3 +639,16 @@ the independently updated terminal host through the API to worker settings:
   Apiary member surface passed with zero overflow, 346 and 318 named controls,
   three Apiary guide steps, and authentication across browser restarts. API PID
   advanced to `3067260`; terminal-host PID remained `2966127`.
+- Release `0.1.0-dev-b278aa2531e1` moves email configuration, bounded Inbox and
+  message reads, attachment previews, multi-source task import, source links,
+  deployment evidence, and the reviewed reply outbox behind one
+  integration-owned API boundary. Mocked transport tests cover the read and
+  command shapes without reading, importing, replying to, or otherwise
+  mutating real mail. All 213 frontend tests, strict TypeScript, and the
+  production build passed. Exact live Edge acceptance passed every primary and
+  Apiary member surface at 1,440-pixel desktop and 412-pixel Android widths with
+  zero overflow, 346 and 312 named controls, three Apiary guide steps, and
+  authentication across complete browser restarts. The hidden browser harness
+  closed after writing evidence. API PID advanced to `3075309`; terminal-host
+  PID remained `2966127`, so the active worker engine and provider sessions were
+  not restarted.
