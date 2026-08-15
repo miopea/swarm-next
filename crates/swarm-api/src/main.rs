@@ -37,6 +37,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_notifications(vapid_subject_from_env())?;
     if let Some((request, status)) = development_reload_paths_from_env()? {
         state = state.with_development_reload_paths(request, status);
+        if let Some(checkout) = env::var_os("SWARM_DEV_CHECKOUT") {
+            state = state.with_development_checkout_path(PathBuf::from(checkout));
+        }
     }
     if let Ok(public_base_url) = env::var("SWARM_PUBLIC_BASE_URL") {
         state = state.with_public_base_url(&public_base_url)?;

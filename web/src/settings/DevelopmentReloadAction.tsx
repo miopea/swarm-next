@@ -2,16 +2,22 @@ import { useState } from "react";
 
 type Props = {
   busy: boolean;
-  enabled: boolean;
+  runtime?: import("../api").DevelopmentRuntime;
   onReload: () => Promise<void>;
 };
 
-export default function DevelopmentReloadAction({ busy, enabled, onReload }: Props) {
+export default function DevelopmentReloadAction({ busy, runtime, onReload }: Props) {
   const [confirming, setConfirming] = useState(false);
-  if (!enabled) return null;
+  if (!runtime?.enabled) return null;
+  if (runtime.state === "requested" || runtime.state === "building") {
+    return <div className="maintenance-action development-reload-action" role="status"><p><strong>Development build in progress.</strong> Workers remain online while Swarm builds and checks the working copy.</p></div>;
+  }
+  if (!runtime.reload_available) {
+    return <div className="maintenance-action development-reload-action"><p><strong>Development build is current.</strong> The API and browser already match the product code in this working copy. No reload is needed.</p></div>;
+  }
   return (
     <div className="maintenance-action development-reload-action">
-      <p><strong>No worker interruption.</strong> Build the current working copy and switch this same app to it. The page briefly reconnects after a successful API/web reload, but Claude and Codex processes keep running in the separate worker engine. A failed compile leaves the current release active.</p>
+      <p><strong>Development changes are ready.</strong> Build the current working copy and switch this same app to it with no worker interruption. The page briefly reconnects, but Claude and Codex processes keep running in the separate worker engine. A failed compile leaves the current release active.</p>
       {!confirming ? (
         <button className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>Reload development build</button>
       ) : (

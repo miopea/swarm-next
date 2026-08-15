@@ -13,6 +13,7 @@ mod terminal_socket;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::{Path as FilePath, PathBuf},
+    process::Command,
     str::FromStr,
     sync::Arc,
     time::Duration,
@@ -105,6 +106,7 @@ pub struct AppState {
     maintenance_request_path: Option<Arc<PathBuf>>,
     development_reload_request_path: Option<Arc<PathBuf>>,
     development_reload_status_path: Option<Arc<PathBuf>>,
+    development_checkout_path: Option<Arc<PathBuf>>,
     maintenance_timeout: Duration,
     jira_readiness: jira::JiraReadinessProbe,
     outlook: Arc<RwLock<outlook::OutlookProbe>>,
@@ -154,6 +156,7 @@ impl AppState {
             maintenance_request_path: None,
             development_reload_request_path: None,
             development_reload_status_path: None,
+            development_checkout_path: None,
             maintenance_timeout: Duration::from_secs(45),
             jira_readiness: jira::JiraReadinessProbe::default(),
             outlook: Arc::new(RwLock::new(outlook::OutlookProbe::default())),
@@ -357,6 +360,12 @@ impl AppState {
     pub fn with_development_reload_paths(mut self, request: PathBuf, status: PathBuf) -> Self {
         self.development_reload_request_path = Some(Arc::new(request));
         self.development_reload_status_path = Some(Arc::new(status));
+        self
+    }
+
+    #[must_use]
+    pub fn with_development_checkout_path(mut self, checkout: PathBuf) -> Self {
+        self.development_checkout_path = Some(Arc::new(checkout));
         self
     }
 
@@ -1215,6 +1224,9 @@ struct DevelopmentRuntimeResponse {
     enabled: bool,
     version: &'static str,
     state: &'static str,
+    reload_available: bool,
+    source_revision: Option<String>,
+    source_dirty: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -3209,15 +3221,92 @@ async fn development_runtime(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let source = development_source_status(&state);
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(DevelopmentRuntimeResponse {
             enabled: state.development_reload_request_path.is_some(),
             version: build_version(),
             state: development_reload_state(&state),
+            reload_available: source
+                .as_ref()
+                .is_some_and(|status| status.reload_available),
+            source_revision: source.as_ref().map(|status| status.revision.clone()),
+            source_dirty: source.is_some_and(|status| status.dirty),
         }),
     )
         .into_response())
+}
+
+struct DevelopmentSourceStatus {
+    revision: String,
+    dirty: bool,
+    reload_available: bool,
+}
+
+fn development_source_status(state: &AppState) -> Option<DevelopmentSourceStatus> {
+    let checkout = state.development_checkout_path.as_ref()?;
+    let revision = git_output(checkout, &["rev-parse", "--short=12", "HEAD"])?;
+    let product_paths = ["Cargo.toml", "Cargo.lock", "crates", "web", "packaging"];
+    let dirty = !git_output_with_paths(
+        checkout,
+        &["status", "--porcelain", "--untracked-files=normal", "--"],
+        &product_paths,
+    )
+    .is_some_and(|output| output.is_empty());
+    let deployed_revision = deployed_source_revision(build_version());
+    let committed_changes = deployed_revision.as_deref().is_none_or(|deployed| {
+        Command::new("git")
+            .arg("-C")
+            .arg(checkout.as_ref())
+            .args(["diff", "--quiet", deployed, "HEAD", "--"])
+            .args(product_paths)
+            .status()
+            .map_or(true, |status| !status.success())
+    });
+    Some(DevelopmentSourceStatus {
+        revision,
+        dirty,
+        reload_available: dirty || committed_changes,
+    })
+}
+
+fn git_output(checkout: &FilePath, arguments: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(checkout)
+        .args(arguments)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn git_output_with_paths(
+    checkout: &FilePath,
+    arguments: &[&str],
+    paths: &[&str],
+) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(checkout)
+        .args(arguments)
+        .args(paths)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn deployed_source_revision(version: &str) -> Option<String> {
+    version
+        .split('-')
+        .find(|part| part.len() == 12 && part.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(str::to_owned)
 }
 
 fn development_reload_state(state: &AppState) -> &'static str {
@@ -6626,6 +6715,7 @@ mod tests {
         let status = response_json(status).await;
         assert_eq!(status["enabled"], true);
         assert_eq!(status["version"], build_version());
+        assert_eq!(status["reload_available"], false);
 
         let requested = app
             .clone()
@@ -6665,6 +6755,19 @@ mod tests {
             response_json(duplicate).await["code"],
             "development_reload_in_progress"
         );
+    }
+
+    #[test]
+    fn development_versions_expose_the_source_revision() {
+        assert_eq!(
+            deployed_source_revision("0.1.0-dev-d85e1e875ce2-20260815003728-2607939").as_deref(),
+            Some("d85e1e875ce2")
+        );
+        assert_eq!(
+            deployed_source_revision("0.1.0-a5d95af96bee").as_deref(),
+            Some("a5d95af96bee")
+        );
+        assert_eq!(deployed_source_revision("0.1.0"), None);
     }
 
     #[tokio::test]

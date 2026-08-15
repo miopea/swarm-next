@@ -52,6 +52,9 @@ export type DevelopmentRuntime = {
   enabled: boolean;
   version: string;
   state: "disabled" | "idle" | "requested" | "building" | "failed" | "ready";
+  reload_available: boolean;
+  source_revision: string | null;
+  source_dirty: boolean;
 };
 export type ResourcePressure = "normal" | "advisory" | "critical" | "unavailable";
 export type RuntimeResources = {

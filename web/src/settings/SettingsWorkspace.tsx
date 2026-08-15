@@ -281,7 +281,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
             )}
           </div>
         ) : null}
-        <DevelopmentReloadAction busy={busy} enabled={developmentRuntime?.enabled === true} onReload={onReloadDevelopment} />
+        <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} onReload={onReloadDevelopment} />
       </section>
 
       <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} />

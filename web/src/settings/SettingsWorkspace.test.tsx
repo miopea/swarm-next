@@ -221,7 +221,7 @@ test("confirms an opt-in development reload without implying worker loss", async
   const onReloadDevelopment = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes("runtime/development")) return ok({ enabled: true, version: "0.1.0-dev", state: "idle" });
+    if (url.includes("runtime/development")) return ok({ enabled: true, version: "0.1.0-dev", state: "idle", reload_available: true, source_revision: "123456789abc", source_dirty: false });
     if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
     if (url.includes("integrations/jira/bindings")) return ok([]);
     if (url.includes("feedback/reports")) return ok([]);
@@ -235,7 +235,7 @@ test("confirms an opt-in development reload without implying worker loss", async
 
   render(<SettingsWorkspace {...minimalProps()} onReloadDevelopment={onReloadDevelopment} />);
   expect(await screen.findByRole("button", { name: "Reload development build" })).toBeInTheDocument();
-  expect(screen.getByText("No worker interruption.", { selector: "strong" })).toBeInTheDocument();
+  expect(screen.getByText("Development changes are ready.", { selector: "strong" })).toBeInTheDocument();
   expect(screen.getByText(/Claude and Codex processes keep running/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Reload development build" }));
   expect(screen.getByRole("group", { name: "Confirm development reload" })).toHaveTextContent("Build and activate the working copy?");
