@@ -147,7 +147,10 @@ Required next extractions are vertical and behavior-led:
   durability and worker delivery remain application/persistence concerns.
 - `crates/swarm-persistence/src/lib.rs` is roughly 3,700 lines although Jira,
   workers, decisions, notifications, dispatches, and outcomes have begun moving
-  to focused modules.
+  to focused modules. The content-free control-room event aggregate now owns
+  durable append, bounded retention, resumable reads, and stale-cursor reset in
+  `events.rs`; task, worker, presence, and runtime mutations still call that one
+  shared event contract rather than duplicating invalidation behavior.
 - `crates/swarm-domain/src/lib.rs` is roughly 2,800 lines and should be grouped by
   domain vocabulary before cross-Hive work expands it.
 
