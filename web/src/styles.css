@@ -983,7 +983,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .operator-presence-chip { width: 34px; justify-content: center; padding: 0; }
   .operator-presence-chip > span:last-child { display: none; }
   .keeper-control-room { padding: 12px; }
-  .keeper-hero { grid-template-columns: 48px minmax(0, 1fr); padding: 14px; gap: 11px; }
+  .keeper-hero { grid-template-columns: max-content minmax(0, 1fr); padding: 14px; gap: 11px; }
   .keeper-hero-mark { width: 48px; height: 48px; }
   .keeper-hero-mark .bee-mascot { width: 53px; height: 53px; }
   .keeper-hero .apiary-backend-badge { grid-column: 1; justify-self: start; white-space: nowrap; }
