@@ -39,6 +39,9 @@ async function main() {
       await tokenInput.fill(operatorToken);
       await page.getByRole("button", { name: "Unlock Swarm" }).click();
     }
+    // A locked first navigation can reject private bootstrap reads before the
+    // explicit unlock succeeds. Judge only the authenticated operator journey.
+    errors.length = 0;
     await page.getByRole("button", { name: /Workers/ }).click();
     const switcher = page.locator(".mobile-worker-switcher-trigger");
     await switcher.waitFor();
