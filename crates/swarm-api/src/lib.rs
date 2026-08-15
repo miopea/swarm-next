@@ -17,6 +17,7 @@ mod orchestration;
 mod outlook;
 mod presence;
 mod presentation;
+mod provider_activity;
 mod runtime;
 mod tasks;
 mod terminal_socket;
@@ -48,7 +49,6 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::{delete, get, patch, post, put},
 };
-use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use swarm_application::{
     ApiaryHiveCandidateOverview, ApiaryInvitationOverview, ApiaryService, ApplicationError,
@@ -76,7 +76,6 @@ use swarm_terminal::{
     ClaudeConversationStart, CodexConversationStart, HistoryCursor, HostClient, HostRequest,
     HostResponse, JournalLimits, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
     MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProviderActivity, TerminalSize,
-    classify_provider_activity,
 };
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore};
 #[cfg(test)]
@@ -647,7 +646,7 @@ impl AppState {
             tracing::warn!("worker supervisor could not load the durable roster");
             return;
         };
-        refresh_provider_activity(self, &profiles, &live).await;
+        provider_activity::refresh(self, &profiles, &live).await;
         let now = unix_timestamp();
         {
             let mut attempts = self.worker_recovery_attempts.write().await;
@@ -1207,12 +1206,6 @@ struct AttachGrantResponse {
     expires_in_ms: u64,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-struct ProviderCapabilitiesView {
-    claude_code: bool,
-    codex: bool,
-}
-
 #[derive(Debug, Deserialize)]
 struct StartSessionRequest {
     workspace: PathBuf,
@@ -1735,7 +1728,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/workers",
             get(workers::list_workers).post(workers::create_worker),
         )
-        .route("/api/v1/providers", get(list_provider_capabilities))
+        .route("/api/v1/providers", get(provider_activity::capabilities))
         .route("/api/v1/integrations/jira/readiness", get(jira_readiness))
         .route(
             "/api/v1/integrations/jira/auth/start",
@@ -2518,88 +2511,6 @@ async fn join_apiary(
         )
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
-}
-
-async fn observe_provider_activity(
-    state: &AppState,
-    profiles: &[WorkerProfile],
-    live: &HashSet<WorkerSessionId>,
-) -> HashMap<WorkerSessionId, ProviderActivity> {
-    let observations = profiles
-        .iter()
-        .filter_map(|profile| {
-            let session_id = profile.active_session_id?;
-            live.contains(&session_id)
-                .then_some((session_id, profile.provider))
-        })
-        .collect::<Vec<_>>();
-    stream::iter(observations)
-        .map(|(session_id, provider)| async move {
-            match request_host(
-                state,
-                HostRequest::Read {
-                    session_id,
-                    after_sequence: None,
-                },
-            )
-            .await
-            {
-                Ok(HostResponse::Output {
-                    resume: swarm_terminal::Resume::Snapshot { snapshot },
-                    running: true,
-                    ..
-                }) => Some((session_id, classify_provider_activity(provider, &snapshot))),
-                _ => None,
-            }
-        })
-        .buffer_unordered(8)
-        .filter_map(async move |observation| observation)
-        .collect()
-        .await
-}
-
-async fn refresh_provider_activity(
-    state: &AppState,
-    profiles: &[WorkerProfile],
-    live: &HashSet<WorkerSessionId>,
-) -> HashMap<WorkerSessionId, ProviderActivity> {
-    let observed = observe_provider_activity(state, profiles, live).await;
-    let changed = {
-        let mut previous = state.provider_activity.write().await;
-        if *previous == observed {
-            false
-        } else {
-            previous.clone_from(&observed);
-            true
-        }
-    };
-    if changed {
-        if let Some(store) = &state.task_store
-            && let Err(error) =
-                store.record_control_room_event(ControlRoomEventKind::RuntimeChanged)
-        {
-            tracing::warn!(%error, "provider activity change could not publish its runtime event");
-        }
-        state.control_room_notify.notify_waiters();
-    }
-    observed
-}
-
-async fn list_provider_capabilities(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let capabilities = match request_host(&state, HostRequest::ProviderCapabilities).await {
-        Ok(HostResponse::ProviderCapabilities { claude_code, codex }) => {
-            ProviderCapabilitiesView { claude_code, codex }
-        }
-        _ => ProviderCapabilitiesView {
-            claude_code: true,
-            codex: false,
-        },
-    };
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(capabilities)).into_response())
 }
 
 async fn jira_readiness(

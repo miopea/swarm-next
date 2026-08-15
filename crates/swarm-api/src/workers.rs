@@ -16,7 +16,7 @@ use swarm_terminal::{HostRequest, ProviderActivity, TerminalSize};
 
 use super::{
     ApiError, AppState, authorize, default_provider, default_terminal_columns,
-    default_terminal_rows, parse_worker_id, reconcile_worker_bindings, refresh_provider_activity,
+    default_terminal_rows, parse_worker_id, provider_activity, reconcile_worker_bindings,
     request_host, require_valid_size, start_worker_process, task_store, task_store_error,
     worker_view,
 };
@@ -69,7 +69,7 @@ pub(super) async fn list_workers(
     let profiles = task_store(&state)?
         .list_worker_profiles()
         .map_err(|error| task_store_error(&error))?;
-    let provider_activity = refresh_provider_activity(&state, &profiles, &live).await;
+    let provider_activity = provider_activity::refresh(&state, &profiles, &live).await;
     let awaiting_operator = task_store(&state)?
         .workers_awaiting_operator()
         .map_err(|error| task_store_error(&error))?;
