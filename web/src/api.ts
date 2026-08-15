@@ -1327,6 +1327,14 @@ export async function fetchEmailMessage(operatorToken: string, messageId: string
   return response.json() as Promise<EmailMessage>;
 }
 
+export async function fetchEmailAttachmentPreview(operatorToken: string, messageId: string, attachmentId: string): Promise<Blob> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/integrations/email/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+  );
+  return response.blob();
+}
+
 export async function importEmailMessage(operatorToken: string, messageId: string, priority: TaskPriority): Promise<EmailImport> {
   const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/email/messages/${encodeURIComponent(messageId)}/import`, {
     method: "POST",

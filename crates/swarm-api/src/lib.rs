@@ -1983,6 +1983,10 @@ fn api_router(state: AppState) -> Router {
             get(email_message),
         )
         .route(
+            "/api/v1/integrations/email/messages/{message_id}/attachments/{attachment_id}",
+            get(preview_email_attachment),
+        )
+        .route(
             "/api/v1/integrations/email/messages/{message_id}/import",
             post(import_email_message),
         )
@@ -4599,6 +4603,53 @@ async fn email_message(
     let outlook = state.outlook.read().await.clone();
     let message = outlook.message(&message_id).await.map_err(outlook_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(message)).into_response())
+}
+
+async fn preview_email_attachment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((message_id, attachment_id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let outlook = state.outlook.read().await.clone();
+    let content = outlook
+        .attachment(&message_id, &attachment_id)
+        .await
+        .map_err(outlook_error)?;
+    let media_type = content.metadata.media_type.as_str();
+    if !matches!(
+        media_type,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    ) {
+        return Err(ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "email_preview_unsupported",
+            "only bounded raster images can be previewed",
+        ));
+    }
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response_headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response_headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; sandbox"),
+    );
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(media_type)
+            .map_err(|_| outlook_error(outlook::OutlookError::InvalidResponse))?,
+    );
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("inline"),
+    );
+    Ok((response_headers, content.bytes).into_response())
 }
 
 async fn import_email_message(

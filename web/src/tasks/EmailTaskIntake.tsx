@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   fetchEmailInbox,
+  fetchEmailAttachmentPreview,
   fetchEmailMessage,
   fetchEmailReadiness,
   importEmailMessage,
@@ -24,6 +25,7 @@ export default function EmailTaskIntake({ operatorToken, onImported }: Props) {
   const [priority, setPriority] = useState<TaskPriority>("normal");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -53,6 +55,30 @@ export default function EmailTaskIntake({ operatorToken, onImported }: Props) {
     }, query.trim() ? 250 : 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [operatorToken, query, readiness?.connection, selected]);
+
+  useEffect(() => {
+    const urls: string[] = [];
+    setImageUrls({});
+    if (!selected) return;
+    let cancelled = false;
+    const previews = selected.attachments.filter((attachment) =>
+      attachment.inline && ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(attachment.media_type),
+    );
+    void Promise.all(previews.map(async (attachment) => {
+      const blob = await fetchEmailAttachmentPreview(operatorToken, selected.summary.id, attachment.id);
+      const url = URL.createObjectURL(blob);
+      urls.push(url);
+      return [attachment.id, url] as const;
+    })).then((entries) => {
+      if (!cancelled) setImageUrls(Object.fromEntries(entries));
+    }).catch(() => {
+      if (!cancelled) setMessage("One or more inline images could not be previewed. They will still be preserved on import.");
+    });
+    return () => {
+      cancelled = true;
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [operatorToken, selected]);
 
   async function choose(summary: EmailMessageSummary) {
     setBusy(true);
@@ -97,7 +123,7 @@ export default function EmailTaskIntake({ operatorToken, onImported }: Props) {
     <section className="email-task-source" aria-labelledby="email-work-heading">
       <div className="email-intake-heading">
         <div><p className="eyebrow">Email work</p><h3 id="email-work-heading">Choose a message from Inbox</h3></div>
-        <span>{readiness.account_address}</span>
+        <span>{messages.length ? `${messages.length} recent messages` : "Inbox"} · {readiness.account_address}</span>
       </div>
       {!selected ? (
         <>
@@ -108,8 +134,9 @@ export default function EmailTaskIntake({ operatorToken, onImported }: Props) {
           <div className="email-message-list" role="list" aria-label="Inbox messages">
             {messages.map((item) => (
               <button key={item.id} type="button" role="listitem" disabled={busy} onClick={() => void choose(item)}>
-                <span className="email-message-primary"><strong>{item.subject || "(No subject)"}</strong><small>{item.sender_name || item.sender_address} · {formatReceived(item.received_at)}</small></span>
-                <span className="email-message-preview">{item.preview || "No message preview"}</span>
+                <span className="email-message-sender">{item.sender_name || item.sender_address}</span>
+                <span className="email-message-content"><strong>{item.subject || "(No subject)"}</strong><small>{item.preview || "No message preview"}</small></span>
+                <time dateTime={new Date(item.received_at * 1000).toISOString()}>{formatReceived(item.received_at)}</time>
                 {item.has_attachments ? <span className="email-attachment-mark">Attachments</span> : null}
               </button>
             ))}
@@ -127,7 +154,17 @@ export default function EmailTaskIntake({ operatorToken, onImported }: Props) {
             <p>{selected.summary.sender_name || selected.summary.sender_address} · {selected.summary.sender_address}</p>
             <small>{formatReceived(selected.summary.received_at)}</small>
           </header>
-          <pre className="email-body-preview">{selected.body_text || selected.summary.preview || "No readable message body."}</pre>
+          <div className="email-body-preview">{readableBody(selected.body_text || selected.summary.preview || "No readable message body.")}</div>
+          {Object.keys(imageUrls).length ? (
+            <div className="email-inline-images" aria-label="Images in this message">
+              {selected.attachments.filter((attachment) => imageUrls[attachment.id]).map((attachment) => (
+                <figure key={attachment.id}>
+                  <img src={imageUrls[attachment.id]} alt={attachment.name || "Image from email"} />
+                  <figcaption>{attachment.name}</figcaption>
+                </figure>
+              ))}
+            </div>
+          ) : null}
           {selected.attachments.length ? (
             <div className="email-attachment-list">
               <strong>{selected.attachments.length} attachment{selected.attachments.length === 1 ? "" : "s"}</strong>
@@ -154,4 +191,9 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function readableBody(body: string) {
+  const withoutCidMarkers = body.replace(/^\s*\[cid:[^\]]+\]\s*$/gim, "").trim();
+  return withoutCidMarkers.split(/\n{2,}/).filter(Boolean).map((paragraph, index) => <p key={`${index}-${paragraph.slice(0, 24)}`}>{paragraph}</p>);
 }
