@@ -174,3 +174,11 @@ and terminal-host PID `400662` unchanged. API RSS stayed between 5,914,624 and
 1,776,128,000 bytes; retained history advanced only 12,212 bytes and dropped
 history remained zero. The paired Edge run also passed all growth and slope
 limits over 120 samples and 59 active navigation cycles.
+
+The 2026-08-15 exact-release run for `0.1.0-dev-371eb6297ac6` observed the
+current real dogfood session for 20 read-only samples over 600 seconds. API PID
+`3110299` remained fixed with memory between 31,895,552 and 33,312,768 bytes;
+terminal-host PID `2966127` remained fixed with its complete cgroup between
+358,846,464 and 359,657,472 bytes. Retained terminal history stayed exactly
+172,922,017 bytes and dropped history remained zero. No worker, service,
+terminal input, Jira record, or browser state was changed by the observation.
