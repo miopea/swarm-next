@@ -52,11 +52,13 @@ These abstractions are justified by shared behavior, not visual resemblance.
 
 ### P1 — oversized presentation responsibilities
 
-- `web/src/App.tsx` remains the browser composition root and still mixes session
-  restoration, live-feed orchestration, commands, navigation, mobile overlays,
-  and layout rendering. The typed snapshot and all aggregate replacement/clear
-  behavior now have one owner in `useControlRoomModel`; locking cannot leave
-  workspace or Jira-link state behind while hiding the rest of the room.
+- `web/src/App.tsx` remains the browser composition root and still mixes
+  commands, navigation, mobile overlays, and layout rendering. The typed
+  snapshot, saved-session restoration, live-feed invalidation, recent event
+  evidence, and all aggregate replacement/clear behavior now have one owner in
+  `useControlRoomModel`. Cancelled effects cannot apply stale room state, and
+  locking cannot leave workspace or Jira-link state behind while hiding the
+  rest of the room.
 - `web/src/tasks/TaskBoard.tsx` has dropped to roughly 550 lines. Query/filter/
   sort is a pure tested `taskBoardModel`, while metadata and assignment are
   focused components. Editing, activity, Jira/email detail, and action-menu
@@ -68,14 +70,12 @@ These abstractions are justified by shared behavior, not visual resemblance.
 
 Required next extractions are vertical and behavior-led:
 
-1. Move live-feed invalidation and saved-session restoration behind the existing
-   `useControlRoomModel`; `App` remains composition and routing.
-2. Continue splitting `TaskCard` only when editing, activity, or integration
+1. Continue splitting `TaskCard` only when editing, activity, or integration
    detail changes next. Metadata, assignment, and query/filter/sort are already
    behavior-owned and directly tested; do not create a generic card framework.
-4. API contracts split by domain (`tasks`, `workers`, `jira`, `presence`) while
+2. API contracts split by domain (`tasks`, `workers`, `jira`, `presence`) while
    keeping one small shared authenticated request helper.
-5. CSS moves with extracted feature components after their visual contracts are
+3. CSS moves with extracted feature components after their visual contracts are
    stable. A wholesale CSS-module migration is not justified during alpha.
 
 ### P1 — backend adapter concentration

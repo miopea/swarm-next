@@ -1,8 +1,9 @@
 import { act, renderHook } from "@testing-library/react";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
+import { BROWSER_SESSION_AUTH, type ControlRoomEventPage } from "../api";
 import type { ControlRoomSnapshot } from "./useControlRoomModel";
-import { useControlRoomModel } from "./useControlRoomModel";
+import { mergeRecentEvents, useControlRoomModel } from "./useControlRoomModel";
 
 const populated = {
   hiveIdentity: { operator: { id: "operator", display_name: "Operator" }, hive: { id: "hive", name: "Hive", operator_id: "operator", apiary_id: null } },
@@ -42,3 +43,51 @@ test("scoped command results update one aggregate without discarding the others"
   expect(result.current.workers).toEqual(populated.workers);
   expect(result.current.jiraTaskLinks).toEqual(populated.jiraTaskLinks);
 });
+
+test("restores the trusted browser session and snapshot through one model operation", async () => {
+  const validateSession = vi.fn().mockResolvedValue(undefined);
+  const loadSnapshot = vi.fn().mockResolvedValue(populated);
+  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot, validateSession }));
+
+  await act(async () => { await result.current.restoreBrowserSession(); });
+
+  expect(validateSession).toHaveBeenCalledOnce();
+  expect(loadSnapshot).toHaveBeenCalledWith(BROWSER_SESSION_AUTH);
+  expect(result.current.workers).toEqual(populated.workers);
+  expect(result.current.tasks).toEqual(populated.tasks);
+});
+
+test("does not apply a live-feed refresh after its owning effect is cancelled", async () => {
+  let finishLoad!: (snapshot: ControlRoomSnapshot) => void;
+  const loadSnapshot = vi.fn(() => new Promise<ControlRoomSnapshot>((resolve) => { finishLoad = resolve; }));
+  const { result } = renderHook(() => useControlRoomModel({ loadSnapshot }));
+  const controller = new AbortController();
+  const page = eventPage(1, false);
+
+  let refresh!: Promise<ControlRoomSnapshot | undefined>;
+  act(() => { refresh = result.current.refreshFromEvents("operator", page, controller.signal); });
+  controller.abort();
+  await act(async () => { finishLoad(populated); await refresh; });
+
+  expect(result.current.workers).toEqual([]);
+  expect(result.current.recentEvents).toEqual([]);
+});
+
+test("deduplicates, bounds, and resets recent control-room evidence", () => {
+  const first = Array.from({ length: 16 }, (_, index) => eventPage(index + 1, false).events[0]);
+  const merged = mergeRecentEvents(first, {
+    events: [eventPage(16, false).events[0], eventPage(17, false).events[0]],
+    next_cursor: 17,
+    reset_required: false,
+  });
+  expect(merged.map((event) => event.sequence)).toEqual(Array.from({ length: 16 }, (_, index) => index + 2));
+  expect(mergeRecentEvents(merged, eventPage(40, true)).map((event) => event.sequence)).toEqual([40]);
+});
+
+function eventPage(sequence: number, resetRequired: boolean): ControlRoomEventPage {
+  return {
+    events: [{ sequence, hive_id: "hive", kind: "tasks_changed", occurred_at: sequence }],
+    next_cursor: sequence,
+    reset_required: resetRequired,
+  };
+}

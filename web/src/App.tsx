@@ -37,8 +37,6 @@ import {
   updateWorker,
   updateWorkerEngine,
   updateTask,
-  validateBrowserSession,
-  type ControlRoomEvent,
   type DecisionRequest,
   type Health,
   type HiveIdentity,
@@ -92,7 +90,7 @@ export function App() {
   const [operatorToken, setOperatorToken] = useState<string>();
   const controlRoomModel = useControlRoomModel();
   const {
-    hiveIdentity, sessions, workers, workspaces, tasks, jiraTaskLinks, decisions,
+    hiveIdentity, sessions, workers, workspaces, tasks, jiraTaskLinks, decisions, recentEvents,
     setHiveIdentity, setWorkers, setWorkspaces, setTasks,
     setJiraTaskLinks, setDecisions,
   } = controlRoomModel;
@@ -118,7 +116,6 @@ export function App() {
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
   const [mobileKeysVisible, setMobileKeysVisible] = useState(initialMobileKeysVisibility);
   const [liveFeedState, setLiveFeedState] = useState<LiveFeedState>("connecting");
-  const [recentEvents, setRecentEvents] = useState<ControlRoomEvent[]>([]);
   const [presence, setPresence] = useState<OperatorPresence>();
   const [lockDetectionState, setLockDetectionState] = useState<LockDetectionState>("unsupported");
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>();
@@ -208,26 +205,26 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     void recoverTransientRuntime(async () => {
-      await validateBrowserSession();
-      return loadControlRoom(BROWSER_SESSION_AUTH);
+      const next = await controlRoomModel.restoreBrowserSession(controller.signal);
+      if (!next) throw new DOMException("Aborted", "AbortError");
+      return next;
     })
       .then((nextControlRoom) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
         setOperatorToken(BROWSER_SESSION_AUTH);
-        controlRoomModel.replace(nextControlRoom);
         setActiveSessionId(restoredSessionId(nextControlRoom.workers, nextControlRoom.sessions));
       })
       .catch((error: unknown) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         terminalWorkspace.logout();
         if (!(error instanceof Error && error.message.includes("401"))) {
           setOperationError(error instanceof Error ? error.message : "Saved authentication could not be restored");
         }
       })
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -235,14 +232,14 @@ export function App() {
       setLiveFeedState("connecting");
       return;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     const feed = new ControlRoomLiveFeed();
     feed.start(
       operatorToken,
       async (page) => {
         const runtimeChanged = page.events.some((event) => event.kind === "runtime_changed");
         const [controlRoom, refreshedPresence, refreshedNotifications, refreshedQueenPolicy, refreshedPresentation, refreshedProviders] = await Promise.all([
-          loadControlRoom(operatorToken),
+          controlRoomModel.refreshFromEvents(operatorToken, page, controller.signal),
           page.events.some((event) => event.kind === "presence_changed")
             ? fetchPresence(operatorToken)
             : Promise.resolve(undefined),
@@ -259,8 +256,7 @@ export function App() {
             ? fetchProviderCapabilities(operatorToken)
             : Promise.resolve(undefined),
         ]);
-        if (cancelled) return;
-        controlRoomModel.replace(controlRoom);
+        if (controller.signal.aborted || !controlRoom) return;
         if (refreshedPresence) setPresence(refreshedPresence);
         if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
         if (refreshedQueenPolicy) setQueenPolicy(refreshedQueenPolicy);
@@ -270,11 +266,6 @@ export function App() {
           setMobileKeysVisible(refreshedPresentation.terminal_keys_visible);
           rememberMobileKeysVisibility(refreshedPresentation.terminal_keys_visible);
         }
-        setRecentEvents((current) => page.reset_required
-          ? page.events.slice(-16)
-          : [...current, ...page.events].filter((event, index, events) =>
-              events.findIndex((candidate) => candidate.sequence === event.sequence) === index,
-            ).slice(-16));
         setActiveSessionId((current) =>
           current && controlRoom.sessions.some((session) => session.session_id === current)
             ? current
@@ -284,7 +275,7 @@ export function App() {
       setLiveFeedState,
     );
     return () => {
-      cancelled = true;
+      controller.abort();
       feed.stop();
     };
   }, [operatorToken, presentationDevice]);

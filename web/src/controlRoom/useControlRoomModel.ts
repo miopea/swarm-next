@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 
 import {
+  BROWSER_SESSION_AUTH,
   fetchDecisions,
   fetchHive,
   fetchJiraTaskLinks,
@@ -8,6 +9,9 @@ import {
   fetchTasks,
   fetchWorkers,
   fetchWorkspaces,
+  validateBrowserSession,
+  type ControlRoomEvent,
+  type ControlRoomEventPage,
   type DecisionRequest,
   type HiveIdentity,
   type JiraTaskLink,
@@ -37,6 +41,11 @@ const emptySnapshot: ControlRoomSnapshot = {
   decisions: [],
 };
 
+type Dependencies = {
+  loadSnapshot?: typeof loadControlRoomSnapshot;
+  validateSession?: typeof validateBrowserSession;
+};
+
 export async function loadControlRoomSnapshot(operatorToken: string): Promise<ControlRoomSnapshot> {
   const [hiveIdentity, sessions, workers, workspaces, tasks, decisions, jiraTaskLinks] = await Promise.all([
     fetchHive(operatorToken),
@@ -56,12 +65,37 @@ export async function loadControlRoomSnapshot(operatorToken: string): Promise<Co
  * invalidation replace the complete snapshot atomically. Keeping those paths on
  * one owner prevents worker, task, and Jira views from drifting apart.
  */
-export function useControlRoomModel() {
+export function useControlRoomModel({
+  loadSnapshot = loadControlRoomSnapshot,
+  validateSession = validateBrowserSession,
+}: Dependencies = {}) {
   const [snapshot, setSnapshot] = useState<ControlRoomSnapshot>(emptySnapshot);
+  const [recentEvents, setRecentEvents] = useState<ControlRoomEvent[]>([]);
 
-  const load = useCallback(loadControlRoomSnapshot, []);
+  const load = useCallback(loadSnapshot, [loadSnapshot]);
   const replace = useCallback((next: ControlRoomSnapshot) => setSnapshot(next), []);
-  const clear = useCallback(() => setSnapshot(emptySnapshot), []);
+  const clear = useCallback(() => {
+    setSnapshot(emptySnapshot);
+    setRecentEvents([]);
+  }, []);
+  const restoreBrowserSession = useCallback(async (signal?: AbortSignal) => {
+    await validateSession();
+    const next = await load(BROWSER_SESSION_AUTH);
+    if (signal?.aborted) return undefined;
+    replace(next);
+    return next;
+  }, [load, replace, validateSession]);
+  const refreshFromEvents = useCallback(async (
+    operatorToken: string,
+    page: ControlRoomEventPage,
+    signal?: AbortSignal,
+  ) => {
+    const next = await load(operatorToken);
+    if (signal?.aborted) return undefined;
+    replace(next);
+    setRecentEvents((current) => mergeRecentEvents(current, page));
+    return next;
+  }, [load, replace]);
   const setHiveIdentity = useCallback((hiveIdentity: HiveIdentity | undefined) => {
     setSnapshot((current) => ({ ...current, hiveIdentity }));
   }, []);
@@ -95,9 +129,12 @@ export function useControlRoomModel() {
 
   return {
     ...snapshot,
+    recentEvents,
     load,
     replace,
     clear,
+    restoreBrowserSession,
+    refreshFromEvents,
     setHiveIdentity,
     setSessions,
     setWorkers,
@@ -106,4 +143,13 @@ export function useControlRoomModel() {
     setJiraTaskLinks,
     setDecisions,
   };
+}
+
+export function mergeRecentEvents(current: ControlRoomEvent[], page: ControlRoomEventPage) {
+  if (page.reset_required) return page.events.slice(-16);
+  return [...current, ...page.events]
+    .filter((event, index, events) =>
+      events.findIndex((candidate) => candidate.sequence === event.sequence) === index,
+    )
+    .slice(-16);
 }
