@@ -7,6 +7,7 @@ mod jira;
 mod jira_oauth;
 mod microsoft_oauth;
 mod notifications;
+mod orchestration;
 mod outlook;
 mod presence;
 mod presentation;
@@ -49,9 +50,8 @@ use swarm_domain::{
     FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard, HiveId, HiveIdentity,
     JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
     LocalApiaryContext, OperatorId, PresenceDeviceId, ProviderConversationId, ProviderKind,
-    QueenAutonomyLevel, QueenAutonomyPolicy, SharedWorkBackend, StewardCapability, Stewardship,
-    StewardshipId, TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile,
-    WorkerSessionId,
+    SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority,
+    TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
@@ -1282,13 +1282,6 @@ struct AttachGrantResponse {
     expires_in_ms: u64,
 }
 
-#[derive(Debug, Deserialize)]
-struct SetQueenAutonomyPolicyRequest {
-    at_hive: QueenAutonomyLevel,
-    away: QueenAutonomyLevel,
-    night_watch: QueenAutonomyLevel,
-}
-
 #[derive(Clone, Copy, Debug, Serialize)]
 struct ProviderCapabilitiesView {
     claude_code: bool,
@@ -1769,7 +1762,7 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/orchestration/queen-policy",
-            get(queen_autonomy_policy).put(set_queen_autonomy_policy),
+            get(orchestration::queen_autonomy_policy).put(orchestration::set_queen_autonomy_policy),
         )
         .route(
             "/api/v1/preferences/presentation/{device_class}",
@@ -2817,35 +2810,6 @@ async fn download_dogfood_attachment(
             .map_err(|_| attachment_error(AttachmentError::Unavailable))?,
     );
     Ok((response_headers, bytes).into_response())
-}
-
-async fn queen_autonomy_policy(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let policy = task_store(&state)?
-        .queen_autonomy_policy()
-        .map_err(|error| task_store_error(&error))?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(policy)).into_response())
-}
-
-async fn set_queen_autonomy_policy(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(request): Json<SetQueenAutonomyPolicyRequest>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let policy = QueenAutonomyPolicy {
-        at_hive: request.at_hive,
-        away: request.away,
-        night_watch: request.night_watch,
-    };
-    let policy = task_store(&state)?
-        .set_queen_autonomy_policy(policy, unix_timestamp())
-        .map_err(|error| task_store_error(&error))?;
-    state.control_room_notify.notify_waiters();
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(policy)).into_response())
 }
 
 async fn control_room_events(

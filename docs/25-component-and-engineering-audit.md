@@ -139,8 +139,10 @@ Required next extractions are vertical and behavior-led:
   device-scoped presentation preferences now have separate focused adapters;
   notification policy, subscription validation/lifecycle, test delivery, and
   the bounded Web Push sender now share the existing `notifications` owner.
-  Queen autonomy policy remains separate rather than being coupled merely
-  because Settings renders it nearby.
+  Queen autonomy policy has its own `orchestration` boundary rather than being
+  coupled to notifications or presence merely because Settings renders them
+  nearby; future conductor execution belongs there only when its authority and
+  environment policy are implemented.
 - `crates/swarm-persistence/src/lib.rs` is roughly 3,700 lines although Jira,
   workers, decisions, notifications, dispatches, and outcomes have begun moving
   to focused modules.
