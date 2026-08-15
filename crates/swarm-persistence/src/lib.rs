@@ -64,7 +64,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 44;
+const CURRENT_SCHEMA_VERSION: i64 = 45;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -127,6 +127,14 @@ pub enum TaskStoreError {
     HiveCandidateNotFound,
     #[error("The Apiary invitation envelope is invalid or expired")]
     InvalidFederationInvitation,
+    #[error("The Apiary join link is invalid or expired")]
+    InvalidApiaryJoinLink,
+    #[error("The Apiary join link was not found")]
+    ApiaryJoinLinkNotFound,
+    #[error("The Apiary join link cannot accept that transition")]
+    ApiaryJoinLinkResolved,
+    #[error("This Apiary already has the maximum number of active join links")]
+    ApiaryJoinLinkLimit,
     #[error("The federation node credential is invalid or expired")]
     InvalidFederationCredential,
     #[error("The federation project catalog is invalid, stale, or misaddressed")]
@@ -1474,6 +1482,13 @@ fn migrate_schema(
     if schema_version < 29 {
         apiary::migrate_apiary_lifecycle(transaction)?;
     }
+    migrate_recent_schema(transaction, schema_version)
+}
+
+fn migrate_recent_schema(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
     migrate_federation_schema(transaction, schema_version)?;
     if schema_version < 40 {
         email::migrate_email_intake(transaction)?;
@@ -1488,6 +1503,9 @@ fn migrate_schema(
     }
     if schema_version < 44 {
         migrate_task_activity_actors(transaction)?;
+    }
+    if schema_version < 45 {
+        federation::migrate_apiary_join_links(transaction)?;
     }
     Ok(())
 }

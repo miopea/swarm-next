@@ -14,6 +14,7 @@ serde.workspace = true
 swarm-domain = { path = "../swarm-domain" }
 serde_json.workspace = true
 sha2.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 url.workspace = true
 uuid.workspace = true

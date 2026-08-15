@@ -17,7 +17,8 @@ use swarm_terminal::{HostRequest, ProviderActivity, TerminalSize};
 use super::{
     ApiError, AppState, authorize, default_provider, default_terminal_columns,
     default_terminal_rows, parse_worker_id, provider_activity, require_valid_size, task_store,
-    task_store_error, terminal_host::request_host,
+    task_store_error,
+    terminal_host::request_host,
     worker_runtime::{reconcile_worker_bindings, start_worker_process},
     worker_view,
 };

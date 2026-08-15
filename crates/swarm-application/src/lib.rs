@@ -1,10 +1,10 @@
 use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
-    ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks,
-    ApiaryJoinReadiness, ApiaryMemberSummary, DecisionRequest, DecisionRequestId,
-    DecisionRequestKind, DecisionUrgency, FederationCatalogAcknowledgement,
-    FederationCatalogReadiness, FederationCatalogSnapshot, FederationClaimId,
-    FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
+    ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinLink,
+    ApiaryJoinLinkBundle, ApiaryJoinLinkId, ApiaryJoinLinkPoll, ApiaryJoinReadiness,
+    ApiaryMemberSummary, DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency,
+    FederationCatalogAcknowledgement, FederationCatalogReadiness, FederationCatalogSnapshot,
+    FederationClaimId, FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
     FederationJoinSubmission, FederationSharedClaim, FederationSyncCondition, FederationSyncHealth,
     HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
     LocalApiaryRole, OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId,
@@ -313,6 +313,78 @@ impl ApiaryService {
     pub fn connection_card(&self, now: i64) -> Result<HiveConnectionCard, ApplicationError> {
         self.store
             .issue_hive_connection_card(now, 24 * 60 * 60)
+            .map_err(Into::into)
+    }
+
+    /// Creates one short-lived Keeper invitation URL capability. The secret is
+    /// returned only in this result and is never exposed by later list calls.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, invalid public endpoints, capability exhaustion,
+    /// and persistence failures.
+    pub fn create_join_link(
+        &self,
+        keeper_endpoint: &str,
+        now: i64,
+    ) -> Result<ApiaryJoinLinkBundle, ApplicationError> {
+        self.store
+            .issue_apiary_join_link(keeper_endpoint, now, 24 * 60 * 60)
+            .map_err(Into::into)
+    }
+
+    /// Lists Keeper-side bootstrap state without returning any bearer secret.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers and unavailable persistence.
+    pub fn join_links(&self, now: i64) -> Result<Vec<ApiaryJoinLink>, ApplicationError> {
+        self.store.apiary_join_links(now).map_err(Into::into)
+    }
+
+    /// Verifies the signed member identity presented through one join link and
+    /// binds the capability to that exact Hive pending Keeper approval.
+    ///
+    /// # Errors
+    /// Rejects invalid capabilities, identity substitution, invalid cards,
+    /// and unavailable persistence.
+    pub fn present_join_link_identity(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        secret: &str,
+        card: &HiveConnectionCard,
+        now: i64,
+    ) -> Result<ApiaryJoinLink, ApplicationError> {
+        self.store
+            .present_apiary_join_link_identity(link_id, secret, card, now)
+            .map_err(Into::into)
+    }
+
+    /// Records explicit Keeper approval for one exact pending Hive identity.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unbound/resolved links, and persistence failures.
+    pub fn approve_join_link(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        now: i64,
+    ) -> Result<ApiaryJoinLink, ApplicationError> {
+        self.store
+            .approve_apiary_join_link(link_id, now)
+            .map_err(Into::into)
+    }
+
+    /// Polls one Keeper capability from the member side. Invitation material
+    /// remains absent until explicit approval and is retry-stable afterward.
+    ///
+    /// # Errors
+    /// Rejects invalid or expired bearer material and corrupt durable state.
+    pub fn poll_join_link(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        secret: &str,
+        now: i64,
+    ) -> Result<ApiaryJoinLinkPoll, ApplicationError> {
+        self.store
+            .poll_apiary_join_link(link_id, secret, now)
             .map_err(Into::into)
     }
 

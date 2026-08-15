@@ -58,17 +58,17 @@ use swarm_application::{
     ApiaryHiveCandidateOverview, ApiaryInvitationOverview, ApiaryService, ApplicationError,
     FederationJoinInvitationOverview, TaskService,
 };
-#[cfg(test)]
-use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
 use swarm_domain::{
-    Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinReadiness,
-    DecisionRequestId, FederationCatalogSnapshot, FederationClaimId,
+    Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinLinkId,
+    ApiaryJoinReadiness, DecisionRequestId, FederationCatalogSnapshot, FederationClaimId,
     FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard, HiveId, HiveIdentity,
     JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
     LocalApiaryContext, OperatorId, ProviderKind, SharedWorkBackend, StewardCapability,
     Stewardship, StewardshipId, TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId,
     WorkerProfile, WorkerSessionId,
 };
+#[cfg(test)]
+use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
     JiraTransitionFailure, TaskDispatch, TaskDispatchFailure, TaskOutcomeDispatch,
@@ -1243,6 +1243,13 @@ struct FederationTransportReadinessView {
     reachability: &'static str,
 }
 
+#[derive(Debug, Deserialize)]
+struct FederationBootstrapRequest {
+    secret: String,
+    #[serde(default)]
+    connection_card: Option<HiveConnectionCard>,
+}
+
 #[derive(Debug, Serialize)]
 struct FederationJoinInvitationView {
     #[serde(flatten)]
@@ -1551,6 +1558,14 @@ fn api_router(state: AppState) -> Router {
             get(federation_transport_readiness),
         )
         .route(
+            "/api/v1/apiary/join-links",
+            get(apiary_join_links).post(create_apiary_join_link),
+        )
+        .route(
+            "/api/v1/apiary/join-links/{link_id}/approval",
+            post(approve_apiary_join_link),
+        )
+        .route(
             "/api/v1/apiary/hive-candidates",
             get(apiary_hive_candidates).post(pin_apiary_hive_candidate),
         )
@@ -1571,6 +1586,10 @@ fn api_router(state: AppState) -> Router {
             post(prepare_imported_apiary_join),
         )
         .route("/api/v1/federation/join", post(consume_federation_join))
+        .route(
+            "/api/v1/federation/bootstrap/{link_id}",
+            post(poll_federation_bootstrap),
+        )
         .route("/api/v1/federation/catalog", get(federation_catalog))
         .route("/api/v1/federation/claims", post(reserve_federation_claim))
         .route(
@@ -2103,6 +2122,78 @@ async fn federation_transport_readiness(
         }),
     )
         .into_response())
+}
+
+async fn create_apiary_join_link(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let endpoint = state.public_base_url.as_deref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "federation_endpoint_unavailable",
+            "configure a remotely reachable SWARM_PUBLIC_BASE_URL before creating an invitation link",
+        )
+    })?;
+    if !federation_endpoint_is_remotely_reachable(endpoint) {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "federation_endpoint_local_only",
+            "the Keeper URL must use remote HTTPS before another Hive can join",
+        ));
+    }
+    let bundle = apiary_service(&state)?
+        .create_join_link(endpoint, unix_timestamp())
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(bundle),
+    )
+        .into_response())
+}
+
+async fn apiary_join_links(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let links = apiary_service(&state)?
+        .join_links(unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(links)).into_response())
+}
+
+async fn approve_apiary_join_link(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(link_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let link = apiary_service(&state)?
+        .approve_join_link(parse_apiary_join_link_id(&link_id)?, unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(link)).into_response())
+}
+
+async fn poll_federation_bootstrap(
+    State(state): State<Arc<AppState>>,
+    Path(link_id): Path<String>,
+    Json(request): Json<FederationBootstrapRequest>,
+) -> Result<Response, ApiError> {
+    let service = apiary_service(&state)?;
+    let link_id = parse_apiary_join_link_id(&link_id)?;
+    let now = unix_timestamp();
+    if let Some(card) = request.connection_card.as_ref() {
+        service
+            .present_join_link_identity(link_id, &request.secret, card, now)
+            .map_err(federation_bootstrap_error)?;
+    }
+    let poll = service
+        .poll_join_link(link_id, &request.secret, now)
+        .map_err(federation_bootstrap_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(poll)).into_response())
 }
 
 async fn apiary_hive_candidates(
@@ -3802,6 +3893,19 @@ fn federation_catalog_error(error: ApplicationError) -> ApiError {
     }
 }
 
+fn federation_bootstrap_error(error: ApplicationError) -> ApiError {
+    match error {
+        ApplicationError::Store(
+            TaskStoreError::InvalidApiaryJoinLink | TaskStoreError::ApiaryJoinLinkNotFound,
+        ) => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid_apiary_join_link",
+            "this Apiary invitation link is invalid or expired",
+        ),
+        other => application_error(other),
+    }
+}
+
 fn federation_claim_error(error: ApplicationError) -> ApiError {
     match error {
         ApplicationError::Store(
@@ -4023,6 +4127,26 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::InvalidApiaryInvitation => ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_apiary_invitation",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidApiaryJoinLink => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_apiary_join_link",
+            error.to_string(),
+        ),
+        TaskStoreError::ApiaryJoinLinkNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "apiary_join_link_not_found",
+            error.to_string(),
+        ),
+        TaskStoreError::ApiaryJoinLinkResolved => ApiError::new(
+            StatusCode::CONFLICT,
+            "apiary_join_link_resolved",
+            error.to_string(),
+        ),
+        TaskStoreError::ApiaryJoinLinkLimit => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "apiary_join_link_limit",
             error.to_string(),
         ),
         TaskStoreError::InvalidApiary => {
@@ -4381,6 +4505,16 @@ fn parse_apiary_invitation_id(value: &str) -> Result<ApiaryInvitationId, ApiErro
             StatusCode::BAD_REQUEST,
             "invalid_apiary_invitation_id",
             "Apiary invitation ID must be a UUID",
+        )
+    })
+}
+
+fn parse_apiary_join_link_id(value: &str) -> Result<ApiaryJoinLinkId, ApiError> {
+    ApiaryJoinLinkId::from_str(value).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_apiary_join_link_id",
+            "Apiary join link ID must be a UUID",
         )
     })
 }
@@ -4974,6 +5108,107 @@ mod tests {
         let remote = response_json(remote).await;
         assert_eq!(remote["reachability"], "remote_https");
         assert_eq!(remote["endpoint"], "https://swarm2.example.test");
+    }
+
+    #[tokio::test]
+    async fn keeper_link_bootstrap_is_public_secret_bound_and_approval_gated() {
+        let now = unix_timestamp();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper)
+                .with_public_base_url("https://keeper.example.test/swarm")
+                .unwrap(),
+        );
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/join-links")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        assert_eq!(created.headers()[header::CACHE_CONTROL], "no-store");
+        let bundle: swarm_domain::ApiaryJoinLinkBundle =
+            serde_json::from_value(response_json(created).await).unwrap();
+
+        let remote = TaskStore::in_memory().unwrap();
+        let card = remote.issue_hive_connection_card(now, 3_600).unwrap();
+        let bootstrap_uri = format!("/api/v1/federation/bootstrap/{}", bundle.link.id);
+        let presented = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&bootstrap_uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "secret": &bundle.one_time_secret,
+                            "connection_card": card,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(presented.status(), StatusCode::OK);
+        let waiting = response_json(presented).await;
+        assert_eq!(waiting["link"]["state"], "awaiting_approval");
+        assert!(waiting["invitation"].is_null());
+
+        let approved = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/apiary/join-links/{}/approval",
+                        bundle.link.id
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(approved.status(), StatusCode::OK);
+
+        let issued = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&bootstrap_uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"secret": &bundle.one_time_secret}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(issued.status(), StatusCode::OK);
+        assert_eq!(issued.headers()[header::CACHE_CONTROL], "no-store");
+        let issued = response_json(issued).await;
+        assert_eq!(issued["link"]["state"], "invitation_issued");
+        assert_eq!(
+            issued["invitation"]["invitation"]["payload"]["invited_hive_id"],
+            card.payload.hive_id.to_string()
+        );
     }
 
     #[tokio::test]

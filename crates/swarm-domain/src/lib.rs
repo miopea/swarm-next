@@ -41,6 +41,7 @@ domain_id!(OperatorId);
 domain_id!(HiveId);
 domain_id!(ApiaryId);
 domain_id!(ApiaryInvitationId);
+domain_id!(ApiaryJoinLinkId);
 domain_id!(FederationNodeId);
 domain_id!(FederationMembershipReceiptId);
 domain_id!(FederationClaimId);
@@ -266,6 +267,89 @@ pub struct HiveConnectionCardPayload {
 pub struct HiveConnectionCard {
     pub payload: HiveConnectionCardPayload,
     pub signature: String,
+}
+
+/// A Keeper-created, short-lived bootstrap capability. The ordinary view never
+/// contains its bearer secret; it only exposes public Apiary and bound-Hive
+/// identity needed for explicit Keeper approval.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiaryJoinLinkState {
+    Open,
+    AwaitingApproval,
+    Approved,
+    InvitationIssued,
+    Revoked,
+    Expired,
+}
+
+impl fmt::Display for ApiaryJoinLinkState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Open => "open",
+            Self::AwaitingApproval => "awaiting_approval",
+            Self::Approved => "approved",
+            Self::InvitationIssued => "invitation_issued",
+            Self::Revoked => "revoked",
+            Self::Expired => "expired",
+        })
+    }
+}
+
+impl FromStr for ApiaryJoinLinkState {
+    type Err = ParseApiaryJoinLinkStateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "open" => Ok(Self::Open),
+            "awaiting_approval" => Ok(Self::AwaitingApproval),
+            "approved" => Ok(Self::Approved),
+            "invitation_issued" => Ok(Self::InvitationIssued),
+            "revoked" => Ok(Self::Revoked),
+            "expired" => Ok(Self::Expired),
+            _ => Err(ParseApiaryJoinLinkStateError),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseApiaryJoinLinkStateError;
+
+impl fmt::Display for ParseApiaryJoinLinkStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("invalid Apiary join link state")
+    }
+}
+
+impl std::error::Error for ParseApiaryJoinLinkStateError {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryJoinLink {
+    pub id: ApiaryJoinLinkId,
+    pub apiary_id: ApiaryId,
+    pub apiary_name: String,
+    pub keeper_endpoint: String,
+    pub state: ApiaryJoinLinkState,
+    pub candidate: Option<ApiaryHiveCandidate>,
+    pub issued_at: i64,
+    pub expires_at: i64,
+}
+
+/// Sensitive creation result returned once to the Keeper browser. The secret
+/// belongs in the URL fragment and is never included in ordinary link lists.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryJoinLinkBundle {
+    pub link: ApiaryJoinLink,
+    pub one_time_secret: String,
+}
+
+/// The member-visible result of one outbound Keeper poll. Invitation material
+/// appears only after explicit Keeper approval and remains retry-stable while
+/// the short-lived join capability is valid.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryJoinLinkPoll {
+    pub link: ApiaryJoinLink,
+    pub invitation: Option<ApiaryInvitationBundle>,
 }
 
 /// A Keeper-pinned remote Hive identity. Pinning proves which public key is
