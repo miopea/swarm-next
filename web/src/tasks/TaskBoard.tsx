@@ -150,7 +150,7 @@ export default function TaskBoard({
   const taskReorder = useReorderDrag(openTasks.map((task) => task.id), (taskIds) => void onReorder(taskIds));
   const draggedTask = tasks.find((task) => task.id === taskReorder.draggedId);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!focusTaskId) return;
     if (focusedTaskCompleted) completedTasksPanel.current?.setAttribute("open", "");
     const frame = requestAnimationFrame(() => {
