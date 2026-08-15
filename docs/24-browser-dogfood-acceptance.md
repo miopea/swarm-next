@@ -674,3 +674,17 @@ the independently updated terminal host through the API to worker settings:
   controls, all three Apiary guide steps, and authentication across browser
   restarts. API PID advanced to `3094914`; terminal-host PID remained
   `2966127`, preserving the active worker session.
+- Release `0.1.0-dev-19f12ddb9d2b` moves core task list, creation, activity,
+  ordering, editing, lifecycle transition, and assignment routes behind one
+  HTTP adapter while application and persistence continue to own lifecycle
+  rules and durability. The focused API gate passed 109 tests; the complete
+  Rust workspace passed 331 tests and Clippy with warnings denied. All 213
+  frontend tests, strict TypeScript, and the production build also passed.
+  Live authenticated rendering exposed the exact release and complete task
+  board. Read-only Edge acceptance then passed Needs you, Tasks, Workers,
+  Apiary, Settings, and the Apiary member control room at 1,440-pixel desktop
+  and 412-pixel Android widths with zero overflow, 346 and 318 named controls,
+  all three Apiary guide steps, and authentication across full browser
+  restarts. API PID advanced to `3100234`; terminal-host PID remained
+  `2966127`, preserving the active worker session. Every proof tab and hidden
+  browser process closed after the run.
