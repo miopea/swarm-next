@@ -16,9 +16,8 @@ const activitySeconds = boundedInteger("SWARM_BROWSER_SOAK_ACTIVITY_SECONDS", 60
 const outputRoot = process.env.SWARM_BROWSER_SOAK_EVIDENCE || path.resolve("dist", "browser-soak");
 const maxGatewayErrors = 20;
 
-if (!operatorToken) throw new Error("SWARM_OPERATOR_TOKEN is required");
-
 async function main() {
+  if (!operatorToken) throw new Error("SWARM_OPERATOR_TOKEN is required");
   await fs.mkdir(outputRoot, { recursive: true });
   const runId = `${new Date().toISOString().replaceAll(/[-:.]/g, "").slice(0, 15)}Z-browser`;
   const samplesPath = path.join(outputRoot, `${runId}-samples.csv`);
@@ -247,7 +246,12 @@ async function openAuthenticatedSettings(page) {
 function readOwnedProcessMemory(pids) {
   const uniquePids = [...new Set(pids.filter((pid) => Number.isSafeInteger(pid) && pid > 0))];
   if (process.platform === "win32") {
-    const command = `$ids=@(${uniquePids.join(",")}); Get-Process -Id $ids -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{id=[int]$_.Id;working_set_bytes=[long]$_.WorkingSet64;private_bytes=[long]$_.PrivateMemorySize64} } | ConvertTo-Json -Compress`;
+    // Chromium helpers are intentionally short-lived. PowerShell reports a
+    // failing exit status when any ID disappears during this sampling window,
+    // even with SilentlyContinue. Emit every process still present and make an
+    // empty/missing subset a normal sample; the pinned browser PID check below
+    // remains responsible for detecting a real browser replacement.
+    const command = `$ids=@(${uniquePids.join(",")}); Get-Process -Id $ids -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{id=[int]$_.Id;working_set_bytes=[long]$_.WorkingSet64;private_bytes=[long]$_.PrivateMemorySize64} } | ConvertTo-Json -Compress; exit 0`;
     const output = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8", windowsHide: true }).trim();
     if (!output) return [];
     const parsed = JSON.parse(output);
@@ -280,7 +284,11 @@ function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { readOwnedProcessMemory };
