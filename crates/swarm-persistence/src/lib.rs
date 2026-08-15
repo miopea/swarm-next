@@ -64,7 +64,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 45;
+const CURRENT_SCHEMA_VERSION: i64 = 46;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1506,6 +1506,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 45 {
         federation::migrate_apiary_join_links(transaction)?;
+    }
+    if schema_version < 46 {
+        federation::migrate_local_apiary_keeper_links(transaction)?;
     }
     Ok(())
 }

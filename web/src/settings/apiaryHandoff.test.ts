@@ -17,4 +17,17 @@ describe("Apiary handoff links", () => {
     expect(() => readApiaryHandoffLink(link, "invitation")).toThrow(/not a Swarm Apiary invitation link/i);
     expect(() => readApiaryHandoffLink("not a link", "connection")).toThrow(/complete Swarm Apiary link/i);
   });
+
+  test("round trips a Keeper capability without placing its secret in the URL path", () => {
+    const capability = {
+      link_id: "link-1",
+      keeper_endpoint: "https://keeper.example.test",
+      secret: "private-capability",
+    };
+    const link = createApiaryHandoffLink("keeper", capability, capability.keeper_endpoint);
+
+    expect(link).toMatch(/^https:\/\/keeper\.example\.test\/#swarm-next-apiary-keeper=/);
+    expect(link).not.toContain("private-capability");
+    expect(readApiaryHandoffLink(link, "keeper")).toEqual(capability);
+  });
 });

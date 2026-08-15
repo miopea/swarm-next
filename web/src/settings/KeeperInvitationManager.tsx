@@ -1,19 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
-  fetchApiaryHiveCandidates,
-  inviteApiaryHiveCandidate,
-  pinApiaryHiveCandidate,
-  type ApiaryHiveCandidate,
-  type HiveConnectionCard,
+  approveApiaryJoinLink,
+  createApiaryJoinLink,
+  fetchApiaryJoinLinks,
+  type ApiaryJoinLink,
+  type ApiaryKeeperJoinCapability,
 } from "../api";
-import { createApiaryHandoffLink, readApiaryHandoffLink } from "./apiaryHandoff";
-import {
-  ApiaryExchangeStep,
-  ApiaryFileFallback,
-  ApiaryGeneratedLink,
-  ApiaryLinkEntry,
-} from "./ApiaryHandoffControls";
+import { createApiaryHandoffLink } from "./apiaryHandoff";
+import { ApiaryGeneratedLink } from "./ApiaryHandoffControls";
 
 type Props = {
   busy: boolean;
@@ -22,63 +17,56 @@ type Props = {
 };
 
 export default function KeeperInvitationManager({ busy, operatorToken, onInvitationCreated }: Props) {
-  const [candidates, setCandidates] = useState<ApiaryHiveCandidate[]>([]);
-  const [connectionLink, setConnectionLink] = useState("");
+  const [links, setLinks] = useState<ApiaryJoinLink[]>([]);
   const [generatedLink, setGeneratedLink] = useState("");
   const [working, setWorking] = useState(false);
-  const [loadError, setLoadError] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-    void fetchApiaryHiveCandidates(operatorToken)
-      .then((value) => {
-        if (cancelled) return;
-        setCandidates(value);
-        setLoadError(false);
-      })
-      .catch(() => { if (!cancelled) setLoadError(true); });
-    return () => { cancelled = true; };
+  const refresh = useCallback(async () => {
+    setLinks(await fetchApiaryJoinLinks(operatorToken));
   }, [operatorToken]);
 
-  async function refreshCandidates() {
-    setCandidates(await fetchApiaryHiveCandidates(operatorToken));
-    setLoadError(false);
-  }
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const current = await fetchApiaryJoinLinks(operatorToken);
+        if (!cancelled) setLinks(current);
+      } catch {
+        if (!cancelled) setError("Invitation status could not be refreshed. No membership changed.");
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 5_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [operatorToken]);
 
-  async function importConnectionCard(file: File | undefined) {
-    if (!file) return;
+  async function createLink() {
     await perform(async () => {
-      if (file.size > 64 * 1024) throw new Error("That connection card is unexpectedly large.");
-      const card = JSON.parse(await file.text()) as HiveConnectionCard;
-      const candidate = await pinApiaryHiveCandidate(operatorToken, card);
-      await refreshCandidates();
-      setMessage(`${candidate.hive_name} is verified and pinned. No membership or access was granted.`);
-    }, "That Hive connection card could not be verified.");
-  }
-
-  async function importConnectionLink() {
-    await perform(async () => {
-      const card = readApiaryHandoffLink<HiveConnectionCard>(connectionLink, "connection");
-      const candidate = await pinApiaryHiveCandidate(operatorToken, card);
-      await refreshCandidates();
-      setConnectionLink("");
-      setMessage(`${candidate.hive_name} is verified and pinned. No membership or access was granted.`);
-    }, "That Hive connection link could not be verified.");
-  }
-
-  async function createInvitation(candidate: ApiaryHiveCandidate) {
-    await perform(async () => {
-      const bundle = await inviteApiaryHiveCandidate(operatorToken, candidate.hive_id);
-      const link = createApiaryHandoffLink("invitation", bundle);
+      const bundle = await createApiaryJoinLink(operatorToken);
+      const capability: ApiaryKeeperJoinCapability = {
+        link_id: bundle.link.id,
+        keeper_endpoint: bundle.link.keeper_endpoint,
+        secret: bundle.one_time_secret,
+      };
+      const link = createApiaryHandoffLink("keeper", capability, bundle.link.keeper_endpoint);
       setGeneratedLink(link);
-      const copied = await copyHandoffLink(link);
-      await Promise.all([refreshCandidates(), onInvitationCreated()]);
+      await refresh();
+      const copied = await copyLink(link);
       setMessage(copied
-        ? `Invitation link for ${candidate.hive_name} copied. It is bound to that Hive, expires, and can be used only once.`
-        : `Invitation link for ${candidate.hive_name} created. Copy it below and share it privately.`);
-    }, "The one-time invitation could not be created.");
+        ? "Invitation link copied. Send it privately to the Hive operator; it expires in 24 hours."
+        : "Invitation link created. Copy it below and send it privately to the Hive operator.");
+    }, "The invitation link could not be created.");
+  }
+
+  async function approve(link: ApiaryJoinLink) {
+    if (!link.candidate) return;
+    await perform(async () => {
+      await approveApiaryJoinLink(operatorToken, link.id);
+      await Promise.all([refresh(), onInvitationCreated()]);
+      setMessage(`${link.candidate?.hive_name} is approved. Her Hive will receive the signed invitation on its next outbound poll.`);
+    }, "That Hive could not be approved.");
   }
 
   async function perform(action: () => Promise<void>, fallback: string) {
@@ -94,7 +82,7 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
     }
   }
 
-  async function copyHandoffLink(link: string): Promise<boolean> {
+  async function copyLink(link: string): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(link);
       return true;
@@ -103,40 +91,64 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
     }
   }
 
+  const pending = links.filter((link) => link.state === "awaiting_approval");
+  const active = links.filter((link) => link.state !== "expired" && link.state !== "revoked");
+
   return (
-    <div className="apiary-hive-candidates">
-      <div>
-        <strong>Invite a Hive</strong>
-        <small>The other operator sends you a short-lived connection link. Swarm verifies its signed identity before it enables an invitation.</small>
+    <div className="apiary-hive-candidates apiary-link-invitations">
+      <div className="apiary-invite-heading">
+        <span>
+          <strong>Invite a Hive</strong>
+          <small>Create one private link. The other Hive connects outward to this Keeper, so no inbound access to her computer is required.</small>
+        </span>
+        <button className="primary-action" disabled={busy || working} onClick={() => void createLink()}>
+          {working ? "Working…" : "Create invitation link"}
+        </button>
       </div>
-      <ol className="apiary-exchange-guide apiary-keeper-exchange" aria-label="How to invite a Hive">
-        <ApiaryExchangeStep number="1" title="Receive her connection link" detail="Ask the Hive operator to copy her link under Join another Keeper's Apiary and send it privately to you." />
-        <ApiaryExchangeStep number="2" title="Verify the exact identity" detail="Paste the link below. Swarm verifies its signature and shows the Hive and operator before any invitation exists." />
-        <ApiaryExchangeStep number="3" title="Return the invitation link" detail="Create invitation copies one bounded link for that exact Hive. It expires and its secret can be consumed only once." />
-      </ol>
-      <ApiaryLinkEntry label="Hive connection link" value={connectionLink} action={working ? "Verifying…" : "Verify Hive"} disabled={busy || working} onChange={setConnectionLink} onAction={() => void importConnectionLink()} />
-      <ApiaryFileFallback summary="Use a connection file instead" ariaLabel="Choose Hive connection card" disabled={busy || working} label={working ? "Verifying…" : "Choose connection card"} detail="or drop the Hive's .json connection card here" onFile={(file) => void importConnectionCard(file)} />
-      {loadError ? <p className="apiary-blockers">Pinned Hive identities could not be refreshed. No membership changed.</p> : null}
-      {candidates.length > 0 ? (
-        <ul className="apiary-candidate-list" aria-label="Pinned Hive identities">
-          {candidates.map((candidate) => (
-            <li key={candidate.hive_id}>
-              <span><strong>{candidate.hive_name}</strong><small>{candidate.operator_display_name}</small></span>
-              <span className="apiary-candidate-state">
-                <span className="readiness-ready">{candidate.invitation_pending ? "Invitation pending" : "Identity pinned"}</span>
-                <button
-                  className="secondary-button"
-                  disabled={working || candidate.invitation_pending}
-                  onClick={() => void createInvitation(candidate)}
-                >{candidate.invitation_pending ? "Invitation created" : "Create invitation"}</button>
-              </span>
+      <div className="apiary-transport-boundary" role="note">
+        <span><strong>Jira work</strong><small>Each Hive polls Jira directly with its own operator identity.</small></span>
+        <span><strong>Swarm work</strong><small>Member Hives poll this Keeper for shared tasks, policy, and coordination.</small></span>
+      </div>
+      {generatedLink ? <ApiaryGeneratedLink link={generatedLink} onCopy={copyLink} /> : null}
+      {pending.length > 0 ? (
+        <section className="apiary-pending-approvals" aria-label="Hives waiting for approval">
+          <h4>Waiting for your approval</h4>
+          <ul className="apiary-candidate-list">
+            {pending.map((link) => (
+              <li key={link.id}>
+                <span>
+                  <strong>{link.candidate?.hive_name}</strong>
+                  <small>{link.candidate?.operator_display_name} · identity verified</small>
+                </span>
+                <button className="primary-action" disabled={working} onClick={() => void approve(link)}>Approve Hive</button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {active.length > 0 ? (
+        <ul className="apiary-link-status" aria-label="Apiary invitation links">
+          {active.map((link) => (
+            <li key={link.id}>
+              <span><strong>{link.candidate?.hive_name ?? "Invitation link"}</strong><small>Expires {new Date(link.expires_at * 1000).toLocaleString()}</small></span>
+              <span className={`apiary-link-state state-${link.state}`}>{joinStateLabel(link.state)}</span>
             </li>
           ))}
         </ul>
-      ) : <p className="empty-copy">No other Hive identities are pinned yet.</p>}
-      {generatedLink ? <ApiaryGeneratedLink link={generatedLink} onCopy={copyHandoffLink} /> : null}
+      ) : <p className="empty-copy">No active invitation links. Create one when another Hive is ready to join.</p>}
       {message ? <p className="form-message" role="status">{message}</p> : null}
       {error ? <p className="form-error" role="alert">{error}</p> : null}
     </div>
   );
+}
+
+function joinStateLabel(state: ApiaryJoinLink["state"]): string {
+  switch (state) {
+    case "open": return "Waiting for Hive";
+    case "awaiting_approval": return "Needs approval";
+    case "approved": return "Approved · awaiting poll";
+    case "invitation_issued": return "Invitation delivered";
+    case "expired": return "Expired";
+    case "revoked": return "Revoked";
+  }
 }

@@ -59,13 +59,13 @@ use swarm_application::{
     FederationJoinInvitationOverview, TaskService,
 };
 use swarm_domain::{
-    Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinLinkId,
-    ApiaryJoinReadiness, DecisionRequestId, FederationCatalogSnapshot, FederationClaimId,
-    FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard, HiveId, HiveIdentity,
-    JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
-    LocalApiaryContext, OperatorId, ProviderKind, SharedWorkBackend, StewardCapability,
-    Stewardship, StewardshipId, TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId,
-    WorkerProfile, WorkerSessionId,
+    Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinLink,
+    ApiaryJoinLinkId, ApiaryJoinReadiness, ApiaryKeeperLink, DecisionRequestId,
+    FederationCatalogSnapshot, FederationClaimId, FederationJoinSubmission, FederationSharedClaim,
+    HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId,
+    JiraProjectScope, JiraStatusMapping, LocalApiaryContext, OperatorId, ProviderKind,
+    SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority,
+    TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
@@ -1250,6 +1250,19 @@ struct FederationBootstrapRequest {
     connection_card: Option<HiveConnectionCard>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SaveApiaryKeeperLinkRequest {
+    link_id: ApiaryJoinLinkId,
+    keeper_endpoint: String,
+    secret: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiaryKeeperLinkPollView {
+    link: ApiaryJoinLink,
+    invitation_received: bool,
+}
+
 #[derive(Debug, Serialize)]
 struct FederationJoinInvitationView {
     #[serde(flatten)]
@@ -1564,6 +1577,14 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/apiary/join-links/{link_id}/approval",
             post(approve_apiary_join_link),
+        )
+        .route(
+            "/api/v1/apiary/keeper-links",
+            get(apiary_keeper_links).post(save_apiary_keeper_link),
+        )
+        .route(
+            "/api/v1/apiary/keeper-links/{link_id}/poll",
+            post(poll_apiary_keeper_link),
         )
         .route(
             "/api/v1/apiary/hive-candidates",
@@ -2175,6 +2196,99 @@ async fn approve_apiary_join_link(
         .approve_join_link(parse_apiary_join_link_id(&link_id)?, unix_timestamp())
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(link)).into_response())
+}
+
+async fn apiary_keeper_links(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let links: Vec<ApiaryKeeperLink> = apiary_service(&state)?
+        .keeper_links()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(links)).into_response())
+}
+
+async fn save_apiary_keeper_link(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SaveApiaryKeeperLinkRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let now = unix_timestamp();
+    apiary_service(&state)?
+        .save_keeper_link(
+            request.link_id,
+            &request.keeper_endpoint,
+            &request.secret,
+            now,
+        )
+        .map_err(application_error)?;
+    let view = poll_saved_apiary_keeper_link(&state, request.link_id, true, now).await?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(view),
+    )
+        .into_response())
+}
+
+async fn poll_apiary_keeper_link(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(link_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let view = poll_saved_apiary_keeper_link(
+        &state,
+        parse_apiary_join_link_id(&link_id)?,
+        false,
+        unix_timestamp(),
+    )
+    .await?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)).into_response())
+}
+
+async fn poll_saved_apiary_keeper_link(
+    state: &AppState,
+    link_id: ApiaryJoinLinkId,
+    present_identity: bool,
+    now: i64,
+) -> Result<ApiaryKeeperLinkPollView, ApiError> {
+    let service = apiary_service(state)?;
+    let (endpoint, secret) = service
+        .keeper_link_credential(link_id)
+        .map_err(application_error)?;
+    let card = if present_identity {
+        Some(service.connection_card(now).map_err(application_error)?)
+    } else {
+        None
+    };
+    let poll = federation_http::FederationHttpClient::new(&endpoint)
+        .map_err(federation_http_error)?
+        .bootstrap(link_id, &secret, card.as_ref())
+        .await
+        .map_err(federation_http_error)?;
+    service
+        .record_keeper_link_poll(&poll.link, now)
+        .map_err(application_error)?;
+    let invitation_received = if let Some(invitation) = poll.invitation.as_ref() {
+        match service.import_invitation(invitation, now) {
+            Ok(_) | Err(ApplicationError::Store(TaskStoreError::FederationInvitationConflict)) => {
+                service
+                    .remove_keeper_link(link_id)
+                    .map_err(application_error)?;
+                true
+            }
+            Err(error) => return Err(application_error(error)),
+        }
+    } else {
+        false
+    };
+    Ok(ApiaryKeeperLinkPollView {
+        link: poll.link,
+        invitation_received,
+    })
 }
 
 async fn poll_federation_bootstrap(
@@ -3906,6 +4020,39 @@ fn federation_bootstrap_error(error: ApplicationError) -> ApiError {
     }
 }
 
+fn federation_http_error(error: federation_http::FederationHttpError) -> ApiError {
+    use federation_http::FederationHttpError;
+    match error {
+        FederationHttpError::InvalidEndpoint => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_keeper_endpoint",
+            error.to_string(),
+        ),
+        FederationHttpError::AuthenticationRejected => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "apiary_invitation_rejected",
+            "the Keeper rejected this invitation link",
+        ),
+        FederationHttpError::Conflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "apiary_bootstrap_conflict",
+            error.to_string(),
+        ),
+        FederationHttpError::TransportUnavailable => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "keeper_unavailable",
+            "the Keeper is temporarily unreachable; this Hive will keep the pending invitation",
+        ),
+        FederationHttpError::RemoteRejected(_)
+        | FederationHttpError::ResponseTooLarge
+        | FederationHttpError::InvalidResponse => ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "keeper_response_invalid",
+            error.to_string(),
+        ),
+    }
+}
+
 fn federation_claim_error(error: ApplicationError) -> ApiError {
     match error {
         ApplicationError::Store(
@@ -5209,6 +5356,128 @@ mod tests {
             issued["invitation"]["invitation"]["payload"]["invited_hive_id"],
             card.payload.hive_id.to_string()
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn member_keeper_link_polls_outbound_and_imports_the_approved_invitation() {
+        let now = unix_timestamp();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let keeper_endpoint = format!("http://{address}");
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        let bundle = keeper
+            .issue_apiary_join_link(&keeper_endpoint, now, 3_600)
+            .unwrap();
+        let keeper_app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper)
+                .with_public_base_url(&keeper_endpoint)
+                .unwrap(),
+        );
+        let keeper_server = tokio::spawn({
+            let app = keeper_app.clone();
+            async move { axum::serve(listener, app).await }
+        });
+
+        let member = TaskStore::in_memory().unwrap();
+        let member_app = router(
+            AppState::default()
+                .with_terminal_host(
+                    HostClient::new("/unreachable/terminal.sock"),
+                    "member-secret",
+                )
+                .with_task_store(member),
+        );
+        let saved = member_app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/keeper-links")
+                    .header(header::AUTHORIZATION, "Bearer member-secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "link_id": bundle.link.id,
+                            "keeper_endpoint": keeper_endpoint,
+                            "secret": bundle.one_time_secret,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::CREATED);
+        let saved = response_json(saved).await;
+        assert_eq!(saved["link"]["state"], "awaiting_approval");
+        assert_eq!(saved["invitation_received"], false);
+
+        let approved = keeper_app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/apiary/join-links/{}/approval",
+                        bundle.link.id
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(approved.status(), StatusCode::OK);
+
+        let polled = member_app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/apiary/keeper-links/{}/poll",
+                        bundle.link.id
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer member-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(polled.status(), StatusCode::OK);
+        let polled = response_json(polled).await;
+        assert_eq!(polled["link"]["state"], "invitation_issued");
+        assert_eq!(polled["invitation_received"], true);
+
+        let pending = authorized_get_with_token(
+            member_app.clone(),
+            "/api/v1/apiary/keeper-links",
+            "member-secret",
+        )
+        .await;
+        assert_eq!(response_json(pending).await, serde_json::json!([]));
+        let invitations = authorized_get_with_token(
+            member_app,
+            "/api/v1/apiary/join-invitations",
+            "member-secret",
+        )
+        .await;
+        assert_eq!(
+            response_json(invitations).await.as_array().unwrap().len(),
+            1
+        );
+
+        keeper_server.abort();
+        let _ = keeper_server.await;
     }
 
     #[tokio::test]
@@ -9119,10 +9388,14 @@ mod tests {
     }
 
     async fn authorized_get(app: Router, uri: &str) -> Response {
+        authorized_get_with_token(app, uri, "secret").await
+    }
+
+    async fn authorized_get_with_token(app: Router, uri: &str, token: &str) -> Response {
         app.oneshot(
             Request::builder()
                 .uri(uri)
-                .header("authorization", "Bearer secret")
+                .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
         )

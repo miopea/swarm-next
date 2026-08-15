@@ -3,51 +3,56 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import type { HiveIdentity } from "../api";
 import ApiarySettings from "./ApiarySettings";
+import { createApiaryHandoffLink } from "./apiaryHandoff";
 
-test("explains when this Hive has a remotely reachable Apiary URL", async () => {
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+test("connects outward to a Keeper without requiring an inbound member URL", async () => {
+  const capability = {
+    link_id: "link-1",
+    keeper_endpoint: "https://keeper.example.test",
+    secret: "private-capability",
+  };
+  let saved = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.endsWith("/api/v1/apiary/transport-readiness")) {
+    if (url === "/api/v1/apiary/keeper-links" && init?.method === "POST") {
+      expect(JSON.parse(String(init.body))).toEqual(capability);
+      saved = true;
       return ok({
-        configured: true,
-        endpoint: "https://swarm2.bfgsolutions.net",
-        reachability: "remote_https",
-      });
+        link: keeperLink("awaiting_approval"),
+        invitation_received: false,
+      }, 201);
     }
-    if (url.endsWith("/api/v1/apiary/join-invitations")) return ok([]);
+    if (url === "/api/v1/apiary/keeper-links") return ok(saved ? [keeperLink("awaiting_approval")] : []);
+    if (url === "/api/v1/apiary/join-invitations") return ok([]);
     throw new Error(`Unexpected request: ${url}`);
   }));
 
   render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("Keeper invitation link"), {
+    target: { value: createApiaryHandoffLink("keeper", capability, capability.keeper_endpoint) },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Connect to Keeper" }));
 
-  expect(await screen.findByText("Reachable Hive URL ready")).toBeInTheDocument();
-  expect(screen.getByText("https://swarm2.bfgsolutions.net")).toBeInTheDocument();
-  expect(screen.getByText(/must remain online for invitations and shared coordination/i)).toBeInTheDocument();
-  const joinGuide = screen.getByRole("list", { name: "How to join an Apiary" });
-  expect(joinGuide).toHaveTextContent("Copy this Hive's connection link");
-  expect(joinGuide).toHaveTextContent("Keeper verifies and invites");
-  expect(joinGuide).toHaveTextContent("Review before joining");
-  expect(screen.getByText(/Reviewing the link does not send anything or join the Apiary/)).toBeInTheDocument();
+  expect(await screen.findByRole("status")).toHaveTextContent(/introduced itself.*Waiting for the Keeper/i);
+  expect(screen.getByRole("list", { name: "Pending Keeper invitations" })).toHaveTextContent("Waiting for Keeper approval");
+  expect(screen.getByRole("note")).toHaveTextContent("This Hive continues polling Jira directly as you");
+  expect(screen.getByRole("note")).toHaveTextContent("polls the Keeper for shared Apiary tasks");
 });
 
-test("warns that a loopback Apiary URL reaches only this machine", async () => {
+test("restores a pending Keeper capability after the browser is reopened", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.endsWith("/api/v1/apiary/transport-readiness")) {
-      return ok({
-        configured: true,
-        endpoint: "http://127.0.0.1:8766",
-        reachability: "local_only",
-      });
-    }
-    if (url.endsWith("/api/v1/apiary/join-invitations")) return ok([]);
+    if (url === "/api/v1/apiary/keeper-links") return ok([keeperLink("awaiting_approval")]);
+    if (url === "/api/v1/apiary/join-invitations") return ok([]);
     throw new Error(`Unexpected request: ${url}`);
   }));
 
   render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
 
-  expect(await screen.findByText("Local testing only")).toBeInTheDocument();
-  expect(screen.getByText(/reaches only this machine/i)).toBeInTheDocument();
+  const pending = await screen.findByRole("list", { name: "Pending Keeper invitations" });
+  expect(pending).toHaveTextContent("Wildflower Garden");
+  expect(pending).toHaveTextContent("https://keeper.example.test");
+  expect(pending).toHaveTextContent("Waiting for Keeper approval");
 });
 
 test("renames the local Hive without changing its durable identity", async () => {
@@ -56,9 +61,7 @@ test("renames the local Hive without changing its durable identity", async () =>
   renamed.hive.name = "Clover Hive";
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.endsWith("/api/v1/apiary/transport-readiness")) {
-      return ok({ configured: false, endpoint: null, reachability: "unavailable" });
-    }
+    if (url.endsWith("/api/v1/apiary/keeper-links")) return ok([]);
     if (url.endsWith("/api/v1/apiary/join-invitations")) return ok([]);
     if (url === "/api/v1/hive" && init?.method === "PUT") {
       expect(JSON.parse(String(init.body))).toEqual({ name: "Clover Hive" });
@@ -115,30 +118,33 @@ test("founds only a reviewed Jira-backed Apiary and refreshes Hive identity", as
   await vi.waitFor(() => expect(onHiveIdentityChange).toHaveBeenCalledWith(federated));
 });
 
-test("copies a short-lived signed Hive link without changing membership", async () => {
+test("Keeper creates one private invitation link for an outbound member connection", async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-    if (String(input) === "/api/v1/apiary/connection-card") {
+  let created = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/join-links" && init?.method === "POST") {
+      created = true;
       return ok({
-        payload: {
-          schema_version: 1, protocol_version: 1, node_id: "node-1", hive_id: "hive-1",
-          hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea",
-          public_key: "public", issued_at: 10, expires_at: 86_410,
-        },
-        signature: "signed",
-      });
+        link: apiaryJoinLink("open"),
+        one_time_secret: "shown-once",
+      }, 201);
     }
-    throw new Error(`unexpected request ${String(input)}`);
+    if (url === "/api/v1/apiary/join-links") return ok(created ? [apiaryJoinLink("open")] : []);
+    if (["/api/v1/apiary/jira-projects", "/api/v1/integrations/jira/bindings", "/api/v1/apiary/shared-work", "/api/v1/apiary/stewardships", "/api/v1/apiary/members"].includes(url)) return ok([]);
+    if (url === "/api/v1/apiary/collapse-readiness") return ok({ active_hive_count: 1, pending_invitation_count: 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
+    throw new Error(`unexpected request ${url}`);
   }));
 
-  render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
-  fireEvent.click(screen.getByRole("button", { name: "Copy connection link" }));
+  render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Create invitation link" }));
 
-  expect(await screen.findByRole("status")).toHaveTextContent("expires in 24 hours and grants no access");
-  expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^http:\/\/localhost:\d+\/#swarm-next-apiary-connection=/));
-  expect(screen.getByRole("group", { name: "Created Apiary link" })).toHaveTextContent(/bound to one Hive and consumed once/i);
-  expect(screen.getByText(/Your personal Hive remains fully independent/)).toBeVisible();
+  expect(await screen.findByRole("status")).toHaveTextContent("Invitation link copied");
+  expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^https:\/\/keeper\.example\.test\/#swarm-next-apiary-keeper=/));
+  expect(screen.getByRole("group", { name: "Created Apiary link" })).toHaveTextContent(/private handoff link/i);
+  expect(screen.getByRole("note")).toHaveTextContent("Each Hive polls Jira directly");
+  expect(screen.getByRole("note")).toHaveTextContent("Member Hives poll this Keeper");
 });
 
 test("shows every collapse blocker and cannot bypass the disabled action", async () => {
@@ -252,97 +258,29 @@ test("promotes only a ready Hive Jira project and then shows it as Apiary owned"
   expect(screen.getByRole("status")).toHaveTextContent("WEB is now in the Apiary project catalog");
 });
 
-test("pins an imported Hive identity without implying membership or access", async () => {
-  const card = {
-    payload: {
-      schema_version: 1, protocol_version: 1, node_id: "node-2", hive_id: "hive-2",
-      hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora",
-      public_key: "public", issued_at: 10, expires_at: 86_410,
-    },
-    signature: "signed",
-  };
-  const candidate = {
-    apiary_id: "apiary-1", node_id: "node-2", hive_id: "hive-2", hive_name: "Clover Hive",
-    operator_id: "operator-2", operator_display_name: "Cora", public_key: "public",
-    card_issued_at: 10, card_expires_at: 86_410,
-    pinned_by_operator_id: "operator-1", pinned_at: 20, last_verified_at: 20,
-  };
-  let pinned = false;
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url === "/api/v1/apiary/collapse-readiness") {
-      return ok({ active_hive_count: 1, pending_invitation_count: 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
-    }
-    if (url === "/api/v1/apiary/jira-projects") return ok([]);
-    if (url === "/api/v1/integrations/jira/bindings") return ok([]);
-    if (url === "/api/v1/apiary/hive-candidates" && init?.method === "POST") {
-      expect(JSON.parse(String(init.body))).toEqual(card);
-      pinned = true;
-      return ok(candidate, 201);
-    }
-    if (url === "/api/v1/apiary/hive-candidates") return ok(pinned ? [candidate] : []);
-    throw new Error(`unexpected request ${url}`);
-  });
-  vi.stubGlobal("fetch", fetchMock);
-
-  render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
-  const inviteGuide = screen.getByRole("list", { name: "How to invite a Hive" });
-  expect(inviteGuide).toHaveTextContent("Receive her connection link");
-  expect(inviteGuide).toHaveTextContent("Verify the exact identity");
-  expect(inviteGuide).toHaveTextContent("Return the invitation link");
-  fireEvent.click(screen.getByText("Use a connection file instead"));
-  const dropTarget = screen.getByText("Choose connection card").closest("label");
-  expect(dropTarget).not.toBeNull();
-  fireEvent.dragEnter(dropTarget!);
-  expect(dropTarget).toHaveClass("drag-active");
-  fireEvent.dragLeave(dropTarget!);
-  expect(dropTarget).not.toHaveClass("drag-active");
-  const file = { size: 512, text: vi.fn(async () => JSON.stringify(card)) } as unknown as File;
-  fireEvent.change(screen.getByLabelText("Choose Hive connection card"), { target: { files: [file] } });
-
-  expect(await screen.findByRole("status")).toHaveTextContent("verified and pinned. No membership or access was granted");
-  expect(screen.getByRole("list", { name: "Pinned Hive identities" })).toHaveTextContent("Clover HiveCoraIdentity pinned");
-  expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/invitations"))).toBe(false);
-});
-
-test("copies one invitation link for a pinned Hive and then shows it pending", async () => {
-  const writeText = vi.fn().mockResolvedValue(undefined);
-  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
-  let invited = false;
-  const candidate = {
-    apiary_id: "apiary-1", node_id: "node-2", hive_id: "hive-2", hive_name: "Clover Hive",
-    operator_id: "operator-2", operator_display_name: "Cora", public_key: "public",
-    card_issued_at: 10, card_expires_at: 86_410,
-    pinned_by_operator_id: "operator-1", pinned_at: 20, last_verified_at: 20,
-    invitation_pending: invited,
-  };
+test("Keeper approves the exact Hive and leaves delivery to its next outbound poll", async () => {
+  let approved = false;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url === "/api/v1/apiary/collapse-readiness") {
-      return ok({ active_hive_count: 1, pending_invitation_count: invited ? 1 : 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
-    }
-    if (url === "/api/v1/apiary/jira-projects") return ok([]);
-    if (url === "/api/v1/integrations/jira/bindings") return ok([]);
-    if (url === "/api/v1/apiary/hive-candidates/hive-2/invitation") {
+    if (url === "/api/v1/apiary/join-links/link-1/approval") {
       expect(init?.method).toBe("POST");
-      invited = true;
-      return ok({
-        keeper_connection_card: { payload: { hive_name: "Meadow Hive" }, signature: "keeper" },
-        invitation: { payload: { invitation_id: "invite-1", invited_hive_id: "hive-2" }, signature: "signed" },
-        promoted_projects: [],
-        one_time_secret: "shown-once",
-      }, 201);
+      approved = true;
+      return ok(apiaryJoinLink("approved", true));
     }
-    if (url === "/api/v1/apiary/hive-candidates") return ok([{ ...candidate, invitation_pending: invited }]);
+    if (url === "/api/v1/apiary/join-links") return ok([apiaryJoinLink(approved ? "approved" : "awaiting_approval", true)]);
+    if (url === "/api/v1/apiary/collapse-readiness") return ok({ active_hive_count: 1, pending_invitation_count: approved ? 1 : 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
+    if (["/api/v1/apiary/jira-projects", "/api/v1/integrations/jira/bindings", "/api/v1/apiary/shared-work", "/api/v1/apiary/stewardships", "/api/v1/apiary/members"].includes(url)) return ok([]);
     throw new Error(`unexpected request ${url}`);
   }));
 
   render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Create invitation" }));
+  const approvals = await screen.findByRole("region", { name: "Hives waiting for approval" });
+  expect(approvals).toHaveTextContent("Clover Hive");
+  expect(approvals).toHaveTextContent("Cora · identity verified");
+  fireEvent.click(screen.getByRole("button", { name: "Approve Hive" }));
 
-  expect(await screen.findByRole("status")).toHaveTextContent("bound to that Hive, expires, and can be used only once");
-  expect(screen.getByRole("button", { name: "Invitation created" })).toBeDisabled();
-  expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/#swarm-next-apiary-invitation=/));
+  expect(await screen.findByRole("status")).toHaveTextContent("Her Hive will receive the signed invitation on its next outbound poll");
+  expect(screen.getByRole("list", { name: "Apiary invitation links" })).toHaveTextContent("Approved · awaiting poll");
 });
 
 test("reviews an invitation before explicitly pinning its exact Keeper", async () => {
@@ -627,6 +565,40 @@ function memberIdentity(): HiveIdentity {
       apiary: { id: "apiary-1", name: "Wildflower Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" },
       local_role: "member",
     },
+  };
+}
+
+function keeperLink(state: "contacting" | "awaiting_approval") {
+  return {
+    link_id: "link-1",
+    keeper_endpoint: "https://keeper.example.test",
+    apiary_id: "apiary-1",
+    apiary_name: "Wildflower Garden",
+    state,
+    created_at: 10,
+    expires_at: 86_410,
+    last_poll_at: null,
+    last_error: null,
+  };
+}
+
+function apiaryJoinLink(state: "open" | "awaiting_approval" | "approved", withCandidate = false) {
+  return {
+    id: "link-1",
+    apiary_id: "apiary-1",
+    apiary_name: "Wildflower Garden",
+    keeper_endpoint: "https://keeper.example.test",
+    state,
+    candidate: withCandidate ? {
+      node_id: "node-2",
+      hive_id: "hive-2",
+      hive_name: "Clover Hive",
+      operator_id: "operator-2",
+      operator_display_name: "Cora",
+      public_key: "public",
+    } : null,
+    issued_at: 10,
+    expires_at: 86_410,
   };
 }
 

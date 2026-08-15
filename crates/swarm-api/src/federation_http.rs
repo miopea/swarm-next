@@ -4,8 +4,8 @@ use futures_util::StreamExt;
 use reqwest::{Client, Method, StatusCode, Url};
 use serde::{Serialize, de::DeserializeOwned};
 use swarm_domain::{
-    FederationCatalogSnapshot, FederationClaimId, FederationJoinAcceptance,
-    FederationJoinSubmission, FederationSharedClaim,
+    ApiaryJoinLinkId, ApiaryJoinLinkPoll, FederationCatalogSnapshot, FederationClaimId,
+    FederationJoinAcceptance, FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard,
 };
 use thiserror::Error;
 
@@ -19,7 +19,7 @@ pub struct FederationHttpClient {
     base_url: Url,
 }
 
-#[derive(Debug, Error)]
+#[derive(Clone, Copy, Debug, Error)]
 pub enum FederationHttpError {
     #[error("Keeper endpoint must be a bounded HTTPS URL without credentials, query, or fragment")]
     InvalidEndpoint,
@@ -42,6 +42,13 @@ struct ReserveClaimRequest<'a> {
     project_id: &'a str,
     issue_id: &'a str,
     issue_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct BootstrapRequest<'a> {
+    secret: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connection_card: Option<&'a HiveConnectionCard>,
 }
 
 impl FederationHttpClient {
@@ -87,6 +94,30 @@ impl FederationHttpClient {
             "api/v1/federation/join",
             None,
             Some(submission),
+        )
+        .await
+    }
+
+    /// Presents or polls one Keeper-created bootstrap capability. All traffic
+    /// is initiated by the member Hive; the Keeper never connects inward.
+    ///
+    /// # Errors
+    /// Returns a typed transport, authentication, conflict, response-bound, or
+    /// protocol error. No retry is performed implicitly.
+    pub async fn bootstrap(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        secret: &str,
+        connection_card: Option<&HiveConnectionCard>,
+    ) -> Result<ApiaryJoinLinkPoll, FederationHttpError> {
+        self.send_json(
+            Method::POST,
+            &format!("api/v1/federation/bootstrap/{link_id}"),
+            None,
+            Some(&BootstrapRequest {
+                secret,
+                connection_card,
+            }),
         )
         .await
     }

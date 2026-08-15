@@ -2,22 +2,21 @@ import { useEffect, useState } from "react";
 
 import {
   acceptFederationJoinPolicy,
+  fetchApiaryKeeperLinks,
   fetchFederationJoinInvitations,
-  fetchFederationTransportReadiness,
-  fetchHiveConnectionCard,
   importFederationJoinInvitation,
+  pollApiaryKeeperLink,
   prepareFederationJoin,
+  saveApiaryKeeperLink,
   type ApiaryInvitationBundle,
+  type ApiaryKeeperJoinCapability,
+  type ApiaryKeeperLink,
   type FederationJoinInvitationOverview,
-  type FederationTransportReadiness,
 } from "../api";
-import { createApiaryHandoffLink, readApiaryHandoffLink } from "./apiaryHandoff";
+import { readApiaryHandoffLink } from "./apiaryHandoff";
 import {
-  ApiaryExchangeStep,
   ApiaryFileFallback,
-  ApiaryGeneratedLink,
   ApiaryLinkEntry,
-  FederationTransportStatus,
 } from "./ApiaryHandoffControls";
 
 type Props = {
@@ -28,53 +27,72 @@ type Props = {
 };
 
 export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessage }: Props) {
-  const [transportReadiness, setTransportReadiness] = useState<FederationTransportReadiness>();
+  const [keeperLinks, setKeeperLinks] = useState<ApiaryKeeperLink[]>([]);
   const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
+  const [keeperLink, setKeeperLink] = useState("");
   const [invitationLink, setInvitationLink] = useState("");
-  const [generatedLink, setGeneratedLink] = useState<string>();
   const [working, setWorking] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     void Promise.allSettled([
-      fetchFederationTransportReadiness(operatorToken),
+      fetchApiaryKeeperLinks(operatorToken),
       fetchFederationJoinInvitations(operatorToken),
-    ]).then(([transport, invitations]) => {
+    ]).then(([links, invitations]) => {
       if (cancelled) return;
-      setTransportReadiness(transport.status === "fulfilled" ? transport.value : undefined);
+      setKeeperLinks(links.status === "fulfilled" ? links.value : []);
       setJoinInvitations(invitations.status === "fulfilled" ? invitations.value : []);
     });
     return () => { cancelled = true; };
   }, [operatorToken]);
+
+  useEffect(() => {
+    if (keeperLinks.length === 0) return;
+    let cancelled = false;
+    const poll = async () => {
+      for (const link of keeperLinks) {
+        try {
+          const result = await pollApiaryKeeperLink(operatorToken, link.link_id);
+          if (cancelled) return;
+          if (result.invitation_received) {
+            setKeeperLinks(await fetchApiaryKeeperLinks(operatorToken));
+            setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
+            onMessage(`Invitation from ${result.link.apiary_name} received. Review its policy and Jira readiness below.`);
+          }
+        } catch {
+          // Pending links remain durable. Temporary Keeper outages are expected.
+        }
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 5_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [keeperLinks, onMessage, operatorToken]);
 
   function clearFeedback() {
     onError("");
     onMessage("");
   }
 
-  async function copyLink(link: string): Promise<boolean> {
-    try {
-      await navigator.clipboard.writeText(link);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function createConnectionLink() {
+  async function connectToKeeper() {
     setWorking(true);
     clearFeedback();
     try {
-      const card = await fetchHiveConnectionCard(operatorToken);
-      const link = createApiaryHandoffLink("connection", card);
-      setGeneratedLink(link);
-      const copied = await copyLink(link);
-      onMessage(copied
-        ? "Connection link copied. It expires in 24 hours and grants no access by itself."
-        : "Connection link created. Copy it below; it expires in 24 hours and grants no access by itself.");
+      const capability = readApiaryHandoffLink<ApiaryKeeperJoinCapability>(keeperLink, "keeper");
+      if (!capability.link_id || !capability.keeper_endpoint || !capability.secret) {
+        throw new Error("That link is not a Keeper invitation.");
+      }
+      const result = await saveApiaryKeeperLink(operatorToken, capability);
+      setKeeperLink("");
+      setKeeperLinks(await fetchApiaryKeeperLinks(operatorToken));
+      if (result.invitation_received) {
+        setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
+        onMessage(`Invitation from ${result.link.apiary_name} received. Review it below before joining.`);
+      } else {
+        onMessage(`This Hive introduced itself to ${result.link.apiary_name}. Waiting for the Keeper to approve the exact identity.`);
+      }
     } catch (cause) {
-      onError(cause instanceof Error ? cause.message : "The connection link could not be created.");
+      onError(cause instanceof Error ? cause.message : "The Keeper invitation link could not be used.");
     } finally {
       setWorking(false);
     }
@@ -153,25 +171,29 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
 
   return (
     <div className="personal-hive-join">
-      <FederationTransportStatus readiness={transportReadiness} />
       <div className="apiary-exchange-intro">
-        <span><strong>Join another Keeper&apos;s Apiary</strong><small>Three deliberate handoffs keep each operator in control. No membership or shared access changes until both Hives verify the exact identities.</small></span>
-        <ol className="apiary-exchange-guide" aria-label="How to join an Apiary">
-          <ApiaryExchangeStep number="1" title="Copy this Hive's connection link" detail="Send the short-lived link privately to the Keeper. Its signed identity contains no repositories, tasks, terminals, Jira access, credentials, or invitation secret.">
-            <button className="secondary-button" disabled={busy || working} onClick={() => void createConnectionLink()}>Copy connection link</button>
-          </ApiaryExchangeStep>
-          <ApiaryExchangeStep number="2" title="Keeper verifies and invites" detail="The Keeper pastes the link, checks your Hive and operator names, then returns one invitation link bound only to this Hive." />
-          <ApiaryExchangeStep number="3" title="Review before joining" detail="Paste the returned link below. Swarm verifies the Keeper, policy, Jira projects, and local readiness before it prepares any join request." />
-        </ol>
+        <span><strong>Join a Keeper&apos;s Apiary</strong><small>Paste the private link she sent you. This Hive connects outward, presents its signed identity, and keeps polling her Keeper—she never needs network access to this computer.</small></span>
+        <ApiaryLinkEntry label="Keeper invitation link" value={keeperLink} action={working ? "Connecting…" : "Connect to Keeper"} disabled={busy || working} onChange={setKeeperLink} onAction={() => void connectToKeeper()} />
+        <div className="apiary-transport-boundary" role="note">
+          <span><strong>Jira work</strong><small>This Hive continues polling Jira directly as you.</small></span>
+          <span><strong>Swarm work</strong><small>This Hive polls the Keeper for shared Apiary tasks and coordination.</small></span>
+        </div>
       </div>
-      {generatedLink ? <ApiaryGeneratedLink link={generatedLink} onCopy={copyLink} /> : null}
+      {keeperLinks.length > 0 ? (
+        <ul className="apiary-link-status" aria-label="Pending Keeper invitations">
+          {keeperLinks.map((link) => <li key={link.link_id}><span><strong>{link.apiary_name ?? "Keeper invitation"}</strong><small>{link.keeper_endpoint}</small></span><span className={`apiary-link-state state-${link.state}`}>{link.state === "awaiting_approval" ? "Waiting for Keeper approval" : "Contacting Keeper"}</span></li>)}
+        </ul>
+      ) : null}
       <div className="apiary-join-card">
         <div>
-          <strong>Paste the Keeper&apos;s invitation link</strong>
-          <small>Reviewing the link does not send anything or join the Apiary. Its private payload stays after the # fragment and is not sent during web navigation.</small>
+          <strong>Review before joining</strong>
+          <small>After Keeper approval, her signed invitation appears here automatically. Policy acceptance, Jira readiness, and final membership remain explicit.</small>
         </div>
-        <ApiaryLinkEntry label="Invitation link" value={invitationLink} action="Review invitation" disabled={busy || working} onChange={setInvitationLink} onAction={previewInvitationLink} />
-        <ApiaryFileFallback summary="Use an invitation file instead" ariaLabel="Choose Apiary invitation" disabled={busy || working} label="Choose invitation file" detail="or drop the Keeper's .json invitation here" onFile={(file) => void previewInvitationFile(file)} />
+        <details className="apiary-manual-fallback">
+          <summary>Advanced: import a legacy invitation</summary>
+          <ApiaryLinkEntry label="Legacy invitation link" value={invitationLink} action="Review invitation" disabled={busy || working} onChange={setInvitationLink} onAction={previewInvitationLink} />
+          <ApiaryFileFallback summary="Use an invitation file" ariaLabel="Choose Apiary invitation" disabled={busy || working} label="Choose invitation file" detail="or drop the Keeper's .json invitation here" onFile={(file) => void previewInvitationFile(file)} />
+        </details>
         {invitationPreview ? <InvitationPreview bundle={invitationPreview} working={working} onCancel={() => setInvitationPreview(undefined)} onTrust={() => void trustKeeperAndImport()} /> : null}
         {joinInvitations.length > 0 ? (
           <ul className="apiary-join-list" aria-label="Saved Apiary invitations">

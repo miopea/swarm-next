@@ -1,6 +1,6 @@
 const HANDOFF_PREFIX = "swarm-next-apiary";
 
-export type ApiaryHandoffKind = "connection" | "invitation";
+export type ApiaryHandoffKind = "connection" | "invitation" | "keeper";
 
 function encodeBase64Url(value: string): string {
   const bytes = new TextEncoder().encode(value);

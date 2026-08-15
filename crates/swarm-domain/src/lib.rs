@@ -352,6 +352,20 @@ pub struct ApiaryJoinLinkPoll {
     pub invitation: Option<ApiaryInvitationBundle>,
 }
 
+/// Public local record of one outbound Keeper connection. The bearer secret is
+/// deliberately absent; it remains private in the member Hive database for
+/// server-side polling across browser reloads and device changes.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ApiaryKeeperLink {
+    pub link_id: ApiaryJoinLinkId,
+    pub keeper_endpoint: String,
+    pub apiary_name: Option<String>,
+    pub state: ApiaryJoinLinkState,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub expires_at: Option<i64>,
+}
+
 /// A Keeper-pinned remote Hive identity. Pinning proves which public key is
 /// expected for a Hive but grants no membership, invitation, or authority.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

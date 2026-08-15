@@ -8,17 +8,18 @@ use subtle::ConstantTimeEq;
 use swarm_domain::{
     ApiaryHiveCandidate, ApiaryId, ApiaryInvitationBundle, ApiaryInvitationEnvelope,
     ApiaryInvitationEnvelopePayload, ApiaryInvitationId, ApiaryJoinLink, ApiaryJoinLinkBundle,
-    ApiaryJoinLinkId, ApiaryJoinLinkPoll, ApiaryJoinLinkState, FEDERATION_CATALOG_SCHEMA_VERSION,
-    FEDERATION_CONNECTION_CARD_SCHEMA_VERSION, FEDERATION_INVITATION_SCHEMA_VERSION,
-    FEDERATION_MEMBERSHIP_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION,
-    FederationCatalogAcknowledgement, FederationCatalogSnapshot, FederationCatalogSnapshotPayload,
-    FederationClaimId, FederationClaimState, FederationJoinAcceptance, FederationJoinInvitation,
-    FederationJoinInvitationState, FederationJoinReadiness, FederationJoinSubmission,
-    FederationJoinSubmissionPayload, FederationMembershipReceipt, FederationMembershipReceiptId,
-    FederationMembershipReceiptPayload, FederationNodeId, FederationProjectManifestEntry,
-    FederationProjectReadiness, FederationSharedClaim, FederationSyncCondition,
-    FederationSyncHealth, HiveConnectionCard, HiveConnectionCardPayload, HiveId,
-    JiraProjectBindingId, OperatorId, SharedWorkBackend, federation_retry_delay_seconds,
+    ApiaryJoinLinkId, ApiaryJoinLinkPoll, ApiaryJoinLinkState, ApiaryKeeperLink,
+    FEDERATION_CATALOG_SCHEMA_VERSION, FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
+    FEDERATION_INVITATION_SCHEMA_VERSION, FEDERATION_MEMBERSHIP_SCHEMA_VERSION,
+    FEDERATION_PROTOCOL_VERSION, FederationCatalogAcknowledgement, FederationCatalogSnapshot,
+    FederationCatalogSnapshotPayload, FederationClaimId, FederationClaimState,
+    FederationJoinAcceptance, FederationJoinInvitation, FederationJoinInvitationState,
+    FederationJoinReadiness, FederationJoinSubmission, FederationJoinSubmissionPayload,
+    FederationMembershipReceipt, FederationMembershipReceiptId, FederationMembershipReceiptPayload,
+    FederationNodeId, FederationProjectManifestEntry, FederationProjectReadiness,
+    FederationSharedClaim, FederationSyncCondition, FederationSyncHealth, HiveConnectionCard,
+    HiveConnectionCardPayload, HiveId, JiraProjectBindingId, OperatorId, SharedWorkBackend,
+    federation_retry_delay_seconds,
 };
 use url::Url;
 
@@ -788,6 +789,144 @@ impl TaskStore {
         let connection = self.connection()?;
         keeper_invitation_context(&connection, apiary_id, &identity.operator.id.to_string())?;
         load_apiary_join_links(&connection, apiary_id, now)
+    }
+
+    /// Saves one Keeper-created capability inside the personal Hive so the API
+    /// can present and poll it server-to-server across browser reloads. The
+    /// plaintext secret remains private and never appears in list results.
+    ///
+    /// # Errors
+    /// Rejects non-personal Hives, malformed capabilities, duplicates, and
+    /// unavailable persistence.
+    pub fn save_local_apiary_keeper_link(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        keeper_endpoint: &str,
+        one_time_secret: &str,
+        now: i64,
+    ) -> Result<ApiaryKeeperLink, TaskStoreError> {
+        validate_invitation_endpoint(keeper_endpoint)
+            .map_err(|_| TaskStoreError::InvalidApiaryJoinLink)?;
+        if now < 0 || self.local_hive_identity()?.hive.apiary_id.is_some() {
+            return Err(TaskStoreError::InvalidApiaryJoinLink);
+        }
+        let secret: [u8; 32] = Base64UrlUnpadded::decode_vec(one_time_secret)
+            .map_err(|_| TaskStoreError::InvalidApiaryJoinLink)?
+            .try_into()
+            .map_err(|_| TaskStoreError::InvalidApiaryJoinLink)?;
+        let endpoint = keeper_endpoint.trim().trim_end_matches('/').to_owned();
+        let connection = self.connection()?;
+        connection
+            .execute(
+                "INSERT INTO local_apiary_keeper_links
+                    (link_id, keeper_endpoint, one_time_secret, state,
+                     created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 'open', ?4, ?4)",
+                params![link_id.to_string(), endpoint, secret.as_slice(), now],
+            )
+            .map_err(|error| {
+                if matches!(error, rusqlite::Error::SqliteFailure(_, _)) {
+                    TaskStoreError::ApiaryJoinLinkResolved
+                } else {
+                    TaskStoreError::Sql(error)
+                }
+            })?;
+        load_local_apiary_keeper_link(&connection, link_id)?
+            .ok_or(TaskStoreError::ApiaryJoinLinkNotFound)
+    }
+
+    /// Lists pending outbound Keeper connections without bearer secrets.
+    ///
+    /// # Errors
+    /// Returns an error when private local persistence is unavailable.
+    pub fn local_apiary_keeper_links(&self) -> Result<Vec<ApiaryKeeperLink>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT link_id, keeper_endpoint, apiary_name, state,
+                    created_at, updated_at, expires_at
+             FROM local_apiary_keeper_links
+             ORDER BY created_at DESC, link_id",
+        )?;
+        statement
+            .query_map([], local_apiary_keeper_link_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Returns one private outbound credential for server-side polling only.
+    /// Callers must never serialize the returned secret to a browser response.
+    ///
+    /// # Errors
+    /// Rejects unknown links and unavailable or corrupt persistence.
+    pub fn local_apiary_keeper_link_credential(
+        &self,
+        link_id: ApiaryJoinLinkId,
+    ) -> Result<(String, String), TaskStoreError> {
+        let connection = self.connection()?;
+        let (endpoint, secret): (String, Vec<u8>) = connection
+            .query_row(
+                "SELECT keeper_endpoint, one_time_secret
+                 FROM local_apiary_keeper_links WHERE link_id = ?1",
+                [link_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::ApiaryJoinLinkNotFound)?;
+        let secret: [u8; 32] = secret
+            .try_into()
+            .map_err(|_| TaskStoreError::InvalidApiaryJoinLink)?;
+        Ok((endpoint, Base64UrlUnpadded::encode_string(&secret)))
+    }
+
+    /// Records only the signed Keeper response metadata after one outbound
+    /// poll, preserving the original endpoint and secret binding.
+    ///
+    /// # Errors
+    /// Rejects endpoint or identity substitution and unavailable persistence.
+    pub fn update_local_apiary_keeper_link(
+        &self,
+        remote: &ApiaryJoinLink,
+        now: i64,
+    ) -> Result<ApiaryKeeperLink, TaskStoreError> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE local_apiary_keeper_links
+             SET apiary_name = ?2, state = ?3, updated_at = ?4, expires_at = ?5
+             WHERE link_id = ?1 AND keeper_endpoint = ?6",
+            params![
+                remote.id.to_string(),
+                &remote.apiary_name,
+                remote.state.to_string(),
+                now,
+                remote.expires_at,
+                &remote.keeper_endpoint,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(TaskStoreError::InvalidApiaryJoinLink);
+        }
+        load_local_apiary_keeper_link(&connection, remote.id)?
+            .ok_or(TaskStoreError::ApiaryJoinLinkNotFound)
+    }
+
+    /// Removes a completed local bootstrap after its signed invitation has
+    /// been imported into the existing durable invitation workflow.
+    ///
+    /// # Errors
+    /// Rejects unknown links and unavailable persistence.
+    pub fn remove_local_apiary_keeper_link(
+        &self,
+        link_id: ApiaryJoinLinkId,
+    ) -> Result<(), TaskStoreError> {
+        let connection = self.connection()?;
+        if connection.execute(
+            "DELETE FROM local_apiary_keeper_links WHERE link_id = ?1",
+            [link_id.to_string()],
+        )? != 1
+        {
+            return Err(TaskStoreError::ApiaryJoinLinkNotFound);
+        }
+        Ok(())
     }
 
     /// Authenticates a public bootstrap request and binds it permanently to the
@@ -2861,6 +3000,30 @@ pub(super) fn migrate_apiary_join_links(
     )
 }
 
+pub(super) fn migrate_local_apiary_keeper_links(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS local_apiary_keeper_links (
+             link_id TEXT PRIMARY KEY,
+             keeper_endpoint TEXT NOT NULL,
+             one_time_secret BLOB NOT NULL CHECK (length(one_time_secret) = 32),
+             apiary_name TEXT,
+             state TEXT NOT NULL CHECK (state IN (
+                 'open','awaiting_approval','approved','invitation_issued','revoked','expired'
+             )),
+             created_at INTEGER NOT NULL CHECK (created_at >= 0),
+             updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+             expires_at INTEGER
+         );
+         CREATE TRIGGER IF NOT EXISTS immutable_local_apiary_keeper_link
+             BEFORE UPDATE OF link_id, keeper_endpoint, one_time_secret, created_at
+             ON local_apiary_keeper_links
+             BEGIN SELECT RAISE(ABORT, 'Local Apiary Keeper link identity is immutable'); END;
+         PRAGMA user_version = 46;",
+    )
+}
+
 pub(super) fn migrate_federation_identity(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -3333,6 +3496,38 @@ fn load_apiary_join_links(
         .collect()
 }
 
+fn load_local_apiary_keeper_link(
+    connection: &rusqlite::Connection,
+    link_id: ApiaryJoinLinkId,
+) -> rusqlite::Result<Option<ApiaryKeeperLink>> {
+    connection
+        .query_row(
+            "SELECT link_id, keeper_endpoint, apiary_name, state,
+                    created_at, updated_at, expires_at
+             FROM local_apiary_keeper_links WHERE link_id = ?1",
+            [link_id.to_string()],
+            local_apiary_keeper_link_from_row,
+        )
+        .optional()
+}
+
+fn local_apiary_keeper_link_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<ApiaryKeeperLink> {
+    Ok(ApiaryKeeperLink {
+        link_id: parse_domain_id(&row.get::<_, String>(0)?)?,
+        keeper_endpoint: row.get(1)?,
+        apiary_name: row.get(2)?,
+        state: row
+            .get::<_, String>(3)?
+            .parse()
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        created_at: row.get(4)?,
+        updated_at: row.get(5)?,
+        expires_at: row.get(6)?,
+    })
+}
+
 fn candidate_by_hive(
     connection: &rusqlite::Connection,
     apiary_id: ApiaryId,
@@ -3565,6 +3760,65 @@ mod tests {
             keeper.issue_apiary_join_link("https://keeper.example.test", 10_100, 3_600),
             Err(TaskStoreError::ApiaryJoinLinkLimit)
         ));
+    }
+
+    #[test]
+    fn personal_hive_retains_keeper_polling_secret_privately_across_restart() {
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, 9_000)
+            .unwrap();
+        let bundle = keeper
+            .issue_apiary_join_link("https://keeper.example.test", 10_000, 3_600)
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("member.sqlite3");
+        let member = TaskStore::open(&path).unwrap();
+        let saved = member
+            .save_local_apiary_keeper_link(
+                bundle.link.id,
+                &bundle.link.keeper_endpoint,
+                &bundle.one_time_secret,
+                10_001,
+            )
+            .unwrap();
+        assert_eq!(saved.state, ApiaryJoinLinkState::Open);
+        assert!(
+            !serde_json::to_string(&saved)
+                .unwrap()
+                .contains(&bundle.one_time_secret)
+        );
+        assert!(matches!(
+            member.save_local_apiary_keeper_link(
+                bundle.link.id,
+                &bundle.link.keeper_endpoint,
+                &bundle.one_time_secret,
+                10_002,
+            ),
+            Err(TaskStoreError::ApiaryJoinLinkResolved)
+        ));
+        drop(member);
+
+        let reopened = TaskStore::open(path).unwrap();
+        assert_eq!(reopened.local_apiary_keeper_links().unwrap(), vec![saved]);
+        assert_eq!(
+            reopened
+                .local_apiary_keeper_link_credential(bundle.link.id)
+                .unwrap(),
+            (
+                bundle.link.keeper_endpoint.clone(),
+                bundle.one_time_secret.clone()
+            )
+        );
+        let updated = reopened
+            .update_local_apiary_keeper_link(&bundle.link, 10_003)
+            .unwrap();
+        assert_eq!(updated.apiary_name.as_deref(), Some("Garden"));
+        assert_eq!(updated.expires_at, Some(bundle.link.expires_at));
+        reopened
+            .remove_local_apiary_keeper_link(bundle.link.id)
+            .unwrap();
+        assert!(reopened.local_apiary_keeper_links().unwrap().is_empty());
     }
 
     #[test]

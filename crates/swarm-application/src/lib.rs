@@ -2,15 +2,16 @@ use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinLink,
     ApiaryJoinLinkBundle, ApiaryJoinLinkId, ApiaryJoinLinkPoll, ApiaryJoinReadiness,
-    ApiaryMemberSummary, DecisionRequest, DecisionRequestId, DecisionRequestKind, DecisionUrgency,
-    FederationCatalogAcknowledgement, FederationCatalogReadiness, FederationCatalogSnapshot,
-    FederationClaimId, FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
-    FederationJoinSubmission, FederationSharedClaim, FederationSyncCondition, FederationSyncHealth,
-    HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext,
-    LocalApiaryRole, OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId,
-    PresenceMode, PresenceObservationState, SharedWorkBackend, StewardCapability, Stewardship,
-    StewardshipId, Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId,
-    WorkerProfile, WorkerRole, WorkerSessionId,
+    ApiaryKeeperLink, ApiaryMemberSummary, DecisionRequest, DecisionRequestId, DecisionRequestKind,
+    DecisionUrgency, FederationCatalogAcknowledgement, FederationCatalogReadiness,
+    FederationCatalogSnapshot, FederationClaimId, FederationJoinAcceptance,
+    FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
+    FederationSharedClaim, FederationSyncCondition, FederationSyncHealth, HiveConnectionCard,
+    HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, LocalApiaryRole,
+    OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    PresenceObservationState, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId,
+    Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
+    WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -385,6 +386,70 @@ impl ApiaryService {
     ) -> Result<ApiaryJoinLinkPoll, ApplicationError> {
         self.store
             .poll_apiary_join_link(link_id, secret, now)
+            .map_err(Into::into)
+    }
+
+    /// Saves a Keeper URL capability privately on this personal Hive so local
+    /// server-side polling survives browser reloads and device changes.
+    ///
+    /// # Errors
+    /// Rejects malformed, duplicate, or non-personal-Hive capabilities.
+    pub fn save_keeper_link(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        keeper_endpoint: &str,
+        secret: &str,
+        now: i64,
+    ) -> Result<ApiaryKeeperLink, ApplicationError> {
+        self.store
+            .save_local_apiary_keeper_link(link_id, keeper_endpoint, secret, now)
+            .map_err(Into::into)
+    }
+
+    /// Lists pending outbound Keeper connections without exposing secrets.
+    ///
+    /// # Errors
+    /// Returns an error when local persistence is unavailable.
+    pub fn keeper_links(&self) -> Result<Vec<ApiaryKeeperLink>, ApplicationError> {
+        self.store.local_apiary_keeper_links().map_err(Into::into)
+    }
+
+    /// Loads one private endpoint and bearer secret for server-side transport.
+    /// This method must never feed a browser response.
+    ///
+    /// # Errors
+    /// Rejects unknown links and corrupt local state.
+    pub fn keeper_link_credential(
+        &self,
+        link_id: ApiaryJoinLinkId,
+    ) -> Result<(String, String), ApplicationError> {
+        self.store
+            .local_apiary_keeper_link_credential(link_id)
+            .map_err(Into::into)
+    }
+
+    /// Saves the latest signed Keeper response metadata without changing the
+    /// locally pinned endpoint or bearer capability.
+    ///
+    /// # Errors
+    /// Rejects endpoint substitution and persistence failures.
+    pub fn record_keeper_link_poll(
+        &self,
+        remote: &ApiaryJoinLink,
+        now: i64,
+    ) -> Result<ApiaryKeeperLink, ApplicationError> {
+        self.store
+            .update_local_apiary_keeper_link(remote, now)
+            .map_err(Into::into)
+    }
+
+    /// Removes one completed local bootstrap after its invitation is durable.
+    ///
+    /// # Errors
+    /// Rejects unknown links and unavailable persistence.
+    pub fn remove_keeper_link(&self, link_id: ApiaryJoinLinkId) -> Result<(), ApplicationError> {
+        self.store
+            .remove_local_apiary_keeper_link(link_id)
             .map_err(Into::into)
     }
 

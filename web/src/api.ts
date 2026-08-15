@@ -368,6 +368,39 @@ export type ApiaryInvitationBundle = {
   promoted_projects: FederationProjectManifestEntry[];
   one_time_secret: string;
 };
+export type ApiaryJoinLinkState = "open" | "awaiting_approval" | "approved" | "invitation_issued" | "revoked" | "expired";
+export type ApiaryJoinLink = {
+  id: string;
+  apiary_id: string;
+  apiary_name: string;
+  keeper_endpoint: string;
+  state: ApiaryJoinLinkState;
+  candidate: ApiaryHiveCandidate | null;
+  issued_at: number;
+  expires_at: number;
+};
+export type ApiaryJoinLinkBundle = {
+  link: ApiaryJoinLink;
+  one_time_secret: string;
+};
+export type ApiaryKeeperLink = {
+  link_id: string;
+  keeper_endpoint: string;
+  apiary_name: string | null;
+  state: ApiaryJoinLinkState;
+  created_at: number;
+  updated_at: number;
+  expires_at: number | null;
+};
+export type ApiaryKeeperJoinCapability = {
+  link_id: string;
+  keeper_endpoint: string;
+  secret: string;
+};
+export type ApiaryKeeperLinkPoll = {
+  link: ApiaryJoinLink;
+  invitation_received: boolean;
+};
 export type FederationProjectManifestEntry = {
   project_id: string;
   project_key: string;
@@ -649,6 +682,65 @@ export async function fetchApiaryHiveCandidates(
 ): Promise<ApiaryHiveCandidate[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/hive-candidates");
   return response.json() as Promise<ApiaryHiveCandidate[]>;
+}
+
+export async function createApiaryJoinLink(
+  operatorToken: string,
+): Promise<ApiaryJoinLinkBundle> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/join-links", {
+    method: "POST",
+  });
+  return response.json() as Promise<ApiaryJoinLinkBundle>;
+}
+
+export async function fetchApiaryJoinLinks(
+  operatorToken: string,
+): Promise<ApiaryJoinLink[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/join-links");
+  return response.json() as Promise<ApiaryJoinLink[]>;
+}
+
+export async function approveApiaryJoinLink(
+  operatorToken: string,
+  linkId: string,
+): Promise<ApiaryJoinLink> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/join-links/${encodeURIComponent(linkId)}/approval`,
+    { method: "POST" },
+  );
+  return response.json() as Promise<ApiaryJoinLink>;
+}
+
+export async function fetchApiaryKeeperLinks(
+  operatorToken: string,
+): Promise<ApiaryKeeperLink[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/keeper-links");
+  return response.json() as Promise<ApiaryKeeperLink[]>;
+}
+
+export async function saveApiaryKeeperLink(
+  operatorToken: string,
+  capability: ApiaryKeeperJoinCapability,
+): Promise<ApiaryKeeperLinkPoll> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/keeper-links", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(capability),
+  });
+  return response.json() as Promise<ApiaryKeeperLinkPoll>;
+}
+
+export async function pollApiaryKeeperLink(
+  operatorToken: string,
+  linkId: string,
+): Promise<ApiaryKeeperLinkPoll> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/keeper-links/${encodeURIComponent(linkId)}/poll`,
+    { method: "POST" },
+  );
+  return response.json() as Promise<ApiaryKeeperLinkPoll>;
 }
 
 export async function pinApiaryHiveCandidate(

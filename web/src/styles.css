@@ -726,6 +726,24 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-confirmation > span { color: var(--muted); font-size: .76rem; line-height: 1.5; }
 .apiary-hive-candidates { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .apiary-hive-candidates > div:first-child { display: grid; gap: 2px; }
+.apiary-hive-candidates > .apiary-invite-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.apiary-invite-heading > span { display: grid; min-width: 0; gap: 2px; }
+.apiary-transport-boundary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.apiary-transport-boundary > span { display: grid; gap: 2px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.apiary-transport-boundary strong { font-size: .76rem; }
+.apiary-transport-boundary small { color: var(--muted); font-size: .69rem; line-height: 1.4; }
+.apiary-pending-approvals { display: grid; gap: 7px; padding: 10px; border: 1px solid color-mix(in srgb, var(--accent-strong) 46%, var(--line)); border-radius: var(--radius-md); background: var(--accent-soft); }
+.apiary-pending-approvals h4 { margin: 0; font-size: .78rem; }
+.apiary-link-status { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.apiary-link-status li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.apiary-link-status li > span:first-child { display: grid; min-width: 0; gap: 1px; }
+.apiary-link-status small { overflow: hidden; color: var(--muted); font-size: .67rem; text-overflow: ellipsis; white-space: nowrap; }
+.apiary-link-state { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; color: var(--quiet); background: var(--surface-soft); font-size: .66rem; font-weight: 750; }
+.apiary-link-state.state-awaiting_approval { color: var(--warn); background: var(--warn-soft); }
+.apiary-link-state.state-approved, .apiary-link-state.state-invitation_issued { color: var(--good); background: var(--good-soft); }
+.apiary-manual-fallback { padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: .72rem; }
+.apiary-manual-fallback > summary { cursor: pointer; }
+.apiary-manual-fallback > .apiary-link-entry { margin-top: 9px; }
 .apiary-card-drop { position: relative; display: flex; min-height: 58px; cursor: pointer; align-items: center; justify-content: center; gap: 8px; padding: 10px 14px; border: 1px dashed var(--line-strong); border-radius: var(--radius-md); background: var(--panel); text-align: center; }
 .apiary-card-drop:hover, .apiary-card-drop:focus-within, .apiary-card-drop.drag-active { border-color: var(--accent-strong); background: var(--accent-soft); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
 .apiary-card-drop.drag-active { border-style: solid; }
@@ -1021,6 +1039,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-invitation-preview .settings-actions button { width: 100%; }
   .apiary-join-summary, .apiary-policy-acknowledgement, .apiary-project-readiness li { align-items: flex-start; flex-direction: column; }
   .apiary-candidate-list li { align-items: flex-start; flex-direction: column; }
+  .apiary-hive-candidates > .apiary-invite-heading, .apiary-link-status li { align-items: stretch; flex-direction: column; }
+  .apiary-invite-heading button { width: 100%; }
+  .apiary-transport-boundary { grid-template-columns: minmax(0, 1fr); }
+  .apiary-link-state { width: fit-content; }
   .apiary-members li { align-items: flex-start; flex-direction: column; }
   .apiary-section-heading { align-items: stretch; flex-direction: column; }
   .apiary-section-heading button { width: 100%; }
