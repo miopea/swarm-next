@@ -878,3 +878,17 @@ the independently updated terminal host through the API to worker settings:
   complete browser restarts. API PID advanced to `3282775`; terminal-host PID
   remained `2966127`, preserving the active worker session. Every proof browser
   process closed after the run.
+- Release `0.1.0-dev-6881ecbe20d4` gives durable worker startup, provider
+  conversation selection, outside-root policy, host-session binding rollback,
+  and stale-session reconciliation one focused Rust runtime owner. Focused
+  tests proved Queen reattachment without duplication, recovery-circuit reset
+  after stability, bounded repeated recovery, and assignment to sleeping
+  workers. The full release gate passed 331 Rust tests, warnings-denied Clippy,
+  213 frontend tests, strict TypeScript, and the production build. Exact live
+  Edge acceptance inspected the preserved Queen terminal while passing every
+  primary and Apiary member surface at 1,440-pixel desktop and 412-pixel
+  Android widths with zero overflow, 345 and 318 named controls, all three
+  Apiary guide steps, and authentication preserved across complete browser
+  restarts. API PID advanced to `3294941`; terminal-host PID remained
+  `2966127`, preserving the active worker session. Every proof browser process
+  closed after the run.
