@@ -135,7 +135,11 @@ Required next extractions are vertical and behavior-led:
   routes likewise share a focused `tasks` adapter while lifecycle rules remain
   in `swarm-application` and persistence. Terminal process ownership and
   recovery remain with the root engine composition until that boundary is
-  independently extracted.
+  independently extracted. Operator-presence observation/manual overrides and
+  device-scoped presentation preferences now have separate focused adapters;
+  notification delivery and Queen autonomy policy remain with their own
+  existing owners rather than being coupled merely because Settings renders
+  them nearby.
 - `crates/swarm-persistence/src/lib.rs` is roughly 3,700 lines although Jira,
   workers, decisions, notifications, dispatches, and outcomes have begun moving
   to focused modules.

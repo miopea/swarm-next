@@ -8,6 +8,8 @@ mod jira_oauth;
 mod microsoft_oauth;
 mod notifications;
 mod outlook;
+mod presence;
+mod presentation;
 mod tasks;
 mod terminal_socket;
 mod workers;
@@ -47,16 +49,14 @@ use swarm_domain::{
     FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard, HiveId, HiveIdentity,
     JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
     LocalApiaryContext, NotificationPolicy, OperatorId, PresenceDeviceClass, PresenceDeviceId,
-    PresenceMode, PresenceObservationState, ProviderConversationId, ProviderKind,
-    QueenAutonomyLevel, QueenAutonomyPolicy, SharedWorkBackend, StewardCapability, Stewardship,
-    StewardshipId, TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile,
-    WorkerSessionId,
+    ProviderConversationId, ProviderKind, QueenAutonomyLevel, QueenAutonomyPolicy,
+    SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority,
+    TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
-    JiraTransitionFailure, NotificationSettings, PresentationColorTheme, PresentationDeviceClass,
-    PresentationPreferences, PushSubscriptionInput, TaskDispatch, TaskDispatchFailure,
-    TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
+    JiraTransitionFailure, NotificationSettings, PushSubscriptionInput, TaskDispatch,
+    TaskDispatchFailure, TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
 use swarm_terminal::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, ClaudeConversationStart,
@@ -1283,16 +1283,6 @@ struct AttachGrantResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct SetPresenceRequest {
-    manual_mode: Option<PresenceMode>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PresenceObservationRequest {
-    device_class: PresenceDeviceClass,
-    state: PresenceObservationState,
-}
-#[derive(Debug, Deserialize)]
 struct SetNotificationPolicyRequest {
     policy: NotificationPolicy,
 }
@@ -1302,12 +1292,6 @@ struct SetQueenAutonomyPolicyRequest {
     at_hive: QueenAutonomyLevel,
     away: QueenAutonomyLevel,
     night_watch: QueenAutonomyLevel,
-}
-
-#[derive(Debug, Deserialize)]
-struct SetPresentationPreferencesRequest {
-    color_theme: PresentationColorTheme,
-    terminal_keys_visible: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -1790,11 +1774,11 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/presence",
-            get(operator_presence).put(set_operator_presence),
+            get(presence::operator_presence).put(presence::set_operator_presence),
         )
         .route(
             "/api/v1/presence/devices/{device_id}",
-            put(observe_presence_device),
+            put(presence::observe_presence_device),
         )
         .route(
             "/api/v1/notifications/settings",
@@ -1806,7 +1790,8 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/preferences/presentation/{device_class}",
-            get(presentation_preferences).put(set_presentation_preferences),
+            get(presentation::presentation_preferences)
+                .put(presentation::set_presentation_preferences),
         )
         .route(
             "/api/v1/notifications/subscriptions/{device_id}",
@@ -2850,59 +2835,6 @@ async fn download_dogfood_attachment(
     Ok((response_headers, bytes).into_response())
 }
 
-async fn operator_presence(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let presence = task_service(&state)?
-        .operator_presence(unix_timestamp())
-        .map_err(application_error)?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(presence)).into_response())
-}
-
-async fn set_operator_presence(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(request): Json<SetPresenceRequest>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let (presence, changed) = task_service(&state)?
-        .set_operator_presence(request.manual_mode, unix_timestamp())
-        .map_err(application_error)?;
-    if changed {
-        state.control_room_notify.notify_waiters();
-    }
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(presence)).into_response())
-}
-
-async fn observe_presence_device(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(device_id): Path<String>,
-    Json(request): Json<PresenceObservationRequest>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let device_id = PresenceDeviceId::from_str(&device_id).map_err(|_| {
-        ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_presence_device_id",
-            "presence device ID must be a UUID",
-        )
-    })?;
-    let (presence, changed) = task_service(&state)?
-        .observe_operator_device(
-            device_id,
-            request.device_class,
-            request.state,
-            unix_timestamp(),
-        )
-        .map_err(application_error)?;
-    if changed {
-        state.control_room_notify.notify_waiters();
-    }
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(presence)).into_response())
-}
 async fn notification_settings(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2955,40 +2887,6 @@ async fn set_queen_autonomy_policy(
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(policy)).into_response())
-}
-
-async fn presentation_preferences(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(device_class): Path<PresentationDeviceClass>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let preferences = task_store(&state)?
-        .presentation_preferences(device_class)
-        .map_err(|error| task_store_error(&error))?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(preferences)).into_response())
-}
-
-async fn set_presentation_preferences(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(device_class): Path<PresentationDeviceClass>,
-    Json(request): Json<SetPresentationPreferencesRequest>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let preferences = task_store(&state)?
-        .set_presentation_preferences(
-            PresentationPreferences {
-                device_class,
-                color_theme: request.color_theme,
-                terminal_keys_visible: request.terminal_keys_visible,
-                configured: true,
-            },
-            unix_timestamp(),
-        )
-        .map_err(|error| task_store_error(&error))?;
-    state.control_room_notify.notify_waiters();
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(preferences)).into_response())
 }
 
 async fn set_notification_policy(
