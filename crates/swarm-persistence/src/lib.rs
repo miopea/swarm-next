@@ -753,6 +753,10 @@ impl TaskStore {
     }
 
     /// Lists the newest durable task events across the local Hive.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the local Hive identity or activity rows
+    /// cannot be read.
     pub fn list_recent_task_activity(
         &self,
         limit: usize,
