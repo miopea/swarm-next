@@ -242,6 +242,17 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-panel > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .keeper-panel h4 { margin: 0; font-size: 1rem; }
 .keeper-panel > header > small { max-width: 190px; color: var(--quiet); font-size: .67rem; line-height: 1.4; text-align: right; }
+.keeper-task-header > div { min-width: 0; }
+.keeper-task-header > div > small { display: block; margin-top: 4px; color: var(--quiet); font-size: .67rem; line-height: 1.4; }
+.keeper-task-form { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(110px, .35fr); gap: 11px; margin: 0 0 14px; padding: 13px; border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: var(--accent-soft); }
+.keeper-task-form label { display: grid; align-content: start; gap: 5px; min-width: 0; color: var(--muted); font-size: .7rem; }
+.keeper-task-form label > span { font-weight: 650; }
+.keeper-task-form label small { color: var(--quiet); font-weight: 400; }
+.keeper-task-form input, .keeper-task-form textarea, .keeper-task-form select { width: 100%; min-width: 0; }
+.keeper-task-form textarea { resize: vertical; }
+.keeper-task-submit { display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 12px; }
+.keeper-task-submit p { max-width: 660px; margin: 0; color: var(--muted); font-size: .7rem; line-height: 1.45; }
+.keeper-task-form .form-error { grid-column: 1 / -1; margin: 0; color: var(--bad); font-size: .75rem; }
 .keeper-hive-list, .keeper-work-list, .keeper-project-list, .keeper-steward-list { display: grid; margin: 0; padding: 0; list-style: none; }
 .keeper-hive-list li { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 9px 0; border-top: 1px solid var(--line); }
 .keeper-hive-list li > span:nth-child(2), .keeper-work-list li > span, .keeper-steward-list li > span:first-child { display: grid; min-width: 0; gap: 3px; }
@@ -999,6 +1010,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .keeper-panel > header { align-items: flex-start; flex-direction: column; }
   .member-sync-panel > header { align-items: center; flex-direction: row; }
   .keeper-panel > header > small { max-width: none; text-align: left; }
+  .keeper-task-header .secondary-button { width: 100%; }
+  .keeper-task-form { grid-template-columns: minmax(0, 1fr); }
+  .keeper-task-form > * { grid-column: 1; }
+  .keeper-task-submit { align-items: stretch; flex-direction: column; }
+  .keeper-task-submit button { width: 100%; }
   .keeper-hive-list li { grid-template-columns: 38px minmax(0, 1fr); }
   .keeper-hive-list .keeper-role-badge { grid-column: 2; justify-self: start; }
   .keeper-work-list li, .keeper-steward-list li { grid-template-columns: minmax(0, 1fr); gap: 6px; }

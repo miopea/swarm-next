@@ -1,8 +1,8 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import KeeperControlRoom from "./KeeperControlRoom";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 test("shows a low-noise Keeper rollup from public Apiary records", async () => {
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
@@ -27,6 +27,35 @@ test("shows a low-noise Keeper rollup from public Apiary records", async () => {
   expect(document.body).not.toHaveTextContent("secret");
   fireEvent.click(screen.getByRole("button", { name: "Manage Apiary" }));
   expect(onManage).toHaveBeenCalledOnce();
+});
+
+test("creates Keeper-canonical shared work without choosing a private worker", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  let tasks: unknown[] = [];
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({ url, init });
+    if (url.endsWith("/members") || url.endsWith("/jira-projects") || url.endsWith("/shared-work") || url.endsWith("/stewardships")) return Promise.resolve(ok([]));
+    if (url.endsWith("/tasks") && init?.method === "POST") {
+      const created = { id: "task-2", apiary_id: "apiary-1", source: "swarm", title: "Coordinate the release", description: "Keep both Hives aligned.", priority: "high", state: "ready", home_node_id: null, home_hive_id: null, revision: 1, created_at: 2, updated_at: 2 };
+      tasks = [created];
+      return Promise.resolve({ ...ok(created), status: 201 });
+    }
+    if (url.endsWith("/tasks")) return Promise.resolve(ok(tasks));
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+  render(<KeeperControlRoom identity={keeperIdentity()} operatorToken="secret" onManage={vi.fn()} />);
+  await screen.findByRole("heading", { name: "Grand Garden" });
+  fireEvent.click(screen.getByRole("button", { name: "Create shared task" }));
+  expect(screen.queryByLabelText(/worker/i)).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Outcome"), { target: { value: "  Coordinate the release  " } });
+  fireEvent.change(screen.getByLabelText(/Context/), { target: { value: "  Keep both Hives aligned.  " } });
+  fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "high" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create for Apiary" }));
+  await waitFor(() => expect(screen.getByRole("list", { name: "Keeper Swarm tasks" })).toHaveTextContent("Coordinate the releaseSwarm · readyUnassignedRevision 1"));
+  const request = requests.find(({ url, init }) => url.endsWith("/tasks") && init?.method === "POST");
+  expect(JSON.parse(String(request?.init?.body))).toEqual({ title: "Coordinate the release", description: "Keep both Hives aligned.", priority: "high" });
+  expect(screen.queryByRole("form", { name: "Create shared Apiary task" })).not.toBeInTheDocument();
 });
 
 function keeperIdentity() { return { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: "apiary-1" }, apiary_context: { mode: "federated" as const, apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const }, local_role: "keeper" as const } }; }

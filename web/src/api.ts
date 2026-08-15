@@ -704,6 +704,18 @@ export async function fetchApiaryTasks(operatorToken: string): Promise<ApiaryTas
   return response.json() as Promise<ApiaryTask[]>;
 }
 
+export async function createApiaryTask(
+  operatorToken: string,
+  input: { title: string; description: string; priority: TaskPriority },
+): Promise<ApiaryTask> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/tasks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return response.json() as Promise<ApiaryTask>;
+}
+
 export async function fetchFederationTaskSyncStatus(
   operatorToken: string,
 ): Promise<FederationTaskSyncStatus> {
