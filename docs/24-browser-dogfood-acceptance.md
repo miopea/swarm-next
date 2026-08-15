@@ -807,3 +807,18 @@ the independently updated terminal host through the API to worker settings:
   and authentication preserved across complete browser restarts. API PID
   advanced to `3222930`; terminal-host PID remained `2966127`, preserving the
   active worker session. Every proof browser process closed after the run.
+- Release `0.1.0-dev-40c4e28ed53f` gives development-reload requests and
+  explicitly disruptive worker-engine maintenance one focused Rust command
+  owner, separate from read-only runtime observation. Focused tests proved
+  authentication, fail-closed unavailable installs, content-free reload
+  requests, no worker restart for a matching engine, and the managed stop,
+  update, cleanup, and configured-worker revival path. The full release gate
+  passed 331 Rust tests, warnings-denied Clippy, 213 frontend tests, strict
+  TypeScript, and the production build. Exact live Edge acceptance exercised
+  the maintenance confirmation surface without applying a worker update and
+  passed every primary and Apiary member surface at 1,440-pixel desktop and
+  412-pixel Android widths with zero overflow, 345 and 315 named controls, all
+  three Apiary guide steps, and authentication preserved across complete
+  browser restarts. API PID advanced to `3235842`; terminal-host PID remained
+  `2966127`, preserving the active worker session. Every proof browser process
+  closed after the run.
