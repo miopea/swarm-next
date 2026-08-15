@@ -10,7 +10,8 @@ use serde::Deserialize;
 use swarm_terminal::{HistoryCursor, HostRequest, HostResponse};
 
 use crate::{
-    ApiError, AppState, authorize, authorized_no_store_request, parse_session_id, request_host,
+    ApiError, AppState, authorize, parse_session_id,
+    terminal_host::{authorized_no_store_request, request_host},
 };
 
 #[derive(Debug, Deserialize)]

@@ -23,6 +23,7 @@ mod session_history;
 mod tasks;
 mod terminal_attach;
 mod terminal_control;
+mod terminal_host;
 mod terminal_socket;
 mod worker_runtime;
 mod workers;
@@ -58,10 +59,10 @@ use swarm_application::{
     FederationJoinInvitationOverview, TaskService,
 };
 #[cfg(test)]
-use swarm_domain::PresenceDeviceId;
+use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinReadiness,
-    ControlRoomEventKind, DecisionRequestId, FederationCatalogSnapshot, FederationClaimId,
+    DecisionRequestId, FederationCatalogSnapshot, FederationClaimId,
     FederationJoinSubmission, FederationSharedClaim, HiveConnectionCard, HiveId, HiveIdentity,
     JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
     LocalApiaryContext, OperatorId, ProviderKind, SharedWorkBackend, StewardCapability,
@@ -3698,21 +3699,6 @@ fn jira_issue_snapshot(issue: &jira::JiraIssue) -> JiraIssueSnapshot<'_> {
     }
 }
 
-async fn request_host(state: &AppState, request: HostRequest) -> Result<HostResponse, ApiError> {
-    let response = terminal_client(state)?
-        .request(&request)
-        .await
-        .map_err(|error| host_unavailable(&error))?;
-    if let HostResponse::Error { message, .. } = &response {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "terminal_operation_failed",
-            message,
-        ));
-    }
-    Ok(response)
-}
-
 fn attachment_error(error: AttachmentError) -> ApiError {
     match error {
         AttachmentError::UnsupportedType | AttachmentError::InvalidSignature => ApiError::new(
@@ -3741,56 +3727,6 @@ fn attachment_error(error: AttachmentError) -> ApiError {
             error.to_string(),
         ),
     }
-}
-
-async fn authorized_request(
-    state: &AppState,
-    headers: &HeaderMap,
-    request: HostRequest,
-) -> Result<Json<HostResponse>, ApiError> {
-    authorize(state, headers)?;
-    let client = terminal_client(state)?;
-    let response = client
-        .request(&request)
-        .await
-        .map_err(|error| host_unavailable(&error))?;
-    if let HostResponse::Error { message, .. } = &response {
-        return Err(ApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "terminal_operation_failed",
-            message,
-        ));
-    }
-    Ok(Json(response))
-}
-
-async fn authorized_no_store_request(
-    state: &AppState,
-    headers: &HeaderMap,
-    request: HostRequest,
-) -> Result<Response, ApiError> {
-    let Json(response) = authorized_request(state, headers, request).await?;
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
-}
-
-fn terminal_client(state: &AppState) -> Result<&HostClient, ApiError> {
-    state.terminal_host.as_ref().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "terminal_host_unconfigured",
-            "terminal host is not configured",
-        )
-    })
-}
-
-fn record_session_event(state: &AppState) -> Result<(), ApiError> {
-    if let Some(store) = &state.task_store {
-        store
-            .record_control_room_event(ControlRoomEventKind::SessionsChanged)
-            .map_err(|error| task_store_error(&error))?;
-    }
-    state.control_room_notify.notify_waiters();
-    Ok(())
 }
 
 fn task_store(state: &AppState) -> Result<&TaskStore, ApiError> {

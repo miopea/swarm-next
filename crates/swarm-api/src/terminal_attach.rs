@@ -14,8 +14,8 @@ use swarm_terminal::{HostRequest, HostResponse};
 use crate::{
     ApiError, AppState,
     attach::{ATTACH_GRANT_TTL, AttachGrantError},
-    attachment_error, authorize, host_unavailable, parse_session_id, request_host, task_store,
-    task_store_error, terminal_client,
+    attachment_error, authorize, host_unavailable, parse_session_id, task_store, task_store_error,
+    terminal_host::{request_host, terminal_client},
     terminal_socket::{
         MAX_WEBSOCKET_MESSAGE_BYTES, TERMINAL_GRANT_PROTOCOL_PREFIX, TERMINAL_WEBSOCKET_PROTOCOL,
         serve_terminal_socket,

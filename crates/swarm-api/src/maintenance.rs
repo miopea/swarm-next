@@ -12,8 +12,8 @@ use swarm_terminal::{HostRequest, HostResponse, TerminalHostStatus};
 use tokio::time::{sleep, timeout};
 
 use crate::{
-    ApiError, AppState, authorize, build_version, request_host, runtime, task_store,
-    task_store_error, unix_timestamp, worker_engine_build_id,
+    ApiError, AppState, authorize, build_version, runtime, task_store, task_store_error,
+    terminal_host::request_host, unix_timestamp, worker_engine_build_id,
 };
 
 #[derive(Debug, Serialize)]

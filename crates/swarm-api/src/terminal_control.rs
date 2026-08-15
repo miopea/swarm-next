@@ -10,8 +10,8 @@ use swarm_domain::ProviderConversationId;
 use swarm_terminal::{ClaudeConversationStart, HostRequest, HostResponse, TerminalSize};
 
 use crate::{
-    ApiError, AppState, authorized_request, parse_session_id, record_session_event,
-    require_valid_size, task_store_error,
+    ApiError, AppState, parse_session_id, require_valid_size, task_store_error,
+    terminal_host::{authorized_request, record_session_event},
 };
 
 #[derive(Debug, Deserialize)]

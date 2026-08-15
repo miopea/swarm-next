@@ -14,7 +14,7 @@ use serde::Serialize;
 use swarm_domain::{ControlRoomEventKind, WorkerProfile, WorkerSessionId};
 use swarm_terminal::{HostRequest, HostResponse, ProviderActivity, classify_provider_activity};
 
-use crate::{ApiError, AppState, authorize, request_host};
+use crate::{ApiError, AppState, authorize, terminal_host::request_host};
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(super) struct ProviderCapabilitiesView {

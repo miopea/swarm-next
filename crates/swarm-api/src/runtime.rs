@@ -16,7 +16,7 @@ use swarm_terminal::{
 use crate::attach::MAX_ATTACH_GRANTS;
 use crate::{
     ApiError, AppState, MAX_TERMINAL_WEBSOCKETS, RESOURCE_ADVISORY_BYTES, RESOURCE_CRITICAL_BYTES,
-    authorize, authorized_no_store_request, build_version, unix_timestamp,
+    authorize, build_version, terminal_host::authorized_no_store_request, unix_timestamp,
 };
 
 #[derive(Debug, Serialize)]

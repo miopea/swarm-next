@@ -7,7 +7,9 @@ use swarm_terminal::{
     TerminalSize,
 };
 
-use crate::{ApiError, AppState, request_host, task_store, task_store_error, worker_view};
+use crate::{
+    ApiError, AppState, task_store, task_store_error, terminal_host::request_host, worker_view,
+};
 
 pub(super) async fn start_worker_process(
     state: &AppState,
