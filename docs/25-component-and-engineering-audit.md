@@ -86,7 +86,10 @@ These abstractions are justified by shared behavior, not visual resemblance.
   operation, but authentication, consistent no-store behavior, typed runtime
   errors, and bounded transient recovery now have one small owner in
   `web/src/api/request.ts`. Domain modules can depend on that helper without
-  importing or recreating unrelated contracts.
+  importing or recreating unrelated contracts. Presence is the first complete
+  domain moved onto that boundary: its vocabulary, reads, manual-mode command,
+  and device-observation command now live together in `web/src/api/presence.ts`
+  while the public barrel remains compatible.
 - `web/src/styles.css` is roughly 1,165 lines in one global
   cascade, making component ownership and mobile regressions harder to see.
 
@@ -99,8 +102,8 @@ Required next extractions are vertical and behavior-led:
 2. Extract personal-Hive joining as its own vertical feature component when its
    next behavior lands. Keeper invitation management is already separated, and
    shared cryptographic handoff parsing remains independent of both views.
-3. API contracts split by domain (`tasks`, `workers`, `jira`, `presence`) over
-   the extracted shared authenticated request helper.
+3. Continue splitting API contracts by domain (`tasks`, `workers`, `jira`) over
+   the extracted shared authenticated request helper and proven presence slice.
 4. CSS moves with extracted feature components after their visual contracts are
    stable. A wholesale CSS-module migration is not justified during alpha.
 

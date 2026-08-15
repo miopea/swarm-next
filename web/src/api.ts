@@ -4,6 +4,7 @@ import {
   recoverTransientRuntime,
   RuntimeRequestError,
 } from "./api/request";
+import type { PresenceDeviceClass } from "./api/presence";
 
 export {
   authenticatedFetch,
@@ -11,6 +12,18 @@ export {
   recoverTransientRuntime,
   RuntimeRequestError,
 } from "./api/request";
+export {
+  fetchPresence,
+  observePresence,
+  setManualPresence,
+} from "./api/presence";
+export type {
+  OperatorPresence,
+  PresenceDeviceClass,
+  PresenceMode,
+  PresenceObservationState,
+  PresenceSource,
+} from "./api/presence";
 
 export type Health = { status: "ok"; version: string; worker_engine_build_id?: string };
 export type ProcessResources = {
@@ -35,11 +48,6 @@ export type PresentationPreferences = {
 };
 export type WorkerAttentionState = "sleeping" | "resting" | "buzzing" | "with_operator" | "awaiting_operator" | "blocked";
 export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed" | "decisions_changed" | "presence_changed" | "notifications_changed";
-export type PresenceMode = "at_hive" | "away" | "night_watch";
-export type PresenceSource = "manual" | "active_device" | "screen_locked" | "inactive_device" | "timed_out";
-export type PresenceDeviceClass = "desktop" | "mobile";
-export type PresenceObservationState = "active" | "idle" | "locked" | "hidden";
-export type OperatorPresence = { mode: PresenceMode; manual_mode: PresenceMode | null; source: PresenceSource };
 export type NotificationPolicy = "important_only" | "all_decisions" | "off";
 export type NotificationSettings = { policy: NotificationPolicy; subscription_count: number; vapid_public_key: string };
 export type QueenAutonomyLevel = "advisory" | "coordinate" | "local_execution";
@@ -591,40 +599,6 @@ export async function fetchControlRoomEvents(
   return response.json() as Promise<ControlRoomEventPage>;
 }
 
-export async function fetchPresence(operatorToken: string): Promise<OperatorPresence> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/presence");
-  return response.json() as Promise<OperatorPresence>;
-}
-
-export async function setManualPresence(
-  operatorToken: string,
-  manualMode: PresenceMode | null,
-): Promise<OperatorPresence> {
-  const response = await authenticatedFetch(operatorToken, "/api/v1/presence", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ manual_mode: manualMode }),
-  });
-  return response.json() as Promise<OperatorPresence>;
-}
-
-export async function observePresence(
-  operatorToken: string,
-  deviceId: string,
-  deviceClass: PresenceDeviceClass,
-  state: PresenceObservationState,
-): Promise<OperatorPresence> {
-  const response = await authenticatedFetch(
-    operatorToken,
-    `/api/v1/presence/devices/${encodeURIComponent(deviceId)}`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_class: deviceClass, state }),
-    },
-  );
-  return response.json() as Promise<OperatorPresence>;
-}
 export async function fetchNotificationSettings(operatorToken: string): Promise<NotificationSettings> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/notifications/settings");
   return response.json() as Promise<NotificationSettings>;
