@@ -127,9 +127,12 @@ Required next extractions are vertical and behavior-led:
 
 ### P1 — backend adapter concentration
 
-- `crates/swarm-api/src/lib.rs` is roughly 11,600 lines. Routing, state composition,
-  task handlers, worker lifecycle, workspace validation, diagnostics, tests, and
-  supervisors share one module.
+- `crates/swarm-api/src/lib.rs` is still over 11,000 lines. Routing, state
+  composition, task handlers, diagnostics, tests, and supervisors share one
+  module. Worker discovery, repository catalog/boundary validation, profile
+  creation/editing/order, and start/stop routes now share a focused `workers`
+  adapter; terminal process ownership and recovery remain with the root engine
+  composition until that boundary is independently extracted.
 - `crates/swarm-persistence/src/lib.rs` is roughly 3,700 lines although Jira,
   workers, decisions, notifications, dispatches, and outcomes have begun moving
   to focused modules.
@@ -143,8 +146,8 @@ decision and YAGNI.
 
 Recommended sequence:
 
-1. Move API workspace/worker routes behind a `workers` adapter module because
-   outside-root approval and terminal-host startup now form a coherent boundary.
+1. Keep the extracted worker adapter at the HTTP/profile boundary; do not move
+   terminal-host supervision into it merely to shrink the root file.
 2. Move task HTTP handlers behind a `tasks` adapter module while keeping all
    transition rules in `swarm-application` and persistence.
 3. Continue extracting persistence by aggregate only when a changed aggregate
