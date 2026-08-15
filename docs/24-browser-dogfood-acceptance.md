@@ -918,3 +918,16 @@ the independently updated terminal host through the API to worker settings:
   and authentication preserved across complete browser restarts. API PID
   advanced to `3367448`; terminal-host PID remained `2966127`, preserving the
   active worker session. Every proof browser context closed after the run.
+- Release `0.1.0-dev-38e9f44c8066` completes the member-owned signed join and
+  adds automatic post-membership Keeper catalog polling with durable bounded
+  backoff and operator-meaningful halt states. Jira reconciliation remains a
+  separate direct per-Hive loop; no Jira issue content or credential traverses
+  Keeper. The release gate passed 338 Rust tests, warnings-denied Clippy, 213
+  frontend tests, strict TypeScript, and the production build. The first live
+  pass also exposed and fixed a completed-task quick-navigation focus race.
+  The final live browser gate passed every primary and Member Apiary surface at
+  1,440-pixel desktop and 412-pixel Android widths with zero overflow, 343 and
+  315 named controls, both transport-boundary explanations, and authentication
+  preserved across complete browser restarts. API PID advanced to `3423836`;
+  terminal-host PID remained `2966127`, preserving the active worker session.
+  Every isolated proof browser closed after the run.
