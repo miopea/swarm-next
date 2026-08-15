@@ -99,6 +99,10 @@ async function checkMemberSurface(browser, surface) {
       await tokenInput.fill(operatorToken);
       await page.getByRole("button", { name: "Unlock Swarm" }).click();
     }
+    await page.getByRole("button", { name: /Workers/ }).waitFor();
+    // A fresh browser context probes the cookie session before the explicit
+    // unlock. Its expected 401 is not an authenticated Member-surface error.
+    errors.length = 0;
     await page.getByRole("button", { name: "Apiary", exact: true }).click();
     const memberControl = page.locator(".member-control-room");
     await memberControl.waitFor();
