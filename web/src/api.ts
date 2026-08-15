@@ -1,6 +1,18 @@
+import {
+  authenticatedFetch,
+  BROWSER_SESSION_AUTH,
+  recoverTransientRuntime,
+  RuntimeRequestError,
+} from "./api/request";
+
+export {
+  authenticatedFetch,
+  BROWSER_SESSION_AUTH,
+  recoverTransientRuntime,
+  RuntimeRequestError,
+} from "./api/request";
+
 export type Health = { status: "ok"; version: string; worker_engine_build_id?: string };
-export const BROWSER_SESSION_AUTH = "browser-session-cookie";
-const TRANSIENT_RUNTIME_STATUSES = new Set([502, 503, 504]);
 export type ProcessResources = {
   resident_memory_bytes: number | null;
   process_tree_resident_memory_bytes?: number | null;
@@ -1572,49 +1584,8 @@ export async function revokeBrowserSession(): Promise<void> {
   await authenticatedFetch(BROWSER_SESSION_AUTH, "/api/v1/auth/session", { method: "DELETE" });
 }
 
-export async function authenticatedFetch(
-  operatorToken: string,
-  url: string,
-  init: RequestInit = {},
-): Promise<Response> {
-  const headers = new Headers(init.headers);
-  if (operatorToken !== BROWSER_SESSION_AUTH) headers.set("Authorization", `Bearer ${operatorToken}`);
-  const response = await fetch(url, { ...init, headers, cache: "no-store", credentials: "same-origin" });
-  if (!response.ok) {
-    let detail = "";
-    try {
-      const body = (await response.json()) as { message?: string };
-      detail = body.message ? `: ${body.message}` : "";
-    } catch {
-      // Some infrastructure failures return an empty or non-JSON response.
-    }
-    throw new RuntimeRequestError(response.status, `Runtime request returned ${response.status}${detail}`);
-  }
-  return response;
-}
-
 export async function fetchHealth(): Promise<Health> {
   const response = await fetch("/health", { cache: "no-store" });
   if (!response.ok) throw new RuntimeRequestError(response.status, `Health returned ${response.status}`);
   return response.json() as Promise<Health>;
-}
-
-export class RuntimeRequestError extends Error {
-  constructor(public readonly status: number, message: string) {
-    super(message);
-    this.name = "RuntimeRequestError";
-  }
-}
-
-export async function recoverTransientRuntime<T>(operation: () => Promise<T>, delays = [250, 500, 1_000, 2_000, 4_000, 8_000]): Promise<T> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      const retryable = error instanceof TypeError
-        || (error instanceof RuntimeRequestError && TRANSIENT_RUNTIME_STATUSES.has(error.status));
-      if (!retryable || attempt >= delays.length) throw error;
-      await new Promise((resolve) => window.setTimeout(resolve, delays[attempt]));
-    }
-  }
 }
