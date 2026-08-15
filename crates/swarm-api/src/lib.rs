@@ -547,34 +547,25 @@ impl AppState {
                 return;
             }
         };
-        let Ok(Some(source)) = store.email_task_link(dispatch.task_id) else {
-            let _ = store.fail_email_reply(
-                &dispatch.id,
-                &swarm_persistence::EmailReplyFailure::Permanent(
-                    "The original email source is no longer available".into(),
-                ),
-            );
-            return;
-        };
         let outlook = self.outlook.read().await.clone();
-        let outcome = outlook.reply(&source.message_id, &dispatch.body).await;
+        let outcome = outlook.reply(&dispatch.message_id, &dispatch.body).await;
         let result = match outcome {
-            Ok(receipt) => store.complete_email_reply(&dispatch.id, &receipt),
+            Ok(receipt) => store.complete_email_reply(&dispatch.target_id, &receipt),
             Err(outlook::OutlookError::AmbiguousDelivery) => store.fail_email_reply(
-                &dispatch.id,
+                &dispatch.target_id,
                 &swarm_persistence::EmailReplyFailure::Uncertain(
                     "Microsoft may have accepted the reply; review the original thread before retrying"
                         .into(),
                 ),
             ),
             Err(outlook::OutlookError::NetworkUnavailable) => store.fail_email_reply(
-                &dispatch.id,
+                &dispatch.target_id,
                 &swarm_persistence::EmailReplyFailure::Retryable(
                     "Microsoft Outlook is temporarily unavailable".into(),
                 ),
             ),
             Err(error) => store.fail_email_reply(
-                &dispatch.id,
+                &dispatch.target_id,
                 &swarm_persistence::EmailReplyFailure::Permanent(error.to_string()),
             ),
         };

@@ -456,6 +456,18 @@ export type EmailReply = {
   attempted_at: number | null;
   delivered_at: number | null;
   last_error: string | null;
+  targets: Array<{
+    id: string;
+    source_id: string;
+    sender_name: string;
+    sender_address: string;
+    web_url: string;
+    state: EmailReplyState;
+    attempts: number;
+    attempted_at: number | null;
+    delivered_at: number | null;
+    last_error: string | null;
+  }>;
 };
 
 export type Worker = {

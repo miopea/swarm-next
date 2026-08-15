@@ -37,8 +37,8 @@ mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
 pub use email::{
     EmailAttachmentSnapshot, EmailImport, EmailMessageSnapshot, EmailReplyDispatch,
-    EmailReplyFailure, EmailReplyState, EmailTaskAttachment, EmailTaskDraft, EmailTaskLink,
-    TaskDeploymentRecord,
+    EmailReplyFailure, EmailReplyState, EmailReplyTarget, EmailReplyTargetDispatch,
+    EmailTaskAttachment, EmailTaskDraft, EmailTaskLink, TaskDeploymentRecord,
 };
 pub use presence::PresenceMutation;
 mod notifications;
@@ -59,7 +59,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 42;
+const CURRENT_SCHEMA_VERSION: i64 = 43;
 const MAX_CONTROL_ROOM_EVENTS: i64 = 4096;
 const MAX_CONTROL_ROOM_EVENT_PAGE: usize = 128;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
@@ -1400,6 +1400,9 @@ fn migrate_schema(
     }
     if schema_version < 42 {
         apiary::migrate_apiary_identity_events(transaction)?;
+    }
+    if schema_version < 43 {
+        email::migrate_email_reply_targets(transaction)?;
     }
     Ok(())
 }

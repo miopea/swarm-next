@@ -1,6 +1,6 @@
 # Email-to-task dogfood scope
 
-Status: **Live dogfood intake implemented; multi-source reply fanout pending**
+Status: **Live dogfood intake and reviewed multi-source reply fanout implemented**
 
 ## Operator outcome
 
@@ -23,18 +23,19 @@ backlog.
 6. Keep every original message/thread identity and direct **Open email** link
    separately inside the merged task.
 7. After the task reaches Completed *and* its approved deployment is recorded,
-   prepare a plain-language resolution and reply to the original message.
+   prepare one plain-language resolution, review every recipient thread, and
+   explicitly send one independently tracked reply to each original message.
 
 Import is operator-initiated. It never scans the mailbox into task storage,
 auto-creates work, or gives Queen access to mailbox credentials. Reply delivery
 is a separate durable, idempotent outbox action gated by completion plus
 deployment and the configured external-send policy.
 
-The current durable reply outbox remains one delivery lifecycle per task. A
-merged task therefore does not silently send the same resolution to every
-source thread. Per-source fanout requires an additive target outbox with
-per-thread idempotency, retry, uncertainty, and migration semantics before it
-can be enabled safely.
+The durable reply outbox owns one operator-reviewed resolution per task and one
+delivery target per source thread. Each target has independent idempotency,
+retry, uncertainty, and delivery evidence. A confirmed thread is never replayed
+while another thread is retried, and crash-ambiguous delivery always requires
+the operator to check the affected thread before an explicit retry.
 
 ## One-time Microsoft registration
 
@@ -87,8 +88,8 @@ The short implementation interview must settle:
 3. attachment types and limits needed for real issue reports;
 4. whether a dogfood reply is always reviewed, may be auto-sent under a
    recorded policy, or varies by sender/domain;
-5. whether a merged task replies to one selected source or every source, and
-   the operator review required before fanout;
+5. whether a future policy may exclude selected source threads from a merged
+   task; the dogfood default explicitly confirms every original thread;
 6. what constitutes deployment evidence for repositories without an automated
    deployment integration;
 7. how shared mailboxes should appear after the first linked account works.

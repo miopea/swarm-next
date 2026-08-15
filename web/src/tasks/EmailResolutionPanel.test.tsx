@@ -23,6 +23,30 @@ const source: EmailTaskSource = {
   attachments: [{ storage_name: "sha256-screen.png", display_name: "screen.png", media_type: "image/png", byte_size: 2048, inline: false, content_id: null }],
 };
 
+const secondSource: EmailTaskSource = {
+  ...source,
+  id: "source-2",
+  message_id: "message-2",
+  conversation_id: "thread-2",
+  sender_name: "Bea",
+  sender_address: "bea@example.com",
+  web_url: "https://outlook.test/message-2",
+  attachments: [],
+};
+
+function reply(state: "draft" | "delivered" | "uncertain") {
+  return {
+    id: "reply-1", task_id: task.id, body: state === "draft" ? "Thank you. The form now saves correctly." : "The issue is fixed.",
+    state, attempts: state === "draft" ? 0 : 1, attempted_at: state === "draft" ? null : 4,
+    delivered_at: state === "delivered" ? 4 : null, last_error: state === "uncertain" ? "connection ended" : null,
+    targets: [source, secondSource].map((item, index) => ({
+      id: `target-${index + 1}`, source_id: item.id, sender_name: item.sender_name, sender_address: item.sender_address,
+      web_url: item.web_url, state, attempts: state === "draft" ? 0 : 1, attempted_at: state === "draft" ? null : 4,
+      delivered_at: state === "delivered" ? 4 : null, last_error: state === "uncertain" ? "connection ended" : null,
+    })),
+  };
+}
+
 test("requires deployment evidence and a second explicit confirmation before replying", async () => {
   const requests: { url: string; method: string; body?: string }[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -32,12 +56,12 @@ test("requires deployment evidence and a second explicit confirmation before rep
     if (url.endsWith("/deployments") && method === "GET") return ok([]);
     if (url.endsWith("/email/reply") && method === "GET") return ok(null);
     if (url.endsWith("/deployments") && method === "POST") return ok({ id: "deployment-1", task_id: task.id, environment: "production", reference: "release-42", deployed_at: 3, recorded_at: 3 });
-    if (url.endsWith("/email/reply") && method === "POST") return ok({ id: "reply-1", task_id: task.id, body: "Thank you. The form now saves correctly.", state: "draft", attempts: 0, attempted_at: null, delivered_at: null, last_error: null });
-    if (url.endsWith("/replies/reply-1/send") && method === "POST") return ok({ id: "reply-1", task_id: task.id, body: "Thank you. The form now saves correctly.", state: "delivered", attempts: 1, attempted_at: 4, delivered_at: 4, last_error: null });
+    if (url.endsWith("/email/reply") && method === "POST") return ok(reply("draft"));
+    if (url.endsWith("/replies/reply-1/send") && method === "POST") return ok(reply("delivered"));
     throw new Error(`Unexpected request: ${method} ${url}`);
   }));
 
-  render(<EmailResolutionPanel operatorToken="operator-token" task={task} source={source} />);
+  render(<EmailResolutionPanel operatorToken="operator-token" task={task} sources={[source, secondSource]} />);
 
   expect(await screen.findByText("Confirm the fix is live")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Send reply now" })).not.toBeInTheDocument();
@@ -50,8 +74,9 @@ test("requires deployment evidence and a second explicit confirmation before rep
   expect(screen.queryByRole("button", { name: "Send reply now" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Review and send" }));
   expect(screen.getByRole("group", { name: "Confirm email reply" })).toHaveTextContent("alex@example.com");
-  fireEvent.click(screen.getByRole("button", { name: "Send reply now" }));
-  expect(await screen.findByText("Reply delivered")).toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "Confirm email reply" })).toHaveTextContent("2 original threads");
+  fireEvent.click(screen.getByRole("button", { name: "Send 2 replies now" }));
+  expect(await screen.findByText("Replies delivered to 2 threads")).toBeInTheDocument();
 
   expect(JSON.parse(requests.find((request) => request.url.endsWith("/deployments") && request.method === "POST")?.body ?? "{}")).toMatchObject({ environment: "production", reference: "release-42" });
   expect(JSON.parse(requests.find((request) => request.url.endsWith("/email/reply") && request.method === "POST")?.body ?? "{}")).toEqual({ body: "Thank you. The form now saves correctly." });
@@ -61,13 +86,13 @@ test("never silently retries an uncertain Outlook result", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith("/deployments")) return ok([{ id: "deployment-1", task_id: task.id, environment: "production", reference: "release-42", deployed_at: 3, recorded_at: 3 }]);
-    if (url.endsWith("/email/reply")) return ok({ id: "reply-1", task_id: task.id, body: "The issue is fixed.", state: "uncertain", attempts: 1, attempted_at: 4, delivered_at: null, last_error: "connection ended" });
+    if (url.endsWith("/email/reply")) return ok(reply("uncertain"));
     throw new Error(`Unexpected request: ${url}`);
   }));
 
-  render(<EmailResolutionPanel operatorToken="operator-token" task={task} source={source} />);
-  expect(await screen.findByRole("alert")).toHaveTextContent("will not retry automatically");
-  expect(screen.getByRole("button", { name: "I checked Outlook · retry reply" })).toBeInTheDocument();
+  render(<EmailResolutionPanel operatorToken="operator-token" task={task} sources={[source, secondSource]} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("will not retry an uncertain thread automatically");
+  expect(screen.getByRole("button", { name: "I checked uncertain threads · retry" })).toBeInTheDocument();
 });
 
 function ok(body: unknown) {

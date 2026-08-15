@@ -159,6 +159,31 @@ pub struct EmailReplyDispatch {
     pub delivered_at: Option<i64>,
     pub provider_reply_id: Option<String>,
     pub last_error: Option<String>,
+    pub targets: Vec<EmailReplyTarget>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EmailReplyTarget {
+    pub id: String,
+    pub source_id: String,
+    pub sender_name: String,
+    pub sender_address: String,
+    pub web_url: String,
+    pub state: EmailReplyState,
+    pub attempts: u8,
+    pub attempted_at: Option<i64>,
+    pub delivered_at: Option<i64>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmailReplyTargetDispatch {
+    pub target_id: String,
+    pub reply_id: String,
+    pub task_id: TaskId,
+    pub message_id: String,
+    pub body: String,
+    pub attempts: u8,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -176,13 +201,20 @@ impl TaskStore {
     /// Returns an error when persistence is unavailable.
     pub fn recover_inflight_email_replies(&self) -> Result<usize, TaskStoreError> {
         let connection = self.connection()?;
-        Ok(connection.execute(
-            "UPDATE email_reply_deliveries
+        let changed = connection.execute(
+            "UPDATE email_reply_targets
              SET state = 'uncertain', last_error = 'Swarm restarted before delivery was confirmed',
                  updated_at = unixepoch()
              WHERE state = 'dispatching'",
             [],
-        )?)
+        )?;
+        connection.execute(
+            "UPDATE email_reply_deliveries SET state = 'uncertain',
+                 last_error = 'Swarm restarted before delivery was confirmed', updated_at = unixepoch()
+             WHERE id IN (SELECT reply_id FROM email_reply_targets WHERE state = 'uncertain')",
+            [],
+        )?;
+        Ok(changed)
     }
 
     /// Imports one already-sanitized message and its private attachment metadata atomically.
@@ -372,16 +404,14 @@ impl TaskStore {
         task_id: TaskId,
     ) -> Result<Option<EmailReplyDispatch>, TaskStoreError> {
         let connection = self.connection()?;
-        connection
+        let id = connection
             .query_row(
-                "SELECT id, task_id, body, state, idempotency_key, attempts,
-                        available_at, attempted_at, delivered_at, provider_reply_id, last_error
-                 FROM email_reply_deliveries WHERE task_id = ?1",
+                "SELECT id FROM email_reply_deliveries WHERE task_id = ?1",
                 [task_id.to_string()],
-                email_reply_from_row,
+                |row| row.get::<_, String>(0),
             )
-            .optional()
-            .map_err(Into::into)
+            .optional()?;
+        id.map_or(Ok(None), |id| email_reply_by_id(&connection, &id))
     }
 
     /// Records operator-approved deployment evidence for a completed task.
@@ -493,8 +523,27 @@ impl TaskStore {
             [&id],
             email_reply_from_row,
         )?;
+        let source_ids = {
+            let mut statement = transaction.prepare(
+                "SELECT id FROM email_message_links WHERE task_id = ?1
+                 ORDER BY received_at, imported_at, id",
+            )?;
+            statement
+                .query_map([task_id.to_string()], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for source_id in source_ids {
+            transaction.execute(
+                "INSERT INTO email_reply_targets (id, reply_id, source_id, state)
+                 VALUES (?1, ?2, ?3, 'draft')",
+                params![Uuid::now_v7().to_string(), id, source_id],
+            )?;
+        }
         transaction.commit()?;
-        Ok(dispatch)
+        drop(connection);
+        self.email_reply_for_task(task_id)?.ok_or_else(|| {
+            TaskStoreError::IntegrityFailure(format!("reply {} disappeared", dispatch.id))
+        })
     }
 
     /// Updates a reply while it is still an operator-reviewed draft.
@@ -529,8 +578,9 @@ impl TaskStore {
     /// # Errors
     /// Rejects unknown or non-draft replies and unavailable persistence.
     pub fn queue_email_reply(&self, id: &str) -> Result<EmailReplyDispatch, TaskStoreError> {
-        let connection = self.connection()?;
-        let changed = connection.execute(
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
             "UPDATE email_reply_deliveries SET state = 'queued', updated_at = unixepoch()
              WHERE id = ?1 AND state = 'draft'",
             [id],
@@ -538,19 +588,26 @@ impl TaskStore {
         if changed != 1 {
             return Err(TaskStoreError::InvalidEmailReply);
         }
-        email_reply_by_id(&connection, id)?.ok_or(TaskStoreError::InvalidEmailReply)
+        transaction.execute(
+            "UPDATE email_reply_targets SET state = 'queued', available_at = unixepoch(), updated_at = unixepoch()
+             WHERE reply_id = ?1 AND state = 'draft'",
+            [id],
+        )?;
+        let reply = refresh_email_reply_summary(&transaction, id)?;
+        transaction.commit()?;
+        Ok(reply)
     }
 
     /// Claims the oldest due reply for the adapter. Credentials never enter this record.
     ///
     /// # Errors
     /// Returns an error when queue state is corrupt or persistence is unavailable.
-    pub fn claim_email_reply(&self) -> Result<Option<EmailReplyDispatch>, TaskStoreError> {
+    pub fn claim_email_reply(&self) -> Result<Option<EmailReplyTargetDispatch>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let id = transaction
             .query_row(
-                "SELECT id FROM email_reply_deliveries
+                "SELECT id FROM email_reply_targets
                  WHERE state = 'queued' AND available_at <= unixepoch()
                    AND attempts < 3
                  ORDER BY available_at, created_at, id LIMIT 1",
@@ -562,14 +619,32 @@ impl TaskStore {
             return Ok(None);
         };
         transaction.execute(
-            "UPDATE email_reply_deliveries
+            "UPDATE email_reply_targets
              SET state = 'dispatching', attempts = attempts + 1,
                  attempted_at = unixepoch(), updated_at = unixepoch()
              WHERE id = ?1",
             [&id],
         )?;
-        let dispatch =
-            email_reply_by_id(&transaction, &id)?.ok_or(TaskStoreError::InvalidEmailReply)?;
+        let dispatch = transaction.query_row(
+            "SELECT target.id, reply.id, reply.task_id, source.message_id, reply.body,
+                    target.attempts
+               FROM email_reply_targets target
+               JOIN email_reply_deliveries reply ON reply.id = target.reply_id
+               JOIN email_message_links source ON source.id = target.source_id
+              WHERE target.id = ?1",
+            [&id],
+            |row| {
+                Ok(EmailReplyTargetDispatch {
+                    target_id: row.get(0)?,
+                    reply_id: row.get(1)?,
+                    task_id: parse_domain_id::<TaskId>(&row.get::<_, String>(2)?)?,
+                    message_id: row.get(3)?,
+                    body: row.get(4)?,
+                    attempts: row.get(5)?,
+                })
+            },
+        )?;
+        refresh_email_reply_summary(&transaction, &dispatch.reply_id)?;
         transaction.commit()?;
         Ok(Some(dispatch))
     }
@@ -587,17 +662,18 @@ impl TaskStore {
             return Err(TaskStoreError::InvalidEmailReply);
         }
         let connection = self.connection()?;
+        let target_id = resolve_email_reply_target_id(&connection, id, "dispatching")?;
         let changed = connection.execute(
-            "UPDATE email_reply_deliveries
+            "UPDATE email_reply_targets
              SET state = 'delivered', provider_reply_id = ?2, delivered_at = unixepoch(),
                  last_error = NULL, updated_at = unixepoch()
              WHERE id = ?1 AND state = 'dispatching'",
-            params![id, provider_reply_id.trim()],
+            params![target_id, provider_reply_id.trim()],
         )?;
         if changed != 1 {
             return Err(TaskStoreError::InvalidEmailReply);
         }
-        email_reply_by_id(&connection, id)?.ok_or(TaskStoreError::InvalidEmailReply)
+        reply_for_target(&connection, &target_id)
     }
 
     /// Explicitly retries a crash-ambiguous reply after operator review.
@@ -610,16 +686,16 @@ impl TaskStore {
     ) -> Result<EmailReplyDispatch, TaskStoreError> {
         let connection = self.connection()?;
         let changed = connection.execute(
-            "UPDATE email_reply_deliveries
+            "UPDATE email_reply_targets
              SET state = 'queued', available_at = unixepoch(),
                  last_error = NULL, updated_at = unixepoch()
-             WHERE id = ?1 AND state = 'uncertain' AND attempts < 3",
+             WHERE reply_id = ?1 AND state = 'uncertain' AND attempts < 3",
             [id],
         )?;
-        if changed != 1 {
+        if changed == 0 {
             return Err(TaskStoreError::InvalidEmailReply);
         }
-        email_reply_by_id(&connection, id)?.ok_or(TaskStoreError::InvalidEmailReply)
+        refresh_email_reply_summary(&connection, id)
     }
 
     /// Returns a failed claim to a bounded retry or terminal state.
@@ -641,11 +717,12 @@ impl TaskStore {
             return Err(TaskStoreError::InvalidEmailReply);
         }
         let connection = self.connection()?;
+        let target_id = resolve_email_reply_target_id(&connection, id, "dispatching")?;
         let attempts = connection
             .query_row(
-                "SELECT attempts FROM email_reply_deliveries
+                "SELECT attempts FROM email_reply_targets
                  WHERE id = ?1 AND state = 'dispatching'",
-                [id],
+                [&target_id],
                 |row| row.get::<_, u8>(0),
             )
             .optional()?
@@ -656,16 +733,16 @@ impl TaskStore {
             state
         };
         let changed = connection.execute(
-            "UPDATE email_reply_deliveries
+            "UPDATE email_reply_targets
              SET state = ?2, available_at = unixepoch() + ?3,
                  last_error = ?4, updated_at = unixepoch()
              WHERE id = ?1 AND state = 'dispatching'",
-            params![id, state, retry_delay, error],
+            params![target_id, state, retry_delay, error],
         )?;
         if changed != 1 {
             return Err(TaskStoreError::InvalidEmailReply);
         }
-        email_reply_by_id(&connection, id)?.ok_or(TaskStoreError::InvalidEmailReply)
+        reply_for_target(&connection, &target_id)
     }
 }
 
@@ -1065,6 +1142,64 @@ pub(crate) fn migrate_email_multi_source(
     )
 }
 
+pub(crate) fn migrate_email_reply_targets(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS email_reply_targets (
+             id TEXT PRIMARY KEY,
+             reply_id TEXT NOT NULL REFERENCES email_reply_deliveries(id) ON DELETE CASCADE,
+             source_id TEXT NOT NULL REFERENCES email_message_links(id) ON DELETE RESTRICT,
+             state TEXT NOT NULL CHECK (
+                 state IN ('draft','queued','dispatching','delivered','uncertain','cancelled')
+             ),
+             attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 3),
+             available_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             attempted_at INTEGER,
+             delivered_at INTEGER,
+             provider_reply_id TEXT,
+             last_error TEXT,
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             UNIQUE (reply_id, source_id),
+             CHECK ((state = 'delivered' AND delivered_at IS NOT NULL AND provider_reply_id IS NOT NULL)
+                 OR state <> 'delivered')
+         );
+         CREATE INDEX IF NOT EXISTS email_reply_target_queue
+             ON email_reply_targets(state, available_at, created_at);
+         INSERT OR IGNORE INTO email_reply_targets (
+             id, reply_id, source_id, state, attempts, available_at, attempted_at,
+             delivered_at, provider_reply_id, last_error, created_at, updated_at
+         )
+         SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-7' ||
+                    substr(lower(hex(randomblob(2))), 2) || '-' ||
+                    substr('89ab', abs(random()) % 4 + 1, 1) ||
+                    substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+                reply.id,
+                (SELECT source.id FROM email_message_links source
+                  WHERE source.task_id = reply.task_id
+                  ORDER BY source.received_at, source.imported_at, source.id LIMIT 1),
+                reply.state, reply.attempts, reply.available_at, reply.attempted_at,
+                reply.delivered_at, reply.provider_reply_id, reply.last_error,
+                reply.created_at, reply.updated_at
+           FROM email_reply_deliveries reply
+          WHERE EXISTS (SELECT 1 FROM email_message_links source WHERE source.task_id = reply.task_id);
+         INSERT OR IGNORE INTO email_reply_targets (
+             id, reply_id, source_id, state, attempts, available_at, created_at, updated_at
+         )
+         SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-7' ||
+                    substr(lower(hex(randomblob(2))), 2) || '-' ||
+                    substr('89ab', abs(random()) % 4 + 1, 1) ||
+                    substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+                reply.id, source.id, 'draft', 0, reply.available_at,
+                reply.created_at, reply.updated_at
+           FROM email_reply_deliveries reply
+           JOIN email_message_links source ON source.task_id = reply.task_id
+          WHERE reply.state = 'draft';
+         PRAGMA user_version = 43;",
+    )
+}
+
 fn validate_email_message(message: &EmailMessageSnapshot<'_>) -> Result<(), TaskStoreError> {
     let subject = email_task_title(message);
     let body = message.body_text.trim();
@@ -1187,6 +1322,7 @@ fn email_reply_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmailReplyD
         delivered_at: row.get(8)?,
         provider_reply_id: row.get(9)?,
         last_error: row.get(10)?,
+        targets: Vec::new(),
     })
 }
 
@@ -1194,7 +1330,7 @@ fn email_reply_by_id(
     connection: &rusqlite::Connection,
     id: &str,
 ) -> Result<Option<EmailReplyDispatch>, TaskStoreError> {
-    connection
+    let mut reply = connection
         .query_row(
             "SELECT id, task_id, body, state, idempotency_key, attempts,
                     available_at, attempted_at, delivered_at, provider_reply_id, last_error
@@ -1202,8 +1338,157 @@ fn email_reply_by_id(
             [id],
             email_reply_from_row,
         )
-        .optional()
-        .map_err(Into::into)
+        .optional()?;
+    if let Some(reply) = &mut reply {
+        reply.targets = email_reply_targets(connection, &reply.id)?;
+        if !reply.targets.is_empty() {
+            reply.state = aggregate_reply_state(&reply.targets);
+            reply.attempts = reply
+                .targets
+                .iter()
+                .map(|target| target.attempts)
+                .max()
+                .unwrap_or(0);
+            reply.attempted_at = reply
+                .targets
+                .iter()
+                .filter_map(|target| target.attempted_at)
+                .max();
+            reply.delivered_at = reply
+                .targets
+                .iter()
+                .filter_map(|target| target.delivered_at)
+                .max();
+            reply.last_error = reply
+                .targets
+                .iter()
+                .find_map(|target| target.last_error.clone());
+        }
+    }
+    Ok(reply)
+}
+
+fn email_reply_targets(
+    connection: &rusqlite::Connection,
+    reply_id: &str,
+) -> Result<Vec<EmailReplyTarget>, TaskStoreError> {
+    let mut statement = connection.prepare(
+        "SELECT target.id, source.id, source.sender_name, source.sender_address,
+                source.web_url, target.state, target.attempts, target.attempted_at,
+                target.delivered_at, target.last_error
+           FROM email_reply_targets target
+           JOIN email_message_links source ON source.id = target.source_id
+          WHERE target.reply_id = ?1
+          ORDER BY source.received_at, source.imported_at, source.id",
+    )?;
+    Ok(statement
+        .query_map([reply_id], |row| {
+            Ok(EmailReplyTarget {
+                id: row.get(0)?,
+                source_id: row.get(1)?,
+                sender_name: row.get(2)?,
+                sender_address: row.get(3)?,
+                web_url: row.get(4)?,
+                state: row
+                    .get::<_, String>(5)?
+                    .parse()
+                    .map_err(|()| rusqlite::Error::InvalidQuery)?,
+                attempts: row.get(6)?,
+                attempted_at: row.get(7)?,
+                delivered_at: row.get(8)?,
+                last_error: row.get(9)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn aggregate_reply_state(targets: &[EmailReplyTarget]) -> EmailReplyState {
+    if targets
+        .iter()
+        .all(|target| target.state == EmailReplyState::Delivered)
+    {
+        EmailReplyState::Delivered
+    } else if targets
+        .iter()
+        .any(|target| target.state == EmailReplyState::Uncertain)
+    {
+        EmailReplyState::Uncertain
+    } else if targets
+        .iter()
+        .any(|target| target.state == EmailReplyState::Dispatching)
+    {
+        EmailReplyState::Dispatching
+    } else if targets
+        .iter()
+        .any(|target| target.state == EmailReplyState::Queued)
+    {
+        EmailReplyState::Queued
+    } else if targets
+        .iter()
+        .any(|target| target.state == EmailReplyState::Cancelled)
+    {
+        EmailReplyState::Cancelled
+    } else {
+        EmailReplyState::Draft
+    }
+}
+
+fn reply_for_target(
+    connection: &rusqlite::Connection,
+    target_id: &str,
+) -> Result<EmailReplyDispatch, TaskStoreError> {
+    let reply_id = connection
+        .query_row(
+            "SELECT reply_id FROM email_reply_targets WHERE id = ?1",
+            [target_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(TaskStoreError::InvalidEmailReply)?;
+    refresh_email_reply_summary(connection, &reply_id)
+}
+
+fn refresh_email_reply_summary(
+    connection: &rusqlite::Connection,
+    reply_id: &str,
+) -> Result<EmailReplyDispatch, TaskStoreError> {
+    let reply =
+        email_reply_by_id(connection, reply_id)?.ok_or(TaskStoreError::InvalidEmailReply)?;
+    let provider_reply_id =
+        (reply.state == EmailReplyState::Delivered).then(|| format!("fanout:{reply_id}"));
+    connection.execute(
+        "UPDATE email_reply_deliveries
+            SET state = ?2, attempts = ?3, attempted_at = ?4, delivered_at = ?5,
+                provider_reply_id = ?6, last_error = ?7, updated_at = unixepoch()
+          WHERE id = ?1",
+        params![
+            reply_id,
+            reply.state.to_string(),
+            reply.attempts,
+            reply.attempted_at,
+            reply.delivered_at,
+            provider_reply_id,
+            reply.last_error,
+        ],
+    )?;
+    email_reply_by_id(connection, reply_id)?.ok_or(TaskStoreError::InvalidEmailReply)
+}
+
+fn resolve_email_reply_target_id(
+    connection: &rusqlite::Connection,
+    id: &str,
+    state: &str,
+) -> Result<String, TaskStoreError> {
+    connection
+        .query_row(
+            "SELECT id FROM email_reply_targets
+              WHERE state = ?2 AND (id = ?1 OR reply_id = ?1)
+              ORDER BY CASE WHEN id = ?1 THEN 0 ELSE 1 END, created_at, id LIMIT 1",
+            params![id, state],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(TaskStoreError::InvalidEmailReply)
 }
 
 #[cfg(test)]
@@ -1321,6 +1606,102 @@ mod tests {
     }
 
     #[test]
+    fn merged_email_reply_tracks_every_thread_independently() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = message(&[]);
+        let second = EmailMessageSnapshot {
+            integration_id: "operator-outlook",
+            message_id: "AAMk-message-2",
+            conversation_id: "AAQk-conversation-2",
+            internet_message_id: Some("<issue-2@example.test>"),
+            subject: "A second report",
+            sender_name: "Another Member",
+            sender_address: "another@example.test",
+            received_at: 1_786_730_100,
+            web_url: "https://outlook.office.com/mail/inbox/id/AAMk-message-2",
+            body_text: "The same form fails for me.",
+            attachments: &[],
+        };
+        let imported = store
+            .import_email_messages(
+                &[first, second],
+                &EmailTaskDraft {
+                    title: "Fix both reported form failures",
+                    description: "Two people reported the same outcome.",
+                    priority: TaskPriority::Normal,
+                    worker_id: None,
+                    state: TaskState::Ready,
+                },
+            )
+            .unwrap();
+        for state in [TaskState::Active, TaskState::Review, TaskState::Completed] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+        store
+            .record_task_deployment(imported.task.id, "production", "release-43", 1_786_730_200)
+            .unwrap();
+        let draft = store
+            .prepare_email_reply(imported.task.id, "Thank you. The shared issue is fixed.")
+            .unwrap();
+        assert_eq!(draft.targets.len(), 2);
+        assert!(
+            draft
+                .targets
+                .iter()
+                .all(|target| target.state == EmailReplyState::Draft)
+        );
+        store.queue_email_reply(&draft.id).unwrap();
+
+        let first_target = store.claim_email_reply().unwrap().unwrap();
+        assert_eq!(first_target.message_id, "AAMk-message-1");
+        let partial = store
+            .complete_email_reply(&first_target.target_id, "provider-reply-1")
+            .unwrap();
+        assert_eq!(partial.state, EmailReplyState::Queued);
+
+        let second_target = store.claim_email_reply().unwrap().unwrap();
+        assert_eq!(second_target.message_id, "AAMk-message-2");
+        let uncertain = store
+            .fail_email_reply(
+                &second_target.target_id,
+                &EmailReplyFailure::Uncertain("connection ended after send".into()),
+            )
+            .unwrap();
+        assert_eq!(uncertain.state, EmailReplyState::Uncertain);
+        assert_eq!(
+            uncertain
+                .targets
+                .iter()
+                .filter(|target| target.state == EmailReplyState::Delivered)
+                .count(),
+            1
+        );
+        assert_eq!(
+            uncertain
+                .targets
+                .iter()
+                .filter(|target| target.state == EmailReplyState::Uncertain)
+                .count(),
+            1
+        );
+
+        let retried = store.retry_uncertain_email_reply(&draft.id).unwrap();
+        assert_eq!(retried.state, EmailReplyState::Queued);
+        let retry_target = store.claim_email_reply().unwrap().unwrap();
+        assert_eq!(retry_target.target_id, second_target.target_id);
+        let delivered = store
+            .complete_email_reply(&retry_target.target_id, "provider-reply-2")
+            .unwrap();
+        assert_eq!(delivered.state, EmailReplyState::Delivered);
+        assert!(
+            delivered
+                .targets
+                .iter()
+                .all(|target| target.state == EmailReplyState::Delivered)
+        );
+    }
+
+    #[test]
     fn schema_v40_email_sources_migrate_without_losing_tasks_or_attachments() {
         let store = TaskStore::in_memory().unwrap();
         let task = store
@@ -1334,6 +1715,7 @@ mod tests {
              DROP INDEX email_messages_by_task;
              DROP INDEX email_messages_by_conversation;
              DROP INDEX email_attachments_by_task;
+             DROP TABLE email_reply_targets;
              DROP TABLE email_reply_deliveries;
              DROP TABLE email_task_attachments;
              DROP TABLE email_message_links;
@@ -1408,6 +1790,7 @@ mod tests {
             )
             .unwrap();
         migrate_email_multi_source(&transaction).unwrap();
+        migrate_email_reply_targets(&transaction).unwrap();
         transaction.commit().unwrap();
         drop(connection);
 
@@ -1472,7 +1855,7 @@ mod tests {
         let queued = store.queue_email_reply(&draft.id).unwrap();
         assert_eq!(queued.state, EmailReplyState::Queued);
         let claimed = store.claim_email_reply().unwrap().unwrap();
-        assert_eq!(claimed.id, draft.id);
+        assert_eq!(claimed.reply_id, draft.id);
         assert_eq!(claimed.attempts, 1);
         let delivered = store
             .complete_email_reply(&draft.id, "provider-reply-1")

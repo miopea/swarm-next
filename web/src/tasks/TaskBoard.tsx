@@ -296,7 +296,7 @@ export default function TaskBoard({
                 key={task.id}
                 task={task}
                 jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
-                emailSource={emailTaskSources.find((source) => source.task_id === task.id)}
+                emailSources={emailTaskSources.filter((source) => source.task_id === task.id)}
                 operatorToken={operatorToken}
                 sessions={sessions}
                 workers={workers}
@@ -356,7 +356,7 @@ export default function TaskBoard({
                 key={task.id}
                 task={task}
                 jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
-                emailSource={emailTaskSources.find((source) => source.task_id === task.id)}
+                emailSources={emailTaskSources.filter((source) => source.task_id === task.id)}
                 operatorToken={operatorToken}
                 sessions={sessions}
                 workers={workers}
@@ -389,7 +389,7 @@ export default function TaskBoard({
   );
 }
 
-function TaskCard({ task, jiraLink, emailSource, operatorToken, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "operatorToken" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onJiraImported" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; emailSource?: EmailTaskSource; operatorToken: string; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; dropTarget: boolean; onDragTarget: () => void; onDragLeave: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
+function TaskCard({ task, jiraLink, emailSources, operatorToken, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: Omit<Props, "tasks" | "jiraTaskLinks" | "operatorToken" | "focusTaskId" | "focusRequest" | "composeRequest" | "onCreate" | "onJiraImported" | "onReorder"> & { task: Task; jiraLink?: JiraTaskLink; emailSources: EmailTaskSource[]; operatorToken: string; canMoveEarlier: boolean; canMoveLater: boolean; onMoveEarlier: () => void; onMoveLater: () => void; onDropBefore: () => void; dropTarget: boolean; onDragTarget: () => void; onDragLeave: () => void; onDragStart: (taskId: string) => void; onDragEnd: () => void }) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
   const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -471,7 +471,7 @@ function TaskCard({ task, jiraLink, emailSource, operatorToken, sessions, worker
       <div className="task-actions">
         {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
         {!editing && jiraLink && <button className="text-button" disabled={busy} onClick={() => void toggleDiscussion()}>{discussionOpen ? "Hide discussion" : "Discussion"}</button>}
-        {!editing && emailSource && <button className="text-button" disabled={busy} onClick={() => setEmailDetailsOpen((current) => !current)}>{emailDetailsOpen ? "Hide email" : task.state === "completed" ? "Close email loop" : "Email source"}</button>}
+        {!editing && emailSources.length > 0 && <button className="text-button" disabled={busy} onClick={() => setEmailDetailsOpen((current) => !current)}>{emailDetailsOpen ? "Hide email" : task.state === "completed" ? "Close email loop" : emailSources.length === 1 ? "Email source" : `${emailSources.length} email sources`}</button>}
         {!editing && (
           <button className="task-menu-trigger" aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)}>
             <span aria-hidden="true">•••</span>
@@ -497,7 +497,7 @@ function TaskCard({ task, jiraLink, emailSource, operatorToken, sessions, worker
         />
       )}
       {discussionOpen && jiraLink && <JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} />}
-      {emailDetailsOpen && emailSource && <EmailResolutionPanel operatorToken={operatorToken} task={task} source={emailSource} />}
+      {emailDetailsOpen && emailSources.length > 0 && <EmailResolutionPanel operatorToken={operatorToken} task={task} sources={emailSources} />}
     </article>
   );
 }

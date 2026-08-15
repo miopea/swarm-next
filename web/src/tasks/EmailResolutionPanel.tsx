@@ -14,9 +14,9 @@ import {
   type TaskDeployment,
 } from "../api";
 
-type Props = { operatorToken: string; task: Task; source: EmailTaskSource };
+type Props = { operatorToken: string; task: Task; sources: EmailTaskSource[] };
 
-export default function EmailResolutionPanel({ operatorToken, task, source }: Props) {
+export default function EmailResolutionPanel({ operatorToken, task, sources }: Props) {
   const [deployments, setDeployments] = useState<TaskDeployment[]>([]);
   const [reply, setReply] = useState<EmailReply | null>(null);
   const [environment, setEnvironment] = useState("production");
@@ -110,16 +110,20 @@ export default function EmailResolutionPanel({ operatorToken, task, source }: Pr
 
   return (
     <section className="email-resolution-panel" aria-label={`Email details for ${task.title}`}>
-      <div className="email-resolution-source">
-        <div><span className="field-caption">Reported by</span><strong>{source.sender_name || source.sender_address}</strong><small>{source.sender_address}</small></div>
-        <a href={source.web_url} target="_blank" rel="noreferrer">Open original thread</a>
+      <div className="email-resolution-sources">
+        <span className="field-caption">{sources.length === 1 ? "Original report" : `${sources.length} original reports`}</span>
+        <ul aria-label="Original email threads">
+          {sources.map((source) => (
+            <li key={source.id}><span><strong>{source.sender_name || source.sender_address}</strong><small>{source.sender_address}</small></span><a href={source.web_url} target="_blank" rel="noreferrer">Open email</a></li>
+          ))}
+        </ul>
       </div>
-      {source.attachments.length ? (
+      {sources.some((source) => source.attachments.length > 0) ? (
         <div className="email-resolution-attachments">
           <span className="field-caption">Original attachments</span>
-          {source.attachments.map((attachment) => (
-            <a key={attachment.storage_name} href={`/api/v1/tasks/${encodeURIComponent(task.id)}/email/attachments/${encodeURIComponent(attachment.storage_name)}`} download={attachment.display_name}>{attachment.display_name}</a>
-          ))}
+          {sources.flatMap((source) => source.attachments.map((attachment) => (
+            <a key={`${source.id}:${attachment.storage_name}`} href={`/api/v1/tasks/${encodeURIComponent(task.id)}/email/attachments/${encodeURIComponent(attachment.storage_name)}`} download={attachment.display_name}>{attachment.display_name}</a>
+          )))}
         </div>
       ) : null}
       {task.state !== "completed" ? (
@@ -135,11 +139,11 @@ export default function EmailResolutionPanel({ operatorToken, task, source }: Pr
         <div className="email-reply-workflow">
           <div className="email-deployment-proof"><span>Deployed</span><strong>{deployments[0].environment}</strong><small>{deployments[0].reference}</small></div>
           {reply?.state === "delivered" ? (
-            <div className="email-reply-delivered" role="status"><strong>Reply delivered</strong><p>{reply.body}</p></div>
+            <div className="email-reply-delivered" role="status"><strong>Replies delivered to {reply.targets.length} {reply.targets.length === 1 ? "thread" : "threads"}</strong><p>{reply.body}</p><ReplyTargets reply={reply} /></div>
           ) : reply?.state === "uncertain" ? (
-            <div className="email-reply-uncertain" role="alert"><strong>Delivery could not be confirmed</strong><p>Swarm will not retry automatically because the first reply may already be in Outlook. Check the original thread first.</p><button className="secondary-button" type="button" disabled={busy} onClick={() => void retryUncertain()}>I checked Outlook · retry reply</button></div>
+            <div className="email-reply-uncertain" role="alert"><strong>One or more deliveries could not be confirmed</strong><p>Swarm will not retry an uncertain thread automatically because Outlook may already have accepted it. Check every uncertain thread first.</p><ReplyTargets reply={reply} /><button className="secondary-button" type="button" disabled={busy} onClick={() => void retryUncertain()}>I checked uncertain threads · retry</button></div>
           ) : reply && ["queued", "dispatching"].includes(reply.state) ? (
-            <div className="email-reply-sending" role="status"><strong>Reply is being delivered</strong><p>Swarm is keeping this durable. It will not create a second queued copy.</p></div>
+            <div className="email-reply-sending" role="status"><strong>Replies are being delivered</strong><p>Each original thread has its own durable, idempotent delivery. Swarm will not create duplicate queued copies.</p><ReplyTargets reply={reply} /></div>
           ) : (
             <>
               <label className="email-reply-editor"><span><span className="field-caption">Step 2 of 2</span> Plain-language resolution</span><textarea rows={5} value={body} placeholder="Thank you for reporting this. We fixed…" onChange={(event) => { setBody(event.target.value); setConfirmingSend(false); }} /></label>
@@ -149,7 +153,7 @@ export default function EmailResolutionPanel({ operatorToken, task, source }: Pr
                 {reply && reply.body === body.trim() ? <button className="primary-action" type="button" disabled={busy} onClick={() => setConfirmingSend(true)}>Review and send</button> : null}
               </div>
               {confirmingSend && reply ? (
-                <div className="email-send-confirmation" role="group" aria-label="Confirm email reply"><strong>Send this reply to {source.sender_address}?</strong><p>{reply.body}</p><span>It will be posted to the original Outlook thread. This action cannot be undone from Swarm.</span><div className="email-reply-actions"><button className="secondary-button" type="button" onClick={() => setConfirmingSend(false)}>Keep editing</button><button className="primary-action" type="button" disabled={busy} onClick={() => void sendReply()}>Send reply now</button></div></div>
+                <div className="email-send-confirmation" role="group" aria-label="Confirm email reply"><strong>Send this reply to {reply.targets.length} {reply.targets.length === 1 ? "original thread" : "original threads"}?</strong><p>{reply.body}</p><ReplyTargets reply={reply} /><span>Every listed Outlook thread receives one reply. This action cannot be undone from Swarm.</span><div className="email-reply-actions"><button className="secondary-button" type="button" onClick={() => setConfirmingSend(false)}>Keep editing</button><button className="primary-action" type="button" disabled={busy} onClick={() => void sendReply()}>Send {reply.targets.length === 1 ? "reply" : `${reply.targets.length} replies`} now</button></div></div>
               ) : null}
             </>
           )}
@@ -160,8 +164,26 @@ export default function EmailResolutionPanel({ operatorToken, task, source }: Pr
   );
 }
 
+function ReplyTargets({ reply }: { reply: EmailReply }) {
+  return <ul className="email-reply-targets" aria-label="Email reply recipients">{reply.targets.map((target) => (
+    <li key={target.id}><span><strong>{target.sender_name || target.sender_address}</strong><small>{target.sender_address}</small></span><span className={`delivery-state ${target.state}`}>{replyTargetStateLabel(target.state)}</span></li>
+  ))}</ul>;
+}
+
 function replyStateMessage(reply: EmailReply) {
-  if (reply.state === "delivered") return "Reply delivered to the original Outlook thread.";
-  if (reply.state === "uncertain") return "Outlook may have accepted the reply, but delivery could not be confirmed.";
-  return "Reply queued for delivery.";
+  const count = reply.targets.length;
+  if (reply.state === "delivered") return `${count === 1 ? "Reply" : `${count} replies`} delivered to the original Outlook ${count === 1 ? "thread" : "threads"}.`;
+  if (reply.state === "uncertain") return "Outlook may have accepted one or more replies, but delivery could not be confirmed.";
+  return `${count === 1 ? "Reply" : `${count} replies`} queued for delivery.`;
+}
+
+function replyTargetStateLabel(state: EmailReply["targets"][number]["state"]) {
+  return ({
+    draft: "Draft",
+    queued: "Ready to send",
+    dispatching: "Sending",
+    delivered: "Delivered",
+    uncertain: "Needs review",
+    cancelled: "Stopped",
+  } as const)[state];
 }
