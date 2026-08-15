@@ -848,3 +848,18 @@ the independently updated terminal host through the API to worker settings:
   and authentication preserved across complete browser restarts. API PID
   advanced to `3253352`; terminal-host PID remained `2966127`, preserving the
   active worker session. Every proof browser process closed after the run.
+- Release `0.1.0-dev-9c671acdf990` gives authenticated terminal start, bounded
+  output reads, input writes, validated resizes, and assignment-releasing stop
+  commands one focused Rust HTTP owner without moving worker lifecycle or
+  WebSocket streaming across their established boundaries. Focused tests
+  proved fail-closed authentication, invalid-token rejection, host-owned
+  session survival across API recreation, and real WebSocket replay and
+  control. The full release gate passed 331 Rust tests, warnings-denied Clippy,
+  213 frontend tests, strict TypeScript, and the production build. Exact live
+  Edge acceptance inspected the real terminal at 1,440-pixel desktop and
+  412-pixel Android widths while passing every primary and Apiary member
+  surface with zero overflow, 346 and 318 named controls, all three Apiary
+  guide steps, and authentication preserved across complete browser restarts.
+  API PID advanced to `3268019`; terminal-host PID remained `2966127`,
+  preserving the active worker session. Every proof browser process closed
+  after the run.
