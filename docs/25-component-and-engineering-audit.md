@@ -95,7 +95,10 @@ These abstractions are justified by shared behavior, not visual resemblance.
   operations deliberately remain outside that profile-owned boundary. Core task
   vocabulary, bounded activity, ordering, creation, editing, lifecycle, and
   assignment now share `web/src/api/tasks.ts`; Jira synchronization and email
-  intake remain integration-owned instead of leaking into the task core.
+  intake remain integration-owned instead of leaking into the task core. Jira
+  readiness, OAuth entry, project/workflow configuration, bounded issue review,
+  task links, comments, sync commands, and reconciliation now share
+  `web/src/api/jira.ts`; malformed rolling-update link responses fail closed.
 - `web/src/styles.css` is roughly 1,165 lines in one global
   cascade, making component ownership and mobile regressions harder to see.
 
@@ -108,8 +111,9 @@ Required next extractions are vertical and behavior-led:
 2. Extract personal-Hive joining as its own vertical feature component when its
    next behavior lands. Keeper invitation management is already separated, and
    shared cryptographic handoff parsing remains independent of both views.
-3. Continue splitting the Jira API contract over the extracted shared request
-   helper and proven presence, worker, and core-task slices.
+3. Apply the same boundary to email only when that independently complex
+   integration is next changed; presence, workers, core tasks, and Jira are now
+   split over the shared request helper.
 4. CSS moves with extracted feature components after their visual contracts are
    stable. A wholesale CSS-module migration is not justified during alpha.
 
