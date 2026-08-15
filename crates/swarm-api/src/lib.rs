@@ -10,6 +10,7 @@ pub mod federation_http;
 mod feedback;
 mod jira;
 mod jira_oauth;
+mod maintenance;
 mod microsoft_oauth;
 mod notifications;
 mod orchestration;
@@ -77,10 +78,9 @@ use swarm_terminal::{
     MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProviderActivity, TerminalSize,
     classify_provider_activity,
 };
-use tokio::{
-    sync::{Mutex, Notify, RwLock, Semaphore},
-    time::{sleep, timeout},
-};
+use tokio::sync::{Mutex, Notify, RwLock, Semaphore};
+#[cfg(test)]
+use tokio::time::sleep;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 use attach::{ATTACH_GRANT_TTL, AttachGrantError, AttachGrantStore};
@@ -1200,14 +1200,6 @@ struct HealthResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct WorkerEngineMaintenanceResponse {
-    previous_version: String,
-    current_version: String,
-    stopped_sessions: usize,
-    restarted_workers: usize,
-}
-
-#[derive(Debug, Serialize)]
 struct AttachGrantResponse {
     grant: String,
     protocol: &'static str,
@@ -1696,11 +1688,11 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/development", get(runtime::development))
         .route(
             "/api/v1/runtime/development/reload",
-            post(request_development_reload),
+            post(maintenance::request_development_reload),
         )
         .route(
             "/api/v1/runtime/terminal-host/maintenance",
-            post(maintain_terminal_host),
+            post(maintenance::maintain_worker_engine),
         )
         .route("/api/v1/backups/database", get(backups::download_database))
         .route(
@@ -2526,211 +2518,6 @@ async fn join_apiary(
         )
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
-}
-
-async fn maintain_terminal_host(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let guard = state.worker_lifecycle.lock().await;
-    let result = maintain_terminal_host_locked(&state).await;
-    if let Ok(maintenance) = &result
-        && maintenance.previous_version != maintenance.current_version
-    {
-        if let Err(error) = task_store(&state).and_then(|store| {
-            store
-                .record_control_room_event(ControlRoomEventKind::RuntimeChanged)
-                .map(|_| ())
-                .map_err(|error| task_store_error(&error))
-        }) {
-            tracing::warn!(message = %error.message, "worker-engine update could not publish its runtime event");
-        }
-        state.control_room_notify.notify_waiters();
-    }
-    drop(guard);
-
-    // This runs on both success and failure. A failed package trigger therefore
-    // revives autostart workers on the still-current host instead of leaving a
-    // partially stopped Hive behind.
-    state.supervise_workers().await;
-    let mut response = result?;
-    response.restarted_workers = task_store(&state)?
-        .list_worker_profiles()
-        .map_err(|error| task_store_error(&error))?
-        .into_iter()
-        .filter(|worker| worker.active_session_id.is_some())
-        .count();
-    Ok(Json(response).into_response())
-}
-
-async fn request_development_reload(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let _guard = state.development_reload.lock().await;
-    if matches!(
-        runtime::development_reload_state(&state),
-        "requested" | "building"
-    ) {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "development_reload_in_progress",
-            "a development build is already in progress",
-        ));
-    }
-    let request_path = state
-        .development_reload_request_path
-        .as_ref()
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "development_reload_unavailable",
-                "this installation is not connected to a development checkout",
-            )
-        })?;
-    let status_path = state
-        .development_reload_status_path
-        .as_ref()
-        .expect("development reload paths are configured together");
-    std::fs::write(status_path.as_ref(), "state=requested\n").map_err(|error| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "development_reload_unavailable",
-            format!("the development reload status could not be recorded: {error}"),
-        )
-    })?;
-    std::fs::write(
-        request_path.as_ref(),
-        format!(
-            "requested_at={}\nsource_version={}\n",
-            unix_timestamp(),
-            build_version()
-        ),
-    )
-    .map_err(|error| {
-        let _ = std::fs::write(status_path.as_ref(), "state=failed\n");
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "development_reload_unavailable",
-            format!("the development reload request could not be recorded: {error}"),
-        )
-    })?;
-    Ok(StatusCode::ACCEPTED.into_response())
-}
-
-async fn maintain_terminal_host_locked(
-    state: &AppState,
-) -> Result<WorkerEngineMaintenanceResponse, ApiError> {
-    let request_path = state.maintenance_request_path.as_ref().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "worker_engine_maintenance_unavailable",
-            "this installation does not expose managed worker-engine maintenance",
-        )
-    })?;
-    let previous = host_status_snapshot(state).await?;
-    if !worker_engine_update_required(&previous) {
-        return Ok(WorkerEngineMaintenanceResponse {
-            previous_version: previous.host_version.clone(),
-            current_version: previous.host_version,
-            stopped_sessions: 0,
-            restarted_workers: 0,
-        });
-    }
-    let HostResponse::Sessions { sessions } =
-        request_host(state, HostRequest::ListSessions).await?
-    else {
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "unexpected_host_response",
-            "terminal host returned an unexpected session response",
-        ));
-    };
-    let running = sessions
-        .into_iter()
-        .filter(|session| session.running)
-        .collect::<Vec<_>>();
-    for session in &running {
-        request_host(
-            state,
-            HostRequest::Stop {
-                session_id: session.session_id,
-            },
-        )
-        .await?;
-        task_store(state)?
-            .release_worker_session(session.session_id)
-            .map_err(|error| task_store_error(&error))?;
-        task_store(state)?
-            .release_session_assignments(session.session_id)
-            .map_err(|error| task_store_error(&error))?;
-    }
-    state.control_room_notify.notify_waiters();
-    std::fs::write(
-        request_path.as_ref(),
-        format!(
-            "requested_at={}\ntarget_version={}\n",
-            unix_timestamp(),
-            build_version()
-        ),
-    )
-    .map_err(|error| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "worker_engine_maintenance_unavailable",
-            format!("the managed maintenance request could not be recorded: {error}"),
-        )
-    })?;
-
-    let updated = timeout(state.maintenance_timeout, async {
-        loop {
-            sleep(Duration::from_millis(200)).await;
-            if let Ok(status) = host_status_snapshot(state).await
-                && !worker_engine_update_required(&status)
-                && !status.draining
-            {
-                return status;
-            }
-        }
-    })
-    .await;
-    let _ = std::fs::remove_file(request_path.as_ref());
-    let current = updated.map_err(|_| {
-        ApiError::new(
-            StatusCode::GATEWAY_TIMEOUT,
-            "worker_engine_maintenance_timed_out",
-            "the worker engine did not report the expected release; configured workers were revived on the available host",
-        )
-    })?;
-    Ok(WorkerEngineMaintenanceResponse {
-        previous_version: previous.host_version,
-        current_version: current.host_version,
-        stopped_sessions: running.len(),
-        restarted_workers: 0,
-    })
-}
-
-fn worker_engine_update_required(status: &swarm_terminal::TerminalHostStatus) -> bool {
-    status.host_build_id.as_deref().map_or_else(
-        || status.host_version != build_version(),
-        |host_build_id| host_build_id != worker_engine_build_id(),
-    )
-}
-
-async fn host_status_snapshot(
-    state: &AppState,
-) -> Result<swarm_terminal::TerminalHostStatus, ApiError> {
-    let HostResponse::HostStatus { status } = request_host(state, HostRequest::HostStatus).await?
-    else {
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "unexpected_host_response",
-            "terminal host returned an unexpected status response",
-        ));
-    };
-    Ok(status)
 }
 
 async fn observe_provider_activity(
