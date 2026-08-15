@@ -47,6 +47,15 @@ enforceable rule. Inventing a meaning would itself violate POLA.
    durably returned work to the unassigned queue. That compatibility guess was
    removed: repository affinity can guide a recommendation but cannot replace
    explicit assignment truth.
+5. Apiary connection and invitation handoffs now share one URL-fragment codec,
+   one accessible link-entry component, and one file-fallback component. The
+   signed payload remains domain-specific, but encoding, size bounds, labels,
+   paste behavior, and fallback drag behavior cannot drift between Keeper and
+   member flows.
+6. Notification permission, subscription persistence, and startup repair remain
+   owned by `NotificationController`. Settings only renders its typed state;
+   it does not infer browser capability from the server's aggregate device
+   count.
 
 These abstractions are justified by shared behavior, not visual resemblance.
 
@@ -63,9 +72,15 @@ These abstractions are justified by shared behavior, not visual resemblance.
   sort is a pure tested `taskBoardModel`, while metadata and assignment are
   focused components. Editing, activity, Jira/email detail, and action-menu
   orchestration still belong to the card and remain the next measured split.
-- `web/src/api.ts` is roughly 900 lines and combines public contract types with
+- `web/src/settings/ApiarySettings.tsx` is roughly 1,100 lines and now combines
+  identity editing, bootstrap handoffs, policy review, Jira readiness,
+  membership, Stewardship, shared-work rollup, and collapse. The signed
+  handoff codec and repeated controls are separated, but the next Apiary change
+  should extract vertical Keeper onboarding and member-join sections rather
+  than adding another generic settings abstraction.
+- `web/src/api.ts` is roughly 1,600 lines and combines public contract types with
   every HTTP operation.
-- `web/src/styles.css` is roughly 760 lines in one global
+- `web/src/styles.css` is roughly 1,165 lines in one global
   cascade, making component ownership and mobile regressions harder to see.
 
 Required next extractions are vertical and behavior-led:
@@ -73,20 +88,23 @@ Required next extractions are vertical and behavior-led:
 1. Continue splitting `TaskCard` only when editing, activity, or integration
    detail changes next. Metadata, assignment, and query/filter/sort are already
    behavior-owned and directly tested; do not create a generic card framework.
-2. API contracts split by domain (`tasks`, `workers`, `jira`, `presence`) while
+2. Extract Apiary Keeper onboarding and member joining as two vertical feature
+   components when their next behavior lands. Keep shared cryptographic handoff
+   parsing independent of both views.
+3. API contracts split by domain (`tasks`, `workers`, `jira`, `presence`) while
    keeping one small shared authenticated request helper.
-3. CSS moves with extracted feature components after their visual contracts are
+4. CSS moves with extracted feature components after their visual contracts are
    stable. A wholesale CSS-module migration is not justified during alpha.
 
 ### P1 — backend adapter concentration
 
-- `crates/swarm-api/src/lib.rs` is over 7,000 lines. Routing, state composition,
+- `crates/swarm-api/src/lib.rs` is roughly 11,600 lines. Routing, state composition,
   task handlers, worker lifecycle, workspace validation, diagnostics, tests, and
   supervisors share one module.
-- `crates/swarm-persistence/src/lib.rs` is over 3,000 lines although Jira,
+- `crates/swarm-persistence/src/lib.rs` is roughly 3,700 lines although Jira,
   workers, decisions, notifications, dispatches, and outcomes have begun moving
   to focused modules.
-- `crates/swarm-domain/src/lib.rs` is over 1,800 lines and should be grouped by
+- `crates/swarm-domain/src/lib.rs` is roughly 2,800 lines and should be grouped by
   domain vocabulary before cross-Hive work expands it.
 
 The file size is evidence, not the rule. Split only at existing domain and
@@ -117,6 +135,12 @@ Recommended sequence:
   disabled on mobile.
 - Desktop and mobile browser proof must still cover the same task filters and Jira
   links now that they share one component.
+- Apiary link payloads stay after the URL fragment, are never fetched by a
+  third-party relay, preserve signed expiry and exact-Hive binding, and retain
+  file import only as a collapsed compatibility path.
+- Notification disable no longer unregisters the push service worker. A device
+  that was explicitly enabled remembers that intent and repairs a missing
+  subscription at startup when browser permission remains granted.
 
 ## Definition of a shareable component
 

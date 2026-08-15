@@ -600,11 +600,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
               <strong>Paste the Keeper's invitation link</strong>
               <small>Reviewing the link does not send anything or join the Apiary. Its private payload stays after the # fragment and is not sent during web navigation.</small>
             </div>
-            <div className="apiary-link-entry">
-              <label htmlFor="apiary-invitation-link"><span>Invitation link</span><input id="apiary-invitation-link" type="url" value={invitationLink} placeholder="Paste the complete link" onChange={(event) => setInvitationLink(event.target.value)} /></label>
-              <button className="primary-action" disabled={busy || working || !invitationLink.trim()} onClick={previewJoinInvitationLink}>Review invitation</button>
-            </div>
-            <details className="apiary-file-fallback"><summary>Use an invitation file instead</summary><ApiaryFileDrop ariaLabel="Choose Apiary invitation" disabled={busy || working} label="Choose invitation file" detail="or drop the Keeper's .json invitation here" onFile={(file) => void previewJoinInvitation(file)} /></details>
+            <ApiaryLinkEntry label="Invitation link" value={invitationLink} action="Review invitation" disabled={busy || working} onChange={setInvitationLink} onAction={previewJoinInvitationLink} />
+            <ApiaryFileFallback summary="Use an invitation file instead" ariaLabel="Choose Apiary invitation" disabled={busy || working} label="Choose invitation file" detail="or drop the Keeper's .json invitation here" onFile={(file) => void previewJoinInvitation(file)} />
             {invitationPreview ? (
               <div className="apiary-invitation-preview" role="group" aria-label="Review Apiary invitation">
                 <div><span>Apiary</span><strong>{invitationPreview.invitation.payload.apiary_name}</strong></div>
@@ -859,11 +856,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                 <ApiaryExchangeStep number="2" title="Verify the exact identity" detail="Paste the link below. Swarm verifies its signature and shows the Hive and operator before any invitation exists." />
                 <ApiaryExchangeStep number="3" title="Return the invitation link" detail="Create invitation copies one bounded link for that exact Hive. It expires and its secret can be consumed only once." />
               </ol>
-              <div className="apiary-link-entry">
-                <label htmlFor="apiary-connection-link"><span>Hive connection link</span><input id="apiary-connection-link" type="url" value={connectionLink} placeholder="Paste the complete link" onChange={(event) => setConnectionLink(event.target.value)} /></label>
-                <button className="primary-action" disabled={busy || working || !connectionLink.trim()} onClick={() => void importConnectionLink()}>{working ? "Verifying…" : "Verify Hive"}</button>
-              </div>
-              <details className="apiary-file-fallback"><summary>Use a connection file instead</summary><ApiaryFileDrop ariaLabel="Choose Hive connection card" disabled={busy || working} label={working ? "Verifying…" : "Choose connection card"} detail="or drop the Hive's .json connection card here" onFile={(file) => void importConnectionCard(file)} /></details>
+              <ApiaryLinkEntry label="Hive connection link" value={connectionLink} action={working ? "Verifying…" : "Verify Hive"} disabled={busy || working} onChange={setConnectionLink} onAction={() => void importConnectionLink()} />
+              <ApiaryFileFallback summary="Use a connection file instead" ariaLabel="Choose Hive connection card" disabled={busy || working} label={working ? "Verifying…" : "Choose connection card"} detail="or drop the Hive's .json connection card here" onFile={(file) => void importConnectionCard(file)} />
               {candidateLoadError ? <p className="apiary-blockers">Pinned Hive identities could not be refreshed. No membership changed.</p> : null}
               {hiveCandidates.length > 0 ? (
                 <ul className="apiary-candidate-list" aria-label="Pinned Hive identities">
@@ -991,6 +985,29 @@ function ApiaryGeneratedLink({ link, onCopy }: { link: string; onCopy: (link: st
       <small>Share only with the intended operator. The signed payload expires; invitation secrets are bound to one Hive and consumed once.</small>
     </div>
   );
+}
+
+type ApiaryLinkEntryProps = {
+  label: string;
+  value: string;
+  action: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+  onAction: () => void;
+};
+
+function ApiaryLinkEntry({ label, value, action, disabled, onChange, onAction }: ApiaryLinkEntryProps) {
+  const id = useId();
+  return (
+    <div className="apiary-link-entry">
+      <label htmlFor={id}><span>{label}</span><input id={id} type="url" value={value} placeholder="Paste the complete link" onChange={(event) => onChange(event.target.value)} /></label>
+      <button className="primary-action" disabled={disabled || !value.trim()} onClick={onAction}>{action}</button>
+    </div>
+  );
+}
+
+function ApiaryFileFallback(props: ApiaryFileDropProps & { summary: string }) {
+  return <details className="apiary-file-fallback"><summary>{props.summary}</summary><ApiaryFileDrop {...props} /></details>;
 }
 
 type ApiaryFileDropProps = {
