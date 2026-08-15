@@ -79,7 +79,7 @@ test("startup repairs a missing subscription when this device was intentionally 
   const pushManager = { getSubscription: vi.fn().mockResolvedValue(null), subscribe: vi.fn().mockResolvedValue(subscription) };
   const register = vi.fn().mockResolvedValue({ pushManager });
   Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(undefined), register } });
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ ...settings, subscription_count: 1 })));
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(ok({ ...settings, subscription_count: 1 }))));
   const states: string[] = [];
 
   await new NotificationController().start("token", vi.fn(), (state) => states.push(state));
@@ -99,7 +99,7 @@ test("disable removes delivery but keeps the service worker available for repair
   const unregister = vi.fn();
   const registration = { update: vi.fn(), unregister, pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) } };
   Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(registration), register: vi.fn() } });
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ ...settings, subscription_count: 0 })));
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(ok({ ...settings, subscription_count: 0 }))));
   const controller = new NotificationController();
   await controller.start("token", vi.fn(), vi.fn());
 
