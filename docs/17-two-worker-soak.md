@@ -117,6 +117,19 @@ cycles, and passed all browser, storage-process, owned-process, and renderer
 memory bounds. Terminal-host PID `400662` and all three worker sessions were
 preserved.
 
+The 2026-08-15 current-build checkpoint ran release
+`0.1.0-dev-b278aa2531e1` for 600 seconds in isolated headless Edge while the
+complete dogfood navigation loop cycled nine times. Browser PID `17704` stayed
+fixed for 59 samples. Post-warmup browser private growth was 3.4 MiB at a 0.16
+MiB/minute fitted slope; the storage service grew 0.18 MiB at 0.03 MiB/minute;
+the complete owned tree grew 29.9 MiB at 2.59 MiB/minute; and renderer heap grew
+2.1 MiB at 0.05 MiB/minute. Every material-growth and slope gate passed,
+browser storage remained zero bytes, DOM nodes stayed between 1,022 and 1,059,
+and no authenticated-page error occurred. The harness closed Edge after writing
+its verdict. This revalidates the heavily expanded Apiary, Jira, and email UI on
+the current build; it remains a bounded checkpoint rather than the required
+24-hour promotion soak.
+
 ## Read-only live observation
 
 `scripts/dogfood/observe-live-soak.sh` monitors the actual dogfood crew without
