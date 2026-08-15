@@ -70,6 +70,33 @@ test("startup refreshes an existing push worker without requesting permission ag
   expect(Notification.requestPermission).not.toHaveBeenCalled();
 });
 
+test("an existing browser subscription survives a transient API handoff while enabling", async () => {
+  vi.useFakeTimers();
+  const subscription = {
+    toJSON: () => ({ endpoint: "https://fcm.googleapis.com/push/existing", keys: { p256dh: "key", auth: "auth" } }),
+  } as unknown as PushSubscription;
+  const registration = { pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) } };
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: {
+    getRegistration: vi.fn().mockResolvedValue(undefined),
+    register: vi.fn().mockResolvedValue(registration),
+  } });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(ok(settings))
+    .mockRejectedValueOnce(new TypeError("gateway restarting"))
+    .mockResolvedValueOnce(ok({ ...settings, subscription_count: 1 }));
+  vi.stubGlobal("fetch", fetchMock);
+  const controller = new NotificationController();
+  const states: string[] = [];
+  await controller.start("token", vi.fn(), (state) => states.push(state));
+
+  const enabled = controller.enable();
+  await vi.advanceTimersByTimeAsync(250);
+
+  await expect(enabled).resolves.toBe(true);
+  expect(states.at(-1)).toBe("enabled");
+  vi.useRealTimers();
+});
+
 test("a denied browser permission does not register or persist anything", async () => {
   vi.stubGlobal("Notification", { permission: "default", requestPermission: vi.fn().mockResolvedValue("denied") });
   const register = vi.fn();

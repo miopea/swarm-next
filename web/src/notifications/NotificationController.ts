@@ -1,5 +1,6 @@
 import {
   fetchNotificationSettings,
+  recoverTransientRuntime,
   removeNotificationSubscription,
   saveNotificationSubscription,
   sendTestNotification,
@@ -31,7 +32,7 @@ export class NotificationController {
     else if (Notification.permission === "denied") this.#onState("denied");
     else this.#onState("available");
     try {
-      const settings = await fetchNotificationSettings(operatorToken);
+      const settings = await recoverTransientRuntime(() => fetchNotificationSettings(operatorToken));
       if (generation !== this.#generation) return;
       this.#publish(settings);
       if (!supportsPush()) return;
@@ -91,7 +92,7 @@ export class NotificationController {
     const registration = supportsPush() ? await navigator.serviceWorker.getRegistration("/") : undefined;
     const subscription = await registration?.pushManager.getSubscription();
     if (subscription) await subscription.unsubscribe();
-    const settings = await removeNotificationSubscription(this.#token, presenceDeviceId());
+    const settings = await recoverTransientRuntime(() => removeNotificationSubscription(this.#token!, presenceDeviceId()));
     this.#publish(settings);
     if (registration) await registration.unregister();
     this.#onState(supportsPush() && Notification.permission !== "denied" ? "available" : "denied");
@@ -99,23 +100,23 @@ export class NotificationController {
 
   async changePolicy(policy: NotificationPolicy): Promise<void> {
     if (!this.#token) return;
-    this.#publish(await setNotificationPolicy(this.#token, policy));
+    this.#publish(await recoverTransientRuntime(() => setNotificationPolicy(this.#token!, policy)));
   }
 
   async test(): Promise<void> {
     if (!this.#token) return;
-    this.#publish(await sendTestNotification(this.#token, presenceDeviceId()));
+    this.#publish(await recoverTransientRuntime(() => sendTestNotification(this.#token!, presenceDeviceId())));
   }
 
   async #save(subscription: PushSubscription) {
     if (!this.#token) return;
     const json = subscription.toJSON();
     if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) throw new Error("Browser push keys are incomplete");
-    this.#publish(await saveNotificationSubscription(this.#token, presenceDeviceId(), {
+    this.#publish(await recoverTransientRuntime(() => saveNotificationSubscription(this.#token!, presenceDeviceId(), {
       device_class: deviceClass(),
-      endpoint: json.endpoint,
-      keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-    }));
+      endpoint: json.endpoint!,
+      keys: { p256dh: json.keys!.p256dh!, auth: json.keys!.auth! },
+    })));
   }
 
   async #reconcileExistingSubscription(): Promise<boolean> {
