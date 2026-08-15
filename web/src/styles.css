@@ -239,6 +239,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-summary dd { margin: 0; font-size: 1.15rem; font-weight: 650; }
 .keeper-dashboard-grid { display: grid; max-width: 1500px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 auto; gap: 16px; }
 .keeper-panel { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
+.keeper-shared-work-panel { grid-column: 1 / -1; }
 .keeper-panel > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .keeper-panel h4 { margin: 0; font-size: 1rem; }
 .keeper-panel > header > small { max-width: 190px; color: var(--quiet); font-size: .67rem; line-height: 1.4; text-align: right; }
