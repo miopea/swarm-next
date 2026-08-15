@@ -701,3 +701,15 @@ the independently updated terminal host through the API to worker settings:
   browser restarts. API PID advanced to `3105931`; terminal-host PID remained
   `2966127`, preserving the active worker session. The unauthenticated in-app
   proof tab and every authenticated hidden Edge process closed after use.
+- Release `0.1.0-dev-371eb6297ac6` moves notification policy, subscription
+  validation/lifecycle, test delivery, response shaping, and delivery
+  scheduling beside the bounded Web Push sender. Existing endpoint allowlists,
+  key validation, generic content-free payloads, and durable queue behavior
+  remain unchanged. The complete gate passed 331 Rust tests, Clippy with
+  warnings denied, 213 frontend tests, strict TypeScript, and the production
+  build. Read-only live Edge acceptance passed every primary and Apiary member
+  surface at 1,440-pixel desktop and 412-pixel Android widths with zero
+  overflow, 346 and 318 named controls, all three Apiary guide steps, and
+  authentication across full browser restarts. API PID advanced to `3110299`;
+  terminal-host PID remained `2966127`, preserving the active worker session.
+  Every proof browser process closed after the run.
