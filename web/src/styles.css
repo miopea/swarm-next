@@ -232,7 +232,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-hero-mark .bee-mascot { width: 68px; height: 68px; transform: translateY(7px); }
 .keeper-hero h3 { margin: 0 0 4px; font-size: 1.35rem; }
 .keeper-hero p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.45; }
-.keeper-summary { display: grid; max-width: 1500px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 auto 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
+.keeper-summary { display: grid; max-width: 1500px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 0 auto 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
 .keeper-summary > div { display: grid; gap: 4px; padding: 15px 17px; border-right: 1px solid var(--line); }
 .keeper-summary > div:last-child { border-right: 0; }
 .keeper-summary dt { color: var(--quiet); font-size: .65rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
