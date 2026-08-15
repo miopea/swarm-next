@@ -760,3 +760,14 @@ the independently updated terminal host through the API to worker settings:
   and authentication across complete browser restarts. API PID advanced to
   `3167607`; terminal-host PID remained `2966127`, preserving the active worker
   session. Every proof browser process closed after the run.
+- Release `0.1.0-dev-321e7eaa77a3` gives the authenticated, no-store consistent
+  SQLite export one focused Rust HTTP owner while online backup creation and
+  integrity remain persistence responsibilities. The full release gate passed
+  331 Rust tests, Clippy with warnings denied, 213 frontend tests, strict
+  TypeScript, and the production build. Live Edge acceptance verified private
+  backup availability while passing every primary and Apiary member surface at
+  1,440-pixel desktop and 412-pixel Android widths with zero overflow, 346 and
+  318 named controls, all three Apiary guide steps, and authentication across
+  complete browser restarts. API PID advanced to `3174241`; terminal-host PID
+  remained `2966127`, preserving the active worker session. Every proof browser
+  process closed after the run.
