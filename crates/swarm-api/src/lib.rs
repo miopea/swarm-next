@@ -3,6 +3,7 @@ mod attach;
 mod attachments;
 mod auth;
 mod backups;
+mod control_room;
 mod decisions;
 mod email_attachments;
 pub mod federation_http;
@@ -1474,11 +1475,6 @@ struct OutputQuery {
 }
 
 #[derive(Debug, Deserialize)]
-struct ControlRoomEventsQuery {
-    after: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
 struct JiraProjectsQuery {
     query: Option<String>,
 }
@@ -1758,7 +1754,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/notifications/subscriptions/{device_id}/test",
             post(notifications::test_notification),
         )
-        .route("/api/v1/control-room/events", get(control_room_events))
+        .route("/api/v1/control-room/events", get(control_room::events))
         .route("/api/v1/runtime/limits", get(runtime_limits))
         .route("/api/v1/runtime/resources", get(runtime_resources))
         .route("/api/v1/runtime/terminal-host", get(terminal_host_status))
@@ -2595,26 +2591,6 @@ async fn join_apiary(
         )
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
-}
-
-async fn control_room_events(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Query(query): Query<ControlRoomEventsQuery>,
-) -> Result<Response, ApiError> {
-    authorize(&state, &headers)?;
-    let after = query.after.unwrap_or(0).max(0);
-    let notified = state.control_room_notify.notified();
-    let mut page = task_store(&state)?
-        .list_control_room_events(after)
-        .map_err(|error| task_store_error(&error))?;
-    if page.events.is_empty() && !page.reset_required {
-        let _ = timeout(Duration::from_secs(20), notified).await;
-        page = task_store(&state)?
-            .list_control_room_events(after)
-            .map_err(|error| task_store_error(&error))?;
-    }
-    Ok(([(header::CACHE_CONTROL, "no-store")], Json(page)).into_response())
 }
 
 async fn runtime_limits(State(state): State<Arc<AppState>>) -> Json<RuntimeLimitsResponse> {
