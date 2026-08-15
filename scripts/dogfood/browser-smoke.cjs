@@ -252,6 +252,17 @@ async function checkSurface(browser, surface) {
         await page.getByRole("heading", { name: "What changed recently" }).waitFor();
         const activityRows = page.locator(".work-activity-list > li");
         if (await activityRows.count() === 0) throw new Error(`${surface.name}: durable work activity is empty`);
+        const activityActors = page.locator(".activity-actor");
+        if (await activityActors.count() === 0) throw new Error(`${surface.name}: durable work activity has no actor provenance`);
+        const actorClasses = await activityActors.evaluateAll((actors) => actors.map((actor) => actor.className));
+        const selectedActor = actorClasses[0].match(/actor-(operator|worker|jira|email|system)/)?.[1];
+        if (!selectedActor) throw new Error(`${surface.name}: durable work activity exposes an unknown actor`);
+        await page.getByLabel("Source", { exact: true }).selectOption(selectedActor);
+        if (await activityRows.count() === 0) throw new Error(`${surface.name}: actor activity filter has no durable events`);
+        const mismatchedActors = await activityActors.evaluateAll((actors, expected) => actors
+          .filter((actor) => !actor.classList.contains(`actor-${expected}`)).length, selectedActor);
+        if (mismatchedActors) throw new Error(`${surface.name}: actor activity filter retained another source`);
+        await page.getByLabel("Source", { exact: true }).selectOption("all");
         const activityBounds = await page.locator(".work-activity").evaluate((element) => ({
           scrollWidth: element.scrollWidth,
           clientWidth: element.clientWidth,

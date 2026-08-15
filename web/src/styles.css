@@ -1067,6 +1067,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .decision-inbox-intro { align-items: start; flex-direction: column; gap: 12px; }
   .work-activity-intro { grid-template-columns: 1fr; gap: 14px; }
   .work-activity-controls { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .work-activity-controls > label:first-child { grid-column: 1 / -1; }
   .work-activity-controls > button { grid-column: 1 / -1; }
   .work-activity-list li { grid-template-columns: 9px minmax(0, 1fr); }
   .work-activity-list time { grid-column: 2; }
