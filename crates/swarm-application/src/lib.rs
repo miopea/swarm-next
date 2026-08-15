@@ -6,12 +6,12 @@ use swarm_domain::{
     DecisionUrgency, FederationCatalogAcknowledgement, FederationCatalogReadiness,
     FederationCatalogSnapshot, FederationClaimId, FederationJoinAcceptance,
     FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
-    FederationSharedClaim, FederationSyncCondition, FederationSyncHealth, HiveConnectionCard,
-    HiveId, JiraConnectionState, JiraProjectBindingId, LocalApiaryContext, LocalApiaryRole,
-    OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
-    PresenceObservationState, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId,
-    Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
-    WorkerSessionId,
+    FederationMemberConnection, FederationSharedClaim, FederationSyncCondition,
+    FederationSyncHealth, HiveConnectionCard, HiveId, JiraConnectionState, JiraProjectBindingId,
+    LocalApiaryContext, LocalApiaryRole, OperatorId, OperatorPresence, PresenceDeviceClass,
+    PresenceDeviceId, PresenceMode, PresenceObservationState, SharedWorkBackend, StewardCapability,
+    Stewardship, StewardshipId, Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId,
+    WorkerProfile, WorkerRole, WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -166,7 +166,20 @@ impl ApiaryService {
         self.store.federation_sync_health().map_err(Into::into)
     }
 
-    /// Records a successful reconciliation outcome for a future bounded runner.
+    /// Returns host-private transport material for the local joined Member.
+    /// Adapters must never serialize this value into browser or agent output.
+    ///
+    /// # Errors
+    /// Rejects personal and Keeper Hives and missing or corrupt membership.
+    pub fn federation_member_connection(
+        &self,
+    ) -> Result<FederationMemberConnection, ApplicationError> {
+        self.store
+            .federation_member_connection()
+            .map_err(Into::into)
+    }
+
+    /// Records a successful reconciliation outcome for the bounded Member runner.
     ///
     /// # Errors
     /// Rejects non-Members, invalid time, and persistence failures.
@@ -179,7 +192,7 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
-    /// Records a classified reconciliation failure for a future bounded runner.
+    /// Records a classified reconciliation failure for the bounded Member runner.
     ///
     /// # Errors
     /// Rejects non-Members, invalid classifications/time, and persistence failures.

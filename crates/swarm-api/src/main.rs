@@ -71,6 +71,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             jira_reconciler.reconcile_jira().await;
         }
     });
+    let federation_reconciler = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        loop {
+            interval.tick().await;
+            federation_reconciler.reconcile_federation().await;
+        }
+    });
     let email_delivery = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));

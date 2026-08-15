@@ -98,6 +98,46 @@ struct MemberCredentialContext {
 }
 
 impl TaskStore {
+    /// Returns the joined Member's host-private outbound Keeper connection.
+    /// This is adapter material and must never enter browser or agent reads.
+    ///
+    /// # Errors
+    /// Rejects personal and Keeper Hives, missing or corrupt membership
+    /// material, and invalid stored Keeper endpoints.
+    pub fn federation_member_connection(
+        &self,
+    ) -> Result<swarm_domain::FederationMemberConnection, TaskStoreError> {
+        self.require_local_federation_member()?;
+        let connection = self.connection()?;
+        let (keeper_endpoint, credential, credential_expires_at) = connection
+            .query_row(
+                "SELECT i.keeper_endpoint, m.node_credential, m.credential_expires_at
+                 FROM local_federation_membership m
+                 JOIN apiary_join_invitations i ON i.id = m.invitation_id
+                 WHERE m.singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(TaskStoreError::InvalidFederationSync)?;
+        validate_invitation_endpoint(&keeper_endpoint)
+            .map_err(|_| TaskStoreError::InvalidFederationSync)?;
+        if credential.len() != 32 || credential_expires_at < 0 {
+            return Err(TaskStoreError::InvalidFederationSync);
+        }
+        Ok(swarm_domain::FederationMemberConnection {
+            keeper_endpoint,
+            node_credential: Base64UrlUnpadded::encode_string(&credential),
+            credential_expires_at,
+        })
+    }
+
     /// Returns content-free local Member synchronization health. The absence of
     /// a row means that a transport loop has never run on this installation.
     ///

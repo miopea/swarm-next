@@ -726,6 +726,16 @@ pub struct FederationJoinAcceptance {
     pub node_credential: String,
 }
 
+/// Host-private transport material for a joined Member Hive. This value may
+/// cross application and adapter boundaries in process, but must never be
+/// serialized into browser, diagnostics, activity, or agent responses.
+#[derive(Clone, Eq, PartialEq)]
+pub struct FederationMemberConnection {
+    pub keeper_endpoint: String,
+    pub node_credential: String,
+    pub credential_expires_at: i64,
+}
+
 /// Durable invited-Hive view of a signed invitation. Sensitive bearer material
 /// and the complete signed envelope remain private to persistence and are never
 /// returned through ordinary application or browser reads.

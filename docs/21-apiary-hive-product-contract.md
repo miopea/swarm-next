@@ -147,9 +147,8 @@ canonical digest of the ordered promoted-project identities. The response is
 `no-store` and contains no node credential, Jira credential, access evidence,
 workflow map, issue content, task, repository, or terminal data. Invalid and
 expired credentials fail as authentication failures. This is a pull contract,
-not delivery: Member-side acknowledgement, offline reconciliation, and
-outbound polling remain later slices, and this endpoint performs no Jira or
-membership mutation.
+not delivery: the Member initiates every request, and this endpoint performs no
+Jira or membership mutation.
 
 The joined Member can now verify and durably acknowledge one of those signed
 snapshots through a private local command. Verification is bound to every
@@ -158,8 +157,9 @@ an unexpired membership credential, validates the canonical project digest,
 and rejects altered, stale, or rollback snapshots. Exact retries are
 idempotent. The acknowledgement records the digest, policy revision, project
 count, and timestamps but deliberately does not claim local Jira access,
-workflow readiness, or policy acceptance. Automatic polling and the per-project
-readiness/reconciliation loop remain separate adapter work.
+workflow readiness, or policy acceptance. The API now performs this fetch and
+acknowledgement automatically on a bounded Member-owned loop; the per-project
+Jira readiness remains local evidence rather than Keeper data.
 
 The Member can also inspect a server-derived convergence view for the latest
 acknowledged snapshot. It compares immutable Jira project IDs with the Hive's
@@ -197,8 +197,9 @@ and total deadline; and response bodies stop at one mebibyte before JSON
 decoding. Network loss, authentication rejection, claim conflict, remote
 rejection, oversized data, and invalid protocol content remain distinct typed
 results. Loopback HTTP exists only for local development and isolated tests.
-This client is not yet wired to persistence or an automatic loop, so the stored
-one-time join secret cannot leave the Hive through this slice.
+The client now powers both the explicit one-time join and the automatic
+post-membership catalog pull. Secrets remain host-private and every connection
+still originates from the Member toward Keeper.
 
 Member Hives now also retain a content-free reconciliation health record with
 an explicit condition, last attempt/success timestamps, consecutive failure
@@ -206,9 +207,10 @@ count, and next eligible attempt. Temporary outages use a deterministic
 5/15/30/60/120/300-second bounded backoff; authentication and protocol
 incompatibility halt until operator action. The private Member UI combines this
 health with catalog/Jira readiness without exposing endpoints, credentials,
-receipts, issue content, or response bodies. An idle record is presented
-honestly as transport not yet enabled: this durable state is the contract for a
-later runner, not evidence that background synchronization already occurs.
+receipts, issue content, or response bodies. The API runner evaluates the
+durable next-attempt boundary every 15 seconds, fetches at most once per minute
+while healthy, and resumes temporary failures according to the stored backoff.
+Personal and Keeper Hives perform no Member polling.
 
 For Jira-backed Apiaries, promoted projects now have a separate durable catalog
 owned by the Apiary. Only its Keeper may promote a Jira project, Native Apiaries

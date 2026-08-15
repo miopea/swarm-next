@@ -62,10 +62,10 @@ use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinLink,
     ApiaryJoinLinkId, ApiaryJoinReadiness, ApiaryKeeperLink, DecisionRequestId,
     FederationCatalogSnapshot, FederationClaimId, FederationJoinSubmission, FederationSharedClaim,
-    HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId,
-    JiraProjectScope, JiraStatusMapping, LocalApiaryContext, OperatorId, ProviderKind,
-    SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority,
-    TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    FederationSyncCondition, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
+    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext, OperatorId,
+    ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId,
+    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
@@ -519,6 +519,88 @@ impl AppState {
                 Err(error) => {
                     tracing::warn!(%error, project = %binding.project_key, "Jira reconciliation was rejected");
                 }
+            }
+        }
+    }
+
+    /// Pulls one bounded federation snapshot from Keeper for a joined Member.
+    /// Jira is deliberately absent from this path: every Hive continues to
+    /// synchronize canonical Jira work directly with Jira.
+    pub async fn reconcile_federation(&self) {
+        let Some(store) = self.task_store.as_ref() else {
+            return;
+        };
+        let service = ApiaryService::new(store.clone());
+        let now = unix_timestamp();
+        let health = match service.federation_sync_health() {
+            Ok(health) => health,
+            Err(ApplicationError::Store(TaskStoreError::InvalidFederationSync)) => return,
+            Err(error) => {
+                tracing::warn!(%error, "federation reconciliation could not read local health");
+                return;
+            }
+        };
+        if matches!(
+            health.condition,
+            FederationSyncCondition::AuthenticationRequired | FederationSyncCondition::Incompatible
+        ) || health.next_attempt_at.is_some_and(|next| next > now)
+        {
+            return;
+        }
+        let connection = match service.federation_member_connection() {
+            Ok(connection) => connection,
+            Err(error) => {
+                tracing::warn!(%error, "federation reconciliation could not load member transport");
+                return;
+            }
+        };
+        if connection.credential_expires_at <= now {
+            record_federation_failure(
+                &service,
+                FederationSyncCondition::AuthenticationRequired,
+                now,
+                self.control_room_notify.as_ref(),
+            );
+            return;
+        }
+        let client = match federation_http::FederationHttpClient::new(&connection.keeper_endpoint) {
+            Ok(client) => client,
+            Err(error) => {
+                record_federation_failure(
+                    &service,
+                    federation_sync_condition(error),
+                    now,
+                    self.control_room_notify.as_ref(),
+                );
+                return;
+            }
+        };
+        let snapshot = match client.catalog(&connection.node_credential).await {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                record_federation_failure(
+                    &service,
+                    federation_sync_condition(error),
+                    now,
+                    self.control_room_notify.as_ref(),
+                );
+                return;
+            }
+        };
+        if let Err(error) = service.acknowledge_federation_catalog(&snapshot, now) {
+            tracing::warn!(%error, "Keeper returned an incompatible federation catalog");
+            record_federation_failure(
+                &service,
+                FederationSyncCondition::Incompatible,
+                now,
+                self.control_room_notify.as_ref(),
+            );
+            return;
+        }
+        match service.record_federation_sync_success(now) {
+            Ok(_) => self.control_room_notify.notify_waiters(),
+            Err(error) => {
+                tracing::warn!(%error, "federation reconciliation result could not be persisted");
             }
         }
     }
@@ -4031,6 +4113,37 @@ fn federation_bootstrap_error(error: ApplicationError) -> ApiError {
     }
 }
 
+fn federation_sync_condition(
+    error: federation_http::FederationHttpError,
+) -> FederationSyncCondition {
+    use federation_http::FederationHttpError;
+    match error {
+        FederationHttpError::TransportUnavailable => FederationSyncCondition::Offline,
+        FederationHttpError::AuthenticationRejected => {
+            FederationSyncCondition::AuthenticationRequired
+        }
+        FederationHttpError::InvalidEndpoint
+        | FederationHttpError::Conflict
+        | FederationHttpError::RemoteRejected(_)
+        | FederationHttpError::ResponseTooLarge
+        | FederationHttpError::InvalidResponse => FederationSyncCondition::Incompatible,
+    }
+}
+
+fn record_federation_failure(
+    service: &ApiaryService,
+    condition: FederationSyncCondition,
+    now: i64,
+    notify: &Notify,
+) {
+    match service.record_federation_sync_failure(condition, now) {
+        Ok(_) => notify.notify_waiters(),
+        Err(error) => {
+            tracing::warn!(%error, "federation reconciliation failure could not be persisted");
+        }
+    }
+}
+
 fn federation_http_error(error: federation_http::FederationHttpError) -> ApiError {
     use federation_http::FederationHttpError;
     match error {
@@ -5770,6 +5883,23 @@ mod tests {
         (endpoint, server)
     }
 
+    #[test]
+    fn federation_transport_failures_have_operator_meaningful_sync_states() {
+        use federation_http::FederationHttpError;
+        assert_eq!(
+            federation_sync_condition(FederationHttpError::TransportUnavailable),
+            FederationSyncCondition::Offline
+        );
+        assert_eq!(
+            federation_sync_condition(FederationHttpError::AuthenticationRejected),
+            FederationSyncCondition::AuthenticationRequired
+        );
+        assert_eq!(
+            federation_sync_condition(FederationHttpError::InvalidResponse),
+            FederationSyncCondition::Incompatible
+        );
+    }
+
     #[tokio::test]
     async fn invited_hive_joins_through_one_outbound_signed_request() {
         let jira_address = start_ready_jira_test_server().await;
@@ -5810,7 +5940,7 @@ mod tests {
                 "api-token",
             )
             .unwrap();
-        let app = router(state);
+        let app = router(state.clone());
         let uri = format!(
             "/api/v1/apiary/join-invitations/{}/submission",
             imported.invitation_id
@@ -5856,6 +5986,17 @@ mod tests {
                 ..
             }
         ));
+        state.reconcile_federation().await;
+        assert!(
+            invited
+                .federation_catalog_acknowledgement()
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            invited.federation_sync_health().unwrap().condition,
+            FederationSyncCondition::Current
+        );
 
         keeper_server.abort();
         let _ = keeper_server.await;

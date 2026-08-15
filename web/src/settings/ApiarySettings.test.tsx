@@ -503,7 +503,7 @@ test("delegates and revokes explicit Steward authority without exposing Hive int
   expect(screen.queryByRole("list", { name: "Apiary Stewards" })).not.toBeInTheDocument();
 });
 
-test("shows honest Member convergence without implying a running transport", async () => {
+test("shows honest Member convergence while waiting for the first automatic poll", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/api/v1/apiary/members") return ok([
@@ -528,8 +528,8 @@ test("shows honest Member convergence without implying a running transport", asy
   render(<ApiarySettings busy={false} hiveIdentity={memberIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
 
   const status = await screen.findByLabelText("Keeper synchronization status");
-  expect(status).toHaveTextContent("Not connected yet");
-  expect(status).toHaveTextContent("Automatic Keeper sync is not enabled in this build");
+  expect(status).toHaveTextContent("Waiting for first sync");
+  expect(status).toHaveTextContent("This Hive will poll Keeper automatically");
   expect(status).toHaveTextContent("CatalogWaitingProjects ready1/1JiraConnectedRetries0");
   expect(status).toHaveTextContent("Shared work waits for: catalog missing");
   expect(status).not.toHaveTextContent("credential");
