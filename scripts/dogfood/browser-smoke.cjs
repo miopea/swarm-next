@@ -337,9 +337,13 @@ async function checkSurface(browser, surface) {
     const appApiStatus = page.getByLabel("App and API status");
     await appApiStatus.getByText(/^(App and API are current|Development reload available|Building development changes|Development build failed)$/).waitFor();
     const appApiText = await appApiStatus.innerText();
+    const normalizedAppApiText = appApiText.toLocaleLowerCase();
     await appApiStatus.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(outputRoot, `${surface.name}-settings-runtime.png`), fullPage: true });
-    if (appApiText.includes("App and API are current") && (!appApiText.includes("Activated") || !appApiText.includes("no reload is pending"))) {
+    if (
+      normalizedAppApiText.includes("app and api are current")
+      && (!normalizedAppApiText.includes("activated") || !normalizedAppApiText.includes("no reload is pending"))
+    ) {
       throw new Error(`${surface.name}: current App/API state does not explain its activation or detector result (${JSON.stringify(appApiText)})`);
     }
     let maintenanceConfirmation = false;
