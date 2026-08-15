@@ -242,9 +242,12 @@ async function checkSurface(browser, surface) {
               }
             }
             if (surface.mobile) {
-              if (!await emailSource.getByLabel("Preview source email", { exact: true }).isVisible()) {
+              const sourcePicker = emailSource.getByLabel("Preview source email", { exact: true });
+              if (!await sourcePicker.isVisible()) {
                 throw new Error(`${surface.name}: compact email source selector is unavailable`);
               }
+              await sourcePicker.scrollIntoViewIfNeeded();
+              await page.screenshot({ path: path.join(outputRoot, `${surface.name}-tasks-email-source-review.png`), fullPage: true });
             } else if (!await emailSource.getByRole("tablist", { name: "Selected source emails" }).isVisible()) {
               throw new Error(`${surface.name}: desktop email source tabs are unavailable`);
             }
@@ -483,7 +486,9 @@ async function checkSurface(browser, surface) {
     let commandSearch = page.getByRole("combobox", { name: "Find work, decisions, or workers" });
     if (completedTaskTitle) {
       await commandSearch.fill(completedTaskTitle);
-      await commandSearch.press("Enter");
+      const completedChoice = page.getByRole("option").filter({ hasText: completedTaskTitle }).filter({ hasText: /Completed/i }).first();
+      await completedChoice.waitFor();
+      await completedChoice.click();
       const completedCard = page.locator(".completed-tasks .task-card", { has: page.getByRole("heading", { name: completedTaskTitle, exact: true }) });
       await completedCard.waitFor();
       const completedTaskFocused = await completedCard.evaluate((card) => card === document.activeElement && card.closest("details")?.open === true);
