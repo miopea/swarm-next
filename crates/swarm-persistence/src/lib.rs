@@ -22,6 +22,7 @@ mod decisions;
 mod email;
 mod events;
 mod federation;
+mod federation_jira_claims;
 mod federation_tasks;
 pub use federation_tasks::MAX_FEDERATION_TASK_COMMAND_BATCH;
 mod feedback;
@@ -30,6 +31,9 @@ pub use federation::{
     MIN_CONNECTION_CARD_LIFETIME_SECONDS, MIN_FEDERATION_INVITATION_LIFETIME_SECONDS,
     verify_apiary_invitation_envelope, verify_federation_catalog_snapshot,
     verify_federation_membership_receipt, verify_hive_connection_card,
+};
+pub use federation_jira_claims::{
+    FederationJiraClaimIntent, FederationJiraClaimPhase, MAX_FEDERATION_JIRA_CLAIM_BATCH,
 };
 mod jira;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
@@ -66,7 +70,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 49;
+const CURRENT_SCHEMA_VERSION: i64 = 50;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -145,6 +149,10 @@ pub enum TaskStoreError {
     InvalidFederationClaim,
     #[error("The local federation synchronization state is invalid")]
     InvalidFederationSync,
+    #[error("The federated Jira claim state is invalid")]
+    InvalidFederationJiraClaim,
+    #[error("This Hive already has the maximum number of pending federated Jira claims")]
+    FederationJiraClaimQueueFull,
     #[error("The Apiary task or task feed is invalid")]
     InvalidFederationTask,
     #[error("The Jira issue is already claimed by another Hive")]
@@ -1528,6 +1536,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 49 {
         migrate_worker_profile_metadata(transaction)?;
+    }
+    if schema_version < 50 {
+        federation_jira_claims::migrate_federation_jira_claims(transaction)?;
     }
     Ok(())
 }

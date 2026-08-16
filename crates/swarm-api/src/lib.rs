@@ -65,16 +65,17 @@ use swarm_domain::{
     FederationSharedClaim, FederationSyncCondition, FederationTaskCommand,
     FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
     FederationTaskSyncStatus, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
-    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext, OperatorId,
-    ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId,
-    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext, LocalApiaryRole,
+    OperatorId, ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId,
+    TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile,
+    WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
 use swarm_persistence::{
-    DecisionDeliveryFailure, DecisionDispatch, JiraIssueSnapshot, JiraProjectBindingInput,
-    JiraTransitionFailure, TaskDispatch, TaskDispatchFailure, TaskOutcomeDispatch,
-    TaskOutcomeFailure, TaskStore, TaskStoreError,
+    DecisionDeliveryFailure, DecisionDispatch, FederationJiraClaimPhase, JiraIssueSnapshot,
+    JiraProjectBindingInput, JiraTransitionFailure, TaskDispatch, TaskDispatchFailure,
+    TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
 #[cfg(test)]
 use swarm_terminal::{
@@ -601,6 +602,18 @@ impl AppState {
         }
         if let Err(condition) =
             reconcile_federation_tasks(&service, &client, &connection.node_credential, now).await
+        {
+            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            return;
+        }
+        if let Err(condition) = reconcile_federation_jira_claims(
+            store,
+            &self.jira_readiness,
+            &client,
+            &connection.node_credential,
+            now,
+        )
+        .await
         {
             record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
             return;
@@ -3314,6 +3327,7 @@ async fn jira_binding_issues(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(issues)).into_response())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn sync_jira_binding(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -3357,6 +3371,62 @@ async fn sync_jira_binding(
             "invalid_jira_selection",
             "one or more selected Jira issues are no longer available",
         ));
+    }
+    let is_federated_member = binding.scope == JiraProjectScope::Apiary
+        && matches!(
+            store.local_apiary_context(),
+            Ok(LocalApiaryContext::Federated {
+                local_role: LocalApiaryRole::Member,
+                ..
+            })
+        );
+    if is_federated_member {
+        let now = unix_timestamp();
+        for issue in &selected_issues {
+            store
+                .queue_federation_jira_claim(binding_id, &issue.id, &issue.key, now)
+                .map_err(|error| task_store_error(&error))?;
+        }
+        let connection = store
+            .federation_member_connection()
+            .map_err(|error| task_store_error(&error))?;
+        let client = federation_http::FederationHttpClient::new(&connection.keeper_endpoint)
+            .map_err(federation_http_error)?;
+        reconcile_federation_jira_claims(
+            store,
+            &state.jira_readiness,
+            &client,
+            &connection.node_credential,
+            now,
+        )
+        .await
+        .map_err(federation_claim_reconciliation_error)?;
+        for issue in &selected_issues {
+            let intent = store
+                .federation_jira_claim_for_issue(binding_id, &issue.id)
+                .map_err(|error| task_store_error(&error))?;
+            if intent.is_none_or(|intent| intent.phase != FederationJiraClaimPhase::Complete) {
+                return Err(ApiError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "federated_jira_claim_pending",
+                    "Keeper ownership is safely queued; Swarm will finish importing when both Keeper and Jira are reachable",
+                ));
+            }
+        }
+        let refreshed = state
+            .jira_readiness
+            .linked_issues(&selected_ids.iter().cloned().collect::<Vec<_>>())
+            .await
+            .map_err(jira_adapter_error)?;
+        let snapshots = refreshed
+            .iter()
+            .map(jira_issue_snapshot)
+            .collect::<Vec<_>>();
+        let tasks = store
+            .sync_jira_issues(binding_id, &snapshots)
+            .map_err(|error| task_store_error(&error))?;
+        state.control_room_notify.notify_waiters();
+        return Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response());
     }
     state
         .jira_readiness
@@ -4408,6 +4478,324 @@ async fn reconcile_federation_tasks(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
+async fn reconcile_federation_jira_claims(
+    store: &TaskStore,
+    jira: &jira::JiraReadinessProbe,
+    client: &federation_http::FederationHttpClient,
+    node_credential: &str,
+    now: i64,
+) -> Result<(), FederationSyncCondition> {
+    let intents = store.pending_federation_jira_claims(now).map_err(|error| {
+        tracing::warn!(%error, "federated Jira claim journal could not be read");
+        FederationSyncCondition::Incompatible
+    })?;
+    for mut intent in intents {
+        for _ in 0..4 {
+            match intent.phase {
+                FederationJiraClaimPhase::Queued => {
+                    let claim = match client
+                        .reserve_claim(
+                            node_credential,
+                            &intent.project_id,
+                            &intent.issue_id,
+                            &intent.issue_key,
+                        )
+                        .await
+                    {
+                        Ok(claim) => claim,
+                        Err(federation_http::FederationHttpError::Conflict) => {
+                            record_federated_jira_attention(
+                                store,
+                                &intent.id,
+                                now,
+                                "claimed_by_another_hive",
+                            )?;
+                            break;
+                        }
+                        Err(error) => {
+                            let condition = federation_sync_condition(error);
+                            record_federated_jira_retry_or_attention(
+                                store,
+                                &intent.id,
+                                now,
+                                condition,
+                                "keeper_reservation_failed",
+                            )?;
+                            return Err(condition);
+                        }
+                    };
+                    ensure_federated_jira_state_changed(store.advance_federation_jira_claim(
+                        &intent.id,
+                        FederationJiraClaimPhase::Queued,
+                        FederationJiraClaimPhase::Reserved,
+                        Some(claim.id),
+                        Some(claim.reservation_expires_at),
+                        now,
+                    ))?;
+                    intent.claim_id = Some(claim.id);
+                    intent.reservation_expires_at = Some(claim.reservation_expires_at);
+                    intent.phase = FederationJiraClaimPhase::Reserved;
+                }
+                FederationJiraClaimPhase::Reserved => {
+                    if intent
+                        .reservation_expires_at
+                        .is_some_and(|expires_at| expires_at <= now)
+                    {
+                        ensure_federated_jira_state_changed(
+                            store.reset_expired_federation_jira_claim(&intent.id, now),
+                        )?;
+                        intent.claim_id = None;
+                        intent.reservation_expires_at = None;
+                        intent.phase = FederationJiraClaimPhase::Queued;
+                        continue;
+                    }
+                    let mut issues = jira
+                        .linked_issues(std::slice::from_ref(&intent.issue_id))
+                        .await
+                        .map_err(|error| {
+                            let condition = jira_federation_sync_condition(error);
+                            let _ = record_federated_jira_retry_or_attention(
+                                store,
+                                &intent.id,
+                                now,
+                                condition,
+                                "jira_read_failed",
+                            );
+                            condition
+                        })?;
+                    if issues.len() != 1 || issues[0].id != intent.issue_id {
+                        record_federated_jira_attention(
+                            store,
+                            &intent.id,
+                            now,
+                            "jira_issue_missing",
+                        )?;
+                        break;
+                    }
+                    let account = jira.current_account().await.map_err(|error| {
+                        let condition = jira_federation_sync_condition(error);
+                        let _ = record_federated_jira_retry_or_attention(
+                            store,
+                            &intent.id,
+                            now,
+                            condition,
+                            "jira_identity_failed",
+                        );
+                        condition
+                    })?;
+                    if issues[0]
+                        .assignee_account_id
+                        .as_deref()
+                        .is_some_and(|assignee| assignee != account.account_id)
+                    {
+                        record_federated_jira_attention(
+                            store,
+                            &intent.id,
+                            now,
+                            "jira_assigned_elsewhere",
+                        )?;
+                        break;
+                    }
+                    if issues[0].assignee_account_id.is_none() {
+                        jira.assign_issue(&intent.issue_id, &account.account_id)
+                            .await
+                            .map_err(|error| {
+                                let condition = jira_federation_sync_condition(error);
+                                let _ = record_federated_jira_retry_or_attention(
+                                    store,
+                                    &intent.id,
+                                    now,
+                                    condition,
+                                    "jira_assignment_failed",
+                                );
+                                condition
+                            })?;
+                        issues[0].assignee_account_id = Some(account.account_id);
+                        issues[0].assignee_name = account.display_name;
+                    }
+                    ensure_federated_jira_state_changed(store.advance_federation_jira_claim(
+                        &intent.id,
+                        FederationJiraClaimPhase::Reserved,
+                        FederationJiraClaimPhase::JiraAssigned,
+                        None,
+                        None,
+                        now,
+                    ))?;
+                    intent.phase = FederationJiraClaimPhase::JiraAssigned;
+                }
+                FederationJiraClaimPhase::JiraAssigned => {
+                    let Some(claim_id) = intent.claim_id else {
+                        record_federated_jira_attention(
+                            store,
+                            &intent.id,
+                            now,
+                            "keeper_claim_missing",
+                        )?;
+                        break;
+                    };
+                    match client.confirm_claim(node_credential, claim_id).await {
+                        Ok(_) => {}
+                        Err(federation_http::FederationHttpError::Conflict) => {
+                            record_federated_jira_attention(
+                                store,
+                                &intent.id,
+                                now,
+                                "keeper_confirmation_conflict",
+                            )?;
+                            break;
+                        }
+                        Err(error) => {
+                            let condition = federation_sync_condition(error);
+                            record_federated_jira_retry_or_attention(
+                                store,
+                                &intent.id,
+                                now,
+                                condition,
+                                "keeper_confirmation_failed",
+                            )?;
+                            return Err(condition);
+                        }
+                    }
+                    ensure_federated_jira_state_changed(store.advance_federation_jira_claim(
+                        &intent.id,
+                        FederationJiraClaimPhase::JiraAssigned,
+                        FederationJiraClaimPhase::Confirmed,
+                        None,
+                        None,
+                        now,
+                    ))?;
+                    intent.phase = FederationJiraClaimPhase::Confirmed;
+                }
+                FederationJiraClaimPhase::Confirmed => {
+                    let issues = jira
+                        .linked_issues(std::slice::from_ref(&intent.issue_id))
+                        .await
+                        .map_err(|error| {
+                            let condition = jira_federation_sync_condition(error);
+                            let _ = record_federated_jira_retry_or_attention(
+                                store,
+                                &intent.id,
+                                now,
+                                condition,
+                                "jira_import_read_failed",
+                            );
+                            condition
+                        })?;
+                    if issues.len() != 1 || issues[0].id != intent.issue_id {
+                        record_federated_jira_attention(
+                            store,
+                            &intent.id,
+                            now,
+                            "jira_import_issue_missing",
+                        )?;
+                        break;
+                    }
+                    let snapshots = issues.iter().map(jira_issue_snapshot).collect::<Vec<_>>();
+                    store
+                        .sync_jira_issues(intent.binding_id, &snapshots)
+                        .map_err(|error| {
+                            tracing::warn!(%error, issue = %intent.issue_key, "confirmed federated Jira claim could not be imported");
+                            FederationSyncCondition::Incompatible
+                        })?;
+                    ensure_federated_jira_state_changed(store.advance_federation_jira_claim(
+                        &intent.id,
+                        FederationJiraClaimPhase::Confirmed,
+                        FederationJiraClaimPhase::Complete,
+                        None,
+                        None,
+                        now,
+                    ))?;
+                    intent.phase = FederationJiraClaimPhase::Complete;
+                    break;
+                }
+                FederationJiraClaimPhase::Complete | FederationJiraClaimPhase::Attention => break,
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn federated_jira_store_error(error: TaskStoreError) -> FederationSyncCondition {
+    tracing::warn!(%error, "federated Jira claim state could not be persisted");
+    FederationSyncCondition::Incompatible
+}
+
+fn ensure_federated_jira_state_changed(
+    result: Result<bool, TaskStoreError>,
+) -> Result<(), FederationSyncCondition> {
+    match result {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            tracing::warn!("federated Jira claim changed concurrently");
+            Err(FederationSyncCondition::Incompatible)
+        }
+        Err(error) => Err(federated_jira_store_error(error)),
+    }
+}
+
+fn record_federated_jira_attention(
+    store: &TaskStore,
+    id: &str,
+    now: i64,
+    code: &str,
+) -> Result<(), FederationSyncCondition> {
+    ensure_federated_jira_state_changed(
+        store.require_attention_for_federation_jira_claim(id, now, code),
+    )
+}
+
+fn record_federated_jira_retry_or_attention(
+    store: &TaskStore,
+    id: &str,
+    now: i64,
+    condition: FederationSyncCondition,
+    code: &str,
+) -> Result<(), FederationSyncCondition> {
+    let result = if condition == FederationSyncCondition::Offline {
+        store.retry_federation_jira_claim(id, now, code)
+    } else {
+        store.require_attention_for_federation_jira_claim(id, now, code)
+    };
+    ensure_federated_jira_state_changed(result)
+}
+
+fn jira_federation_sync_condition(error: jira::JiraAdapterError) -> FederationSyncCondition {
+    match error {
+        jira::JiraAdapterError::NetworkUnavailable => FederationSyncCondition::Offline,
+        jira::JiraAdapterError::NotConfigured | jira::JiraAdapterError::CredentialsInvalid => {
+            FederationSyncCondition::AuthenticationRequired
+        }
+        jira::JiraAdapterError::PermissionDenied
+        | jira::JiraAdapterError::InvalidResponse
+        | jira::JiraAdapterError::ResponseLimitExceeded
+        | jira::JiraAdapterError::TransitionUnavailable => FederationSyncCondition::Incompatible,
+    }
+}
+
+fn federation_claim_reconciliation_error(condition: FederationSyncCondition) -> ApiError {
+    match condition {
+        FederationSyncCondition::Offline => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "federated_jira_claim_queued",
+            "Keeper ownership is safely queued until Keeper and Jira are reachable",
+        ),
+        FederationSyncCondition::AuthenticationRequired => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "federated_jira_claim_authentication_required",
+            "Reconnect the Hive's Jira or Apiary identity before claiming new shared work",
+        ),
+        FederationSyncCondition::Incompatible
+        | FederationSyncCondition::Idle
+        | FederationSyncCondition::Current => ApiError::new(
+            StatusCode::CONFLICT,
+            "federated_jira_claim_requires_attention",
+            "Shared ownership changed while the issue was being claimed; review it before retrying",
+        ),
+    }
+}
+
 fn federation_http_error(error: federation_http::FederationHttpError) -> ApiError {
     use federation_http::FederationHttpError;
     match error {
@@ -4777,6 +5165,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "apiary_member_required",
             error.to_string(),
         ),
+        TaskStoreError::InvalidFederationJiraClaim => ApiError::new(
+            StatusCode::CONFLICT,
+            "invalid_federated_jira_claim",
+            error.to_string(),
+        ),
+        TaskStoreError::FederationJiraClaimQueueFull => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "federated_jira_claim_queue_full",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidFederationTask => ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_federation_task",
@@ -5106,7 +5504,7 @@ mod tests {
         path::PathBuf,
         sync::{
             Arc,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -6296,6 +6694,218 @@ mod tests {
 
         keeper_server.abort();
         let _ = keeper_server.await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn member_jira_claim_reserves_assigns_confirms_and_imports_once() {
+        let now = unix_timestamp();
+        let keeper = TaskStore::in_memory().unwrap();
+        let context = keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now - 1)
+            .unwrap();
+        let LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected Keeper Apiary");
+        };
+        keeper
+            .promote_apiary_jira_project(
+                apiary.id,
+                "10001",
+                "WEB",
+                "Website",
+                keeper.local_hive_identity().unwrap().operator.id,
+                now,
+            )
+            .unwrap();
+        let (keeper_endpoint, keeper_server) = start_keeper_join_test_server(keeper.clone()).await;
+
+        let member = TaskStore::in_memory().unwrap();
+        let binding = member
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        member
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "1".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let card = member.issue_hive_connection_card(now, 3_600).unwrap();
+        keeper.pin_hive_candidate(&card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(card.payload.hive_id, &keeper_endpoint, now, 3_600)
+            .unwrap();
+        let invitation = member
+            .import_apiary_invitation_bundle(&bundle, now)
+            .unwrap();
+        member
+            .accept_federation_join_policy(invitation.invitation_id, 1, now)
+            .unwrap();
+        let submission = member
+            .prepare_federation_join_submission(
+                invitation.invitation_id,
+                &swarm_domain::FederationJoinReadiness {
+                    jira_connection: JiraConnectionState::Ready,
+                    projects: member
+                        .federation_project_readiness(invitation.invitation_id)
+                        .unwrap(),
+                    blockers: Vec::new(),
+                },
+                now,
+            )
+            .unwrap();
+        let acceptance = keeper
+            .consume_federation_join_submission(&submission, now)
+            .unwrap();
+        member
+            .apply_federation_join_acceptance(invitation.invitation_id, &acceptance, now)
+            .unwrap();
+        let binding = member
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website",
+                scope: JiraProjectScope::Apiary,
+                apiary_id: Some(apiary.id),
+            })
+            .unwrap();
+
+        let assigned = Arc::new(AtomicBool::new(false));
+        let assignment_writes = Arc::new(AtomicUsize::new(0));
+        let jira_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let jira_address = jira_listener.local_addr().unwrap();
+        let search_assigned = assigned.clone();
+        let write_assigned = assigned.clone();
+        let writes = assignment_writes.clone();
+        let jira_app = Router::new()
+            .route(
+                "/rest/api/3/myself",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "accountId": "operator-1",
+                        "displayName": "Bea"
+                    }))
+                }),
+            )
+            .route(
+                "/rest/api/3/search/jql",
+                get(move || {
+                    let search_assigned = search_assigned.clone();
+                    async move {
+                        let assignee_json = search_assigned.load(Ordering::SeqCst).then(|| {
+                            serde_json::json!({
+                                "accountId": "operator-1",
+                                "displayName": "Bea"
+                            })
+                        });
+                        Json(serde_json::json!({
+                            "isLast": true,
+                            "issues": [{
+                                "id": "20001",
+                                "key": "WEB-42",
+                                "fields": {
+                                    "summary": "Make shared work atomic",
+                                    "description": null,
+                                    "status": { "id": "1", "name": "To Do" },
+                                    "assignee": assignee_json,
+                                    "updated": "2026-08-15T13:00:00.000+0000"
+                                }
+                            }]
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/rest/api/3/issue/20001/assignee",
+                put(move |Json(body): Json<serde_json::Value>| {
+                    let write_assigned = write_assigned.clone();
+                    let writes = writes.clone();
+                    async move {
+                        assert_eq!(body["accountId"], "operator-1");
+                        write_assigned.store(true, Ordering::SeqCst);
+                        writes.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            );
+        let jira_server =
+            tokio::spawn(async move { axum::serve(jira_listener, jira_app).await.unwrap() });
+        let jira = jira::JiraReadinessProbe::configured(
+            &format!("http://{jira_address}"),
+            "operator@example.test",
+            "token",
+        )
+        .unwrap();
+        let intent = member
+            .queue_federation_jira_claim(binding.id, "20001", "WEB-42", now)
+            .unwrap();
+        let connection = member.federation_member_connection().unwrap();
+        let client =
+            federation_http::FederationHttpClient::new(&connection.keeper_endpoint).unwrap();
+
+        reconcile_federation_jira_claims(&member, &jira, &client, &connection.node_credential, now)
+            .await
+            .unwrap();
+        let completed = member
+            .federation_jira_claim_for_issue(binding.id, "20001")
+            .unwrap()
+            .unwrap();
+        assert_eq!(completed.id, intent.id);
+        assert_eq!(completed.phase, FederationJiraClaimPhase::Complete);
+        assert_eq!(assignment_writes.load(Ordering::SeqCst), 1);
+        assert_eq!(member.list_jira_issue_links(binding.id).unwrap().len(), 1);
+        let claims = keeper.list_active_federation_claims(now).unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(
+            claims[0].state,
+            swarm_domain::FederationClaimState::Confirmed
+        );
+
+        reconcile_federation_jira_claims(&member, &jira, &client, &connection.node_credential, now)
+            .await
+            .unwrap();
+        assert_eq!(assignment_writes.load(Ordering::SeqCst), 1);
+
+        keeper_server.abort();
+        let _ = keeper_server.await;
+        let queued = member
+            .queue_federation_jira_claim(binding.id, "20002", "WEB-43", now)
+            .unwrap();
+        assert_eq!(
+            reconcile_federation_jira_claims(
+                &member,
+                &jira,
+                &client,
+                &connection.node_credential,
+                now,
+            )
+            .await,
+            Err(FederationSyncCondition::Offline)
+        );
+        let retriable = member
+            .federation_jira_claim_for_issue(binding.id, "20002")
+            .unwrap()
+            .unwrap();
+        assert_eq!(retriable.id, queued.id);
+        assert_eq!(retriable.phase, FederationJiraClaimPhase::Queued);
+        assert_eq!(retriable.attempts, 1);
+        assert_eq!(
+            retriable.last_error.as_deref(),
+            Some("keeper_reservation_failed")
+        );
+        assert_eq!(assignment_writes.load(Ordering::SeqCst), 1);
+
+        jira_server.abort();
+        let _ = jira_server.await;
     }
 
     #[tokio::test]
