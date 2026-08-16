@@ -31,8 +31,8 @@ mod workers;
 
 #[cfg(test)]
 use runtime::{
-    ResourcePressure, deployed_source_revision, development_source_status_for, git_output,
-    resource_response,
+    ResourcePressure, deployed_source_revision, development_reload_state_for_source,
+    development_source_status_for, git_output, resource_response,
 };
 #[cfg(test)]
 use std::process::Command;
@@ -7042,7 +7042,7 @@ mod tests {
         assert!(!request.contains("secret"));
         assert_eq!(
             std::fs::read_to_string(status_path).unwrap(),
-            "state=requested\n"
+            "state=requested\nrevision=unknown\n"
         );
 
         let duplicate = app
@@ -7074,6 +7074,41 @@ mod tests {
             Some("a5d95af96bee")
         );
         assert_eq!(deployed_source_revision("0.1.0"), None);
+    }
+
+    #[test]
+    fn development_progress_only_applies_to_the_exact_attempted_revision() {
+        let runtime = TempDir::new().unwrap();
+        let request_path = runtime.path().join("development-reload.request");
+        let status_path = runtime.path().join("development-reload.status");
+        let state =
+            AppState::default().with_development_reload_paths(request_path, status_path.clone());
+
+        std::fs::write(&status_path, "state=failed\n").unwrap();
+        assert_eq!(
+            development_reload_state_for_source(&state, Some("current123456")),
+            "idle"
+        );
+        std::fs::write(&status_path, "state=failed\nrevision=older1234567\n").unwrap();
+        assert_eq!(
+            development_reload_state_for_source(&state, Some("current123456")),
+            "idle"
+        );
+        std::fs::write(&status_path, "state=failed\nrevision=current123456\n").unwrap();
+        assert_eq!(
+            development_reload_state_for_source(&state, Some("current123456")),
+            "failed"
+        );
+        std::fs::write(&status_path, "state=requested\nrevision=older1234567\n").unwrap();
+        assert_eq!(
+            development_reload_state_for_source(&state, Some("current123456")),
+            "idle"
+        );
+        std::fs::write(&status_path, "state=building\nrevision=current123456\n").unwrap();
+        assert_eq!(
+            development_reload_state_for_source(&state, Some("current123456")),
+            "building"
+        );
     }
 
     #[test]
@@ -7117,6 +7152,7 @@ mod tests {
             .expect("development checkout should be readable");
         assert!(!docs_only.dirty);
         assert!(!docs_only.reload_available);
+        assert!(docs_only.aligned);
 
         git(&["add", "docs", "scripts"]);
         git(&[
@@ -7133,6 +7169,7 @@ mod tests {
             development_source_status_for(checkout_path, Some(&deployed_revision)).unwrap();
         assert!(!committed_docs.dirty);
         assert!(!committed_docs.reload_available);
+        assert!(committed_docs.aligned);
 
         std::fs::write(
             checkout_path.join("web/src/main.ts"),
@@ -7143,6 +7180,7 @@ mod tests {
             development_source_status_for(checkout_path, Some(&deployed_revision)).unwrap();
         assert!(dirty_product.dirty);
         assert!(dirty_product.reload_available);
+        assert!(dirty_product.aligned);
 
         git(&["add", "web"]);
         git(&[
@@ -7159,6 +7197,14 @@ mod tests {
             development_source_status_for(checkout_path, Some(&deployed_revision)).unwrap();
         assert!(!committed_product.dirty);
         assert!(committed_product.reload_available);
+        assert!(committed_product.aligned);
+
+        let newer_revision = git_output(checkout_path, &["rev-parse", "HEAD"]).unwrap();
+        git(&["checkout", "--quiet", "--detach", &deployed_revision]);
+        let older_checkout =
+            development_source_status_for(checkout_path, Some(&newer_revision)).unwrap();
+        assert!(!older_checkout.aligned);
+        assert!(!older_checkout.reload_available);
     }
 
     #[tokio::test]

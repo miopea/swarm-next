@@ -11,6 +11,13 @@ export default function DevelopmentReloadAction({ busy, runtime, onReload }: Pro
   if (!runtime?.enabled) return null;
   const runningRevision = deployedRevision(runtime.version);
   const workingRevision = shortRevision(runtime.source_revision);
+  if (runtime.state === "source_mismatch") return (
+    <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="alert">
+      <header><div><span className="runtime-component-name">App and API</span><strong>Development checkout needs to catch up</strong></div><span className="runtime-status-badge restart">Reload blocked</span></header>
+      <p>Revision {runningRevision} is active, but working-copy revision {workingRevision} does not contain that deployed source.</p>
+      <small>Swarm will not build or activate an older or unrelated checkout. Update the development checkout first; Claude, Codex, and the worker engine remain online.</small>
+    </article>
+  );
   if (runtime.state === "requested" || runtime.state === "building") {
     return <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status" role="status"><header><div><span className="runtime-component-name">App and API</span><strong>Building development changes</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header><p>Revision {runningRevision} remains active while Swarm compiles and checks {workingRevision}.</p><small>The page reconnects only after the new browser and API build is healthy. Claude, Codex, and the worker engine keep running.</small></article>;
   }
@@ -52,7 +59,7 @@ function ReloadConfirmation({ busy, onCancel, onConfirm }: { busy: boolean; onCa
 }
 
 function deployedRevision(version: string) {
-  return version.match(/-dev-([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7) ?? "the current build";
+  return version.match(/-(?:dev-)?([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7) ?? "the current build";
 }
 
 function shortRevision(revision: string | null) {

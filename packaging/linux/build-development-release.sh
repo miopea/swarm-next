@@ -15,7 +15,7 @@ bundle="$output/swarm-next-$version-linux-x86_64"
 rm -rf -- "$bundle"
 mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 
-(cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" cargo build --release --locked --workspace) >&2
+(cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_BUILD_SOURCE_REVISION="$revision" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" cargo build --release --locked --workspace) >&2
 (cd "$repo_root" && "${SWARM_PNPM_BIN:-pnpm}" --dir web build) >&2
 [ -f "$repo_root/web/dist/index.html" ] || { echo "compiled web assets are missing" >&2; exit 1; }
 cp "$repo_root/target/release/swarm-api" "$bundle/bin/"
@@ -26,6 +26,7 @@ cp "$repo_root/packaging/systemd-user/"*.in "$bundle/systemd-user/"
 cp "$repo_root/packaging/linux/swarm-next-package" "$bundle/"
 chmod 0755 "$bundle/swarm-next-package"
 printf '%s\n' "$version" > "$bundle/VERSION"
+printf '%s\n' "$revision" > "$bundle/SOURCE_REVISION"
 printf '%s\n' "$protocol" > "$bundle/PROTOCOL"
 (
   cd "$bundle"

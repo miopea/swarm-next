@@ -4,10 +4,21 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 base_version=$(sed -n 's/^version = "\([0-9][0-9.]*\)"/\1/p' "$repo_root/Cargo.toml" | tr -d '\r' | head -n 1)
 revision=$(git -C "$repo_root" rev-parse --short=12 HEAD)
+source_revision=${SWARM_SOURCE_REVISION:-$revision}
 version="$base_version-$revision"
 protocol=$(sed -n 's/^pub const PROTOCOL_VERSION: u16 = \([0-9][0-9]*\);/\1/p' "$repo_root/crates/swarm-terminal/src/ipc.rs" | tr -d '\r')
 worker_engine_build_id=$(sh "$repo_root/packaging/linux/worker-engine-build-id.sh" "$repo_root")
-[ -n "$base_version" ] && [ -n "$revision" ] && [ -n "$protocol" ] && [ -n "$worker_engine_build_id" ] || { echo "could not determine package metadata" >&2; exit 1; }
+[ -n "$base_version" ] && [ -n "$revision" ] && [ -n "$source_revision" ] && [ -n "$protocol" ] && [ -n "$worker_engine_build_id" ] || { echo "could not determine package metadata" >&2; exit 1; }
+case "$source_revision" in
+  *[!0-9a-fA-F]*)
+    echo "source revision must be exactly 12 hexadecimal characters" >&2
+    exit 1
+    ;;
+esac
+[ "${#source_revision}" -eq 12 ] || {
+  echo "source revision must be exactly 12 hexadecimal characters" >&2
+  exit 1
+}
 git -C "$repo_root" diff --quiet && git -C "$repo_root" diff --cached --quiet || {
   echo "refusing to package a dirty worktree" >&2
   exit 1
@@ -18,7 +29,7 @@ bundle="$output/swarm-next-$version-linux-x86_64"
 rm -rf -- "$bundle"
 mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 
-(cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" cargo build --release --locked --workspace)
+(cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_BUILD_SOURCE_REVISION="$source_revision" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" cargo build --release --locked --workspace)
 if [ "${SWARM_SKIP_WEB_BUILD:-0}" != "1" ]; then
   (cd "$repo_root" && "${SWARM_PNPM_BIN:-pnpm}" --dir web build)
 fi
@@ -31,6 +42,7 @@ cp "$repo_root/packaging/systemd-user/"*.in "$bundle/systemd-user/"
 cp "$repo_root/packaging/linux/swarm-next-package" "$bundle/"
 chmod 0755 "$bundle/swarm-next-package"
 printf '%s\n' "$version" > "$bundle/VERSION"
+printf '%s\n' "$source_revision" > "$bundle/SOURCE_REVISION"
 printf '%s\n' "$protocol" > "$bundle/PROTOCOL"
 (
   cd "$bundle"

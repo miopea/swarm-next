@@ -163,12 +163,21 @@ pub(super) async fn development(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let source = development_source_status(&state);
+    let source_aligned = source.as_ref().is_some_and(|status| status.aligned);
+    let state_name = if source.is_some() && !source_aligned {
+        "source_mismatch"
+    } else {
+        development_reload_state_for_source(
+            &state,
+            source.as_ref().map(|status| status.revision.as_str()),
+        )
+    };
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(DevelopmentRuntimeResponse {
             enabled: state.development_reload_request_path.is_some(),
             version: build_version(),
-            state: development_reload_state(&state),
+            state: state_name,
             reload_available: source
                 .as_ref()
                 .is_some_and(|status| status.reload_available),
@@ -183,14 +192,12 @@ pub(super) struct DevelopmentSourceStatus {
     pub(super) revision: String,
     pub(super) dirty: bool,
     pub(super) reload_available: bool,
+    pub(super) aligned: bool,
 }
 
-fn development_source_status(state: &AppState) -> Option<DevelopmentSourceStatus> {
+pub(super) fn development_source_status(state: &AppState) -> Option<DevelopmentSourceStatus> {
     let checkout = state.development_checkout_path.as_ref()?;
-    development_source_status_for(
-        checkout,
-        deployed_source_revision(build_version()).as_deref(),
-    )
+    development_source_status_for(checkout, build_source_revision().as_deref())
 }
 
 pub(super) fn development_source_status_for(
@@ -204,19 +211,29 @@ pub(super) fn development_source_status_for(
         &DEVELOPMENT_PRODUCT_PATHS,
     )
     .is_some_and(|output| output.is_empty());
-    let committed_changes = deployed_revision.is_none_or(|deployed| {
+    let aligned = deployed_revision.is_some_and(|deployed| {
         Command::new("git")
             .arg("-C")
             .arg(checkout)
-            .args(["diff", "--quiet", deployed, "HEAD", "--"])
-            .args(DEVELOPMENT_PRODUCT_PATHS)
+            .args(["merge-base", "--is-ancestor", deployed, "HEAD"])
             .status()
-            .map_or(true, |status| !status.success())
+            .is_ok_and(|status| status.success())
     });
+    let committed_changes = aligned
+        && deployed_revision.is_some_and(|deployed| {
+            Command::new("git")
+                .arg("-C")
+                .arg(checkout)
+                .args(["diff", "--quiet", deployed, "HEAD", "--"])
+                .args(DEVELOPMENT_PRODUCT_PATHS)
+                .status()
+                .is_ok_and(|status| !status.success())
+        });
     Some(DevelopmentSourceStatus {
         revision,
         dirty,
-        reload_available: dirty || committed_changes,
+        reload_available: aligned && (dirty || committed_changes),
+        aligned,
     })
 }
 
@@ -261,14 +278,32 @@ pub(super) fn deployed_source_revision(version: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(super) fn development_reload_state(state: &AppState) -> &'static str {
+pub(super) fn build_source_revision() -> Option<String> {
+    option_env!("SWARM_BUILD_SOURCE_REVISION")
+        .map(str::to_owned)
+        .or_else(|| deployed_source_revision(build_version()))
+}
+
+pub(super) fn development_reload_state_for_source(
+    state: &AppState,
+    source_revision: Option<&str>,
+) -> &'static str {
     let Some(path) = &state.development_reload_status_path else {
         return "disabled";
     };
     let Ok(value) = std::fs::read_to_string(path.as_ref()) else {
         return "idle";
     };
-    match value.lines().find_map(|line| line.strip_prefix("state=")) {
+    let marker_revision = value
+        .lines()
+        .find_map(|line| line.strip_prefix("revision="));
+    let marker_state = value.lines().find_map(|line| line.strip_prefix("state="));
+    if matches!(marker_state, Some("requested" | "building" | "failed"))
+        && marker_revision != source_revision
+    {
+        return "idle";
+    }
+    match marker_state {
         Some("requested") => "requested",
         Some("building") => "building",
         Some("failed") => "failed",

@@ -205,7 +205,7 @@ export type WorkerEngineMaintenanceResult = {
 export type DevelopmentRuntime = {
   enabled: boolean;
   version: string;
-  state: "disabled" | "idle" | "requested" | "building" | "failed" | "ready";
+  state: "disabled" | "idle" | "requested" | "building" | "failed" | "ready" | "source_mismatch";
   reload_available: boolean;
   source_revision: string | null;
   source_dirty: boolean;

@@ -58,6 +58,15 @@ This pass proves functional redraw and recovery, not long-duration performance.
 The multi-day soak and outbound feedback submission transport remain separate
 promotion work.
 
+## Development reload provenance
+
+Host-compatible releases and the development checkout now compare the exact
+product source rather than assuming the package commit is the deployed source.
+Reload is blocked when the configured checkout is older or unrelated, and a
+failed-build marker applies only to the exact revision that failed. Packaging
+tests, API tests, and the live System surface must prove that this fail-closed
+state never restarts Claude, Codex, or the independently pinned worker engine.
+
 ## Deterministic stale-work attention
 
 The next Queen-automation dogfood rule is deliberately observable rather than

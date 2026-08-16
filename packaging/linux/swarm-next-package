@@ -29,6 +29,7 @@ dev_config="$config_root/swarm-next-dev.env"
 dev_reload_started=
 dev_status_path=
 dev_build_root=
+dev_reload_revision=
 
 die() { printf 'swarm-next-package: %s\n' "$*" >&2; exit 1; }
 run_systemctl() { "$systemctl_bin" --user "$@"; }
@@ -66,9 +67,9 @@ on_exit() {
   fi
   if [ -n "$dev_reload_started" ] && [ -n "$dev_status_path" ]; then
     if [ "$result" -eq 0 ]; then
-      printf 'state=ready\n' > "$dev_status_path" 2>/dev/null || true
+      printf 'state=ready\nrevision=%s\n' "$dev_reload_revision" > "$dev_status_path" 2>/dev/null || true
     else
-      printf 'state=failed\n' > "$dev_status_path" 2>/dev/null || true
+      printf 'state=failed\nrevision=%s\n' "$dev_reload_revision" > "$dev_status_path" 2>/dev/null || true
     fi
   fi
   [ -z "$dev_build_root" ] || clear_managed_directory "$dev_build_root"
@@ -347,7 +348,9 @@ reload_development() {
   validate_dev_checkout "$dev_checkout"
   [ "$dev_status_path" = "$state_root/development-reload.status" ] || die "development status path is invalid"
   dev_reload_started=1
-  printf 'state=building\n' > "$dev_status_path"
+  dev_reload_revision=$(git -C "$dev_checkout" rev-parse --short=12 HEAD)
+  [ -n "$dev_reload_revision" ] || die "development source revision is unavailable"
+  printf 'state=building\nrevision=%s\n' "$dev_reload_revision" > "$dev_status_path"
   rm -f "$state_root/development-reload.request"
   dev_build_root="$state_root/development-build"
   mkdir -p "$dev_build_root"

@@ -66,8 +66,27 @@ pub(super) async fn request_development_reload(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let _guard = state.development_reload.lock().await;
+    let source = runtime::development_source_status(&state);
+    if source.as_ref().is_some_and(|status| !status.aligned) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "development_source_mismatch",
+            "the configured development checkout does not contain the deployed source",
+        ));
+    }
+    if source
+        .as_ref()
+        .is_some_and(|status| !status.reload_available)
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "development_reload_not_needed",
+            "the configured development checkout has no product changes to reload",
+        ));
+    }
+    let source_revision = source.map_or_else(|| "unknown".into(), |source| source.revision);
     if matches!(
-        runtime::development_reload_state(&state),
+        runtime::development_reload_state_for_source(&state, Some(&source_revision)),
         "requested" | "building"
     ) {
         return Err(ApiError::new(
@@ -90,7 +109,11 @@ pub(super) async fn request_development_reload(
         .development_reload_status_path
         .as_ref()
         .expect("development reload paths are configured together");
-    std::fs::write(status_path.as_ref(), "state=requested\n").map_err(|error| {
+    std::fs::write(
+        status_path.as_ref(),
+        format!("state=requested\nrevision={source_revision}\n"),
+    )
+    .map_err(|error| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "development_reload_unavailable",
@@ -106,7 +129,10 @@ pub(super) async fn request_development_reload(
         ),
     )
     .map_err(|error| {
-        let _ = std::fs::write(status_path.as_ref(), "state=failed\n");
+        let _ = std::fs::write(
+            status_path.as_ref(),
+            format!("state=failed\nrevision={source_revision}\n"),
+        );
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "development_reload_unavailable",

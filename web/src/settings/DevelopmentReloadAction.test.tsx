@@ -56,3 +56,20 @@ test("explains that the running build matches the polled working copy", () => {
   expect(status).toHaveTextContent("Swarm checks the working copy every 15 seconds");
   expect(status).toHaveTextContent("without restarting Claude, Codex, or the worker engine");
 });
+
+test("blocks an older or unrelated development checkout", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-123456789abc",
+    state: "source_mismatch",
+    reload_available: false,
+    source_revision: "abcdef012345",
+    source_dirty: false,
+  }} />);
+
+  const status = screen.getByLabelText("App and API status");
+  expect(status).toHaveTextContent("Development checkout needs to catch up");
+  expect(status).toHaveTextContent("Revision 1234567 is active");
+  expect(status).toHaveTextContent("working-copy revision abcdef0 does not contain that deployed source");
+  expect(screen.queryByRole("button", { name: /reload|build/i })).not.toBeInTheDocument();
+});

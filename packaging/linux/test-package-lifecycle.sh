@@ -98,7 +98,7 @@ grep -q "$SWARM_INSTALL_ROOT/current/bin/swarm-api" "$SWARM_SYSTEMD_USER_ROOT/sw
 grep -q "$SWARM_INSTALL_ROOT/host-current/bin/swarm-terminal-host" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
 grep -q "$SWARM_INSTALL_ROOT/current/swarm-next-package reconcile-host-if-idle" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.service"
 grep -q "PathChanged=$SWARM_STATE_ROOT/worker-engine-maintenance.request" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.path"
-grep -q '^OnUnitActiveSec=2min$' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.timer"
+tr -d '\r' < "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.timer" | grep -q '^OnUnitActiveSec=2min$'
 grep -q 'swarm-next-host-reconcile.path' "$SWARM_SYSTEMD_USER_ROOT/swarm-next.target"
 grep -q 'swarm-next-host-reconcile.timer' "$SWARM_SYSTEMD_USER_ROOT/swarm-next.target"
 grep -q "SWARM_ASSET_ROOT=$SWARM_INSTALL_ROOT/assets" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
@@ -131,12 +131,17 @@ fi
 # Development mode is explicit, checkout-scoped, same-port, and restarts only
 # the replaceable API when it is enabled or disabled.
 dev_checkout="$HOME/projects/swarm-next"
-mkdir -p "$dev_checkout/.git" "$dev_checkout/packaging/linux"
+mkdir -p "$dev_checkout/packaging/linux"
 cat > "$dev_checkout/packaging/linux/build-development-release.sh" <<'EOF'
 #!/bin/sh
 exit 1
 EOF
 chmod +x "$dev_checkout/packaging/linux/build-development-release.sh"
+git -C "$dev_checkout" init -q
+git -C "$dev_checkout" config user.name "Swarm Package Test"
+git -C "$dev_checkout" config user.email "swarm-package-test@example.invalid"
+git -C "$dev_checkout" add packaging/linux/build-development-release.sh
+git -C "$dev_checkout" commit -qm "test development checkout"
 : > "$HOME/systemctl.log"
 "$package" enable-development "$dev_checkout"
 grep -q "^SWARM_DEV_CHECKOUT=$dev_checkout$" "$SWARM_CONFIG_ROOT/swarm-next-dev.env"
@@ -158,7 +163,7 @@ if "$package" reload-development; then
   echo "failing development build unexpectedly succeeded" >&2
   exit 1
 fi
-[ "$(cat "$SWARM_STATE_ROOT/development-reload.status")" = "state=failed" ]
+grep -q '^state=failed$' "$SWARM_STATE_ROOT/development-reload.status"
 [ ! -e "$SWARM_STATE_ROOT/development-reload.request" ]
 [ -z "$(find "$SWARM_STATE_ROOT/development-build" -mindepth 1 -maxdepth 1 -print -quit)" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "1.0.0" ]

@@ -35,11 +35,21 @@ serve. It reloads only after a different healthy version appears. Development
 mode is visibly labeled in Settings, requires a confirmation for each build,
 and can be disabled without changing the active release.
 
+Every packaged API also carries the exact 12-character source revision whose
+product tree it represents. This is distinct from the packaging commit when a
+host-compatibility branch builds the release. Development reload is offered
+only when that source is an ancestor of the configured checkout. An older or
+unrelated checkout is shown as a blocked source mismatch instead of being
+built. Failed-build status is revision-bound, so a stale or legacy failure
+marker cannot keep a later healthy source in a failed state.
+
 ## Consequences
 
 - Local iteration uses the exact installed URL, authentication, PWA, and
   terminal recovery path that the operator dogfoods.
 - A compile or web-build failure leaves the current application running.
+- A compatibility deployment cannot make an older checkout appear newer, and
+  a stale failed-build marker cannot survive a source change.
 - Enabling development mode is a host-side administrative action, not a web
   capability; the web trigger is inert when no checkout is configured.
 - The build service intentionally has access to the selected checkout and the
@@ -52,7 +62,8 @@ and can be disabled without changing the active release.
 ## Validation
 
 - API tests prove authentication, explicit availability, no-store status, a
-  content-free request, and fail-closed behavior when disabled.
+  content-free request, fail-closed behavior when disabled, source ancestry,
+  and revision-bound failure reporting.
 - The package lifecycle smoke proves enable/disable configuration and confirms
   that neither action restarts the terminal host.
 - The real dogfood proof must build a working-copy package, change the API
