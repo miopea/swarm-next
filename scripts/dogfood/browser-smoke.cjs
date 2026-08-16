@@ -702,6 +702,15 @@ async function checkSurface(browser, surface) {
       || !await sleepingWorkerEditor.getByRole("button", { name: "Remove worker" }).isVisible()) {
       throw new Error(`${surface.name}: sleeping-worker maintenance controls are incomplete`);
     }
+    await sleepingWorkerEditor.getByRole("button", { name: /Refresh local draft|Draft locally/ }).click();
+    await sleepingWorkerEditor.getByText("Local draft ready", { exact: true }).waitFor();
+    if (!await sleepingWorkerEditor.getByText(/Nothing has been saved yet/).isVisible()
+      || !await sleepingWorkerEditor.getByRole("button", { name: "Save worker changes" }).isVisible()
+      || !await sleepingWorkerEditor.getByLabel("Queen routing description").evaluate((field) => field.classList.contains("worker-description-generated"))) {
+      throw new Error(`${surface.name}: generated worker-description review is not clearly presented as an unsaved draft`);
+    }
+    await sleepingWorkerEditor.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-settings-worker-description-review.png`), fullPage: true });
     await sleepingWorkerEditor.getByRole("button", { name: "Remove worker" }).click();
     if (!await sleepingWorkerEditor.getByText(`Remove ${sleepingWorkerName} from this Hive?`, { exact: true }).isVisible()
       || !await sleepingWorkerEditor.getByRole("button", { name: "Confirm removal" }).isVisible()
