@@ -1336,3 +1336,18 @@ the independently updated terminal host through the API to worker settings:
   advanced to `3952145`; terminal-host PID `2966127` and worker-engine build
   `f8abd293` remained unchanged. No Jira or live Apiary mutation occurred, and
   every proof browser closed after the run.
+- Main commit `cd46fc27` and host-compatible release
+  `0.1.0-26b22a4aaca9` add deterministic attention for Active work whose
+  assigned worker process has exited. The rule waits through the recovery
+  window, rechecks task revision and replacement-session state, and creates at
+  most one current record for the newest process incarnation. It does not
+  restart a worker, transition a task, inject a terminal, or mutate Jira. The
+  complete gate passed 413 Rust tests, warnings-denied Clippy, formatting, all
+  244 frontend tests, strict TypeScript, and the production build. The live
+  Queen settings rendered at desktop and Android-size 412 by 915 with the new
+  **Work surfaced** metric and zero horizontal overflow. Automatic Queen review
+  remained off. The live database migrated to schema 64 with
+  `quick_check=ok`; no production attention record was fabricated. API PID
+  advanced to `79485`; terminal-host PID `2966127`, worker-engine build
+  `f8abd293`, and Queen provider PID `2966160` remained unchanged. No Jira or
+  live-task mutation occurred, and the temporary viewport override was reset.
