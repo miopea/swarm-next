@@ -1032,3 +1032,18 @@ the independently updated terminal host through the API to worker settings:
   controls, and a final image review corrected mobile capability truncation.
   API PID advanced to `3682916`; terminal-host PID `2966127` remained unchanged,
   preserving the active Queen session. Every proof browser and context closed.
+- Test revision `792ba1f` closes the remaining worker-management acceptance
+  gap without mutating a live profile. The authenticated browser gate now opens
+  an ordinary sleeping worker, requires the repository identity, editable
+  Queen-routing description, bounded local and Claude drafting controls,
+  default-provider selector, and guarded removal action, then enters and backs
+  out of the explicit removal confirmation. The same run confirms that the
+  Keeper screen tells the receiving operator to paste the private link in her
+  own personal Hive under **Settings -> Apiary -> Join a Keeper's Apiary**.
+  Desktop at 1,440 by 900 and Android-size mobile at 412 by 915 passed every
+  primary and mocked Member surface with zero horizontal overflow, 340 and 308
+  named controls, and authentication preserved across complete browser
+  restarts. Jira and email intake were deliberately skipped for this proof so
+  changing live source data could not block or mutate the maintenance checks.
+  API PID remained `3682916`; terminal-host PID `2966127` remained unchanged.
+  Every proof browser and context closed after the run.
