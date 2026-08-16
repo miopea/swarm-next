@@ -64,6 +64,24 @@ It captures, subject to preview and redaction:
 Reports become product evidence linked to a capability and journey. A request
 to reproduce a legacy feature must state the user outcome it restores.
 
+## Legacy evolution archaeology
+
+Before Swarm Next becomes the default daily driver, review the full reachable
+legacy history using the [legacy evolution atlas](26-legacy-evolution-atlas.md).
+This is an evidence exercise, not a port checklist. It identifies recurring
+incidents, features that survived real use, solutions that were reverted, and
+historical constraints that no longer apply.
+
+The first resulting implementation stream is a deterministic coordinator below
+Queen. Typed scheduling, reconciliation, bounded retry, lease expiry, and
+policy-complete health responses should not spend an LLM call. Queen remains
+responsible for ambiguity, prioritization, routing judgment, and operator
+decisions. External effects retain their own approval boundary.
+
+Dogfood evidence must report both automation safety and value: Queen calls
+avoided, deterministic completions, escalations, uncertain deliveries, repeated
+failures, and operator interruptions.
+
 ## Migration policy
 
 - Import from a snapshot or explicit export, never the live legacy database.
