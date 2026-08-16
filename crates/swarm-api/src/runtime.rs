@@ -89,6 +89,39 @@ pub(super) enum ResourcePressure {
     Unavailable,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CoordinatorStartAdmission {
+    Allowed,
+    DeferredAdvisory,
+    DeferredCritical,
+    DeferredUnavailable,
+}
+
+impl CoordinatorStartAdmission {
+    pub(super) const fn code(self) -> u8 {
+        match self {
+            Self::Allowed => 0,
+            Self::DeferredAdvisory => 1,
+            Self::DeferredCritical => 2,
+            Self::DeferredUnavailable => 3,
+        }
+    }
+
+    pub(super) const fn from_code(code: u8) -> Self {
+        match code {
+            0 => Self::Allowed,
+            1 => Self::DeferredAdvisory,
+            2 => Self::DeferredCritical,
+            _ => Self::DeferredUnavailable,
+        }
+    }
+
+    pub(super) const fn permits_start(self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct ProcessResourceResponse {
     resident_memory_bytes: Option<u64>,
@@ -336,6 +369,41 @@ fn sample_machine_resources() -> MachineResourceResponse {
         cpu_pressure_avg10: None,
         io_pressure_avg10: None,
         pressure: ResourcePressure::Unavailable,
+    }
+}
+
+pub(super) async fn coordinator_start_admission(state: &AppState) -> CoordinatorStartAdmission {
+    let machine = sample_machine_resources().pressure;
+    let terminal_host = if let Some(client) = &state.terminal_host {
+        match client.request(&HostRequest::HostStatus).await {
+            Ok(HostResponse::HostStatus { status }) => resource_response(status.resources).pressure,
+            Ok(_) | Err(_) => ResourcePressure::Unavailable,
+        }
+    } else {
+        ResourcePressure::Unavailable
+    };
+    combine_coordinator_start_admission(machine, terminal_host)
+}
+
+pub(super) const fn combine_coordinator_start_admission(
+    machine: ResourcePressure,
+    terminal_host: ResourcePressure,
+) -> CoordinatorStartAdmission {
+    if matches!(machine, ResourcePressure::Critical)
+        || matches!(terminal_host, ResourcePressure::Critical)
+    {
+        CoordinatorStartAdmission::DeferredCritical
+    } else if matches!(machine, ResourcePressure::Advisory)
+        || matches!(terminal_host, ResourcePressure::Advisory)
+    {
+        CoordinatorStartAdmission::DeferredAdvisory
+    } else if matches!(terminal_host, ResourcePressure::Unavailable) {
+        // The worker engine must be reachable before an automatic start can be
+        // safely claimed. Machine evidence is Linux-only, so a healthy engine
+        // is sufficient on other supported hosts where that evidence is absent.
+        CoordinatorStartAdmission::DeferredUnavailable
+    } else {
+        CoordinatorStartAdmission::Allowed
     }
 }
 

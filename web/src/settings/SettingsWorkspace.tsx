@@ -239,6 +239,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
             <span>
               <strong>Routine coordination</strong>
               <small>Swarm wakes assigned sleeping workers and surfaces Active work that becomes stale while its loaded worker is resting.</small>
+              <small>{coordinatorAdmissionDetail(coordinatorStatus?.automatic_start_admission)}</small>
             </span>
             <span className="coordinator-metrics">
               <strong>{coordinatorStatus?.queen_calls_avoided ?? 0}</strong>
@@ -420,6 +421,16 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
       </section>
     </div>
   );
+}
+
+function coordinatorAdmissionDetail(admission: CoordinatorStatus["automatic_start_admission"] | undefined) {
+  switch (admission) {
+    case "allowed": return "Automatic worker starts are available.";
+    case "deferred_advisory": return "Automatic worker starts are waiting for memory pressure to settle.";
+    case "deferred_critical": return "Automatic worker starts are paused to protect active work from critical memory pressure.";
+    case "deferred_unavailable": return "Automatic worker starts are waiting for reliable worker-engine evidence.";
+    default: return "Checking whether automatic worker starts are safe.";
+  }
 }
 
 function workerEngineLabel(health: Health | undefined, host: TerminalHostStatus | undefined, loaded: boolean) {

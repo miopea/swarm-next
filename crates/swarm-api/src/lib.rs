@@ -43,7 +43,10 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path as FilePath, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
     time::Duration,
 };
 
@@ -79,7 +82,7 @@ use swarm_domain::{
     TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
-use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
+use swarm_domain::{ControlRoomEventKind, PresenceDeviceId, TaskActivityActor};
 use swarm_persistence::{
     CoordinatorStatus, DecisionDeliveryFailure, DecisionDispatch, FederationHandoffIntentPhase,
     FederationJiraClaimPhase, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionFailure,
@@ -130,6 +133,7 @@ pub struct AppState {
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
     provider_activity: Arc<RwLock<HashMap<WorkerSessionId, ProviderActivity>>>,
+    coordinator_start_admission: Arc<AtomicU8>,
     control_room_notify: Arc<Notify>,
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
@@ -183,6 +187,9 @@ impl AppState {
             worker_errors: Arc::new(RwLock::new(HashMap::new())),
             worker_recovery_attempts: Arc::new(RwLock::new(HashMap::new())),
             provider_activity: Arc::new(RwLock::new(HashMap::new())),
+            coordinator_start_admission: Arc::new(AtomicU8::new(
+                runtime::CoordinatorStartAdmission::DeferredUnavailable.code(),
+            )),
             control_room_notify: Arc::new(Notify::new()),
             notification_sender: None,
             attachment_store: None,
@@ -856,6 +863,20 @@ impl AppState {
 
     async fn run_deterministic_coordinator(&self, store: &TaskStore) {
         self.observe_stale_owned_work(store).await;
+        let admission = runtime::coordinator_start_admission(self).await;
+        self.coordinator_start_admission
+            .store(admission.code(), Ordering::Relaxed);
+        self.run_deterministic_worker_wakes(store, admission).await;
+    }
+
+    async fn run_deterministic_worker_wakes(
+        &self,
+        store: &TaskStore,
+        admission: runtime::CoordinatorStartAdmission,
+    ) {
+        if !admission.permits_start() {
+            return;
+        }
         let actions = match store.claim_coordinator_worker_wakes(unix_timestamp()) {
             Ok(actions) => actions,
             Err(error) => {
@@ -937,6 +958,12 @@ impl AppState {
         self.task_store.as_ref().map_or_else(
             || Ok(CoordinatorStatus::default()),
             TaskStore::coordinator_status,
+        )
+    }
+
+    fn coordinator_start_admission(&self) -> runtime::CoordinatorStartAdmission {
+        runtime::CoordinatorStartAdmission::from_code(
+            self.coordinator_start_admission.load(Ordering::Relaxed),
         )
     }
 
@@ -7114,6 +7141,79 @@ mod tests {
         );
     }
 
+    #[test]
+    fn coordinator_start_admission_uses_strongest_evidence_and_requires_the_engine() {
+        use runtime::{CoordinatorStartAdmission, combine_coordinator_start_admission};
+
+        assert_eq!(
+            combine_coordinator_start_admission(ResourcePressure::Normal, ResourcePressure::Normal),
+            CoordinatorStartAdmission::Allowed
+        );
+        assert_eq!(
+            combine_coordinator_start_admission(
+                ResourcePressure::Unavailable,
+                ResourcePressure::Normal
+            ),
+            CoordinatorStartAdmission::Allowed
+        );
+        assert_eq!(
+            combine_coordinator_start_admission(
+                ResourcePressure::Normal,
+                ResourcePressure::Advisory
+            ),
+            CoordinatorStartAdmission::DeferredAdvisory
+        );
+        assert_eq!(
+            combine_coordinator_start_admission(
+                ResourcePressure::Critical,
+                ResourcePressure::Normal
+            ),
+            CoordinatorStartAdmission::DeferredCritical
+        );
+        assert_eq!(
+            combine_coordinator_start_admission(
+                ResourcePressure::Normal,
+                ResourcePressure::Unavailable
+            ),
+            CoordinatorStartAdmission::DeferredUnavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn pressure_deferral_leaves_an_automatic_worker_wake_durably_queued() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store
+            .create_task("Wake only when safe", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::worker(queen.id))
+            .unwrap();
+        assert_eq!(store.coordinator_status().unwrap().queued_actions, 1);
+
+        AppState::default()
+            .run_deterministic_worker_wakes(
+                &store,
+                runtime::CoordinatorStartAdmission::DeferredAdvisory,
+            )
+            .await;
+
+        let status = store.coordinator_status().unwrap();
+        assert_eq!(status.queued_actions, 1);
+        assert_eq!(status.uncertain_actions, 0);
+        assert_eq!(status.completed_actions, 0);
+    }
+
     #[tokio::test]
     async fn local_hive_identity_is_private_and_stable() {
         let store = TaskStore::in_memory().unwrap();
@@ -10660,6 +10760,10 @@ mod tests {
         assert_eq!(coordinator["queued_actions"], 0);
         assert_eq!(coordinator["uncertain_actions"], 0);
         assert_eq!(coordinator["stale_attention_actions"], 0);
+        assert_eq!(
+            coordinator["automatic_start_admission"],
+            "deferred_unavailable"
+        );
 
         let initial = response_json(
             authorized_get(app.clone(), "/api/v1/orchestration/queen-automation").await,

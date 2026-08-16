@@ -75,6 +75,20 @@ v62-to-v63 action-ledger migration. Rendered desktop and 412 by 915 acceptance
 must confirm that the added coordinator metric remains readable before the
 release is promoted.
 
+## Resource-pressure admission for automatic starts
+
+Automatic assigned-worker wakes are admitted before their durable action is
+claimed. Advisory or critical machine/worker-engine pressure leaves the action
+queued and observable, while an unavailable worker engine fails closed. The
+operator can still wake a worker explicitly, and no running worker is stopped
+or suspended by this rule.
+
+Automated acceptance covers pressure precedence, partial evidence on hosts
+without machine-wide sampling, fail-closed worker-engine availability, durable
+queue retention, API visibility, and the operator-facing explanation. Rendered
+desktop and 412 by 915 acceptance must confirm that the admission explanation
+does not crowd the coordinator metrics before promotion.
+
 ## Dogfood usability correction (2026-08-12)
 
 An isolated local runtime and the rendered 1280 by 720 browser surface verified

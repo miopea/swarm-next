@@ -1264,7 +1264,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .queen-automation-toggle { width: 100%; justify-content: space-between; }
   .queen-conductor-actions { align-items: stretch; flex-direction: column; }
   .queen-conductor-actions button { width: 100%; }
-  .coordinator-status { grid-template-columns: repeat(3, 1fr); }
+  .coordinator-status { grid-template-columns: repeat(2, 1fr); }
   .coordinator-status > span:first-child { grid-column: 1 / -1; }
   .coordinator-metrics { justify-items: start; text-align: left; }
   .worker-settings { grid-column: auto; }
@@ -1349,7 +1349,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queen-automation-status > span:last-child { display: grid; min-width: 0; gap: 2px; }
 .queen-automation-status small { color: var(--muted); line-height: 1.4; }
 .queen-automation-status.uncertain { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
-.coordinator-status { display: grid; grid-template-columns: minmax(150px, 1fr) repeat(3, minmax(60px, auto)); align-items: center; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: color-mix(in srgb, var(--sage-soft) 35%, var(--panel)); }
+.coordinator-status { display: grid; grid-template-columns: minmax(150px, 1fr) repeat(4, minmax(60px, auto)); align-items: center; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: color-mix(in srgb, var(--sage-soft) 35%, var(--panel)); }
 .coordinator-status > span { display: grid; min-width: 0; gap: 2px; }
 .coordinator-status small { color: var(--muted); font-size: .72rem; line-height: 1.35; }
 .coordinator-metrics { justify-items: end; text-align: right; }
@@ -1469,7 +1469,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .runtime-impact-reload .runtime-impact-label { color: var(--good); background: var(--good-soft); }
 
 @media (max-width: 680px) {
-  .coordinator-status { grid-template-columns: repeat(3, 1fr); }
+  .coordinator-status { grid-template-columns: repeat(2, 1fr); }
   .coordinator-status > span:first-child { grid-column: 1 / -1; }
   .coordinator-metrics { justify-items: start; text-align: left; }
   .jira-binding-card { grid-template-columns: 1fr; gap: 8px; }

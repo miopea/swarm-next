@@ -31,6 +31,7 @@ pub(super) struct CoordinatorStatusResponse {
     queued_actions: usize,
     stale_attention_actions: usize,
     last_action_at: Option<i64>,
+    automatic_start_admission: super::runtime::CoordinatorStartAdmission,
 }
 
 pub(super) async fn queen_autonomy_policy(
@@ -92,6 +93,7 @@ pub(super) async fn coordinator_status(
             queued_actions: status.queued_actions,
             stale_attention_actions: status.stale_attention_actions,
             last_action_at: status.last_action_at,
+            automatic_start_admission: state.coordinator_start_admission(),
         }),
     )
         .into_response())
