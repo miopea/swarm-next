@@ -56,8 +56,8 @@ pub async fn serve_terminal_socket(
     task_store: TaskStore,
     control_room_notify: Arc<Notify>,
 ) {
-    let Some((after_sequence, owner_device_id)) =
-        complete_initial_handshake(&mut socket, &terminal_host, session_id).await
+    let Some((after_sequence, initial_size, owner_device_id)) =
+        complete_initial_handshake(&mut socket).await
     else {
         return;
     };
@@ -80,12 +80,15 @@ pub async fn serve_terminal_socket(
     });
     let mut input = tokio::spawn(handle_input(
         socket_receiver,
-        terminal_host,
-        session_id,
-        task_store,
-        control_room_notify,
-        outbound_sender.clone(),
-        owner_device_id,
+        TerminalInputContext {
+            terminal_host,
+            session_id,
+            task_store,
+            control_room_notify,
+            outbound: outbound_sender.clone(),
+            owner_device_id,
+        },
+        initial_size,
     ));
 
     let (input_completed, output_completed) = tokio::select! {
@@ -106,9 +109,7 @@ pub async fn serve_terminal_socket(
 
 async fn complete_initial_handshake(
     socket: &mut WebSocket,
-    terminal_host: &HostClient,
-    session_id: WorkerSessionId,
-) -> Option<(Option<u64>, Option<PresenceDeviceId>)> {
+) -> Option<(Option<u64>, TerminalSize, Option<PresenceDeviceId>)> {
     let initial = tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv()).await;
     let (after_sequence, initial_size, owner_device_id) = match initial {
         Ok(Some(Ok(Message::Text(text)))) => {
@@ -157,33 +158,11 @@ async fn complete_initial_handshake(
         }
     };
 
-    match terminal_host
-        .request(&HostRequest::Resize {
-            session_id,
-            size: initial_size,
-        })
-        .await
-    {
-        Ok(HostResponse::Acknowledged) => {}
-        Ok(HostResponse::Error { code, message }) => {
-            send_direct_error(socket, &code, &message).await;
-            return None;
-        }
-        Ok(_) => {
-            send_direct_error(
-                socket,
-                "unexpected_host_response",
-                "terminal host did not acknowledge the initial renderer size",
-            )
-            .await;
-            return None;
-        }
-        Err(error) => {
-            send_direct_error(socket, "terminal_host_unavailable", &error.to_string()).await;
-            return None;
-        }
-    }
-    Some((after_sequence, owner_device_id))
+    // A terminal is one server-owned PTY with potentially many desktop and
+    // mobile viewers. Merely attaching a viewer must not resize that shared
+    // provider process. The requested geometry is retained by this connection
+    // and becomes authoritative only after this device sends operator input.
+    Some((after_sequence, initial_size, owner_device_id))
 }
 
 async fn stream_output(
@@ -353,23 +332,36 @@ async fn send_snapshot(
         .map_err(|_| ())
 }
 
-async fn handle_input(
-    mut socket_receiver: SplitStream<WebSocket>,
+struct TerminalInputContext {
     terminal_host: HostClient,
     session_id: WorkerSessionId,
     task_store: TaskStore,
     control_room_notify: Arc<Notify>,
     outbound: mpsc::Sender<Message>,
     owner_device_id: Option<PresenceDeviceId>,
+}
+
+async fn handle_input(
+    mut socket_receiver: SplitStream<WebSocket>,
+    context: TerminalInputContext,
+    mut requested_size: TerminalSize,
 ) {
+    let TerminalInputContext {
+        terminal_host,
+        session_id,
+        task_store,
+        control_room_notify,
+        outbound,
+        owner_device_id,
+    } = context;
     while let Some(message) = socket_receiver.next().await {
         let message = match message {
             Ok(Message::Text(text)) => text,
             Ok(Message::Close(_)) | Err(_) => return,
             Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_)) => continue,
         };
-        let (request, is_operator_input) = match client_request(&message, session_id) {
-            Ok(request) => request,
+        let action = match client_request(&message, session_id) {
+            Ok(action) => action,
             Err(ClientMessageError {
                 code,
                 message,
@@ -383,53 +375,78 @@ async fn handle_input(
                 continue;
             }
         };
-        if is_operator_input
-            && !record_operator_engagement(
-                &task_store,
-                session_id,
-                owner_device_id,
-                &control_room_notify,
-                &outbound,
-            )
-            .await
-        {
-            continue;
-        }
-        match terminal_host.request(&request).await {
-            Ok(HostResponse::Acknowledged) => {}
-            Ok(HostResponse::Error { code, message }) => {
-                let _ = send_control(
-                    &outbound,
-                    &ServerTerminalMessage::Error {
-                        code: &code,
-                        message,
-                    },
-                )
-                .await;
+        match action {
+            ClientTerminalAction::Resize(size) => {
+                requested_size = size;
+                let now = unix_timestamp();
+                let Ok(owns_geometry) =
+                    task_store.device_owns_worker_engagement(session_id, owner_device_id, now)
+                else {
+                    let _ = send_control(
+                        &outbound,
+                        &ServerTerminalMessage::Error {
+                            code: "terminal_resize_authority_unavailable",
+                            message: "terminal resize authority could not be checked".into(),
+                        },
+                    )
+                    .await;
+                    return;
+                };
+                if owns_geometry
+                    && !forward_host_request(
+                        &terminal_host,
+                        HostRequest::Resize {
+                            session_id,
+                            size: requested_size,
+                        },
+                        &outbound,
+                    )
+                    .await
+                {
+                    return;
+                }
             }
-            Ok(_) => {
-                let _ = send_control(
-                    &outbound,
-                    &ServerTerminalMessage::Error {
-                        code: "unexpected_host_response",
-                        message: "terminal host did not acknowledge the operation".into(),
-                    },
-                )
-                .await;
-            }
-            Err(error) => {
-                let _ = send_control(
-                    &outbound,
-                    &ServerTerminalMessage::Error {
-                        code: "terminal_host_unavailable",
-                        message: error.to_string(),
-                    },
-                )
-                .await;
-                return;
+            ClientTerminalAction::Input { request, engaged } => {
+                if engaged {
+                    if !record_operator_engagement(
+                        &task_store,
+                        session_id,
+                        owner_device_id,
+                        &control_room_notify,
+                        &outbound,
+                    )
+                    .await
+                    {
+                        continue;
+                    }
+                    // Geometry follows the device that actually typed, before
+                    // the provider receives that input. Other attached viewers
+                    // continue rendering canonical output but cannot fight this
+                    // size until they themselves become the engaged device.
+                    if !forward_host_request(
+                        &terminal_host,
+                        HostRequest::Resize {
+                            session_id,
+                            size: requested_size,
+                        },
+                        &outbound,
+                    )
+                    .await
+                    {
+                        return;
+                    }
+                }
+                if !forward_host_request(&terminal_host, request, &outbound).await {
+                    return;
+                }
             }
         }
     }
+}
+
+enum ClientTerminalAction {
+    Input { request: HostRequest, engaged: bool },
+    Resize(TerminalSize),
 }
 
 struct ClientMessageError {
@@ -441,25 +458,21 @@ struct ClientMessageError {
 fn client_request(
     message: &str,
     session_id: WorkerSessionId,
-) -> Result<(HostRequest, bool), ClientMessageError> {
+) -> Result<ClientTerminalAction, ClientMessageError> {
     match serde_json::from_str::<ClientTerminalMessage>(message) {
-        Ok(ClientTerminalMessage::Input { text }) => Ok((
-            HostRequest::Write {
+        Ok(ClientTerminalMessage::Input { text }) => Ok(ClientTerminalAction::Input {
+            engaged: !text.is_empty(),
+            request: HostRequest::Write {
                 session_id,
-                bytes: text.clone().into_bytes(),
+                bytes: text.into_bytes(),
             },
-            !text.is_empty(),
-        )),
+        }),
         Ok(ClientTerminalMessage::Resize { rows, columns })
             if rows >= MIN_TERMINAL_ROWS && columns >= MIN_TERMINAL_COLUMNS =>
         {
-            Ok((
-                HostRequest::Resize {
-                    session_id,
-                    size: TerminalSize::new(rows, columns),
-                },
-                false,
-            ))
+            Ok(ClientTerminalAction::Resize(TerminalSize::new(
+                rows, columns,
+            )))
         }
         Ok(ClientTerminalMessage::Resize { .. }) => Err(ClientMessageError {
             code: "invalid_terminal_size",
@@ -481,6 +494,49 @@ fn client_request(
     }
 }
 
+async fn forward_host_request(
+    terminal_host: &HostClient,
+    request: HostRequest,
+    outbound: &mpsc::Sender<Message>,
+) -> bool {
+    match terminal_host.request(&request).await {
+        Ok(HostResponse::Acknowledged) => true,
+        Ok(HostResponse::Error { code, message }) => {
+            let _ = send_control(
+                outbound,
+                &ServerTerminalMessage::Error {
+                    code: &code,
+                    message,
+                },
+            )
+            .await;
+            true
+        }
+        Ok(_) => {
+            let _ = send_control(
+                outbound,
+                &ServerTerminalMessage::Error {
+                    code: "unexpected_host_response",
+                    message: "terminal host did not acknowledge the operation".into(),
+                },
+            )
+            .await;
+            true
+        }
+        Err(error) => {
+            let _ = send_control(
+                outbound,
+                &ServerTerminalMessage::Error {
+                    code: "terminal_host_unavailable",
+                    message: error.to_string(),
+                },
+            )
+            .await;
+            false
+        }
+    }
+}
+
 async fn record_operator_engagement(
     task_store: &TaskStore,
     session_id: WorkerSessionId,
@@ -488,11 +544,7 @@ async fn record_operator_engagement(
     control_room_notify: &Notify,
     outbound: &mpsc::Sender<Message>,
 ) -> bool {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
-        });
+    let now = unix_timestamp();
     if let Ok(changed) = task_store.renew_worker_engagement(
         session_id,
         owner_device_id,
@@ -513,6 +565,14 @@ async fn record_operator_engagement(
     )
     .await;
     false
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 
 async fn send_control(

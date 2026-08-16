@@ -650,6 +650,37 @@ impl TaskStore {
         Ok(released)
     }
 
+    /// Returns whether this exact device currently owns the unexpired operator
+    /// engagement for a live worker session.
+    ///
+    /// Terminal geometry is shared by every viewer of one server-owned PTY.
+    /// Resize authority therefore follows the device that most recently sent
+    /// operator input; passive desktop and mobile viewers must not resize the
+    /// same provider process back and forth.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn device_owns_worker_engagement(
+        &self,
+        session_id: WorkerSessionId,
+        owner_device_id: Option<PresenceDeviceId>,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        let owner_device_id = owner_device_id.map(|device_id| device_id.to_string());
+        connection
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM worker_engagements
+                     WHERE session_id = ?1 AND expires_at > ?2
+                       AND owner_device_id IS ?3
+                 )",
+                params![session_id.to_string(), now, owner_device_id],
+                |row| row.get(0),
+            )
+            .map_err(TaskStoreError::from)
+    }
+
     /// Returns whether coordination may inject into a worker at this instant.
     ///
     /// # Errors
@@ -1461,6 +1492,56 @@ mod tests {
         assert!(!store.worker_accepts_injection(worker.id, 103).unwrap());
         assert!(store.release_worker_engagement(session, phone).unwrap());
         assert!(store.worker_accepts_injection(worker.id, 103).unwrap());
+    }
+
+    #[test]
+    fn terminal_geometry_authority_follows_the_engaged_device() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Clover", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        let desktop = PresenceDeviceId::new();
+        let phone = PresenceDeviceId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        assert!(
+            !store
+                .device_owns_worker_engagement(session, Some(desktop), 100)
+                .unwrap()
+        );
+        store
+            .renew_worker_engagement(session, Some(desktop), 100, 300)
+            .unwrap();
+        assert!(
+            store
+                .device_owns_worker_engagement(session, Some(desktop), 101)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .device_owns_worker_engagement(session, Some(phone), 101)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .device_owns_worker_engagement(session, Some(desktop), 401)
+                .unwrap()
+        );
+
+        store
+            .renew_worker_engagement(session, Some(phone), 102, 300)
+            .unwrap();
+        assert!(
+            store
+                .device_owns_worker_engagement(session, Some(phone), 103)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .device_owns_worker_engagement(session, Some(desktop), 103)
+                .unwrap()
+        );
     }
 
     #[test]

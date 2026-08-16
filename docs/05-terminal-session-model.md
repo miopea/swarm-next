@@ -60,7 +60,10 @@ geometry part of the same synchronization boundary.
   queued resize events that no longer match xterm's current dimensions are
   ignored.
 - Hidden terminals never commit zero or intermediate dimensions.
-- A resize is sent only after a stable non-zero ResizeObserver measurement.
+- A resize is sent only after a stable non-zero ResizeObserver measurement and
+  is applied to the shared PTY only for the device holding the current operator
+  engagement lease. Passive desktop and mobile viewers reflow locally without
+  competing for provider geometry.
 - A changed resize advances the canonical sequence, invalidates byte-only
   cursors, and wakes every attachment with one canonical snapshot.
 - An identical resize is acknowledged as a no-op so renderer echoes cannot

@@ -12927,13 +12927,13 @@ mod tests {
             executable: PathBuf::from("/bin/sh"),
             arguments: vec![
                 "-lc".into(),
-                "printf socket-ready; read value; printf 'socket:%s' \"$value\"".into(),
+                "printf socket-ready; read value; printf 'socket:%s' \"$value\"; read value; printf 'socket:%s' \"$value\"".into(),
             ],
             working_directory: workspace.clone(),
         };
         let session = registry.spawn(&command, TerminalSize::default()).unwrap();
         let socket = runtime.path().join("terminal.sock");
-        let host_server = HostServer::bind(&socket, registry).unwrap();
+        let host_server = HostServer::bind(&socket, Arc::clone(&registry)).unwrap();
         let host_task = tokio::spawn(host_server.run());
         let store = TaskStore::in_memory().unwrap();
         let worker = store
@@ -12963,11 +12963,14 @@ mod tests {
             "ws://{address}/api/v1/terminal/sessions/{}/attach",
             session.id()
         );
-        let mut websocket = connect_terminal(&websocket_url, &grant, 30, 100, None).await;
+        let desktop_device = "019fedfc-1c30-70e1-a5e2-9a3c94268093";
+        let phone_device = "019fedfc-1c30-70e1-a5e2-9a3c94268094";
+        let mut websocket =
+            connect_terminal(&websocket_url, &grant, 30, 100, None, desktop_device).await;
 
         let (initial, initial_dimensions, initial_sequence) =
             terminal_output_until(&mut websocket, "socket-ready").await;
-        assert_eq!(initial_dimensions, Some((30, 100)));
+        assert_eq!(initial_dimensions, Some((24, 80)));
         assert!(String::from_utf8_lossy(&initial).contains("socket-ready"));
 
         let mut resumed_websocket = connect_terminal(
@@ -12976,6 +12979,7 @@ mod tests {
             30,
             100,
             Some(initial_sequence),
+            desktop_device,
         )
         .await;
         let resumed_state = tokio::time::timeout(Duration::from_secs(1), resumed_websocket.next())
@@ -12992,10 +12996,10 @@ mod tests {
         assert_eq!(resumed_state["latest_sequence"], initial_sequence);
 
         let mut second_websocket =
-            connect_terminal(&websocket_url, &second_grant, 30, 100, None).await;
+            connect_terminal(&websocket_url, &second_grant, 16, 48, None, phone_device).await;
         let (_, second_initial_dimensions, _) =
             terminal_output_until(&mut second_websocket, "socket-ready").await;
-        assert_eq!(second_initial_dimensions, Some((30, 100)));
+        assert_eq!(second_initial_dimensions, Some((24, 80)));
 
         websocket
             .send(ClientMessage::Text(
@@ -13003,12 +13007,12 @@ mod tests {
             ))
             .await
             .unwrap();
-        let (_, first_resized_dimensions, _) =
-            terminal_output_until(&mut websocket, "socket-ready").await;
-        let (_, second_resized_dimensions, _) =
-            terminal_output_until(&mut second_websocket, "socket-ready").await;
-        assert_eq!(first_resized_dimensions, Some((35, 110)));
-        assert_eq!(second_resized_dimensions, Some((35, 110)));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let swarm_terminal::Resume::Snapshot { snapshot } = session.resume_after(None).unwrap()
+        else {
+            panic!("fresh terminal read must return a snapshot");
+        };
+        assert_eq!((snapshot.rows, snapshot.columns), (24, 80));
 
         websocket
             .send(ClientMessage::Text(
@@ -13018,14 +13022,41 @@ mod tests {
             .unwrap();
         let (after_input, _, _) = terminal_output_until(&mut websocket, "socket:hello").await;
         assert!(String::from_utf8_lossy(&after_input).contains("socket:hello"));
+        let (_, phone_observed_desktop_dimensions, _) =
+            terminal_output_until(&mut second_websocket, "socket:hello").await;
+        assert_eq!(phone_observed_desktop_dimensions, Some((35, 110)));
         assert!(!store.worker_accepts_injection(worker.id, i64::MIN).unwrap());
+
+        second_websocket
+            .send(ClientMessage::Text(
+                r#"{"type":"resize","rows":42,"columns":120}"#.into(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let swarm_terminal::Resume::Snapshot { snapshot } = session.resume_after(None).unwrap()
+        else {
+            panic!("fresh terminal read must return a snapshot");
+        };
+        assert_eq!((snapshot.rows, snapshot.columns), (35, 110));
+
+        second_websocket
+            .send(ClientMessage::Text(
+                r#"{"type":"input","text":"phone\n"}"#.into(),
+            ))
+            .await
+            .unwrap();
+        let (after_phone_input, phone_dimensions, _) =
+            terminal_output_until(&mut second_websocket, "socket:phone").await;
+        assert!(String::from_utf8_lossy(&after_phone_input).contains("socket:phone"));
+        assert_eq!(phone_dimensions, Some((42, 120)));
 
         let released = release_app
             .oneshot(
                 Request::builder()
                     .method("DELETE")
                     .uri(format!(
-                        "/api/v1/terminal/sessions/{}/engagements/019fedfc-1c30-70e1-a5e2-9a3c94268093",
+                        "/api/v1/terminal/sessions/{}/engagements/{phone_device}",
                         session.id()
                     ))
                     .header("authorization", "Bearer secret")
@@ -13086,6 +13117,7 @@ mod tests {
         rows: u16,
         columns: u16,
         after_sequence: Option<u64>,
+        device_id: &str,
     ) -> WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>> {
         let mut request = websocket_url.into_client_request().unwrap();
         request.headers_mut().insert(
@@ -13102,7 +13134,7 @@ mod tests {
         websocket
             .send(ClientMessage::Text(
                 format!(
-                    r#"{{"type":"resume","after_sequence":{},"rows":{rows},"columns":{columns},"device_id":"019fedfc-1c30-70e1-a5e2-9a3c94268093"}}"#,
+                    r#"{{"type":"resume","after_sequence":{},"rows":{rows},"columns":{columns},"device_id":"{device_id}"}}"#,
                     after_sequence
                         .map_or_else(|| "null".to_owned(), |sequence| sequence.to_string())
                 )

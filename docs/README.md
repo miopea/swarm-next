@@ -81,3 +81,4 @@ Current decision records:
 - [ADR 0042: Serialized resource-aware worker wakes](decisions/0042-serialized-resource-aware-worker-wakes.md)
 - [ADR 0043: Loaded worker before Active work](decisions/0043-loaded-worker-before-active.md)
 - [ADR 0044: Delivered Ready work attention](decisions/0044-delivered-ready-work-attention.md)
+- [ADR 0045: Engaged-device terminal geometry](decisions/0045-engaged-device-terminal-geometry.md)
