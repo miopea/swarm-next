@@ -4,6 +4,7 @@ import {
   approveApiaryJoinLink,
   createApiaryJoinLink,
   fetchApiaryJoinLinks,
+  revokeApiaryJoinLink,
   type ApiaryJoinLink,
   type ApiaryKeeperJoinCapability,
 } from "../api";
@@ -20,6 +21,7 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
   const [links, setLinks] = useState<ApiaryJoinLink[]>([]);
   const [generatedLink, setGeneratedLink] = useState("");
   const [working, setWorking] = useState(false);
+  const [confirmingCancellation, setConfirmingCancellation] = useState<string>();
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -67,6 +69,16 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
       await Promise.all([refresh(), onInvitationCreated()]);
       setMessage(`${link.candidate?.hive_name} is approved. Her Hive will receive the signed invitation on its next outbound poll.`);
     }, "That Hive could not be approved.");
+  }
+
+  async function cancel(link: ApiaryJoinLink) {
+    await perform(async () => {
+      await revokeApiaryJoinLink(operatorToken, link.id);
+      setConfirmingCancellation(undefined);
+      setGeneratedLink("");
+      await refresh();
+      setMessage("Invitation cancelled. That private link can no longer introduce a Hive.");
+    }, "That invitation could not be cancelled.");
   }
 
   async function perform(action: () => Promise<void>, fallback: string) {
@@ -131,7 +143,13 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
           {active.map((link) => (
             <li key={link.id}>
               <span><strong>{link.candidate?.hive_name ?? "Invitation link"}</strong><small>Expires {new Date(link.expires_at * 1000).toLocaleString()}</small></span>
-              <span className={`apiary-link-state state-${link.state}`}>{joinStateLabel(link.state)}</span>
+              <span className="apiary-link-actions">
+                <span className={`apiary-link-state state-${link.state}`}>{joinStateLabel(link.state)}</span>
+                {link.state !== "invitation_issued" ? confirmingCancellation === link.id
+                  ? <span className="apiary-cancel-confirm" role="group" aria-label="Confirm invitation cancellation"><button className="danger-button" disabled={working} onClick={() => void cancel(link)}>Cancel invitation</button><button className="secondary-button" disabled={working} onClick={() => setConfirmingCancellation(undefined)}>Keep link</button></span>
+                  : <button className="danger-link" disabled={working} onClick={() => setConfirmingCancellation(link.id)}>Cancel</button>
+                  : null}
+              </span>
             </li>
           ))}
         </ul>

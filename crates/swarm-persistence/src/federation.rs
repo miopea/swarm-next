@@ -831,6 +831,43 @@ impl TaskStore {
         load_apiary_join_links(&connection, apiary_id, now)
     }
 
+    /// Revokes one undelivered Keeper invitation capability. A link remains
+    /// cancellable while it is open, awaiting approval, or approved but not
+    /// yet polled. Once its signed invitation has been delivered, revoking the
+    /// transport link is intentionally too late.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, expired/resolved/delivered links, and unavailable
+    /// persistence.
+    pub fn revoke_apiary_join_link(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        now: i64,
+    ) -> Result<ApiaryJoinLink, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let apiary_id = identity
+            .hive
+            .apiary_id
+            .ok_or(TaskStoreError::ApiaryKeeperRequired)?;
+        let connection = self.connection()?;
+        keeper_invitation_context(&connection, apiary_id, &identity.operator.id.to_string())?;
+        let changed = connection.execute(
+            "UPDATE apiary_join_links
+             SET state = 'revoked'
+             WHERE id = ?1 AND apiary_id = ?2
+               AND state IN ('open','awaiting_approval','approved')
+               AND expires_at > ?3",
+            params![link_id.to_string(), apiary_id.to_string(), now],
+        )?;
+        if changed != 1 {
+            return Err(TaskStoreError::ApiaryJoinLinkResolved);
+        }
+        load_apiary_join_links(&connection, apiary_id, now)?
+            .into_iter()
+            .find(|link| link.id == link_id)
+            .ok_or(TaskStoreError::ApiaryJoinLinkNotFound)
+    }
+
     /// Saves one Keeper-created capability inside the personal Hive so the API
     /// can present and poll it server-to-server across browser reloads. The
     /// plaintext secret remains private and never appears in list results.
@@ -3799,6 +3836,51 @@ mod tests {
         assert!(matches!(
             keeper.issue_apiary_join_link("https://keeper.example.test", 10_100, 3_600),
             Err(TaskStoreError::ApiaryJoinLinkLimit)
+        ));
+    }
+
+    #[test]
+    fn keeper_can_revoke_an_undelivered_link_but_not_a_delivered_invitation() {
+        let member = TaskStore::in_memory().unwrap();
+        let card = member.issue_hive_connection_card(10_000, 3_600).unwrap();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, 9_000)
+            .unwrap();
+
+        let unused = keeper
+            .issue_apiary_join_link("https://keeper.example.test", 10_000, 3_600)
+            .unwrap();
+        let revoked = keeper
+            .revoke_apiary_join_link(unused.link.id, 10_001)
+            .unwrap();
+        assert_eq!(revoked.state, ApiaryJoinLinkState::Revoked);
+        let cancelled_poll = keeper
+            .poll_apiary_join_link(unused.link.id, &unused.one_time_secret, 10_002)
+            .unwrap();
+        assert_eq!(cancelled_poll.link.state, ApiaryJoinLinkState::Revoked);
+        assert!(cancelled_poll.invitation.is_none());
+
+        let delivered = keeper
+            .issue_apiary_join_link("https://keeper.example.test", 10_010, 3_600)
+            .unwrap();
+        keeper
+            .present_apiary_join_link_identity(
+                delivered.link.id,
+                &delivered.one_time_secret,
+                &card,
+                10_011,
+            )
+            .unwrap();
+        keeper
+            .approve_apiary_join_link(delivered.link.id, 10_012)
+            .unwrap();
+        keeper
+            .poll_apiary_join_link(delivered.link.id, &delivered.one_time_secret, 10_013)
+            .unwrap();
+        assert!(matches!(
+            keeper.revoke_apiary_join_link(delivered.link.id, 10_014),
+            Err(TaskStoreError::ApiaryJoinLinkResolved)
         ));
     }
 

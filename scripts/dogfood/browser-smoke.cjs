@@ -698,6 +698,23 @@ async function checkSurface(browser, surface) {
     if (!personalExchange && !await apiaryExchange.getByText(/Settings → Apiary → Join a Keeper's Apiary/).isVisible()) {
       throw new Error(`${surface.name}: Keeper invitation does not explain how the receiving personal Hive ingests the link`);
     }
+    if (!personalExchange) {
+      const cancelInvitation = apiaryExchange.getByRole("button", { name: "Cancel", exact: true }).first();
+      if (await cancelInvitation.isVisible().catch(() => false)) {
+        await cancelInvitation.click();
+        const cancellationGuard = apiaryExchange.getByRole("group", { name: "Confirm invitation cancellation" });
+        await cancellationGuard.waitFor();
+        if (!await cancellationGuard.getByRole("button", { name: "Cancel invitation" }).isVisible()
+          || !await cancellationGuard.getByRole("button", { name: "Keep link" }).isVisible()) {
+          throw new Error(`${surface.name}: Keeper invitation cancellation is not guarded`);
+        }
+        await page.screenshot({
+          path: path.join(outputRoot, `${surface.name}-settings-apiary-cancel.png`),
+          fullPage: true,
+        });
+        await cancellationGuard.getByRole("button", { name: "Keep link" }).click();
+      }
+    }
     if (apiaryOverflow.scrollWidth > apiaryOverflow.clientWidth + 1 || apiaryOverflow.overflowingSteps > 0 || apiaryOverflow.overflowingDrops > 0) {
       throw new Error(`${surface.name}: Apiary invitation exchange overflows its layout`);
     }

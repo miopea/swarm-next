@@ -1703,6 +1703,10 @@ fn api_router(state: AppState) -> Router {
             post(approve_apiary_join_link),
         )
         .route(
+            "/api/v1/apiary/join-links/{link_id}",
+            delete(revoke_apiary_join_link),
+        )
+        .route(
             "/api/v1/apiary/keeper-links",
             get(apiary_keeper_links).post(save_apiary_keeper_link),
         )
@@ -2366,6 +2370,18 @@ async fn approve_apiary_join_link(
     authorize(&state, &headers)?;
     let link = apiary_service(&state)?
         .approve_join_link(parse_apiary_join_link_id(&link_id)?, unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(link)).into_response())
+}
+
+async fn revoke_apiary_join_link(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(link_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let link = apiary_service(&state)?
+        .revoke_join_link(parse_apiary_join_link_id(&link_id)?, unix_timestamp())
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(link)).into_response())
 }
@@ -6230,6 +6246,68 @@ mod tests {
             issued["invitation"]["invitation"]["payload"]["invited_hive_id"],
             card.payload.hive_id.to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn keeper_can_cancel_an_undelivered_join_link() {
+        let now = unix_timestamp();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive(
+                "Wildflower Garden",
+                SharedWorkBackend::Jira,
+                now.saturating_sub(1),
+            )
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(keeper)
+                .with_public_base_url("https://keeper.example.test")
+                .unwrap(),
+        );
+        let created = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/join-links")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bundle: swarm_domain::ApiaryJoinLinkBundle =
+            serde_json::from_value(response_json(created).await).unwrap();
+
+        let cancelled = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/apiary/join-links/{}", bundle.link.id))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cancelled.status(), StatusCode::OK);
+        assert_eq!(response_json(cancelled).await["state"], "revoked");
+
+        let retry = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/apiary/join-links/{}", bundle.link.id))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]

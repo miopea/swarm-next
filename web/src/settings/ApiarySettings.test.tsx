@@ -126,6 +126,7 @@ test("Keeper creates one private invitation link for an outbound member connecti
   const writeText = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
   let created = false;
+  let revoked = false;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/v1/apiary/join-links" && init?.method === "POST") {
@@ -135,7 +136,11 @@ test("Keeper creates one private invitation link for an outbound member connecti
         one_time_secret: "shown-once",
       }, 201);
     }
-    if (url === "/api/v1/apiary/join-links") return ok(created ? [apiaryJoinLink("open")] : []);
+    if (url === "/api/v1/apiary/join-links/link-1" && init?.method === "DELETE") {
+      revoked = true;
+      return ok(apiaryJoinLink("revoked"));
+    }
+    if (url === "/api/v1/apiary/join-links") return ok(created && !revoked ? [apiaryJoinLink("open")] : []);
     if (["/api/v1/apiary/jira-projects", "/api/v1/integrations/jira/bindings", "/api/v1/apiary/shared-work", "/api/v1/apiary/stewardships", "/api/v1/apiary/members"].includes(url)) return ok([]);
     if (url === "/api/v1/apiary/collapse-readiness") return ok({ active_hive_count: 1, pending_invitation_count: 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
     throw new Error(`unexpected request ${url}`);
@@ -151,6 +156,13 @@ test("Keeper creates one private invitation link for an outbound member connecti
   expect(screen.getAllByText(/In her personal Hive/)).toHaveLength(2);
   expect(screen.getByRole("note")).toHaveTextContent("Each Hive polls Jira directly");
   expect(screen.getByRole("note")).toHaveTextContent("Member Hives poll this Keeper");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  const confirmation = screen.getByRole("group", { name: "Confirm invitation cancellation" });
+  expect(confirmation).toHaveTextContent("Cancel invitation");
+  expect(confirmation).toHaveTextContent("Keep link");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel invitation" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("Invitation cancelled");
+  expect(screen.queryByRole("list", { name: "Apiary invitation links" })).not.toBeInTheDocument();
 });
 
 test("shows every collapse blocker and cannot bypass the disabled action", async () => {
@@ -587,7 +599,7 @@ function keeperLink(state: "contacting" | "awaiting_approval") {
   };
 }
 
-function apiaryJoinLink(state: "open" | "awaiting_approval" | "approved", withCandidate = false) {
+function apiaryJoinLink(state: "open" | "awaiting_approval" | "approved" | "invitation_issued" | "revoked", withCandidate = false) {
   return {
     id: "link-1",
     apiary_id: "apiary-1",

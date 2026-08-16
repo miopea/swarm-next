@@ -770,6 +770,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-link-status li > span:first-child { display: grid; min-width: 0; gap: 1px; }
 .apiary-link-status small { overflow: hidden; color: var(--muted); font-size: .67rem; text-overflow: ellipsis; white-space: nowrap; }
 .apiary-link-state { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; color: var(--quiet); background: var(--surface-soft); font-size: .66rem; font-weight: 750; }
+.apiary-link-actions, .apiary-cancel-confirm { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.apiary-cancel-confirm button { min-height: 32px; padding: 5px 9px; }
 .apiary-link-state.state-awaiting_approval { color: var(--warn); background: var(--warn-soft); }
 .apiary-link-state.state-approved, .apiary-link-state.state-invitation_issued { color: var(--good); background: var(--good-soft); }
 .apiary-manual-fallback { padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: .72rem; }
@@ -1081,6 +1083,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-invite-heading button { width: 100%; }
   .apiary-transport-boundary { grid-template-columns: minmax(0, 1fr); }
   .apiary-link-state { width: fit-content; }
+  .apiary-link-actions { align-items: stretch; flex-direction: column; }
+  .apiary-cancel-confirm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .apiary-cancel-confirm button { width: 100%; }
   .apiary-members li { align-items: flex-start; flex-direction: column; }
   .apiary-section-heading { align-items: stretch; flex-direction: column; }
   .apiary-section-heading button { width: 100%; }

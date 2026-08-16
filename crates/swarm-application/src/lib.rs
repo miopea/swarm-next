@@ -576,6 +576,22 @@ impl ApiaryService {
         self.store.apiary_join_links(now).map_err(Into::into)
     }
 
+    /// Cancels one invitation link until its signed invitation has been
+    /// delivered to the receiving Hive.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers and links that are expired, revoked, or already
+    /// delivered.
+    pub fn revoke_join_link(
+        &self,
+        link_id: ApiaryJoinLinkId,
+        now: i64,
+    ) -> Result<ApiaryJoinLink, ApplicationError> {
+        self.store
+            .revoke_apiary_join_link(link_id, now)
+            .map_err(Into::into)
+    }
+
     /// Verifies the signed member identity presented through one join link and
     /// binds the capability to that exact Hive pending Keeper approval.
     ///

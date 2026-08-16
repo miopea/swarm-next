@@ -822,6 +822,18 @@ export async function approveApiaryJoinLink(
   return response.json() as Promise<ApiaryJoinLink>;
 }
 
+export async function revokeApiaryJoinLink(
+  operatorToken: string,
+  linkId: string,
+): Promise<ApiaryJoinLink> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/join-links/${encodeURIComponent(linkId)}`,
+    { method: "DELETE" },
+  );
+  return response.json() as Promise<ApiaryJoinLink>;
+}
+
 export async function fetchApiaryKeeperLinks(
   operatorToken: string,
 ): Promise<ApiaryKeeperLink[]> {
