@@ -73,21 +73,58 @@ async function verifySurface(browser, surface, finalSurface, restoreSleepingWork
     if (after.scrollbackRows < Math.min(before.scrollbackRows, 100)) {
       throw new Error(`${surface.name}: restored terminal history is unexpectedly shallow (${JSON.stringify({ before, after })})`);
     }
-    await page.locator(".xterm").hover();
-    await page.mouse.wheel(0, -100_000);
+    const beforeGesture = await scrollbackMetrics(page);
+    if (surface.mobile) {
+      await dragTerminalWithTouch(page, "down");
+    } else {
+      await page.locator(".xterm").hover();
+      await page.mouse.wheel(0, -100_000);
+    }
+    await page.waitForTimeout(250);
+    const afterGesture = await scrollbackMetrics(page);
+    if (afterGesture.viewportRow >= beforeGesture.viewportRow) {
+      throw new Error(`${surface.name}: terminal viewport did not move into scrollback (${JSON.stringify({ beforeGesture, afterGesture })})`);
+    }
     await page.screenshot({ path: path.join(outputRoot, `${surface.name}-restored-scrollback.png`), fullPage: false });
     if (errors.length) throw new Error(`${surface.name}: browser errors: ${errors.join(" | ")}`);
     if (finalSurface && (restoreWorkerAfterRun || restoreSleepingWorker || wokeWorker)) {
       await page.getByRole("button", { name: "Put worker to sleep" }).click();
     }
     passed = true;
-    return { surface: surface.name, before, after, status: "passed", wokeWorker };
+    return { surface: surface.name, before, after, beforeGesture, afterGesture, status: "passed", wokeWorker };
   } finally {
     if (!passed && (restoreWorkerAfterRun || restoreSleepingWorker || wokeWorker)) {
       const sleep = page.getByRole("button", { name: "Put worker to sleep" });
       if (await sleep.isVisible().catch(() => false)) await sleep.click().catch(() => undefined);
     }
     await context.close();
+  }
+}
+
+async function dragTerminalWithTouch(page, direction) {
+  const screen = page.locator(".xterm-screen");
+  const box = await screen.boundingBox();
+  if (!box) throw new Error("mobile: terminal screen has no touch target");
+  const x = box.x + box.width / 2;
+  const top = box.y + Math.min(80, box.height * 0.25);
+  const bottom = box.y + Math.max(box.height - 80, box.height * 0.75);
+  const startY = direction === "down" ? top : bottom;
+  const endY = direction === "down" ? bottom : top;
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x, y: startY, id: 1 }],
+    });
+    for (let step = 1; step <= 6; step += 1) {
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x, y: startY + ((endY - startY) * step) / 6, id: 1 }],
+      });
+    }
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  } finally {
+    await session.detach();
   }
 }
 
@@ -161,6 +198,7 @@ async function scrollbackMetrics(page) {
       bufferLines: Number(surface.dataset.terminalBufferLines || 0),
       childCount: surface.childElementCount,
       scrollbackRows,
+      viewportRow: Number(surface.dataset.terminalViewportRow || 0),
       scrollable: scrollbackRows > 0,
     };
   });

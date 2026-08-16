@@ -184,6 +184,32 @@ test("turns a one-finger vertical drag into terminal scrollback", () => {
   surface.dispose();
 });
 
+test("captures a real xterm-child drag even when the child stops bubbling", () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const element = document.createElement("div");
+  const xtermChild = document.createElement("div");
+  element.append(xtermChild);
+  xtermChild.addEventListener("touchstart", (event) => event.stopPropagation());
+  xtermChild.addEventListener("touchmove", (event) => event.stopPropagation());
+  const surface = new XtermSurface();
+  surface.open(element);
+  xterm.scrollLines.mockClear();
+
+  xtermChild.dispatchEvent(touchEvent("touchstart", [{ identifier: 9, clientY: 120 }]));
+  const move = touchEvent("touchmove", [{ identifier: 9, clientY: 80 }]);
+  xtermChild.dispatchEvent(move);
+
+  expect(move.defaultPrevented).toBe(true);
+  expect(xterm.scrollLines).toHaveBeenCalledWith(2);
+  surface.dispose();
+});
+
 test("accumulates small touch movement and scrolls in both directions", () => {
   vi.stubGlobal(
     "ResizeObserver",

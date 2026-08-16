@@ -46,10 +46,13 @@ export class XtermSurface implements TerminalSurface {
   open(element: HTMLElement): void {
     this.#element = element;
     this.#terminal.open(element);
-    element.addEventListener("touchstart", this.#handleTouchStart, { passive: true });
-    element.addEventListener("touchmove", this.#handleTouchMove, { passive: false });
-    element.addEventListener("touchend", this.#handleTouchEnd, { passive: true });
-    element.addEventListener("touchcancel", this.#handleTouchEnd, { passive: true });
+    // xterm owns descendants below this mount and may stop bubbling touch
+    // events while handling selection/focus. Capture the gesture at the mount
+    // boundary so a real finger drag reaches Swarm before xterm consumes it.
+    element.addEventListener("touchstart", this.#handleTouchStart, { passive: true, capture: true });
+    element.addEventListener("touchmove", this.#handleTouchMove, { passive: false, capture: true });
+    element.addEventListener("touchend", this.#handleTouchEnd, { passive: true, capture: true });
+    element.addEventListener("touchcancel", this.#handleTouchEnd, { passive: true, capture: true });
     this.#resizeObserver = new ResizeObserver(() => this.#scheduleFit());
     this.#resizeObserver.observe(element);
   }
@@ -132,10 +135,10 @@ export class XtermSurface implements TerminalSurface {
     this.#cancelScheduledFit();
     this.#themeObserver?.disconnect();
     this.#resizeObserver?.disconnect();
-    this.#element?.removeEventListener("touchstart", this.#handleTouchStart);
-    this.#element?.removeEventListener("touchmove", this.#handleTouchMove);
-    this.#element?.removeEventListener("touchend", this.#handleTouchEnd);
-    this.#element?.removeEventListener("touchcancel", this.#handleTouchEnd);
+    this.#element?.removeEventListener("touchstart", this.#handleTouchStart, true);
+    this.#element?.removeEventListener("touchmove", this.#handleTouchMove, true);
+    this.#element?.removeEventListener("touchend", this.#handleTouchEnd, true);
+    this.#element?.removeEventListener("touchcancel", this.#handleTouchEnd, true);
     this.#resetTouchGesture();
     this.#terminal.dispose();
   }
