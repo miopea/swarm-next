@@ -1075,3 +1075,16 @@ the independently updated terminal host through the API to worker settings:
   image review confirmed the guard is readable and unambiguous at both sizes.
   API PID advanced to `3725960`; terminal-host PID `2966127` remained unchanged,
   preserving all active workers. Every proof browser and context closed.
+- Release `0.1.0-dev-110c81bd0fba` completes the receiving personal-Hive side
+  of that lifecycle. A revoked or expired private link is labelled in plain
+  language, stops polling the Keeper, and can be removed only through an
+  explicit local confirmation; an operator may also deliberately stop waiting
+  on a still-live link. Removing it changes no Keeper or Apiary state and
+  explains that the private link must be pasted again to reconnect. The full
+  Rust workspace, 222 frontend tests, warnings-denied Clippy, formatting,
+  strict TypeScript, and production build passed. Isolated personal-Hive proof
+  rendered the cancelled state and backed out of its removal guard at 1,440 by
+  900 and Android-size 412 by 915. Every primary, Member, and personal-Hive
+  surface remained free of horizontal overflow, and browser authentication
+  survived complete restarts. API PID advanced to `3733677`; terminal-host PID
+  `2966127` remained unchanged. Every proof browser and context closed.

@@ -113,6 +113,8 @@ async function checkPersonalHiveSurface(browser, surface) {
     await removalGuard.waitFor();
     await removalGuard.getByRole("button", { name: "Remove link" }).waitFor();
     await removalGuard.getByRole("button", { name: "Keep waiting" }).waitFor();
+    await cancelledLink.scrollIntoViewIfNeeded();
+    await cancelledLink.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-personal-cancelled-link.png`) });
     const dimensions = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
     if (dimensions.scrollWidth > dimensions.clientWidth + 1) {
       throw new Error(`${surface.name}/personal-apiary: horizontal overflow ${dimensions.scrollWidth}px > ${dimensions.clientWidth}px`);
