@@ -90,9 +90,11 @@ const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
 const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
 const ACTIVE_SESSION_STORAGE_KEY = "swarm-next.active-session.v1";
+const WORKER_VISIBILITY_STORAGE_KEY = "swarm-next.worker-visibility.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
 type Surface = "decisions" | "tasks" | "workers" | "apiary" | "settings";
+type WorkerVisibility = "all" | "awake";
 
 export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
@@ -113,6 +115,7 @@ export function App() {
   const [feedbackRevision, setFeedbackRevision] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
   const [showMobileWorkers, setShowMobileWorkers] = useState(false);
+  const [workerVisibility, setWorkerVisibility] = useState<WorkerVisibility>(readWorkerVisibility);
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
@@ -324,6 +327,11 @@ export function App() {
         terminal_keys_visible: mobileKeysVisible,
       });
     });
+  }
+
+  function changeWorkerVisibility(visibility: WorkerVisibility) {
+    setWorkerVisibility(visibility);
+    rememberWorkerVisibility(visibility);
   }
 
   function changeMobileKeysVisibility(visible: boolean) {
@@ -718,6 +726,10 @@ export function App() {
     () => sessions.filter((session) => session.running && !workers.some((worker) => worker.active_session_id === session.session_id)),
     [sessions, workers],
   );
+  const visibleWorkers = useMemo(
+    () => workerVisibility === "awake" ? workers.filter((worker) => worker.running) : workers,
+    [workerVisibility, workers],
+  );
   const liveWorkerCount = workers.filter((worker) => worker.running).length
     + orphanSessions.filter((session) => session.running).length;
   const rosterWorkerCount = workers.length + orphanSessions.length;
@@ -827,14 +839,24 @@ export function App() {
             </nav>
 
             {(surface === "tasks" || surface === "workers") && <div className="rail-context">
-              <div className="rail-heading"><span>{surface === "tasks" ? "Board view" : "Workers"}</span></div>
+              <div className="rail-heading">
+                <span>{surface === "tasks" ? "Board view" : "Workers"}</span>
+                {surface === "workers" ? (
+                  <div className="worker-visibility-toggle" role="group" aria-label="Workers shown">
+                    <button type="button" aria-pressed={workerVisibility === "all"} onClick={() => changeWorkerVisibility("all")}>All</button>
+                    <button type="button" aria-pressed={workerVisibility === "awake"} onClick={() => changeWorkerVisibility("awake")}>Awake</button>
+                  </div>
+                ) : null}
+              </div>
               {surface === "tasks" ? (
                 <TaskBoardControls query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} workers={workers} projects={taskProjects} openCount={openTaskCount} busy={busy} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onSync={() => void syncJiraBoard()} />
               ) : workers.length === 0 && orphanSessions.length === 0 ? (
                 <p className="empty-rail">No workers configured.</p>
+              ) : visibleWorkers.length === 0 && orphanSessions.length === 0 ? (
+                <p className="empty-rail">All {workers.length} workers are sleeping. Choose All to wake one.</p>
               ) : (
                 <div className="worker-list">
-                  {workers.map((worker) => {
+                  {visibleWorkers.map((worker) => {
                     const sessionId = worker.active_session_id;
                     const task = sessionId ? tasksBySession.get(sessionId) : undefined;
                     return (
@@ -911,9 +933,16 @@ export function App() {
                 <div><p className="eyebrow">Worker switcher</p><h3 id="mobile-worker-heading">Where do you want to work?</h3></div>
                 <button type="button" onClick={() => setShowMobileWorkers(false)}>Close</button>
               </div>
-              <p className="mobile-worker-dialog-summary">{liveWorkerCount} active · {rosterWorkerCount - liveWorkerCount} sleeping</p>
+              <div className="mobile-worker-dialog-toolbar">
+                <p className="mobile-worker-dialog-summary">{liveWorkerCount} awake · {rosterWorkerCount - liveWorkerCount} sleeping</p>
+                <div className="worker-visibility-toggle" role="group" aria-label="Workers shown">
+                  <button type="button" aria-pressed={workerVisibility === "all"} onClick={() => changeWorkerVisibility("all")}>All</button>
+                  <button type="button" aria-pressed={workerVisibility === "awake"} onClick={() => changeWorkerVisibility("awake")}>Awake</button>
+                </div>
+              </div>
               <div className="mobile-worker-dialog-list">
-                {workers.map((worker) => {
+                {visibleWorkers.length === 0 && orphanSessions.length === 0 ? <p className="empty-rail">All {workers.length} workers are sleeping. Choose All to wake one.</p> : null}
+                {visibleWorkers.map((worker) => {
                   const sessionId = worker.active_session_id;
                   const assignedTask = sessionId ? tasksBySession.get(sessionId) : undefined;
                   return (
@@ -1069,6 +1098,22 @@ function saveActiveSessionId(sessionId: string) {
     window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId);
   } catch {
     // Selection persistence is a non-critical convenience.
+  }
+}
+
+function readWorkerVisibility(): WorkerVisibility {
+  try {
+    return window.localStorage.getItem(WORKER_VISIBILITY_STORAGE_KEY) === "awake" ? "awake" : "all";
+  } catch {
+    return "all";
+  }
+}
+
+function rememberWorkerVisibility(visibility: WorkerVisibility) {
+  try {
+    window.localStorage.setItem(WORKER_VISIBILITY_STORAGE_KEY, visibility);
+  } catch {
+    // Worker filtering is a non-critical presentation preference.
   }
 }
 

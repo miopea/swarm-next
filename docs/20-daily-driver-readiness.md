@@ -39,6 +39,9 @@ profile may point to at most one running session. Session history remains
 immutable when that profile starts again. Operators may rename a non-Queen
 profile and choose whether Swarm keeps it active automatically; repository and
 provider-conversation identity remain immutable maintenance boundaries.
+The worker rail keeps the full roster count visible while a device-local
+`All / Awake` filter lets large Hives hide unloaded sleeping profiles without
+changing their state or memory use.
 
 The Queen is a singleton profile with role `queen`, stable name `Queen`, and
 autostart enabled. The API supervisor reconciles her profile against the

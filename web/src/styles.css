@@ -110,7 +110,10 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .surface-nav button.selected small { color: var(--text); background: var(--panel-raised); }
 
 .rail-context { min-height: 0; flex: 1; padding-top: 17px; overflow-y: auto; }
-.rail-heading { margin: 0 7px 10px; color: var(--quiet); font-size: .69rem; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
+.rail-heading { display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: 8px; margin: 0 7px 10px; color: var(--quiet); font-size: .69rem; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
+.worker-visibility-toggle { display: inline-flex; flex: 0 0 auto; padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); }
+.worker-visibility-toggle button { min-height: 24px; padding: 2px 8px; border: 0; border-radius: 999px; color: var(--quiet); background: transparent; font-size: .65rem; letter-spacing: 0; text-transform: none; }
+.worker-visibility-toggle button[aria-pressed="true"] { color: var(--text); background: var(--panel-raised); box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 10%, transparent); }
 .empty-rail { padding: 13px 12px; color: var(--muted); font-size: .84rem; line-height: 1.5; }
 .task-board-controls { display: grid; gap: 12px; padding: 3px 7px; }
 .task-board-controls label { display: grid; gap: 5px; color: var(--quiet); font-size: .7rem; font-weight: 650; }
@@ -214,6 +217,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .mobile-worker-dialog-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .mobile-worker-dialog-heading h3 { margin: 0; font-size: 1.12rem; }
 .mobile-worker-dialog-summary { margin: 0; color: var(--muted); font-size: .76rem; }
+.mobile-worker-dialog-toolbar { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; }
 .mobile-worker-dialog-list { display: grid; min-height: 0; overflow-y: auto; gap: 5px; overscroll-behavior: contain; }
 .mobile-worker-choice { display: grid; width: 100%; min-height: 66px; grid-template-columns: 42px minmax(0, 1fr) 9px; align-items: center; gap: 10px; padding: 8px 10px; border-color: var(--line); color: var(--text); background: var(--panel); text-align: left; }
 .mobile-worker-choice[aria-current="page"] { border-color: var(--good); background: var(--good-soft); box-shadow: inset 3px 0 var(--good); }

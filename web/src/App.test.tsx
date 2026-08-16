@@ -378,6 +378,54 @@ test("removes completed assignments from the live worker roster", async () => {
   expect(screen.queryByText("Already shipped")).not.toBeInTheDocument();
 });
 
+test("filters sleeping workers and remembers the choice on this device", async () => {
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  const queenSession = "019fedfc-1c30-70e1-a5e2-9a3c94268094";
+  const workers = [
+    {
+      id: "worker-queen", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code",
+      workspace: "/workspace/queen", autostart: true, position: 0, active_session_id: queenSession,
+      running: true, attention_state: "resting", created_at: 1, updated_at: 1,
+    },
+    {
+      id: "worker-platform", hive_id: "hive-1", name: "Platform", role: "worker", provider: "claude_code",
+      workspace: "/workspace/platform", autostart: false, position: 1, active_session_id: null,
+      running: false, attention_state: "sleeping", created_at: 1, updated_at: 1,
+    },
+  ];
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: queenSession, running: true }] }));
+    if (url === "/api/v1/workers") return Promise.resolve(ok(workers));
+    if (url === "/api/v1/workspaces" || url === "/api/v1/tasks" || url === "/api/v1/decisions") return Promise.resolve(ok([]));
+    if (url.includes("/api/v1/control-room/events")) {
+      return new Promise((_, reject) => init?.signal?.addEventListener(
+        "abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true },
+      ));
+    }
+    return Promise.resolve(ok({}));
+  });
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+  expect(await screen.findByRole("button", { name: /^Platform/ })).toBeInTheDocument();
+  const visibility = screen.getByRole("group", { name: "Workers shown" });
+  fireEvent.click(within(visibility).getByRole("button", { name: "Awake" }));
+
+  expect(screen.queryByRole("button", { name: /^Platform/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Queen/ })).toBeInTheDocument();
+  expect(window.localStorage.getItem("swarm-next.worker-visibility.v1")).toBe("awake");
+
+  cleanup();
+  render(<App />);
+  expect(await screen.findByRole("button", { name: /^Queen/ })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Platform/ })).not.toBeInTheDocument();
+  expect(within(screen.getByRole("group", { name: "Workers shown" })).getByRole("button", { name: "Awake" })).toHaveAttribute("aria-pressed", "true");
+});
+
 test("switching workers releases only the previously selected engagement", async () => {
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   const queenSession = "019fedfc-1c30-70e1-a5e2-9a3c94268091";
