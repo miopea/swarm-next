@@ -52,15 +52,24 @@ export default function TaskMetadata({ task, jiraLink, busy, onRetryJira }: {
             <div><dt>Assignee</dt><dd className="task-text-value">{jiraLink.jira_assignee_name ?? "Unassigned"}</dd></div>
           </dl>
           {jiraLink.outbound_state && (
-            <span className={`jira-sync-state ${jiraLink.outbound_state}`}>
+            <span
+              className={`jira-sync-state ${jiraLink.outbound_state}`}
+              title={jiraLink.outbound_state === "conflict"
+                ? "Jira changed or rejected a Swarm update. Its current status is shown above; retry only if Swarm should replace it."
+                : jiraLink.outbound_state === "uncertain"
+                  ? "Jira may already have received this update. Sync before retrying to avoid repeating it."
+                  : undefined}
+            >
               {jiraLink.outbound_state === "queued" || jiraLink.outbound_state === "dispatching"
                 ? "Updating Jira…"
-                : "Jira update needs attention"}
+                : jiraLink.outbound_state === "conflict"
+                  ? "Jira changed — review before retry"
+                  : "Jira result unknown — sync before retry"}
             </span>
           )}
           {(jiraLink.outbound_state === "conflict" || jiraLink.outbound_state === "uncertain") && (
             <button className="text-button jira-sync-retry" type="button" disabled={busy} onClick={() => void onRetryJira(task)}>
-              Retry Jira
+              Retry Swarm update
             </button>
           )}
         </section>

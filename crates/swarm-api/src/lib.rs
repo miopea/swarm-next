@@ -10311,6 +10311,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn jira_reconciliation_refreshes_only_work_already_in_the_hive() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -10365,6 +10366,11 @@ mod tests {
                 binding.id,
                 &[
                     JiraStatusMapping {
+                        jira_status_id: "1".into(),
+                        jira_status_name: "To Do".into(),
+                        task_state: TaskState::Ready,
+                    },
+                    JiraStatusMapping {
                         jira_status_id: "3".into(),
                         jira_status_name: "In Progress".into(),
                         task_state: TaskState::Active,
@@ -10380,7 +10386,7 @@ mod tests {
         store
             .set_jira_auto_sync_assigned(binding.id, false)
             .unwrap();
-        store
+        let task = store
             .sync_jira_issues(
                 binding.id,
                 &[JiraIssueSnapshot {
@@ -10388,14 +10394,16 @@ mod tests {
                     issue_key: "WEB-42",
                     summary: "Original title",
                     description: "Original Jira context",
-                    status_id: "3",
-                    status_name: "In Progress",
+                    status_id: "1",
+                    status_name: "To Do",
                     assignee_account_id: None,
                     assignee_name: None,
                     remote_updated_at: "2026-08-13T13:00:00.000+0000",
                 }],
             )
-            .unwrap();
+            .unwrap()
+            .remove(0);
+        store.transition_task(task.id, TaskState::Active).unwrap();
         let state = AppState::default()
             .with_task_store(store.clone())
             .with_jira_configuration(
@@ -10415,6 +10423,13 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].jira_assignee_name.as_deref(), Some("Fern"));
         assert_eq!(links[0].jira_status_id, "5");
+        assert_eq!(
+            store
+                .jira_transition_state_for_task(task.id)
+                .unwrap()
+                .as_deref(),
+            Some("conflict")
+        );
     }
 
     #[tokio::test]

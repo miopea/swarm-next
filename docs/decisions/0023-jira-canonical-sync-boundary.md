@@ -48,6 +48,12 @@ Jira is an adapter-private integration behind typed application commands.
   stores the last observed values and maps workflow state through the confirmed
   project mapping. Swarm-owned worker assignment, execution evidence, local
   notes, and terminal history are never overwritten by an import.
+- An unchanged Jira status cannot roll back a newer local state while its durable
+  outbound transition is pending. A genuinely different Jira status is canonical:
+  it updates the linked task, including remote closure or reopen, and moves the
+  superseded Swarm transition to visible conflict instead of later overwriting
+  Jira. The operator sees Jira's current status and must review before explicitly
+  retrying the Swarm update.
 - Adding an issue establishes an ongoing synchronization relationship, not a
   snapshot import. Jira changes continue inbound; mapped Swarm state changes,
   operator/worker comments, completion evidence, and closure flow outbound

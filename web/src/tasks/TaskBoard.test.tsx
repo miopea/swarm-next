@@ -209,8 +209,12 @@ test("keeps Jira identity and remote status visible while routing work", () => {
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Website Services");
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("To Do");
   expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Bradford");
-  expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Jira update needs attention");
-  fireEvent.click(within(card).getByRole("button", { name: "Retry Jira" }));
+  expect(within(card).getByLabelText("Jira issue WEB-42")).toHaveTextContent("Jira changed — review before retry");
+  expect(within(card).getByText("Jira changed — review before retry")).toHaveAttribute(
+    "title",
+    "Jira changed or rejected a Swarm update. Its current status is shown above; retry only if Swarm should replace it.",
+  );
+  fireEvent.click(within(card).getByRole("button", { name: "Retry Swarm update" }));
   expect(onRetryJira).toHaveBeenCalledWith(expect.objectContaining({ id: task.id }));
   expect(within(card).getByRole("link", { name: /WEB-42/ })).toHaveAttribute("href", "https://jira.example.test/browse/WEB-42");
   const swarmDetails = within(card).getByRole("region", { name: "Swarm details" });
@@ -244,7 +248,7 @@ test("reads and posts Jira discussion without leaving the task", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: "Discussion" }));
   const discussion = await screen.findByRole("region", { name: "Jira discussion for WEB-42" });
-  expect(within(discussion).getByText("Ready for review")).toBeInTheDocument();
+  expect(await within(discussion).findByText("Ready for review")).toBeInTheDocument();
   fireEvent.change(within(discussion).getByLabelText("Add an update"), { target: { value: "Shipped cleanly" } });
   fireEvent.click(within(discussion).getByRole("button", { name: "Share to Jira" }));
   await waitFor(() => expect(onAddJiraComment).toHaveBeenCalledWith(task.id, "Shipped cleanly"));

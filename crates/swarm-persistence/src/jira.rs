@@ -336,7 +336,8 @@ impl TaskStore {
             let target_state = states[status_id];
             let existing = transaction
                 .query_row(
-                    "SELECT link.task_id, task.state, delivery.id, delivery.target_task_state
+                    "SELECT link.task_id, task.state, delivery.id, delivery.target_task_state,
+                            link.jira_status_id
                      FROM jira_issue_links link
                      JOIN tasks task ON task.id = link.task_id
                      LEFT JOIN jira_transition_deliveries delivery
@@ -349,83 +350,105 @@ impl TaskStore {
                             row.get::<_, String>(1)?,
                             row.get::<_, Option<String>>(2)?,
                             row.get::<_, Option<String>>(3)?,
+                            row.get::<_, String>(4)?,
                         ))
                     },
                 )
                 .optional()?;
-            let task_id =
-                if let Some((task_id, previous_state, delivery_id, delivery_target)) = existing {
-                    let task_id = parse_domain_id::<TaskId>(&task_id)?;
-                    let previous_state = TaskState::from_str(&previous_state)
-                        .map_err(|_| rusqlite::Error::InvalidQuery)?;
-                    let delivery_target = delivery_target
-                        .map(|state| {
-                            TaskState::from_str(&state).map_err(|_| rusqlite::Error::InvalidQuery)
-                        })
-                        .transpose()?;
-                    let remote_acknowledged = delivery_target == Some(target_state);
-                    if remote_acknowledged && let Some(delivery_id) = delivery_id {
-                        transaction.execute(
-                            "UPDATE jira_transition_deliveries
+            let task_id = if let Some((
+                task_id,
+                previous_state,
+                delivery_id,
+                delivery_target,
+                previous_status_id,
+            )) = existing
+            {
+                let task_id = parse_domain_id::<TaskId>(&task_id)?;
+                let previous_state = TaskState::from_str(&previous_state)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                let delivery_target = delivery_target
+                    .map(|state| {
+                        TaskState::from_str(&state).map_err(|_| rusqlite::Error::InvalidQuery)
+                    })
+                    .transpose()?;
+                let remote_acknowledged = delivery_target == Some(target_state);
+                if remote_acknowledged && let Some(delivery_id) = delivery_id.as_deref() {
+                    transaction.execute(
+                        "UPDATE jira_transition_deliveries
                          SET state = 'delivered', delivered_at = unixepoch(),
                              last_error = NULL, updated_at = unixepoch()
                          WHERE id = ?1 AND state <> 'delivered'",
-                            [delivery_id],
-                        )?;
-                    }
-                    let synchronized_state = if delivery_target.is_some() && !remote_acknowledged {
+                        [delivery_id],
+                    )?;
+                }
+                let remote_changed = status_id != previous_status_id.trim();
+                if delivery_target.is_some()
+                    && !remote_acknowledged
+                    && remote_changed
+                    && let Some(delivery_id) = delivery_id.as_deref()
+                {
+                    transaction.execute(
+                        "UPDATE jira_transition_deliveries
+                             SET state = 'conflict', last_error = 'remote_state_changed',
+                                 updated_at = unixepoch()
+                             WHERE id = ?1 AND state <> 'delivered'",
+                        [delivery_id],
+                    )?;
+                }
+                let synchronized_state =
+                    if delivery_target.is_some() && !remote_acknowledged && !remote_changed {
                         previous_state
                     } else {
                         target_state
                     };
-                    let changed = transaction.execute(
-                        "UPDATE tasks SET title = ?2, state = ?3, updated_at = unixepoch()
+                let changed = transaction.execute(
+                    "UPDATE tasks SET title = ?2, state = ?3, updated_at = unixepoch()
                      WHERE id = ?1 AND (title <> ?2 OR state <> ?3)",
-                        params![task_id.to_string(), summary, synchronized_state.to_string()],
-                    )?;
-                    tasks_changed |= changed > 0;
-                    if previous_state != synchronized_state {
-                        transaction.execute(
-                            "INSERT INTO task_activity (
+                    params![task_id.to_string(), summary, synchronized_state.to_string()],
+                )?;
+                tasks_changed |= changed > 0;
+                if previous_state != synchronized_state {
+                    transaction.execute(
+                        "INSERT INTO task_activity (
                                  task_id, kind, from_state, to_state, note, actor_kind
                              ) VALUES (?1, 'state_changed', ?2, ?3, ?4, 'jira')",
-                            params![
-                                task_id.to_string(),
-                                previous_state.to_string(),
-                                synchronized_state.to_string(),
-                                format!("Synchronized from Jira {issue_key}"),
-                            ],
-                        )?;
-                    }
-                    task_id
-                } else {
-                    let task_id = TaskId::new();
-                    transaction.execute(
-                        "INSERT INTO tasks (
+                        params![
+                            task_id.to_string(),
+                            previous_state.to_string(),
+                            synchronized_state.to_string(),
+                            format!("Synchronized from Jira {issue_key}"),
+                        ],
+                    )?;
+                }
+                task_id
+            } else {
+                let task_id = TaskId::new();
+                transaction.execute(
+                    "INSERT INTO tasks (
                          id, hive_id, title, description, priority, workspace, state, position
                      ) VALUES (?1, ?2, ?3, ?4, 'normal', ?5, ?6,
                          COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0))",
-                        params![
-                            task_id.to_string(),
-                            binding.hive_id.to_string(),
-                            summary,
-                            issue.description.trim(),
-                            unassigned_scope,
-                            target_state.to_string(),
-                        ],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO task_activity (task_id, kind, to_state, note, actor_kind)
+                    params![
+                        task_id.to_string(),
+                        binding.hive_id.to_string(),
+                        summary,
+                        issue.description.trim(),
+                        unassigned_scope,
+                        target_state.to_string(),
+                    ],
+                )?;
+                transaction.execute(
+                    "INSERT INTO task_activity (task_id, kind, to_state, note, actor_kind)
                      VALUES (?1, 'created', ?2, ?3, 'jira')",
-                        params![
-                            task_id.to_string(),
-                            target_state.to_string(),
-                            format!("Imported from Jira {issue_key}"),
-                        ],
-                    )?;
-                    tasks_changed = true;
-                    task_id
-                };
+                    params![
+                        task_id.to_string(),
+                        target_state.to_string(),
+                        format!("Imported from Jira {issue_key}"),
+                    ],
+                )?;
+                tasks_changed = true;
+                task_id
+            };
             transaction.execute(
                 "INSERT INTO jira_issue_links (
                      issue_id, issue_key, binding_id, task_id, jira_status_id, jira_status_name,
@@ -1416,6 +1439,133 @@ mod tests {
                 .is_empty(),
             "an unchanged Jira snapshot must not wake every connected client"
         );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn newer_remote_state_wins_over_a_pending_transition_and_can_reopen_work() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "1".into(),
+                        jira_status_name: "To Do".into(),
+                        task_state: TaskState::Ready,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "3".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "5".into(),
+                        jira_status_name: "Done".into(),
+                        task_state: TaskState::Completed,
+                    },
+                ],
+            )
+            .unwrap();
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "20001",
+                    issue_key: "WEB-42",
+                    summary: "Polish the launch page",
+                    description: "",
+                    status_id: "1",
+                    status_name: "To Do",
+                    assignee_account_id: Some("account-1"),
+                    assignee_name: Some("Bea"),
+                    remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                }],
+            )
+            .unwrap()
+            .remove(0);
+
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let unchanged = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "20001",
+                    issue_key: "WEB-42",
+                    summary: "Polish the launch page",
+                    description: "",
+                    status_id: "1",
+                    status_name: "To Do",
+                    assignee_account_id: Some("account-1"),
+                    assignee_name: Some("Bea"),
+                    remote_updated_at: "2026-08-13T12:00:00.000+0000",
+                }],
+            )
+            .unwrap()
+            .remove(0);
+        assert_eq!(unchanged.state, TaskState::Active);
+        assert_eq!(
+            store
+                .jira_transition_state_for_task(task.id)
+                .unwrap()
+                .as_deref(),
+            Some("queued")
+        );
+
+        let closed = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "20001",
+                    issue_key: "WEB-42",
+                    summary: "Polish the launch page",
+                    description: "",
+                    status_id: "5",
+                    status_name: "Done",
+                    assignee_account_id: Some("account-1"),
+                    assignee_name: Some("Bea"),
+                    remote_updated_at: "2026-08-13T12:05:00.000+0000",
+                }],
+            )
+            .unwrap()
+            .remove(0);
+        assert_eq!(closed.state, TaskState::Completed);
+        assert_eq!(
+            store
+                .jira_transition_state_for_task(task.id)
+                .unwrap()
+                .as_deref(),
+            Some("conflict")
+        );
+
+        let reopened = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "20001",
+                    issue_key: "WEB-42",
+                    summary: "Polish the launch page",
+                    description: "",
+                    status_id: "3",
+                    status_name: "In Progress",
+                    assignee_account_id: Some("account-1"),
+                    assignee_name: Some("Bea"),
+                    remote_updated_at: "2026-08-13T12:10:00.000+0000",
+                }],
+            )
+            .unwrap()
+            .remove(0);
+        assert_eq!(reopened.state, TaskState::Active);
+        assert_eq!(store.jira_transition_state_for_task(task.id).unwrap(), None);
     }
 
     #[test]
