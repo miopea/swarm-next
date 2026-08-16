@@ -1219,3 +1219,17 @@ the independently updated terminal host through the API to worker settings:
   PID advanced to `3891701`; terminal-host PID `2966127` and the active Queen
   session remained unchanged. No Jira or live Apiary mutation occurred, and the
   proof browser closed after the run.
+- Release `0.1.0-dev-b05442a088ec` gives Keeper a bounded, privacy-preserving
+  audit of Steward task routing. Accepted shared tasks identify the routing
+  Steward, while the delegation surface shows recent accepted and declined
+  actions without exposing a member Hive's workers, repositories, terminals, or
+  credentials. The full gate passed 382 Rust tests, warnings-denied Clippy,
+  formatting, all 235 frontend tests, strict TypeScript, the production build,
+  and the dogfood harness. Isolated desktop and Android-size fixtures proved the
+  populated audit and rolling-update fallback. The deployed public Keeper view
+  rendered at 1,440 by 900 and 412 by 915 with zero horizontal overflow and no
+  browser warnings or errors. The package created a verified 1,208,320-byte
+  pre-update backup; schema 58 remained healthy with `quick_check=ok`. API PID
+  advanced to `3902142`; terminal-host PID `2966127`, worker-engine build
+  `f8abd293`, and the active Queen session remained unchanged. No Jira or live
+  Apiary mutation occurred, and the proof browser closed after the run.
