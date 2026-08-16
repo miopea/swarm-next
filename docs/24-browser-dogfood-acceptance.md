@@ -1250,3 +1250,23 @@ the independently updated terminal host through the API to worker settings:
   `f8abd293`, and Queen session `01a004fc-68b6-7720-9a6e-0eebf2434db1`
   remained unchanged. No Jira or live Apiary mutation occurred, and the proof
   browser closed after the run.
+- Release `0.1.0-dev-b0d74982e82b` adds operator-reviewed Steward Assist.
+  A scoped Steward can queue a short help offer for one managed Hive; Keeper
+  authenticates the Member, rechecks the exact current Assist grant and target,
+  and records one retry-stable result. The target operator accepts or declines
+  from her own Hive. No path injects a terminal, starts a worker, changes an
+  engagement lease, or implies takeover. Incoming, sent, queued, accepted, and
+  declined states remain durable across outbound Member polling. The complete
+  gate passed 386 Rust tests, warnings-denied Clippy, formatting, all 236
+  frontend tests, strict TypeScript, the production build, and the dogfood
+  harness. The actual populated Member component rendered at 1,440 by 900 and
+  Android-size 412 by 915 with zero horizontal overflow; all mobile Assist
+  controls met a 44-pixel touch target, and Accept and Offer completed without
+  UI errors. The deployed public Keeper and Apiary surfaces reported exact
+  release `0.1.0-dev-b0d74982e82b-20260816102112-3939579`, rendered with zero
+  horizontal overflow, and emitted no browser warnings or errors. The live
+  database migrated to schema 59 with `quick_check=ok`, all four Assist journal
+  tables present, and a 1,208,320-byte database. API PID advanced to `3940991`;
+  terminal-host PID `2966127`, worker-engine build `f8abd293`, and Queen session
+  `01a004fc-68b6-7720-9a6e-0eebf2434db1` remained unchanged. No Jira or live
+  Apiary mutation occurred, and every proof browser closed after the run.
