@@ -18,7 +18,8 @@ type Props = {
 };
 
 export default function WorkerSettings({ workers, workspaces, busy, providers, onCreate, onUpdate, onRemove, onDraftDescription, onReorder }: Props) {
-  const roster = workers.filter((worker) => worker.role !== "queen");
+  const scout = workers.find((worker) => worker.system_role === "scout");
+  const roster = workers.filter((worker) => worker.role !== "queen" && worker.system_role !== "scout");
   const available = workspaces.filter((workspace) => !workspace.configured_worker_id);
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
@@ -88,6 +89,27 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             <span><strong>Queen</strong><small>Pinned · always active</small></span>
           </div>
         )}
+        {scout && (
+          <WorkerPreferenceRow
+            worker={scout}
+            busy={busy}
+            first
+            last
+            managed
+            dragging={false}
+            dropTarget={false}
+            onMove={() => undefined}
+            onUpdate={onUpdate}
+            onRemove={onRemove}
+            onDraftDescription={onDraftDescription}
+            providers={providers}
+            onDragStart={() => undefined}
+            onDragEnd={() => undefined}
+            onDragTarget={() => undefined}
+            onDragLeave={() => undefined}
+            onDrop={() => undefined}
+          />
+        )}
         {roster.map((worker, index) => (
           <WorkerPreferenceRow
             key={worker.id}
@@ -95,6 +117,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             busy={busy}
             first={index === 0}
             last={index === roster.length - 1}
+            managed={false}
             dragging={workerReorder.draggedId === worker.id}
             dropTarget={workerReorder.dropTargetId === worker.id && workerReorder.draggedId !== worker.id}
             onMove={(offset) => move(index, offset)}
@@ -188,6 +211,7 @@ type WorkerPreferenceRowProps = {
   busy: boolean;
   first: boolean;
   last: boolean;
+  managed: boolean;
   dragging: boolean;
   dropTarget: boolean;
   onMove: (offset: -1 | 1) => void;
@@ -202,7 +226,7 @@ type WorkerPreferenceRowProps = {
   onDrop: (event: DragEvent) => void;
 };
 
-function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, onMove, onUpdate, onRemove, onDraftDescription, providers, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
+function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dropTarget, onMove, onUpdate, onRemove, onDraftDescription, providers, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(worker.name);
   const [description, setDescription] = useState(worker.description ?? "");
@@ -248,7 +272,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, 
   return (
     <div
       className={`configured-worker${dragging ? " configured-worker-dragging" : ""}${dropTarget ? " drop-target-before" : ""}`}
-      draggable={!busy && !editing}
+      draggable={!managed && !busy && !editing}
       onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", worker.id); onDragStart(); }}
       onDragEnd={onDragEnd}
       onDragEnter={() => { if (!editing) onDragTarget(); }}
@@ -259,27 +283,28 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, 
       <span className="worker-settings-bee"><BeeMascot expression={attention.expression} /></span>
       {editing ? (
         <form className="worker-preference-form" aria-label={`Edit ${worker.name}`} onSubmit={(event) => void save(event)}>
-          <label><span>Worker name</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus /></label>
+          <label><span>Worker name</span><input value={name} disabled={managed} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus /></label>
+          {managed && <small className="privacy-note">Scout is pinned after Queen and keeps ordinary worker authority for deliberate cross-repository work.</small>}
           <small className="worker-repository-path"><span>Repository</span><code>{worker.workspace}</code></small>
           <div className="worker-description-field"><span className="worker-description-heading"><label htmlFor={`worker-description-${worker.id}`}>Queen routing description</label><button type="button" className="secondary-button" disabled={busy || draftingDescription} onClick={() => void draftDescription()}>{draftingDescription ? "Reading repository…" : description ? "Refresh from repository" : "Draft from repository"}</button></span><textarea id={`worker-description-${worker.id}`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" /><small>The draft reads local README and project metadata only. Review it before saving.</small>{draftError && <small className="field-error" role="alert">{draftError}</small>}</div>
-          <label className="worker-provider-field"><span>Default coding provider</span><select value={provider} disabled={worker.running} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
+          <div className="worker-provider-field"><label htmlFor={`worker-provider-${worker.id}`}>Default coding provider</label><select id={`worker-provider-${worker.id}`} value={provider} disabled={worker.running} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
             <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · unavailable"}</option>
-          </select><small>{worker.running ? "Put this worker to sleep before changing provider." : "Used the next time this worker wakes. Existing history remains available."}</small></label>
+          </select><small>{worker.running ? "Put this worker to sleep before changing provider." : "Used the next time this worker wakes. Existing history remains available."}</small></div>
           <label className="worker-autostart"><input type="checkbox" checked={autostart} onChange={(event) => setAutostart(event.target.checked)} />Keep this worker active automatically</label>
           <span className="worker-edit-actions"><button disabled={busy || !name.trim()}>Save</button><button type="button" className="secondary-button" disabled={busy} onClick={cancel}>Cancel</button></span>
-          <div className="worker-remove-zone">
+          {!managed && <div className="worker-remove-zone">
             {confirmingRemoval ? <><p><strong>Remove {worker.name} from this Hive?</strong><small>Repository files are untouched. Historical sessions remain, but this worker must be sleeping and have no open assigned tasks.</small></p><span><button type="button" className="danger-button" disabled={busy || worker.running} onClick={() => void remove()}>Confirm removal</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmingRemoval(false)}>Keep worker</button></span></> : <button type="button" className="danger-link" disabled={busy || worker.running} onClick={() => setConfirmingRemoval(true)}>Remove worker</button>}
-          </div>
+          </div>}
         </form>
       ) : (
         <>
           <span className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {attention.label}{worker.autostart ? " · always active" : ""}</small>{worker.description && <small className="worker-routing-summary">{worker.description}</small>}</span>
           <button type="button" className="worker-edit-button secondary-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
-          <span className="worker-order-actions">
+          {!managed && <span className="worker-order-actions">
             <button type="button" className="secondary-button" aria-label={`Move ${worker.name} earlier`} disabled={busy || first} onClick={() => onMove(-1)}>↑</button>
             <button type="button" className="secondary-button" aria-label={`Move ${worker.name} later`} disabled={busy || last} onClick={() => onMove(1)}>↓</button>
-          </span>
+          </span>}
         </>
       )}
     </div>

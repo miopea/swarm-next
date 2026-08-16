@@ -179,6 +179,32 @@ test("drafts private repository context into an editable unsaved description", a
   expect(screen.getByText(/local README and project metadata only/)).toBeInTheDocument();
 });
 
+test("pins managed Scout after Queen while keeping provider and routing settings editable", () => {
+  const scout = { ...worker("scout", "Scout", "/projects", 0), system_role: "scout" as const };
+  render(
+    <WorkerSettings
+      workers={[queen, scout, budget]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
+      onReorder={vi.fn()}
+    />,
+  );
+
+  const scoutSummary = screen.getByText("Scout").closest<HTMLElement>(".configured-worker")!;
+  expect(scoutSummary).not.toHaveAttribute("draggable", "true");
+  fireEvent.click(within(scoutSummary).getByRole("button", { name: "Edit" }));
+  const form = screen.getByRole("form", { name: "Edit Scout" });
+  expect(within(form).getByLabelText("Worker name")).toBeDisabled();
+  expect(within(form).getByRole("combobox", { name: "Default coding provider" })).toBeEnabled();
+  expect(within(form).queryByRole("button", { name: "Remove worker" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Move Scout later" })).not.toBeInTheDocument();
+});
+
 function worker(id: string, name: string, workspace: string, position: number, role: Worker["role"] = "worker"): Worker {
   return {
     id,

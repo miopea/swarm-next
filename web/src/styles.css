@@ -609,7 +609,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .configured-worker-summary .worker-routing-summary { margin-top: 2px; color: var(--muted); }
 .worker-edit-button { min-height: 34px; padding: 5px 10px; }
 .worker-preference-form { display: grid; grid-column: 2 / -1; grid-template-columns: minmax(150px, 1fr) auto; align-items: end; gap: 8px 12px; padding: 5px 0; }
-.worker-preference-form > label:not(.worker-autostart) { display: grid; gap: 4px; color: var(--muted); font-size: .72rem; font-weight: 700; }
+.worker-preference-form > label:not(.worker-autostart), .worker-provider-field { display: grid; gap: 4px; color: var(--muted); font-size: .72rem; font-weight: 700; }
 .worker-description-field { color: var(--muted); display: grid; font-size: .72rem; font-weight: 700; gap: 4px; grid-column: 1 / -1; }
 .worker-description-field textarea { min-height: 76px; resize: vertical; }
 .worker-description-heading { align-items: center; display: flex; gap: 10px; justify-content: space-between; }

@@ -16,6 +16,7 @@ export type Worker = {
   name: string;
   description?: string;
   role: WorkerRole;
+  system_role?: "scout";
   provider: ProviderKind;
   workspace: string;
   autostart: boolean;

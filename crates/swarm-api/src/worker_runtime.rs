@@ -21,6 +21,7 @@ pub(super) async fn start_worker_process(
     let profile = task_store(state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
+    let is_scout = worker_is_scout(state, worker_id)?;
     if let Some(session_id) = profile.active_session_id
         && live.contains(&session_id)
     {
@@ -30,6 +31,7 @@ pub(super) async fn start_worker_process(
             false,
             None,
             ProviderActivity::Unknown,
+            is_scout,
         ));
     }
     let mcp_config = if profile.provider == ProviderKind::ClaudeCode {
@@ -103,13 +105,22 @@ pub(super) async fn start_worker_process(
     let profile = task_store(state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
+    let is_scout = worker_is_scout(state, worker_id)?;
     Ok(worker_view(
         profile,
         true,
         false,
         None,
         ProviderActivity::Unknown,
+        is_scout,
     ))
+}
+
+fn worker_is_scout(state: &AppState, worker_id: WorkerId) -> Result<bool, ApiError> {
+    task_store(state)?
+        .scout_worker_id()
+        .map(|scout_id| scout_id == Some(worker_id))
+        .map_err(|error| task_store_error(&error))
 }
 
 pub(super) async fn reconcile_worker_bindings(

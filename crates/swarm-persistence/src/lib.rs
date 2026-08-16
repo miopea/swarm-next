@@ -70,7 +70,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 50;
+const CURRENT_SCHEMA_VERSION: i64 = 51;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -237,6 +237,8 @@ pub enum TaskStoreError {
     EmptyWorkerUpdate,
     #[error("the Queen profile is managed by Swarm and cannot be edited")]
     QueenProfileImmutable,
+    #[error("Scout is a managed Hive worker and cannot be renamed or removed")]
+    ScoutIdentityImmutable,
     #[error("the Queen profile already exists")]
     QueenAlreadyExists,
     #[error("worker already has an active session")]
@@ -269,7 +271,7 @@ pub enum TaskStoreError {
     JiraTransitionPending,
     #[error("this Hive already has the maximum number of pending Jira updates")]
     JiraTransitionQueueFull,
-    #[error("worker order must contain every non-Queen worker exactly once")]
+    #[error("worker order must contain every operator-ordered worker exactly once")]
     InvalidWorkerOrder,
     #[error("database schema version {found} is newer than supported version {supported}")]
     UnsupportedSchemaVersion { found: i64, supported: i64 },
@@ -1540,7 +1542,41 @@ fn migrate_recent_schema(
     if schema_version < 50 {
         federation_jira_claims::migrate_federation_jira_claims(transaction)?;
     }
+    if schema_version < 51 {
+        migrate_managed_worker_roles(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_managed_worker_roles(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let worker_profiles_exist = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                       WHERE type = 'table' AND name = 'worker_profiles')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !worker_profiles_exist {
+        return transaction.execute_batch("PRAGMA user_version = 51;");
+    }
+    let has_system_role = {
+        let mut statement = transaction.prepare("PRAGMA table_info(worker_profiles)")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .any(|column| column == "system_role")
+    };
+    if !has_system_role {
+        transaction.execute_batch(
+            "ALTER TABLE worker_profiles
+             ADD COLUMN system_role TEXT CHECK (system_role IS NULL OR system_role = 'scout');",
+        )?;
+    }
+    transaction.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS one_scout_per_hive
+             ON worker_profiles(hive_id) WHERE system_role = 'scout' AND archived_at IS NULL;
+         PRAGMA user_version = 51;",
+    )
 }
 
 fn migrate_worker_profile_metadata(

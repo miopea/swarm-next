@@ -99,7 +99,7 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
       <div className="apiary-invite-heading">
         <span>
           <strong>Invite a Hive</strong>
-          <small>Create one private link. The other Hive connects outward to this Keeper, so no inbound access to her computer is required.</small>
+          <small>Create one private link, then send it to the other operator. In her personal Hive, she pastes it under Settings → Apiary → Join a Keeper&apos;s Apiary. Her Hive connects outward to this Keeper, so no inbound access to her computer is required.</small>
         </span>
         <button className="primary-action" disabled={busy || working} onClick={() => void createLink()}>
           {working ? "Working…" : "Create invitation link"}

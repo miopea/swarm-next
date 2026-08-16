@@ -174,6 +174,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     <div className="personal-hive-join">
       <div className="apiary-exchange-intro">
         <span><strong>Join a Keeper&apos;s Apiary</strong><small>Paste the private link she sent you. This Hive connects outward, presents its signed identity, and keeps polling her Keeper—she never needs network access to this computer.</small></span>
+        <p className="privacy-note">You are in the receiving personal Hive. Paste the link created on the Keeper&apos;s Apiary screen below.</p>
         <ApiaryLinkEntry label="Keeper invitation link" value={keeperLink} action={working ? "Connecting…" : "Connect to Keeper"} disabled={busy || working} onChange={setKeeperLink} onAction={() => void connectToKeeper()} />
         <div className="apiary-transport-boundary" role="note">
           <span><strong>Jira work</strong><small>This Hive continues polling Jira directly as you.</small></span>

@@ -24,6 +24,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .to_string_lossy()
             .as_ref(),
     )?;
+    let _ = store.promote_project_root_to_scout(
+        scout_workspace_from_roots(&workspace_roots)
+            .to_string_lossy()
+            .as_ref(),
+    )?;
     let mut state = env::var("SWARM_OPERATOR_TOKEN")
         .map_or_else(
             |_| AppState::default(),
@@ -181,6 +186,22 @@ fn queen_workspace_from_roots(roots: &[PathBuf]) -> PathBuf {
                 .cloned()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("queen")
+        },
+        PathBuf::from,
+    )
+}
+
+fn scout_workspace_from_roots(roots: &[PathBuf]) -> PathBuf {
+    env::var_os("SWARM_SCOUT_WORKSPACE").map_or_else(
+        || {
+            let first = roots.first().cloned().unwrap_or_else(|| PathBuf::from("."));
+            if roots.len() == 1 {
+                return first.parent().map_or(first.clone(), PathBuf::from);
+            }
+            first
+                .ancestors()
+                .find(|candidate| roots.iter().all(|root| root.starts_with(candidate)))
+                .map_or_else(|| first.clone(), PathBuf::from)
         },
         PathBuf::from,
     )

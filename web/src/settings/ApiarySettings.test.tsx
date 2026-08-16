@@ -143,6 +143,7 @@ test("Keeper creates one private invitation link for an outbound member connecti
   expect(await screen.findByRole("status")).toHaveTextContent("Invitation link copied");
   expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^https:\/\/keeper\.example\.test\/#swarm-next-apiary-keeper=/));
   expect(screen.getByRole("group", { name: "Created Apiary link" })).toHaveTextContent(/private handoff link/i);
+  expect(screen.getByText(/In her personal Hive/)).toHaveTextContent("Settings → Apiary → Join a Keeper's Apiary");
   expect(screen.getByRole("note")).toHaveTextContent("Each Hive polls Jira directly");
   expect(screen.getByRole("note")).toHaveTextContent("Member Hives poll this Keeper");
 });

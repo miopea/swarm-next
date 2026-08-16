@@ -1315,6 +1315,8 @@ struct WorkerView {
     engagement_expires_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     runtime_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system_role: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1467,6 +1469,7 @@ fn worker_view(
     awaiting_operator: bool,
     runtime_error: Option<String>,
     provider_activity: ProviderActivity,
+    is_scout: bool,
 ) -> WorkerView {
     let engagement_expires_at = profile.engagement_expires_at;
     let attention_state = if runtime_error.is_some() {
@@ -1488,6 +1491,7 @@ fn worker_view(
         attention_state,
         engagement_expires_at,
         runtime_error,
+        system_role: is_scout.then_some("scout"),
     }
 }
 
@@ -5321,7 +5325,8 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         }
         TaskStoreError::DuplicateWorkerName
         | TaskStoreError::QueenAlreadyExists
-        | TaskStoreError::QueenProfileImmutable => {
+        | TaskStoreError::QueenProfileImmutable
+        | TaskStoreError::ScoutIdentityImmutable => {
             ApiError::new(StatusCode::CONFLICT, "worker_conflict", error.to_string())
         }
         TaskStoreError::WorkerAlreadyRunning => ApiError::new(
@@ -7753,14 +7758,22 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let profile = store.ensure_queen("/workspace/queen").unwrap();
         assert_eq!(
-            worker_view(profile.clone(), true, true, None, ProviderActivity::Resting)
-                .attention_state,
+            worker_view(
+                profile.clone(),
+                true,
+                true,
+                None,
+                ProviderActivity::Resting,
+                false,
+            )
+            .attention_state,
             WorkerAttentionState::AwaitingOperator
         );
         let mut engaged = profile;
         engaged.engagement_expires_at = Some(400);
         assert_eq!(
-            worker_view(engaged, true, true, None, ProviderActivity::Resting).attention_state,
+            worker_view(engaged, true, true, None, ProviderActivity::Resting, false)
+                .attention_state,
             WorkerAttentionState::WithOperator
         );
     }
@@ -7776,17 +7789,26 @@ mod tests {
                 false,
                 None,
                 ProviderActivity::Resting,
+                false,
             )
             .attention_state,
             WorkerAttentionState::Resting
         );
         assert_eq!(
-            worker_view(profile.clone(), true, false, None, ProviderActivity::Active,)
-                .attention_state,
+            worker_view(
+                profile.clone(),
+                true,
+                false,
+                None,
+                ProviderActivity::Active,
+                false,
+            )
+            .attention_state,
             WorkerAttentionState::Buzzing
         );
         assert_eq!(
-            worker_view(profile, false, false, None, ProviderActivity::Active).attention_state,
+            worker_view(profile, false, false, None, ProviderActivity::Active, false)
+                .attention_state,
             WorkerAttentionState::Sleeping
         );
     }

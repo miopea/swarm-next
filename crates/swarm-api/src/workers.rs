@@ -78,6 +78,9 @@ pub(super) async fn list_workers(
         .workers_awaiting_operator()
         .map_err(|error| task_store_error(&error))?;
     let errors = state.worker_errors.read().await;
+    let scout_id = task_store(&state)?
+        .scout_worker_id()
+        .map_err(|error| task_store_error(&error))?;
     let workers = profiles
         .into_iter()
         .map(|profile| {
@@ -90,7 +93,15 @@ pub(super) async fn list_workers(
                 .active_session_id
                 .and_then(|session_id| provider_activity.get(&session_id).copied())
                 .unwrap_or(ProviderActivity::Unknown);
-            worker_view(profile, running, needs_operator, runtime_error, activity)
+            let is_scout = scout_id == Some(profile.id);
+            worker_view(
+                profile,
+                running,
+                needs_operator,
+                runtime_error,
+                activity,
+                is_scout,
+            )
         })
         .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(workers)).into_response())
@@ -285,6 +296,7 @@ pub(super) async fn create_worker(
             false,
             None,
             ProviderActivity::Unknown,
+            false,
         )),
     )
         .into_response())
@@ -329,6 +341,10 @@ pub(super) async fn update_worker(
             .remove(&worker_id);
     }
     let running = profile.active_session_id.is_some();
+    let is_scout = task_store(&state)?
+        .scout_worker_id()
+        .map_err(|error| task_store_error(&error))?
+        == Some(worker_id);
     state.control_room_notify.notify_waiters();
     Ok(Json(worker_view(
         profile,
@@ -336,6 +352,7 @@ pub(super) async fn update_worker(
         false,
         None,
         ProviderActivity::Unknown,
+        is_scout,
     ))
     .into_response())
 }
@@ -557,6 +574,10 @@ pub(super) async fn stop_worker(
     authorize(&state, &headers)?;
     let _guard = state.worker_lifecycle.lock().await;
     let worker_id = parse_worker_id(&worker_id)?;
+    let is_scout = task_store(&state)?
+        .scout_worker_id()
+        .map_err(|error| task_store_error(&error))?
+        == Some(worker_id);
     let profile = task_store(&state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
@@ -585,6 +606,7 @@ pub(super) async fn stop_worker(
         false,
         None,
         ProviderActivity::Unknown,
+        is_scout,
     ))
     .into_response())
 }

@@ -31,6 +31,93 @@ impl TaskStore {
         )
     }
 
+    /// Promotes the exact existing `Project Root` worker at the configured
+    /// projects root into managed Scout without replacing its durable identity.
+    ///
+    /// # Errors
+    /// Returns an error for invalid workspace, conflicting name, corrupt identity,
+    /// or unavailable persistence.
+    pub fn promote_project_root_to_scout(
+        &self,
+        workspace: &str,
+    ) -> Result<Option<WorkerProfile>, TaskStoreError> {
+        let workspace = workspace.trim();
+        if workspace.is_empty() || workspace.len() > MAX_WORKSPACE_BYTES {
+            return Err(TaskStoreError::InvalidWorkspace);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        if let Some(id) = transaction
+            .query_row(
+                "SELECT id FROM worker_profiles
+                 WHERE system_role = 'scout' AND archived_at IS NULL",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            transaction.commit()?;
+            drop(connection);
+            return self
+                .get_worker_profile(parse_worker_identity(&id)?)
+                .map(Some);
+        }
+        let Some(id) = transaction
+            .query_row(
+                "SELECT id FROM worker_profiles
+                 WHERE role = 'worker' AND archived_at IS NULL
+                   AND workspace = ?1 AND name = 'Project Root' COLLATE NOCASE",
+                [workspace],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        else {
+            transaction.commit()?;
+            return Ok(None);
+        };
+        let duplicate_name = transaction
+            .query_row(
+                "SELECT 1 FROM worker_profiles
+                 WHERE id != ?1 AND name = 'Scout' COLLATE NOCASE AND archived_at IS NULL",
+                [&id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if duplicate_name {
+            return Err(TaskStoreError::DuplicateWorkerName);
+        }
+        transaction.execute(
+            "UPDATE worker_profiles
+             SET name = 'Scout', system_role = 'scout', autostart = 0, position = 0,
+                 updated_at = unixepoch()
+             WHERE id = ?1",
+            [&id],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_worker_profile(parse_worker_identity(&id)?)
+            .map(Some)
+    }
+
+    /// Returns the stable managed Scout identity when configured.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or contains invalid identity data.
+    pub fn scout_worker_id(&self) -> Result<Option<WorkerId>, TaskStoreError> {
+        self.connection()?
+            .query_row(
+                "SELECT id FROM worker_profiles
+                 WHERE system_role = 'scout' AND archived_at IS NULL",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|id| parse_worker_identity(&id))
+            .transpose()
+    }
+
     /// Creates one durable worker profile without starting a process.
     ///
     /// # Errors
@@ -101,9 +188,9 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let (role, current_provider, running) = transaction
+        let (role, system_role, current_provider, running) = transaction
             .query_row(
-                "SELECT role, provider,
+                "SELECT role, system_role, provider,
                         EXISTS(SELECT 1 FROM worker_sessions
                                WHERE worker_id = worker_profiles.id AND ended_at IS NULL)
                  FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
@@ -111,8 +198,9 @@ impl TaskStore {
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, bool>(2)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, bool>(3)?,
                     ))
                 },
             )
@@ -120,6 +208,9 @@ impl TaskStore {
             .ok_or(TaskStoreError::WorkerNotFound)?;
         if role == WorkerRole::Queen.to_string() {
             return Err(TaskStoreError::QueenProfileImmutable);
+        }
+        if system_role.as_deref() == Some("scout") && name.is_some() {
+            return Err(TaskStoreError::ScoutIdentityImmutable);
         }
         if let Some(name) = name {
             let duplicate = transaction
@@ -178,9 +269,9 @@ impl TaskStore {
     pub fn archive_worker_profile(&self, worker_id: WorkerId) -> Result<(), TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let (name, role, running, owns_open_tasks) = transaction
+        let (name, role, system_role, running, owns_open_tasks) = transaction
             .query_row(
-                "SELECT name, role,
+                "SELECT name, role, system_role,
                         EXISTS(SELECT 1 FROM worker_sessions
                                WHERE worker_id = worker_profiles.id AND ended_at IS NULL),
                         EXISTS(SELECT 1 FROM tasks
@@ -192,8 +283,9 @@ impl TaskStore {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, bool>(2)?,
+                        row.get::<_, Option<String>>(2)?,
                         row.get::<_, bool>(3)?,
+                        row.get::<_, bool>(4)?,
                     ))
                 },
             )
@@ -201,6 +293,9 @@ impl TaskStore {
             .ok_or(TaskStoreError::WorkerNotFound)?;
         if role == WorkerRole::Queen.to_string() {
             return Err(TaskStoreError::QueenProfileImmutable);
+        }
+        if system_role.as_deref() == Some("scout") {
+            return Err(TaskStoreError::ScoutIdentityImmutable);
         }
         if running {
             return Err(TaskStoreError::WorkerMustBeSleeping);
@@ -241,7 +336,7 @@ impl TaskStore {
         let expected = {
             let mut statement = transaction.prepare(
                 "SELECT id FROM worker_profiles
-                 WHERE role != 'queen' AND archived_at IS NULL
+                 WHERE role != 'queen' AND system_role IS NULL AND archived_at IS NULL
                  ORDER BY position, created_at, id",
             )?;
             statement
@@ -294,7 +389,11 @@ impl TaskStore {
               ON e.worker_id = p.id AND e.session_id = s.session_id
              AND e.expires_at > unixepoch()
             WHERE p.archived_at IS NULL
-            ORDER BY CASE p.role WHEN 'queen' THEN 0 ELSE 1 END,
+            ORDER BY CASE
+                         WHEN p.role = 'queen' THEN 0
+                         WHEN p.system_role = 'scout' THEN 1
+                         ELSE 2
+                     END,
                      p.position, p.created_at, p.id
             ",
         )?;
@@ -814,6 +913,10 @@ fn validate_profile(name: &str, workspace: &str) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
+fn parse_worker_identity(value: &str) -> Result<WorkerId, TaskStoreError> {
+    WorkerId::from_str(value).map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
+}
+
 fn validate_worker_name(name: &str) -> Result<(), TaskStoreError> {
     if name.is_empty() || name.len() > MAX_WORKER_NAME_BYTES || name.chars().any(char::is_control) {
         return Err(TaskStoreError::InvalidWorkerName);
@@ -880,6 +983,76 @@ mod tests {
         assert_eq!(queen.name, "Queen");
         assert_eq!(queen.role, WorkerRole::Queen);
         assert!(queen.autostart);
+    }
+
+    #[test]
+    fn exact_project_root_is_promoted_to_protected_sleeping_scout_in_place() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let project_root = store
+            .create_worker_with_description(
+                "Project Root",
+                "Coordinates deliberate cross-repository changes.",
+                ProviderKind::ClaudeCode,
+                "/workspace/projects",
+                true,
+                9,
+            )
+            .unwrap();
+        let conversation = project_root.provider_conversation_id;
+        let ordinary = store
+            .create_worker(
+                "Daisy",
+                ProviderKind::ClaudeCode,
+                "/workspace/daisy",
+                false,
+                10,
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .promote_project_root_to_scout("/workspace/other")
+                .unwrap()
+                .is_none()
+        );
+        let scout = store
+            .promote_project_root_to_scout("/workspace/projects")
+            .unwrap()
+            .unwrap();
+        assert_eq!(scout.id, project_root.id);
+        assert_eq!(scout.name, "Scout");
+        assert_eq!(scout.description, project_root.description);
+        assert_eq!(scout.provider_conversation_id, conversation);
+        assert_eq!(scout.role, WorkerRole::Worker);
+        assert!(!scout.autostart);
+        assert_eq!(store.scout_worker_id().unwrap(), Some(scout.id));
+        assert!(matches!(
+            store.update_worker_profile(scout.id, Some("Root"), None, None, None),
+            Err(TaskStoreError::ScoutIdentityImmutable)
+        ));
+        assert!(matches!(
+            store.archive_worker_profile(scout.id),
+            Err(TaskStoreError::ScoutIdentityImmutable)
+        ));
+        let updated = store
+            .update_worker_profile(
+                scout.id,
+                None,
+                Some("Routes larger cross-repository work."),
+                Some(ProviderKind::Codex),
+                Some(false),
+            )
+            .unwrap();
+        assert_eq!(updated.provider, ProviderKind::Codex);
+        let reordered = store.reorder_workers(&[ordinary.id]).unwrap();
+        assert_eq!(
+            reordered
+                .iter()
+                .map(|profile| profile.id)
+                .collect::<Vec<_>>(),
+            vec![queen.id, updated.id, ordinary.id]
+        );
     }
 
     #[test]
