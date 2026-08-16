@@ -1233,3 +1233,20 @@ the independently updated terminal host through the API to worker settings:
   advanced to `3902142`; terminal-host PID `2966127`, worker-engine build
   `f8abd293`, and the active Queen session remained unchanged. No Jira or live
   Apiary mutation occurred, and the proof browser closed after the run.
+- Release `0.1.0-dev-c592274d42b1` adds a privacy-bounded Steward Observe
+  pulse. A Member Steward sees only per-managed-Hive counts for Ready, Active,
+  Blocked, Review, and active Jira claims plus the latest shared-work activity
+  time. Private workers, repositories, terminals, transcripts, local tasks,
+  provider sessions, Jira issue content, and credentials remain absent. The
+  full gate passed 382 Rust tests, warnings-denied Clippy, formatting, all 235
+  frontend tests, strict TypeScript, the production build, and the dogfood
+  harness. The actual Member component rendered cleanly at 1,440 by 900 and
+  Android-size 412 by 915 with zero horizontal overflow; rolling-update tests
+  also proved both older Keeper and newer Member payloads. The deployed public
+  surface reported exact release `0.1.0-dev-c592274d42b1-20260816093833-3915254`
+  at both sizes with zero horizontal overflow and no browser warnings. Schema
+  58 remained healthy with `quick_check=ok` and a 1,208,320-byte database. API
+  PID advanced to `3916638`; terminal-host PID `2966127`, worker-engine build
+  `f8abd293`, and Queen session `01a004fc-68b6-7720-9a6e-0eebf2434db1`
+  remained unchanged. No Jira or live Apiary mutation occurred, and the proof
+  browser closed after the run.
