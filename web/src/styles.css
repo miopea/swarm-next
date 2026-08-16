@@ -787,7 +787,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-file-fallback summary { width: max-content; cursor: pointer; }
 .apiary-file-fallback .apiary-card-drop { margin-top: 8px; }
 .apiary-generated-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent-strong) 38%, var(--line)); border-radius: var(--radius-md); background: var(--accent-soft); }
-.apiary-generated-link small { grid-column: 1 / -1; color: var(--muted); line-height: 1.4; }
+.apiary-generated-link-heading { display: grid; grid-column: 1 / -1; gap: 2px; }
+.apiary-generated-link-heading > strong { font-size: .88rem; }
+.apiary-generated-link small { color: var(--muted); line-height: 1.4; }
+.apiary-generated-link-steps { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 4px 0 0; padding: 0; list-style: none; }
+.apiary-generated-link-steps > li { display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: 3px 8px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.apiary-generated-link-fallback { grid-column: 1 / -1; }
 .apiary-invitation-preview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 11px; border: 1px solid var(--accent-strong); border-radius: var(--radius-md); background: var(--accent-soft); }
 .apiary-invitation-preview > div { display: grid; min-width: 0; gap: 2px; }
 .apiary-invitation-preview > div > span { color: var(--muted); font-size: .65rem; }
@@ -1197,6 +1202,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-step-action button { width: 100%; }
   .apiary-link-entry, .apiary-generated-link { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .apiary-link-entry button, .apiary-generated-link button { width: 100%; }
+  .apiary-generated-link-steps { grid-template-columns: minmax(0, 1fr); }
   .apiary-handoff-page { place-items: start stretch; padding: 0; }
   .apiary-handoff-card { min-height: 100dvh; align-content: start; border: 0; border-radius: 0; padding: 24px 18px max(28px, env(safe-area-inset-bottom)); box-shadow: none; }
   .apiary-handoff-target > div { grid-template-columns: minmax(0, 1fr); }

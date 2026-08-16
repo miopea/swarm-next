@@ -23,9 +23,18 @@ export function ApiaryGeneratedLink({ link, onCopy }: { link: string; onCopy: (l
   const id = useId();
   return (
     <div className="apiary-generated-link" role="group" aria-label="Created Apiary link">
-      <label htmlFor={id}><span>Private handoff link</span><input id={id} readOnly value={link} onFocus={(event) => event.currentTarget.select()} /></label>
+      <div className="apiary-generated-link-heading">
+        <strong>Send this to the other Hive operator</strong>
+        <small>This is the only item she needs from you. Share it privately; it expires and can be consumed by only one Hive.</small>
+      </div>
+      <label htmlFor={id}><span>Private invitation link</span><input id={id} readOnly value={link} onFocus={(event) => event.currentTarget.select()} /></label>
       <button className="secondary-button" onClick={() => void onCopy(link)}>Copy again</button>
-      <small>Send it privately. Opening the link guides her to her personal Hive, then prefills Settings -&gt; Apiary -&gt; Join a Keeper&apos;s Apiary. Manual paste remains available. The link expires and can be consumed by only one Hive.</small>
+      <ol className="apiary-generated-link-steps" aria-label="How the personal Hive uses this invitation">
+        <ApiaryExchangeStep number="1" title="She opens the link" detail="A private handoff page asks where she normally opens her personal Hive." />
+        <ApiaryExchangeStep number="2" title="Her Hive connects outward" detail="The link opens Settings → Apiary and prefills Connect to Keeper. No inbound access to her computer is needed." />
+        <ApiaryExchangeStep number="3" title="You approve the exact Hive" detail="Her verified Hive appears here for approval. She then reviews policy and Jira readiness before joining." />
+      </ol>
+      <small className="apiary-generated-link-fallback">If opening the link cannot reach her personal Hive, she can paste the complete link into Settings → Apiary → Join a Keeper&apos;s Apiary.</small>
     </div>
   );
 }
