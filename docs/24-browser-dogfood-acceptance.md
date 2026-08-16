@@ -1088,7 +1088,7 @@ the independently updated terminal host through the API to worker settings:
   surface remained free of horizontal overflow, and browser authentication
   survived complete restarts. API PID advanced to `3733677`; terminal-host PID
   `2966127` remained unchanged. Every proof browser and context closed.
-- Pending release adds retry-safe Member departure without sacrificing private
+- Release `0.1.0-dev-c293119af824` adds retry-safe Member departure without sacrificing private
   Hive work. The flow names exactly what stays local, blocks departure while
   shared Jira claims, Apiary tasks, Stewardships, or queued shared mutations
   remain, and requires the Apiary name before leaving. If the Keeper response
@@ -1098,5 +1098,9 @@ the independently updated terminal host through the API to worker settings:
   and the production build passed. The real component was visually proofed in
   an isolated non-mutating Member surface at 1,440 by 900 and Android-size 412
   by 915. Normal, confirmation, and paused-recovery states had zero horizontal
-  overflow and kept all safeguards readable. The proof tab closed immediately
-  after the run.
+  overflow and kept all safeguards readable. An earlier verified schema-52
+  backup remained available and a 1,110,016-byte schema-53 snapshot passed
+  `quick_check=ok` after activation. Live desktop and mobile smoke tests showed
+  the new release with zero horizontal overflow. API PID advanced to `3768640`;
+  terminal-host PID `2966127` remained unchanged, preserving active workers.
+  Every proof tab closed immediately after the run.
