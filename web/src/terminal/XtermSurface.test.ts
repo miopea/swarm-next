@@ -386,6 +386,7 @@ test("continuous container movement produces one settled terminal resize", async
   await vi.advanceTimersByTimeAsync(1);
   expect(xterm.resize).toHaveBeenCalledOnce();
   expect(xterm.resize).toHaveBeenCalledWith(132, 38);
+  await vi.advanceTimersByTimeAsync(16);
   expect(xterm.refresh).toHaveBeenCalledWith(0, 37);
 
   surface.dispose();
@@ -486,11 +487,17 @@ test("repaints unchanged geometry after a settled viewport change", async () => 
   surface.open(element);
 
   window.dispatchEvent(new Event("resize"));
-  await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_FOR_TEST_MS);
+  await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_FOR_TEST_MS + 16);
 
   expect(xterm.resize).not.toHaveBeenCalled();
   expect(xterm.clearTextureAtlas).toHaveBeenCalledOnce();
   expect(xterm.refresh).toHaveBeenCalledWith(0, 23);
+  await vi.advanceTimersByTimeAsync(350);
+  expect(xterm.clearTextureAtlas).toHaveBeenCalledTimes(2);
+  xterm.clearTextureAtlas.mockClear();
+  window.dispatchEvent(new Event("focus"));
+  await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_FOR_TEST_MS + 16);
+  expect(xterm.clearTextureAtlas).toHaveBeenCalledOnce();
   surface.dispose();
   element.remove();
 });

@@ -7,6 +7,7 @@ import type { Disposable, TerminalSurface } from "./TerminalController";
 
 const MAX_FIT_FRAMES = 60;
 const RESIZE_SETTLE_MS = 120;
+const REDRAW_RETRY_MS = 350;
 const TOUCH_DRAG_THRESHOLD_PX = 4;
 const FALLBACK_CELL_HEIGHT_PX = 17;
 export const MIN_TERMINAL_ROWS = 4;
@@ -19,6 +20,7 @@ export class XtermSurface implements TerminalSurface {
   #resizeObserver: ResizeObserver | undefined;
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
   #redrawFrame: number | undefined;
+  #redrawRetryTimer: ReturnType<typeof setTimeout> | undefined;
   #element: HTMLElement | undefined;
   #pointerIdentifier: number | undefined;
   #touchIdentifier: number | undefined;
@@ -65,7 +67,9 @@ export class XtermSurface implements TerminalSurface {
     this.#resizeObserver = new ResizeObserver(() => this.#scheduleFit());
     this.#resizeObserver.observe(element);
     window.addEventListener("resize", this.#handleViewportChange);
+    window.addEventListener("focus", this.#handleViewportChange);
     window.addEventListener("pageshow", this.#handleViewportChange);
+    window.visualViewport?.addEventListener("resize", this.#handleViewportChange);
     document.addEventListener("visibilitychange", this.#handleVisibilityChange);
   }
 
@@ -150,7 +154,9 @@ export class XtermSurface implements TerminalSurface {
     this.#themeObserver?.disconnect();
     this.#resizeObserver?.disconnect();
     window.removeEventListener("resize", this.#handleViewportChange);
+    window.removeEventListener("focus", this.#handleViewportChange);
     window.removeEventListener("pageshow", this.#handleViewportChange);
+    window.visualViewport?.removeEventListener("resize", this.#handleViewportChange);
     document.removeEventListener("visibilitychange", this.#handleVisibilityChange);
     this.#element?.removeEventListener("pointerdown", this.#handlePointerStart, true);
     this.#element?.removeEventListener("pointermove", this.#handlePointerMove, true);
@@ -290,7 +296,7 @@ export class XtermSurface implements TerminalSurface {
     }
     // A stable row/column count does not mean Chromium's backing canvas is
     // healthy. Explicitly repaint after responsive layout and PWA resumes.
-    this.#refreshViewport();
+    this.#scheduleRedraw();
   }
 
   #refreshViewport(): void {
@@ -309,13 +315,25 @@ export class XtermSurface implements TerminalSurface {
       this.#redrawFrame = undefined;
       if (!this.#element?.isConnected) return;
       this.#refreshViewport();
+      // Chromium can acknowledge the first invalidation while its backing
+      // texture is still being recreated after a debugger/PWA viewport
+      // transition. One bounded follow-up catches that race without polling.
+      this.#redrawRetryTimer = setTimeout(() => {
+        this.#redrawRetryTimer = undefined;
+        if (this.#element?.isConnected) this.#refreshViewport();
+      }, REDRAW_RETRY_MS);
     });
   }
 
   #cancelScheduledRedraw(): void {
-    if (this.#redrawFrame === undefined) return;
-    cancelAnimationFrame(this.#redrawFrame);
-    this.#redrawFrame = undefined;
+    if (this.#redrawFrame !== undefined) {
+      cancelAnimationFrame(this.#redrawFrame);
+      this.#redrawFrame = undefined;
+    }
+    if (this.#redrawRetryTimer !== undefined) {
+      clearTimeout(this.#redrawRetryTimer);
+      this.#redrawRetryTimer = undefined;
+    }
   }
 
   #publishBufferMetrics(): void {
