@@ -20,8 +20,8 @@ use uuid::Uuid;
 mod apiary;
 mod coordinator;
 pub use coordinator::{
-    CoordinatorAttention, CoordinatorStatus, CoordinatorWorkerWake, ExitedWorkerOwnedWorkCandidate,
-    StaleOwnedWorkCandidate,
+    AUTOMATIC_WAKE_BATCH_LIMIT, CoordinatorAttention, CoordinatorStatus, CoordinatorWorkerWake,
+    ExitedWorkerOwnedWorkCandidate, StaleOwnedWorkCandidate,
 };
 mod decisions;
 mod email;

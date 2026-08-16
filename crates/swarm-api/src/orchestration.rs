@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use swarm_domain::{QueenAutonomyLevel, QueenAutonomyPolicy};
+use swarm_persistence::AUTOMATIC_WAKE_BATCH_LIMIT;
 
 use super::{ApiError, AppState, authorize, task_store, task_store_error, unix_timestamp};
 
@@ -33,6 +34,7 @@ pub(super) struct CoordinatorStatusResponse {
     worker_exit_attention_actions: usize,
     last_action_at: Option<i64>,
     automatic_start_admission: super::runtime::CoordinatorStartAdmission,
+    automatic_start_batch_limit: usize,
 }
 
 pub(super) async fn queen_autonomy_policy(
@@ -96,6 +98,7 @@ pub(super) async fn coordinator_status(
             worker_exit_attention_actions: status.worker_exit_attention_actions,
             last_action_at: status.last_action_at,
             automatic_start_admission: state.coordinator_start_admission(),
+            automatic_start_batch_limit: usize::from(AUTOMATIC_WAKE_BATCH_LIMIT),
         }),
     )
         .into_response())

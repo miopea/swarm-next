@@ -105,6 +105,20 @@ fingerprinting, API visibility, and the operator-facing combined work-surfaced
 metric. Rendered desktop and 412 by 915 acceptance must confirm that the added
 breakdown remains readable before promotion.
 
+## Serialized automatic worker wakes
+
+A normal resource sample admits only one deterministic worker start per
+coordination pass. Additional Queen-originated Ready assignments remain queued
+until a later pass obtains fresh API and worker-engine evidence. Manual starts
+remain available, already running workers are never stopped, and an ambiguous
+claimed start still becomes uncertain instead of replaying.
+
+Automated acceptance covers two simultaneous sleeping-worker assignments,
+single-claim ordering, durable remainder visibility, the public batch-limit
+contract, and the operator explanation. Rendered desktop and 412 by 915
+acceptance must confirm that the added safety explanation remains readable
+before promotion.
+
 ## Dogfood usability correction (2026-08-12)
 
 An isolated local runtime and the rendered 1280 by 720 browser surface verified

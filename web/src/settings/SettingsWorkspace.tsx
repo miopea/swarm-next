@@ -239,7 +239,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
             <span>
               <strong>Routine coordination</strong>
               <small>Swarm wakes assigned sleeping workers and surfaces Active work that becomes stale or loses its loaded worker.</small>
-              <small>{coordinatorAdmissionDetail(coordinatorStatus?.automatic_start_admission)}</small>
+              <small>{coordinatorAdmissionDetail(coordinatorStatus?.automatic_start_admission, coordinatorStatus?.automatic_start_batch_limit)}</small>
             </span>
             <span className="coordinator-metrics">
               <strong>{coordinatorStatus?.queen_calls_avoided ?? 0}</strong>
@@ -423,12 +423,13 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   );
 }
 
-function coordinatorAdmissionDetail(admission: CoordinatorStatus["automatic_start_admission"] | undefined) {
+function coordinatorAdmissionDetail(admission: CoordinatorStatus["automatic_start_admission"] | undefined, batchLimit: number | undefined) {
+  const serialized = batchLimit === 1 ? " Swarm starts one worker at a time, then checks memory again." : "";
   switch (admission) {
-    case "allowed": return "Automatic worker starts are available.";
-    case "deferred_advisory": return "Automatic worker starts are waiting for memory pressure to settle.";
-    case "deferred_critical": return "Automatic worker starts are paused to protect active work from critical memory pressure.";
-    case "deferred_unavailable": return "Automatic worker starts are waiting for reliable worker-engine evidence.";
+    case "allowed": return `Automatic worker starts are available.${serialized}`;
+    case "deferred_advisory": return `Automatic worker starts are waiting for memory pressure to settle.${serialized}`;
+    case "deferred_critical": return `Automatic worker starts are paused to protect active work from critical memory pressure.${serialized}`;
+    case "deferred_unavailable": return `Automatic worker starts are waiting for reliable worker-engine evidence.${serialized}`;
     default: return "Checking whether automatic worker starts are safe.";
   }
 }

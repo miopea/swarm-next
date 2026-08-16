@@ -10850,6 +10850,10 @@ mod tests {
             coordinator["automatic_start_admission"],
             "deferred_unavailable"
         );
+        assert_eq!(
+            coordinator["automatic_start_batch_limit"],
+            swarm_persistence::AUTOMATIC_WAKE_BATCH_LIMIT
+        );
 
         let initial = response_json(
             authorized_get(app.clone(), "/api/v1/orchestration/queen-automation").await,

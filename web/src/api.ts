@@ -182,6 +182,7 @@ export type CoordinatorStatus = {
   worker_exit_attention_actions: number;
   last_action_at: number | null;
   automatic_start_admission: "allowed" | "deferred_advisory" | "deferred_critical" | "deferred_unavailable";
+  automatic_start_batch_limit: number;
 };
 export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };
 export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: number; reset_required: boolean };

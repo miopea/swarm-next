@@ -4,7 +4,10 @@ use uuid::Uuid;
 
 use super::{TaskStore, TaskStoreError, events::insert_control_room_event};
 
-const MAX_WAKE_CLAIMS: i64 = 8;
+/// Automatic starts are intentionally serialized. A fresh resource sample is
+/// required before the next sleeping worker can be claimed.
+pub const AUTOMATIC_WAKE_BATCH_LIMIT: u8 = 1;
+const MAX_WAKE_CLAIMS: i64 = AUTOMATIC_WAKE_BATCH_LIMIT as i64;
 const MAX_STALE_CANDIDATES: i64 = 32;
 const MAX_EXITED_WORK_CANDIDATES: i64 = 32;
 
@@ -476,8 +479,10 @@ impl TaskStore {
             .map_err(TaskStoreError::from)
     }
 
-    /// Claims a bounded batch of deterministic worker wakes. A claimed action is
-    /// never replayed after ambiguity; API startup marks it uncertain instead.
+    /// Claims at most one deterministic worker wake. A claimed action is never
+    /// replayed after ambiguity; API startup marks it uncertain instead. The
+    /// next action stays queued until a later coordination pass obtains fresh
+    /// resource evidence.
     ///
     /// # Errors
     /// Returns a persistence or identity-integrity error.
@@ -854,6 +859,56 @@ mod tests {
         let status = store.coordinator_status().unwrap();
         assert_eq!(status.completed_actions, 1);
         assert_eq!(status.queen_calls_avoided, 1);
+    }
+
+    #[test]
+    fn automatic_worker_wakes_are_serialized_between_resource_checks() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let petal = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let pollen = store
+            .create_worker(
+                "Pollen",
+                ProviderKind::ClaudeCode,
+                "/workspace/pollen",
+                false,
+                2,
+            )
+            .unwrap();
+        for (title, workspace, worker_id) in [
+            ("Polish Petal", "/workspace/petal", petal.id),
+            ("Polish Pollen", "/workspace/pollen", pollen.id),
+        ] {
+            let task = store.create_task(title, workspace).unwrap();
+            store
+                .transition_task(task.id, swarm_domain::TaskState::Ready)
+                .unwrap();
+            store
+                .assign_task_to_worker_as(task.id, worker_id, &TaskActivityActor::worker(queen.id))
+                .unwrap();
+        }
+
+        let first_pass = store.claim_coordinator_worker_wakes(100).unwrap();
+        assert_eq!(first_pass.len(), usize::from(AUTOMATIC_WAKE_BATCH_LIMIT));
+        assert_eq!(store.coordinator_status().unwrap().queued_actions, 2);
+        assert!(
+            store
+                .complete_coordinator_worker_wake(&first_pass[0].action_id, 101)
+                .unwrap()
+        );
+
+        let second_pass = store.claim_coordinator_worker_wakes(130).unwrap();
+        assert_eq!(second_pass.len(), usize::from(AUTOMATIC_WAKE_BATCH_LIMIT));
+        assert_ne!(first_pass[0].worker_id, second_pass[0].worker_id);
+        assert_eq!(store.coordinator_status().unwrap().queued_actions, 1);
     }
 
     #[test]

@@ -174,6 +174,12 @@ replacement session or engagement exists. Both observations are bound to the
 exact task revision, owner, and process incarnation; neither injects a terminal,
 changes a task, or spends a Queen call merely to discover the condition.
 
+Automatic wake admission is now serialized as well. A safe resource sample can
+claim only one sleeping worker; remaining Queen-originated wakes stay durable
+until the next pass samples the newly changed process tree. This preserves the
+legacy pressure-management outcome without recreating fleet-wide start bursts,
+suspension, or timer tuning.
+
 ## Complete commit ledger
 
 The repeatable ledger pass now covers all 1,431 reachable commits. It records
