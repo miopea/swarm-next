@@ -85,6 +85,18 @@ export async function removeWorker(operatorToken: string, workerId: string): Pro
   });
 }
 
+export type WorkerDescriptionDraft = {
+  description: string;
+  source: "repository_metadata";
+};
+
+export async function draftWorkerDescription(operatorToken: string, workerId: string): Promise<WorkerDescriptionDraft> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/workers/${encodeURIComponent(workerId)}/description-draft`, {
+    method: "POST",
+  });
+  return response.json() as Promise<WorkerDescriptionDraft>;
+}
+
 export async function reorderWorkers(operatorToken: string, workerIds: string[]): Promise<void> {
   await authenticatedFetch(operatorToken, "/api/v1/workers/order", {
     method: "PUT",

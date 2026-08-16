@@ -27,6 +27,7 @@ test("configures and reorders durable workers with progressive path completion",
       onCreate={onCreate}
       onUpdate={onUpdate}
       onRemove={vi.fn().mockResolvedValue(undefined)}
+      onDraftDescription={vi.fn().mockResolvedValue("Drafted routing context.")}
       onReorder={onReorder}
     />,
   );
@@ -67,6 +68,7 @@ test("requires explicit confirmation before removing a sleeping worker", async (
       onCreate={vi.fn()}
       onUpdate={vi.fn()}
       onRemove={onRemove}
+      onDraftDescription={vi.fn()}
       onReorder={vi.fn()}
     />,
   );
@@ -89,6 +91,7 @@ test("accepts a complete typed path when it is not in the bounded suggestions", 
       onCreate={onCreate}
       onUpdate={vi.fn()}
       onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
       onReorder={vi.fn()}
     />,
   );
@@ -113,6 +116,7 @@ test("offers Codex only when the terminal host reports it ready", () => {
       onCreate={onCreate}
       onUpdate={vi.fn()}
       onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
       onReorder={vi.fn()}
     />,
   );
@@ -136,6 +140,7 @@ test("desktop drag ordering keeps accessible arrow controls as a fallback", () =
       onCreate={vi.fn()}
       onUpdate={vi.fn()}
       onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
       onReorder={onReorder}
     />,
   );
@@ -149,6 +154,28 @@ test("desktop drag ordering keeps accessible arrow controls as a fallback", () =
   fireEvent.drop(target, { dataTransfer });
   expect(onReorder).toHaveBeenCalledWith([studio.id, budget.id]);
   expect(rendered.getByRole("button", { name: "Move Poppy earlier" })).toBeInTheDocument();
+});
+
+test("drafts private repository context into an editable unsaved description", async () => {
+  const onDraftDescription = vi.fn().mockResolvedValue("BudgetBug owns personal budget planning and bill tracking.");
+  render(
+    <WorkerSettings
+      workers={[queen, budget]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onRemove={vi.fn()}
+      onDraftDescription={onDraftDescription}
+      onReorder={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Draft from repository" }));
+  expect(await screen.findByDisplayValue("BudgetBug owns personal budget planning and bill tracking.")).toBeInTheDocument();
+  expect(onDraftDescription).toHaveBeenCalledWith(budget.id);
+  expect(screen.getByText(/local README and project metadata only/)).toBeInTheDocument();
 });
 
 function worker(id: string, name: string, workspace: string, position: number, role: Worker["role"] = "worker"): Worker {

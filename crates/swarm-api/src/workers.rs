@@ -359,6 +359,170 @@ pub(super) async fn remove_worker(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+#[derive(Debug, Serialize)]
+pub(super) struct WorkerDescriptionDraft {
+    description: String,
+    source: &'static str,
+}
+
+pub(super) async fn draft_worker_description(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(worker_id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let worker_id = parse_worker_id(&worker_id)?;
+    let profile = task_store(&state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    let description = repository_description_draft(Path::new(&profile.workspace)).await?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(WorkerDescriptionDraft {
+            description,
+            source: "repository_metadata",
+        }),
+    )
+        .into_response())
+}
+
+const MAX_DESCRIPTION_SOURCE_BYTES: u64 = 64 * 1024;
+
+async fn repository_description_draft(workspace: &Path) -> Result<String, ApiError> {
+    let repository_name = workspace
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("This repository");
+    let package_json = read_description_source(workspace, "package.json").await;
+    let cargo_toml = read_description_source(workspace, "Cargo.toml").await;
+    let pyproject = read_description_source(workspace, "pyproject.toml").await;
+    let readme = read_first_available(
+        workspace,
+        &[
+            "README.md",
+            "README.MD",
+            "readme.md",
+            "README.txt",
+            "README",
+        ],
+    )
+    .await;
+
+    let package_metadata = package_json
+        .as_deref()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok());
+    let display_name = package_metadata
+        .as_ref()
+        .and_then(|value| value.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(repository_name);
+    let summary = package_metadata
+        .as_ref()
+        .and_then(|value| value.get("description"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(clean_summary)
+        .or_else(|| cargo_toml.as_deref().and_then(manifest_description))
+        .or_else(|| pyproject.as_deref().and_then(manifest_description))
+        .or_else(|| readme.as_deref().and_then(readme_summary));
+    let implementation = if package_json.is_some() {
+        "JavaScript or TypeScript application"
+    } else if cargo_toml.is_some() {
+        "Rust application or service"
+    } else if pyproject.is_some() {
+        "Python application or service"
+    } else {
+        "software repository"
+    };
+    let ownership = summary
+        .unwrap_or_else(|| format!("the {display_name} product and its repository-owned behavior"));
+    let ownership = ownership.trim().trim_end_matches(['.', '!', '?']);
+    let draft = format!(
+        "{display_name} owns {ownership}. This worker should receive changes to this {implementation}, including its product behavior, implementation, tests, and release configuration. Cross-repository coordination stays with Queen or Scout."
+    );
+    clean_summary(&draft).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "description_unavailable",
+            "Swarm could not find usable repository metadata; enter a routing description manually",
+        )
+    })
+}
+
+async fn read_first_available(workspace: &Path, names: &[&str]) -> Option<String> {
+    for name in names {
+        if let Some(content) = read_description_source(workspace, name).await {
+            return Some(content);
+        }
+    }
+    None
+}
+
+async fn read_description_source(workspace: &Path, name: &str) -> Option<String> {
+    let path = workspace.join(name);
+    let metadata = tokio::fs::symlink_metadata(&path).await.ok()?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > MAX_DESCRIPTION_SOURCE_BYTES
+    {
+        return None;
+    }
+    tokio::fs::read_to_string(path).await.ok()
+}
+
+fn manifest_description(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "description")
+            .then(|| value.trim().trim_matches(['\'', '"']))
+            .and_then(clean_summary)
+    })
+}
+
+fn readme_summary(content: &str) -> Option<String> {
+    let mut paragraph = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            if !paragraph.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if line.starts_with('#')
+            || line.starts_with("![")
+            || line.starts_with("[![")
+            || line.starts_with('<')
+            || line.starts_with("---")
+        {
+            continue;
+        }
+        paragraph.push(line);
+        if paragraph.join(" ").len() >= 600 {
+            break;
+        }
+    }
+    clean_summary(&paragraph.join(" "))
+}
+
+fn clean_summary(value: &str) -> Option<String> {
+    let normalized = value
+        .replace(['\r', '\n', '\t'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() || normalized.chars().any(char::is_control) {
+        return None;
+    }
+    let end = normalized
+        .char_indices()
+        .map(|(index, character)| index + character.len_utf8())
+        .take_while(|end| *end <= 2_000)
+        .last()
+        .unwrap_or(0);
+    (end > 0).then(|| normalized[..end].trim().to_owned())
+}
+
 pub(super) async fn start_worker(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -421,4 +585,51 @@ pub(super) async fn stop_worker(
         ProviderActivity::Unknown,
     ))
     .into_response())
+}
+
+#[cfg(test)]
+mod description_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn repository_draft_prefers_bounded_manifest_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        tokio::fs::write(
+            directory.path().join("package.json"),
+            r#"{"name":"meadow","description":"Manages customer gardens and seasonal plans."}"#,
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            directory.path().join("README.md"),
+            "# Ignore this\n\nA less precise summary.",
+        )
+        .await
+        .unwrap();
+
+        let draft = repository_description_draft(directory.path())
+            .await
+            .unwrap();
+        assert!(draft.starts_with("meadow owns Manages customer gardens and seasonal plans"));
+        assert!(draft.contains("JavaScript or TypeScript application"));
+        assert!(draft.contains("Queen or Scout"));
+    }
+
+    #[tokio::test]
+    async fn repository_draft_uses_readme_without_following_markdown_badges() {
+        let directory = tempfile::tempdir().unwrap();
+        tokio::fs::write(
+            directory.path().join("README.md"),
+            "# Clover\n\n[![build](badge.svg)](ci)\n\nClover coordinates durable worker sessions for software teams.\n\n## Setup\nDo not include this.",
+        )
+        .await
+        .unwrap();
+
+        let draft = repository_description_draft(directory.path())
+            .await
+            .unwrap();
+        assert!(draft.contains("coordinates durable worker sessions for software teams"));
+        assert!(!draft.contains("badge.svg"));
+        assert!(!draft.contains("Do not include this"));
+    }
 }

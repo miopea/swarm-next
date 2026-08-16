@@ -28,6 +28,7 @@ export type {
 } from "./api/presence";
 export {
   createWorker,
+  draftWorkerDescription,
   fetchWorkers,
   fetchWorkspaces,
   removeWorker,

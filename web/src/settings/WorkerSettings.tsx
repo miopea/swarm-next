@@ -13,10 +13,11 @@ type Props = {
   onCreate: (name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean) => Promise<void>;
   onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean) => Promise<void>;
   onRemove: (workerId: string) => Promise<void>;
+  onDraftDescription: (workerId: string) => Promise<string>;
   onReorder: (workerIds: string[]) => Promise<void>;
 };
 
-export default function WorkerSettings({ workers, workspaces, busy, providers, onCreate, onUpdate, onRemove, onReorder }: Props) {
+export default function WorkerSettings({ workers, workspaces, busy, providers, onCreate, onUpdate, onRemove, onDraftDescription, onReorder }: Props) {
   const roster = workers.filter((worker) => worker.role !== "queen");
   const available = workspaces.filter((workspace) => !workspace.configured_worker_id);
   const [name, setName] = useState("");
@@ -99,6 +100,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             onMove={(offset) => move(index, offset)}
             onUpdate={onUpdate}
             onRemove={onRemove}
+            onDraftDescription={onDraftDescription}
             providers={providers}
             onDragStart={() => workerReorder.start(worker.id)}
             onDragEnd={workerReorder.end}
@@ -190,6 +192,7 @@ type WorkerPreferenceRowProps = {
   onMove: (offset: -1 | 1) => void;
   onUpdate: Props["onUpdate"];
   onRemove: Props["onRemove"];
+  onDraftDescription: Props["onDraftDescription"];
   providers: ProviderCapabilities;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -198,13 +201,15 @@ type WorkerPreferenceRowProps = {
   onDrop: (event: DragEvent) => void;
 };
 
-function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, onMove, onUpdate, onRemove, providers, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
+function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, onMove, onUpdate, onRemove, onDraftDescription, providers, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(worker.name);
   const [description, setDescription] = useState(worker.description ?? "");
   const [provider, setProvider] = useState(worker.provider);
   const [autostart, setAutostart] = useState(worker.autostart);
   const [confirmingRemoval, setConfirmingRemoval] = useState(false);
+  const [draftingDescription, setDraftingDescription] = useState(false);
+  const [draftError, setDraftError] = useState("");
   const attention = workerAttention(worker);
 
   async function save(event: FormEvent) {
@@ -227,6 +232,18 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, 
     await onRemove(worker.id);
   }
 
+  async function draftDescription() {
+    setDraftingDescription(true);
+    setDraftError("");
+    try {
+      setDescription(await onDraftDescription(worker.id));
+    } catch {
+      setDraftError("Swarm could not draft from this repository. You can still enter the description yourself.");
+    } finally {
+      setDraftingDescription(false);
+    }
+  }
+
   return (
     <div
       className={`configured-worker${dragging ? " configured-worker-dragging" : ""}${dropTarget ? " drop-target-before" : ""}`}
@@ -243,7 +260,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, 
         <form className="worker-preference-form" aria-label={`Edit ${worker.name}`} onSubmit={(event) => void save(event)}>
           <label><span>Worker name</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus /></label>
           <small className="worker-repository-path"><span>Repository</span><code>{worker.workspace}</code></small>
-          <label className="worker-description-field"><span>Queen routing description</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" /></label>
+          <div className="worker-description-field"><span className="worker-description-heading"><label htmlFor={`worker-description-${worker.id}`}>Queen routing description</label><button type="button" className="secondary-button" disabled={busy || draftingDescription} onClick={() => void draftDescription()}>{draftingDescription ? "Reading repository…" : description ? "Refresh from repository" : "Draft from repository"}</button></span><textarea id={`worker-description-${worker.id}`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" /><small>The draft reads local README and project metadata only. Review it before saving.</small>{draftError && <small className="field-error" role="alert">{draftError}</small>}</div>
           <label className="worker-provider-field"><span>Default coding provider</span><select value={provider} disabled={worker.running} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
             <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · unavailable"}</option>

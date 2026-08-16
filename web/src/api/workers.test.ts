@@ -2,6 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import {
   createWorker,
+  draftWorkerDescription,
   fetchWorkers,
   fetchWorkspaces,
   removeWorker,
@@ -40,6 +41,7 @@ test("owns worker discovery, configuration, ordering, and lifecycle commands", a
     { ...worker, running: true, attention_state: "resting" },
     worker,
     null,
+    { description: "Clover owns the test fixture.", source: "repository_metadata" },
   ];
   const fetch = vi.fn().mockImplementation(() => {
     const body = responses.shift();
@@ -62,6 +64,10 @@ test("owns worker discovery, configuration, ordering, and lifecycle commands", a
   await expect(startWorker("operator", "worker/one")).resolves.toMatchObject({ running: true });
   await expect(stopWorker("operator", "worker/one")).resolves.toEqual(worker);
   await expect(removeWorker("operator", "worker/one")).resolves.toBeUndefined();
+  await expect(draftWorkerDescription("operator", "worker/one")).resolves.toEqual({
+    description: "Clover owns the test fixture.",
+    source: "repository_metadata",
+  });
 
   expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/workers", expect.objectContaining({
     method: "POST",
@@ -89,5 +95,8 @@ test("owns worker discovery, configuration, ordering, and lifecycle commands", a
   }));
   expect(fetch).toHaveBeenNthCalledWith(8, "/api/v1/workers/worker%2Fone", expect.objectContaining({
     method: "DELETE",
+  }));
+  expect(fetch).toHaveBeenNthCalledWith(9, "/api/v1/workers/worker%2Fone/description-draft", expect.objectContaining({
+    method: "POST",
   }));
 });

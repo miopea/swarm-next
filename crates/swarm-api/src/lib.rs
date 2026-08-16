@@ -1977,6 +1977,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/workers/{worker_id}",
             patch(workers::update_worker).delete(workers::remove_worker),
         )
+        .route(
+            "/api/v1/workers/{worker_id}/description-draft",
+            post(workers::draft_worker_description),
+        )
         .route("/api/v1/workspaces", get(workers::list_workspaces))
         .route(
             "/api/v1/workers/{worker_id}/start",
