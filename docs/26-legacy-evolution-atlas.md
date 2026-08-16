@@ -167,17 +167,37 @@ assignments remain manual, and an ambiguous wake never replays. Settings shows
 the completed action and avoided-Queen-call count so the layer's value and
 failure state are visible during dogfooding.
 
+## Complete commit ledger
+
+The repeatable ledger pass now covers all 1,431 reachable commits. It records
+full and short identity, timestamp, change type, release marker, file-aware and
+subject-only capability tags, linked issue references, file count, churn, and
+subject in `docs/legacy/commit-capability-ledger.csv`. Its generation script is
+`scripts/analysis/build-legacy-commit-ledger.cjs`; the self-test protects log,
+classification, and reference parsing.
+
+The file-aware pass finds 346 task, 341 worker, 279 terminal, 234 drone, 174
+Queen, 136 resource, 97 mobile/PWA, 86 Jira, 85 worker-state, 82 messaging, 75
+recovery, and 30 email commits. These overlapping counts are deliberately
+broader than the subject-only baseline above: they include implementation files
+and commit bodies, so they describe evidence touched rather than author intent.
+The generated summary and bounded regression candidates live beside the ledger.
+
+Six high-value chains were then checked against commit messages and touched
+source/test files in `docs/legacy/validated-regression-chains.md`: terminal
+ownership, automated-input authority, revive loops, speculative preparation,
+mobile scrollback, and state classification. Their stable outcomes already map
+to Swarm Next invariants; none creates a port ticket by itself.
+
 ## Remaining history passes
 
-1. Build a commit-to-capability ledger for all 1,431 commits, including files
-   touched and linked task/issue identifiers.
-2. Identify regression chains: feature, corrective fixes, revert, and eventual
-   stable replacement.
-3. Compare the final code contract and tests with README claims; documentation
+1. Expand validated regression chains beyond the six highest-risk operator
+   journeys when a new dogfood gap needs historical evidence.
+2. Compare the final code contract and tests with README claims; documentation
    alone is not proof a feature held.
-4. Sample the implementation at stable release boundaries rather than only the
+3. Sample the implementation at stable release boundaries rather than only the
    final tree.
-5. Feed each surviving outcome into the capability inventory and dogfood plan;
+4. Feed each surviving outcome into the capability inventory and dogfood plan;
    do not create port tickets directly from this atlas.
 
 ## Acceptance for the archaeology milestone
