@@ -1203,3 +1203,19 @@ the independently updated terminal host through the API to worker settings:
   `quick_check=ok`. API PID advanced to `3867547`; terminal-host PID `2966127`
   remained unchanged. No Jira or live Apiary mutation occurred, and every proof
   browser closed after the run.
+- Release `0.1.0-dev-69bb4f24dfb0` adds the first guarded Steward action. A
+  Member with synchronized **Assign** authority can journal one bounded task
+  command for a managed Hive; Keeper authenticates the member node and operator,
+  rechecks the current scope and target membership in the creation transaction,
+  and returns one retry-stable applied or rejected receipt. The target Hive still
+  chooses its private worker and repository. The full gate passed 382 Rust tests,
+  warnings-denied Clippy, formatting, all 235 frontend tests, strict TypeScript,
+  the production build, and the dogfood harness. Isolated desktop and Android
+  fixture proof exercised submission, queued state, and rejection presentation
+  with no target-worker exposure. The deployed public Keeper surface rendered at
+  1,440 by 900 and 412 by 915 with zero horizontal overflow and no browser
+  warnings or errors. The package created a verified 1,183,744-byte pre-update
+  backup and migrated the live database to schema 58 with `quick_check=ok`. API
+  PID advanced to `3891701`; terminal-host PID `2966127` and the active Queen
+  session remained unchanged. No Jira or live Apiary mutation occurred, and the
+  proof browser closed after the run.
