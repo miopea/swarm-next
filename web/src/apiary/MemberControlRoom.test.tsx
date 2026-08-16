@@ -29,6 +29,7 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
     if (url.endsWith("/my-stewardship")) return Promise.resolve(ok({
       schema_version: 1, protocol_version: 1, apiary_id: "apiary-1", member_node_id: "node-2", member_operator_id: "operator-2", generated_at: 100,
       stewardship: { id: "stewardship-1", apiary_id: "apiary-1", steward_operator_id: "operator-2", managed_hive_ids: ["hive-2"], capabilities: ["observe", "assist", "takeover"] },
+      observations: [{ hive_id: "hive-2", ready_swarm_task_count: 2, active_swarm_task_count: 1, blocked_swarm_task_count: 1, review_swarm_task_count: 3, active_jira_claim_count: 4, last_shared_activity_at: 100 }],
     }));
     if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({
       acknowledgement: { apiary_id: "apiary-1", policy_revision: 1, promoted_project_catalog_digest: "digest", project_count: 1, snapshot_issued_at: 1, snapshot_expires_at: 2, acknowledged_at: 1 },
@@ -51,6 +52,10 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
   const stewardship = screen.getByRole("heading", { name: "Trusted support for 1 Hive" }).closest("article");
   expect(stewardship).toHaveTextContent("Clover Hive");
   expect(stewardship).toHaveTextContent("Observe, Assist, Take over");
+  const observations = screen.getByRole("list", { name: "Managed Hive shared-work status" });
+  expect(observations).toHaveTextContent("Clover Hive");
+  expect(observations).toHaveTextContent("Ready2Active1Blocked1Review3Jira owned4");
+  expect(stewardship).toHaveTextContent("private workers and terminals stay local");
   expect(document.body).not.toHaveTextContent("WWD-102");
   expect(document.body).not.toHaveTextContent("node-2");
   expect(document.body).not.toHaveTextContent("secret");

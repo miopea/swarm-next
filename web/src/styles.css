@@ -265,6 +265,19 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-role-badge.steward { color: var(--accent-strong); background: var(--accent-soft); }
 .member-stewardship-panel { grid-column: 1 / -1; border-color: var(--accent-line); background: linear-gradient(135deg, var(--panel), var(--accent-soft)); }
 .member-stewardship-panel .member-detail-list dd { overflow: visible; text-overflow: clip; white-space: normal; }
+.steward-observations { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--accent-line); }
+.steward-observations > header { display: flex; align-items: end; justify-content: space-between; gap: 14px; margin-bottom: 8px; }
+.steward-observations h5 { margin: 0; font-size: .94rem; }
+.steward-observations > header small { max-width: 390px; color: var(--muted); font-size: .68rem; line-height: 1.4; text-align: right; }
+.steward-observations > ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.steward-observations > ul > li { display: grid; grid-template-columns: minmax(120px, .75fr) minmax(0, 1.25fr); align-items: center; gap: 12px; padding: 10px 11px; border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--panel) 82%, transparent); }
+.steward-observation-title { display: grid; min-width: 0; gap: 3px; }
+.steward-observation-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steward-observation-title small { color: var(--muted); font-size: .64rem; line-height: 1.35; }
+.steward-observations dl { display: grid; grid-template-columns: repeat(5, minmax(42px, 1fr)); gap: 4px; margin: 0; }
+.steward-observations dl > div { display: grid; justify-items: center; gap: 2px; min-width: 0; padding: 5px 3px; border-radius: 7px; background: var(--surface-soft); }
+.steward-observations dt { overflow: hidden; max-width: 100%; color: var(--quiet); font-size: .58rem; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.steward-observations dd { margin: 0; color: var(--text); font-size: .78rem; font-weight: 750; }
 .steward-task-form { display: grid; grid-template-columns: minmax(170px, .7fr) minmax(260px, 1.3fr) minmax(110px, .35fr); align-items: end; gap: 10px; margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--accent-line); }
 .steward-task-form-heading { display: flex; grid-column: 1 / -1; align-items: end; justify-content: space-between; gap: 16px; }
 .steward-task-form-heading h5 { margin: 0; font-size: .94rem; }
@@ -1115,6 +1128,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .steward-task-form-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
   .steward-task-form-heading small { max-width: none; text-align: left; }
   .steward-task-form > .primary-action { width: 100%; }
+  .steward-observations > header { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .steward-observations > header small { max-width: none; text-align: left; }
+  .steward-observations > ul { grid-template-columns: minmax(0, 1fr); }
+  .steward-observations > ul > li { grid-template-columns: minmax(0, 1fr); }
+  .steward-observations dl { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .keeper-hive-list li { grid-template-columns: 38px minmax(0, 1fr); }
   .keeper-hive-list .keeper-role-badge { grid-column: 2; justify-self: start; }
   .keeper-work-list li, .keeper-steward-list li { grid-template-columns: minmax(0, 1fr); gap: 6px; }

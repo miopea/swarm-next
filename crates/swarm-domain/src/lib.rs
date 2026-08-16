@@ -1781,6 +1781,20 @@ pub struct Stewardship {
 
 pub const FEDERATION_STEWARDSHIP_SCHEMA_VERSION: u16 = 1;
 
+/// Keeper-known shared-work status for one Hive in a Steward's explicit scope.
+/// This deliberately excludes private workers, repositories, terminals,
+/// provider sessions, local tasks, and integration credentials.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardHiveObservation {
+    pub hive_id: HiveId,
+    pub ready_swarm_task_count: usize,
+    pub active_swarm_task_count: usize,
+    pub blocked_swarm_task_count: usize,
+    pub review_swarm_task_count: usize,
+    pub active_jira_claim_count: usize,
+    pub last_shared_activity_at: Option<i64>,
+}
+
 /// One bounded Keeper response describing only the authenticated Member
 /// operator's current Steward delegation. Worker, repository, terminal, Jira,
 /// credential, and task content are deliberately absent.
@@ -1792,6 +1806,10 @@ pub struct FederationStewardshipSnapshot {
     pub member_node_id: FederationNodeId,
     pub member_operator_id: OperatorId,
     pub stewardship: Option<Stewardship>,
+    /// Additive for rolling compatibility: older Keepers omit it and older
+    /// Members ignore it. An empty list means no observation has arrived yet.
+    #[serde(default)]
+    pub observations: Vec<FederationStewardHiveObservation>,
     pub generated_at: i64,
 }
 

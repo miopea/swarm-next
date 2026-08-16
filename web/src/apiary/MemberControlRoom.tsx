@@ -123,6 +123,7 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
   const stewardship = snapshot.stewardship?.stewardship;
   const managedMembers = stewardship?.managed_hive_ids.map((hiveId) => snapshot.members.find((member) => member.hive_id === hiveId) ?? { hive_id: hiveId, hive_name: "Registered Hive" }) ?? [];
   const managedHives = managedMembers.map((member) => member.hive_name);
+  const stewardObservations = snapshot.stewardship?.observations ?? [];
   const canAssign = stewardship?.capabilities.includes("assign") ?? false;
   const [stewardTarget, setStewardTarget] = useState("");
   const [stewardTitle, setStewardTitle] = useState("");
@@ -224,6 +225,22 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
             <div><dt>Hives in scope</dt><dd>{managedHives.join(", ")}</dd></div>
             <div><dt>Capabilities</dt><dd>{stewardship.capabilities.map(stewardCapabilityLabel).join(", ")}</dd></div>
           </dl>
+          {stewardObservations.length ? <section className="steward-observations" aria-labelledby="steward-observations-heading">
+            <header><div><p className="eyebrow">Observe</p><h5 id="steward-observations-heading">Shared-work pulse</h5></div><small>Keeper-known work only · private workers and terminals stay local</small></header>
+            <ul aria-label="Managed Hive shared-work status">{stewardObservations.map((observation) => {
+              const member = managedMembers.find((candidate) => candidate.hive_id === observation.hive_id);
+              return <li key={observation.hive_id}>
+                <span className="steward-observation-title"><strong>{member?.hive_name ?? "Managed Hive"}</strong><small>Last shared change {formatTimestamp(observation.last_shared_activity_at)}</small></span>
+                <dl>
+                  <div><dt>Ready</dt><dd>{observation.ready_swarm_task_count}</dd></div>
+                  <div><dt>Active</dt><dd>{observation.active_swarm_task_count}</dd></div>
+                  <div><dt>Blocked</dt><dd>{observation.blocked_swarm_task_count}</dd></div>
+                  <div><dt>Review</dt><dd>{observation.review_swarm_task_count}</dd></div>
+                  <div><dt>Jira owned</dt><dd>{observation.active_jira_claim_count}</dd></div>
+                </dl>
+              </li>;
+            })}</ul>
+          </section> : null}
           {canAssign ? <form className="steward-task-form" onSubmit={(event) => { event.preventDefault(); void routeStewardTask(); }}>
             <div className="steward-task-form-heading"><div><p className="eyebrow">Route shared work</p><h5>Give a managed Hive a clear outcome</h5></div><small>The target Hive chooses its private worker and repository.</small></div>
             <label>Hive<select aria-label="Target Hive" required value={stewardTarget} onChange={(event) => setStewardTarget(event.target.value)}><option value="">Choose a managed Hive</option>{managedMembers.map((member) => <option key={member.hive_id} value={member.hive_id}>{member.hive_name}</option>)}</select></label>

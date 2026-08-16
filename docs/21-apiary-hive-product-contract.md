@@ -351,6 +351,14 @@ reason, is immediately visible, replaces the exclusive lease, pauses competing
 automation, and is audited. Keeper grants Steward takeover capability once per
 scope; an in-scope takeover does not require another approval.
 
+Observe is limited to structured state Keeper already owns. A synchronized
+Steward sees, for each managed Hive, only counts of Keeper-canonical Swarm work
+by lifecycle, active Jira home-Hive ownership, and the latest shared-work
+change. It does not imply live presence and never exposes private workers,
+repositories, local tasks, terminals, transcripts, provider sessions, Jira
+issue content, or credentials. An older Keeper may temporarily return no pulse;
+authority and other Hive work remain usable during rolling updates.
+
 ## Tasks
 
 The target canonical lifecycle is:

@@ -8392,7 +8392,25 @@ mod tests {
 
         let remote_json = remote_stewardship(app.clone(), credential).await;
         assert_eq!(remote_json["stewardship"], created_json);
-        for forbidden in ["credential", "endpoint", "repository", "terminal", "jira"] {
+        assert_eq!(
+            remote_json["observations"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            remote_json["observations"][0]["hive_id"],
+            managed_hive_id.to_string()
+        );
+        assert_eq!(remote_json["observations"][0]["ready_swarm_task_count"], 0);
+        for forbidden in [
+            "credential",
+            "endpoint",
+            "repository",
+            "terminal",
+            "issue_id",
+            "issue_key",
+            "jira_status",
+            "jira_assignee",
+        ] {
             assert!(!remote_json.to_string().contains(forbidden));
         }
 
@@ -8430,6 +8448,16 @@ mod tests {
         assert_eq!(
             routed_json["task"]["title"],
             "Coordinate a managed Hive outcome"
+        );
+        let observed_after_routing = remote_stewardship(app.clone(), credential).await;
+        assert_eq!(
+            observed_after_routing["observations"][0]["ready_swarm_task_count"],
+            1
+        );
+        assert!(
+            observed_after_routing["observations"][0]["last_shared_activity_at"]
+                .as_i64()
+                .is_some()
         );
 
         let exact_retry = app

@@ -93,9 +93,12 @@ The first guarded remote action is implemented: a Steward with explicit
 Hive. The Member journals the command before network I/O; Keeper authenticates
 the exact node and operator, rechecks the current grant and Hive scope, creates
 the task atomically, stores a retry-stable receipt, and audits rejections. The
-target Hive privately chooses its worker and repository. Observe, assist,
-takeover, member, and project actions remain staged until each receives its own
-bounded command and conflict rules.
+target Hive privately chooses its worker and repository. **Observe** now adds a
+Keeper-derived, content-free shared-work pulse for each managed Hive: counts of
+Ready, Active, Blocked, Review, and active Jira ownership plus the last shared
+change. It never reports worker, repository, terminal, transcript, local-task,
+or credential data. Assist, takeover, member, and project actions remain staged
+until each receives its own bounded command and conflict rules.
 
 Keeper control-room checkpoint: a federated Keeper receives a first-class,
 read-only Apiary surface outside Settings. It summarizes registered membership,

@@ -248,6 +248,15 @@ export type Stewardship = {
   managed_hive_ids: string[];
   capabilities: StewardCapability[];
 };
+export type FederationStewardHiveObservation = {
+  hive_id: string;
+  ready_swarm_task_count: number;
+  active_swarm_task_count: number;
+  blocked_swarm_task_count: number;
+  review_swarm_task_count: number;
+  active_jira_claim_count: number;
+  last_shared_activity_at: number | null;
+};
 export type FederationStewardshipSnapshot = {
   schema_version: number;
   protocol_version: number;
@@ -255,6 +264,7 @@ export type FederationStewardshipSnapshot = {
   member_node_id: string;
   member_operator_id: string;
   stewardship: Stewardship | null;
+  observations?: FederationStewardHiveObservation[];
   generated_at: number;
 };
 export type FederationStewardTaskCommand = {

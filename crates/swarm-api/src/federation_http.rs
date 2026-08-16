@@ -838,6 +838,7 @@ mod tests {
             member_node_id: FederationNodeId::new(),
             member_operator_id: OperatorId::new(),
             stewardship: None,
+            observations: Vec::new(),
             generated_at: 1_000,
         };
         let expected = snapshot.clone();
