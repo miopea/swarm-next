@@ -22,6 +22,7 @@ mod decisions;
 mod email;
 mod events;
 mod federation;
+mod federation_handoffs;
 mod federation_jira_claims;
 mod federation_stewardships;
 mod federation_tasks;
@@ -72,7 +73,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 53;
+const CURRENT_SCHEMA_VERSION: i64 = 54;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -149,6 +150,8 @@ pub enum TaskStoreError {
     InvalidFederationCatalog,
     #[error("The federation shared-work claim is invalid")]
     InvalidFederationClaim,
+    #[error("The federation claim handoff is invalid")]
+    InvalidFederationHandoff,
     #[error("The local federation synchronization state is invalid")]
     InvalidFederationSync,
     #[error("This Hive still owns or is sending shared Apiary work")]
@@ -163,6 +166,8 @@ pub enum TaskStoreError {
     InvalidFederationTask,
     #[error("The Jira issue is already claimed by another Hive")]
     FederationClaimConflict,
+    #[error("The federation claim already has a conflicting handoff")]
+    FederationHandoffConflict,
     #[error("A current invitation already exists for this pinned Hive")]
     FederationInvitationConflict,
     #[error("task was not found")]
@@ -1557,6 +1562,9 @@ fn migrate_recent_schema(
     if schema_version < 53 {
         federation::migrate_federation_departures(transaction)?;
     }
+    if schema_version < 54 {
+        federation_handoffs::migrate_federation_handoffs(transaction)?;
+    }
     Ok(())
 }
 
@@ -2519,7 +2527,7 @@ fn task_activity_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskActiv
     })
 }
 
-fn parse_domain_id<T: FromStr>(value: &str) -> rusqlite::Result<T> {
+pub(crate) fn parse_domain_id<T: FromStr>(value: &str) -> rusqlite::Result<T> {
     T::from_str(value).map_err(|_| rusqlite::Error::InvalidQuery)
 }
 

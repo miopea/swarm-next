@@ -4,10 +4,11 @@ use swarm_domain::{
     ApiaryJoinLinkBundle, ApiaryJoinLinkId, ApiaryJoinLinkPoll, ApiaryJoinReadiness,
     ApiaryKeeperLink, ApiaryMemberSummary, ApiaryTask, DecisionRequest, DecisionRequestId,
     DecisionRequestKind, DecisionUrgency, FederationCatalogAcknowledgement,
-    FederationCatalogReadiness, FederationCatalogSnapshot, FederationClaimId,
-    FederationDepartureOverview, FederationDepartureReadiness, FederationDepartureReceipt,
-    FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
-    FederationJoinSubmission, FederationMemberConnection, FederationSharedClaim,
+    FederationCatalogReadiness, FederationCatalogSnapshot, FederationClaimHandoff,
+    FederationClaimHandoffId, FederationClaimId, FederationDepartureOverview,
+    FederationDepartureReadiness, FederationDepartureReceipt, FederationJoinAcceptance,
+    FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
+    FederationMemberConnection, FederationNodeId, FederationSharedClaim,
     FederationStewardshipSnapshot, FederationSyncCondition, FederationSyncHealth,
     FederationTaskCommand, FederationTaskCommandId, FederationTaskCommandReceipt,
     FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
@@ -377,6 +378,97 @@ impl ApiaryService {
     ) -> Result<Vec<FederationSharedClaim>, ApplicationError> {
         self.store
             .list_active_federation_claims(now)
+            .map_err(Into::into)
+    }
+
+    /// Offers a confirmed shared claim to another active Hive.
+    ///
+    /// # Errors
+    /// Rejects invalid actors, claims, targets, content, or conflicts.
+    pub fn offer_federation_claim_handoff(
+        &self,
+        node_credential: &str,
+        claim_id: FederationClaimId,
+        target_node_id: FederationNodeId,
+        reason: Option<&str>,
+        now: i64,
+    ) -> Result<FederationClaimHandoff, ApplicationError> {
+        self.store
+            .offer_federation_claim_handoff(node_credential, claim_id, target_node_id, reason, now)
+            .map_err(Into::into)
+    }
+
+    /// Lists the authenticated member's bounded handoff feed.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials or unavailable persistence.
+    pub fn federation_claim_handoffs(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<Vec<FederationClaimHandoff>, ApplicationError> {
+        self.store
+            .list_federation_claim_handoffs(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Accepts an offer as its target Hive.
+    ///
+    /// # Errors
+    /// Rejects invalid actors or lifecycle transitions.
+    pub fn accept_federation_claim_handoff(
+        &self,
+        credential: &str,
+        id: FederationClaimHandoffId,
+        now: i64,
+    ) -> Result<FederationClaimHandoff, ApplicationError> {
+        self.store
+            .accept_federation_claim_handoff(credential, id, now)
+            .map_err(Into::into)
+    }
+
+    /// Declines an offer as its target Hive.
+    ///
+    /// # Errors
+    /// Rejects invalid actors or lifecycle transitions.
+    pub fn decline_federation_claim_handoff(
+        &self,
+        credential: &str,
+        id: FederationClaimHandoffId,
+        now: i64,
+    ) -> Result<FederationClaimHandoff, ApplicationError> {
+        self.store
+            .decline_federation_claim_handoff(credential, id, now)
+            .map_err(Into::into)
+    }
+
+    /// Cancels an unaccepted offer as its source Hive.
+    ///
+    /// # Errors
+    /// Rejects invalid actors or lifecycle transitions.
+    pub fn cancel_federation_claim_handoff(
+        &self,
+        credential: &str,
+        id: FederationClaimHandoffId,
+        now: i64,
+    ) -> Result<FederationClaimHandoff, ApplicationError> {
+        self.store
+            .cancel_federation_claim_handoff(credential, id, now)
+            .map_err(Into::into)
+    }
+
+    /// Confirms successful target-side Jira assignment and transfers ownership.
+    ///
+    /// # Errors
+    /// Rejects invalid actors, claim drift, or lifecycle transitions.
+    pub fn confirm_federation_claim_handoff(
+        &self,
+        credential: &str,
+        id: FederationClaimHandoffId,
+        now: i64,
+    ) -> Result<FederationClaimHandoff, ApplicationError> {
+        self.store
+            .confirm_federation_claim_handoff(credential, id, now)
             .map_err(Into::into)
     }
 

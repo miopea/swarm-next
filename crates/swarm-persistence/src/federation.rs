@@ -2800,7 +2800,7 @@ fn active_claim_for_issue(
         .map_err(Into::into)
 }
 
-fn federation_claim_by_id(
+pub(crate) fn federation_claim_by_id(
     connection: &rusqlite::Connection,
     claim_id: FederationClaimId,
 ) -> Result<Option<FederationSharedClaim>, TaskStoreError> {
@@ -5414,6 +5414,107 @@ mod tests {
             first_member.list_active_federation_claims(now + 24),
             Err(TaskStoreError::ApiaryKeeperRequired)
         ));
+    }
+
+    #[test]
+    fn confirmed_claim_handoff_moves_home_only_after_target_confirmation() {
+        let now = 35_000;
+        let keeper = TaskStore::in_memory().unwrap();
+        let context = keeper
+            .create_apiary_for_local_hive("Wildflower Garden", SharedWorkBackend::Jira, now - 10)
+            .unwrap();
+        let swarm_domain::LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected Keeper Apiary");
+        };
+        let first_member = TaskStore::in_memory().unwrap();
+        let second_member = TaskStore::in_memory().unwrap();
+        let first = register_remote_member(&keeper, &first_member, now);
+        let second = register_remote_member(&keeper, &second_member, now + 10);
+        keeper
+            .promote_apiary_jira_project(
+                apiary.id,
+                "10001",
+                "WWD",
+                "Website Development",
+                keeper.local_hive_identity().unwrap().operator.id,
+                now + 20,
+            )
+            .unwrap();
+        let reserved = keeper
+            .reserve_federation_claim(
+                &first.node_credential,
+                "10001",
+                "20001",
+                "WWD-101",
+                now + 21,
+            )
+            .unwrap();
+        let confirmed = keeper
+            .confirm_federation_claim(&first.node_credential, reserved.id, now + 22)
+            .unwrap();
+        let offered = keeper
+            .offer_federation_claim_handoff(
+                &first.node_credential,
+                confirmed.id,
+                second.receipt.payload.member_node_id,
+                Some("Repository ownership moved"),
+                now + 23,
+            )
+            .unwrap();
+        assert_eq!(
+            keeper
+                .offer_federation_claim_handoff(
+                    &first.node_credential,
+                    confirmed.id,
+                    second.receipt.payload.member_node_id,
+                    Some("Repository ownership moved"),
+                    now + 24,
+                )
+                .unwrap(),
+            offered
+        );
+        assert!(matches!(
+            keeper.accept_federation_claim_handoff(&first.node_credential, offered.id, now + 24,),
+            Err(TaskStoreError::FederationHandoffConflict)
+        ));
+        let accepted = keeper
+            .accept_federation_claim_handoff(&second.node_credential, offered.id, now + 25)
+            .unwrap();
+        assert_eq!(
+            accepted.state,
+            swarm_domain::FederationClaimHandoffState::Accepted
+        );
+        assert_eq!(
+            keeper.list_active_federation_claims(now + 25).unwrap()[0].home_node_id,
+            first.receipt.payload.member_node_id
+        );
+        assert!(matches!(
+            keeper.cancel_federation_claim_handoff(&first.node_credential, offered.id, now + 26,),
+            Err(TaskStoreError::FederationHandoffConflict)
+        ));
+        let completed = keeper
+            .confirm_federation_claim_handoff(&second.node_credential, offered.id, now + 27)
+            .unwrap();
+        assert_eq!(
+            completed.state,
+            swarm_domain::FederationClaimHandoffState::Completed
+        );
+        assert_eq!(
+            keeper.list_active_federation_claims(now + 27).unwrap()[0].home_node_id,
+            second.receipt.payload.member_node_id
+        );
+        assert_eq!(
+            keeper
+                .confirm_federation_claim_handoff(&second.node_credential, offered.id, now + 28,)
+                .unwrap(),
+            completed
+        );
+        assert_eq!(
+            keeper
+                .list_federation_claim_handoffs(&second.node_credential, now + 28)
+                .unwrap(),
+            vec![completed]
+        );
     }
 
     #[test]

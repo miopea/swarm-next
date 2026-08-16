@@ -46,6 +46,7 @@ domain_id!(FederationNodeId);
 domain_id!(FederationMembershipReceiptId);
 domain_id!(FederationDepartureReceiptId);
 domain_id!(FederationClaimId);
+domain_id!(FederationClaimHandoffId);
 domain_id!(ApiaryTaskId);
 domain_id!(FederationTaskCommandId);
 domain_id!(StewardshipId);
@@ -762,6 +763,68 @@ pub struct FederationSharedClaim {
     pub reservation_expires_at: i64,
     pub confirmed_at: Option<i64>,
     pub released_at: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationClaimHandoffState {
+    Offered,
+    Accepted,
+    Completed,
+    Declined,
+    Cancelled,
+}
+
+impl fmt::Display for FederationClaimHandoffState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Offered => "offered",
+            Self::Accepted => "accepted",
+            Self::Completed => "completed",
+            Self::Declined => "declined",
+            Self::Cancelled => "cancelled",
+        })
+    }
+}
+
+impl FromStr for FederationClaimHandoffState {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "offered" => Ok(Self::Offered),
+            "accepted" => Ok(Self::Accepted),
+            "completed" => Ok(Self::Completed),
+            "declined" => Ok(Self::Declined),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Keeper-authoritative transfer of one confirmed shared Jira claim. The
+/// source remains the claim owner until the target confirms its local Jira
+/// assignment succeeded.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationClaimHandoff {
+    pub id: FederationClaimHandoffId,
+    pub apiary_id: ApiaryId,
+    pub claim_id: FederationClaimId,
+    pub project_id: String,
+    pub issue_id: String,
+    pub issue_key: String,
+    pub source_node_id: FederationNodeId,
+    pub source_hive_id: HiveId,
+    pub source_operator_id: OperatorId,
+    pub target_node_id: FederationNodeId,
+    pub target_hive_id: HiveId,
+    pub target_operator_id: OperatorId,
+    pub state: FederationClaimHandoffState,
+    pub reason: Option<String>,
+    pub offered_at: i64,
+    pub accepted_at: Option<i64>,
+    pub completed_at: Option<i64>,
+    pub closed_at: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

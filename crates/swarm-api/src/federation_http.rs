@@ -4,10 +4,11 @@ use futures_util::StreamExt;
 use reqwest::{Client, Method, StatusCode, Url};
 use serde::{Serialize, de::DeserializeOwned};
 use swarm_domain::{
-    ApiaryJoinLinkId, ApiaryJoinLinkPoll, FederationCatalogSnapshot, FederationClaimId,
-    FederationDepartureReadiness, FederationDepartureReceipt, FederationJoinAcceptance,
-    FederationJoinSubmission, FederationSharedClaim, FederationStewardshipSnapshot,
-    FederationTaskCommand, FederationTaskCommandReceipt, FederationTaskPage, HiveConnectionCard,
+    ApiaryJoinLinkId, ApiaryJoinLinkPoll, FederationCatalogSnapshot, FederationClaimHandoff,
+    FederationClaimHandoffId, FederationClaimId, FederationDepartureReadiness,
+    FederationDepartureReceipt, FederationJoinAcceptance, FederationJoinSubmission,
+    FederationNodeId, FederationSharedClaim, FederationStewardshipSnapshot, FederationTaskCommand,
+    FederationTaskCommandReceipt, FederationTaskPage, HiveConnectionCard,
 };
 use thiserror::Error;
 
@@ -44,6 +45,12 @@ struct ReserveClaimRequest<'a> {
     project_id: &'a str,
     issue_id: &'a str,
     issue_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct OfferHandoffRequest<'a> {
+    target_node_id: FederationNodeId,
+    reason: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -297,6 +304,114 @@ impl FederationHttpClient {
         .await
     }
 
+    /// Offers one confirmed claim to a target member through the Keeper.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, conflict, or protocol errors.
+    pub async fn offer_claim_handoff(
+        &self,
+        node_credential: &str,
+        claim_id: FederationClaimId,
+        target_node_id: FederationNodeId,
+        reason: Option<&str>,
+    ) -> Result<FederationClaimHandoff, FederationHttpError> {
+        self.send_json(
+            Method::POST,
+            &format!("api/v1/federation/claims/{claim_id}/handoffs"),
+            Some(node_credential),
+            Some(&OfferHandoffRequest {
+                target_node_id,
+                reason,
+            }),
+        )
+        .await
+    }
+
+    /// Reads the authenticated member's bounded handoff feed.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, response, or protocol errors.
+    pub async fn claim_handoffs(
+        &self,
+        node_credential: &str,
+    ) -> Result<Vec<FederationClaimHandoff>, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::GET,
+            "api/v1/federation/handoffs",
+            Some(node_credential),
+            None,
+        )
+        .await
+    }
+
+    async fn transition_claim_handoff(
+        &self,
+        node_credential: &str,
+        handoff_id: FederationClaimHandoffId,
+        suffix: &str,
+        method: Method,
+    ) -> Result<FederationClaimHandoff, FederationHttpError> {
+        let path = if suffix.is_empty() {
+            format!("api/v1/federation/handoffs/{handoff_id}")
+        } else {
+            format!("api/v1/federation/handoffs/{handoff_id}/{suffix}")
+        };
+        self.send_json::<(), _>(method, &path, Some(node_credential), None)
+            .await
+    }
+
+    /// Accepts a handoff as its target member.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, conflict, or protocol errors.
+    pub async fn accept_claim_handoff(
+        &self,
+        credential: &str,
+        id: FederationClaimHandoffId,
+    ) -> Result<FederationClaimHandoff, FederationHttpError> {
+        self.transition_claim_handoff(credential, id, "acceptance", Method::POST)
+            .await
+    }
+
+    /// Confirms that target-side Jira assignment succeeded.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, conflict, or protocol errors.
+    pub async fn confirm_claim_handoff(
+        &self,
+        credential: &str,
+        id: FederationClaimHandoffId,
+    ) -> Result<FederationClaimHandoff, FederationHttpError> {
+        self.transition_claim_handoff(credential, id, "confirmation", Method::POST)
+            .await
+    }
+
+    /// Declines a handoff as its target member.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, conflict, or protocol errors.
+    pub async fn decline_claim_handoff(
+        &self,
+        credential: &str,
+        id: FederationClaimHandoffId,
+    ) -> Result<FederationClaimHandoff, FederationHttpError> {
+        self.transition_claim_handoff(credential, id, "decline", Method::POST)
+            .await
+    }
+
+    /// Cancels an unaccepted handoff as its source member.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, conflict, or protocol errors.
+    pub async fn cancel_claim_handoff(
+        &self,
+        credential: &str,
+        id: FederationClaimHandoffId,
+    ) -> Result<FederationClaimHandoff, FederationHttpError> {
+        self.transition_claim_handoff(credential, id, "", Method::DELETE)
+            .await
+    }
+
     async fn send_json<B, R>(
         &self,
         method: Method,
@@ -538,6 +653,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handoff_transport_preserves_target_identity_and_member_auth() {
+        let handoff = sample_handoff();
+        let offered = handoff.clone();
+        let listed = handoff.clone();
+        let accepted = handoff.clone();
+        let app = Router::new()
+            .route(
+                "/swarm/api/v1/federation/claims/{claim_id}/handoffs",
+                axum::routing::post(
+                    move |headers: axum::http::HeaderMap,
+                          axum::extract::Path(claim_id): axum::extract::Path<String>,
+                          Json(body): Json<serde_json::Value>| {
+                        let offered = offered.clone();
+                        async move {
+                            assert_eq!(headers[header::AUTHORIZATION], "Bearer source-secret");
+                            assert_eq!(claim_id, offered.claim_id.to_string());
+                            assert_eq!(body["target_node_id"], offered.target_node_id.to_string());
+                            Json(offered)
+                        }
+                    },
+                ),
+            )
+            .route(
+                "/swarm/api/v1/federation/handoffs",
+                get(move |headers: axum::http::HeaderMap| {
+                    let listed = listed.clone();
+                    async move {
+                        assert_eq!(headers[header::AUTHORIZATION], "Bearer target-secret");
+                        Json(vec![listed])
+                    }
+                }),
+            )
+            .route(
+                "/swarm/api/v1/federation/handoffs/{handoff_id}/acceptance",
+                axum::routing::post(
+                    move |headers: axum::http::HeaderMap,
+                          axum::extract::Path(handoff_id): axum::extract::Path<String>| {
+                        let accepted = accepted.clone();
+                        async move {
+                            assert_eq!(headers[header::AUTHORIZATION], "Bearer target-secret");
+                            assert_eq!(handoff_id, accepted.id.to_string());
+                            Json(accepted)
+                        }
+                    },
+                ),
+            );
+        let address = spawn_server(app).await;
+        let client = FederationHttpClient::new(&format!("http://{address}/swarm")).unwrap();
+        assert_eq!(
+            client
+                .offer_claim_handoff(
+                    "source-secret",
+                    handoff.claim_id,
+                    handoff.target_node_id,
+                    handoff.reason.as_deref(),
+                )
+                .await
+                .unwrap(),
+            handoff
+        );
+        assert_eq!(
+            client.claim_handoffs("target-secret").await.unwrap(),
+            vec![handoff.clone()]
+        );
+        assert_eq!(
+            client
+                .accept_claim_handoff("target-secret", handoff.id)
+                .await
+                .unwrap(),
+            handoff
+        );
+    }
+
+    #[tokio::test]
     async fn task_command_transport_preserves_identity_and_receipt() {
         let command = FederationTaskCommand {
             id: FederationTaskCommandId::new(),
@@ -727,6 +916,29 @@ mod tests {
             reservation_expires_at: 1_120,
             confirmed_at: None,
             released_at: None,
+        }
+    }
+
+    fn sample_handoff() -> FederationClaimHandoff {
+        FederationClaimHandoff {
+            id: FederationClaimHandoffId::new(),
+            apiary_id: ApiaryId::new(),
+            claim_id: FederationClaimId::new(),
+            project_id: "10001".into(),
+            issue_id: "20001".into(),
+            issue_key: "WWD-101".into(),
+            source_node_id: FederationNodeId::new(),
+            source_hive_id: HiveId::new(),
+            source_operator_id: OperatorId::new(),
+            target_node_id: FederationNodeId::new(),
+            target_hive_id: HiveId::new(),
+            target_operator_id: OperatorId::new(),
+            state: swarm_domain::FederationClaimHandoffState::Offered,
+            reason: Some("Repository ownership moved".into()),
+            offered_at: 1_000,
+            accepted_at: None,
+            completed_at: None,
+            closed_at: None,
         }
     }
 

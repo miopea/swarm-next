@@ -62,15 +62,15 @@ use swarm_application::{
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinLink,
     ApiaryJoinLinkId, ApiaryJoinReadiness, ApiaryKeeperLink, ApiaryTask, ApiaryTaskId,
-    DecisionRequestId, FederationCatalogSnapshot, FederationClaimId, FederationDepartureReadiness,
-    FederationDepartureReceipt, FederationJoinSubmission, FederationSharedClaim,
-    FederationStewardshipSnapshot, FederationSyncCondition, FederationTaskCommand,
-    FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
-    FederationTaskSyncStatus, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
-    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext, LocalApiaryRole,
-    OperatorId, ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId,
-    TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile,
-    WorkerSessionId,
+    DecisionRequestId, FederationCatalogSnapshot, FederationClaimHandoffId, FederationClaimId,
+    FederationDepartureReadiness, FederationDepartureReceipt, FederationJoinSubmission,
+    FederationNodeId, FederationSharedClaim, FederationStewardshipSnapshot,
+    FederationSyncCondition, FederationTaskCommand, FederationTaskOutboxEntry,
+    FederationTaskOutboxStatus, FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard,
+    HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope,
+    JiraStatusMapping, LocalApiaryContext, LocalApiaryRole, OperatorId, ProviderKind,
+    SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority,
+    TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
@@ -1381,6 +1381,13 @@ struct ReserveFederationClaimRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct OfferFederationClaimHandoffRequest {
+    target_node_id: FederationNodeId,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct FederationTaskPageQuery {
     #[serde(default)]
     after: i64,
@@ -1775,6 +1782,30 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/federation/claims/{claim_id}/confirmation",
             post(confirm_federation_claim),
+        )
+        .route(
+            "/api/v1/federation/claims/{claim_id}/handoffs",
+            post(offer_federation_claim_handoff),
+        )
+        .route(
+            "/api/v1/federation/handoffs",
+            get(list_federation_claim_handoffs),
+        )
+        .route(
+            "/api/v1/federation/handoffs/{handoff_id}",
+            delete(cancel_federation_claim_handoff),
+        )
+        .route(
+            "/api/v1/federation/handoffs/{handoff_id}/acceptance",
+            post(accept_federation_claim_handoff),
+        )
+        .route(
+            "/api/v1/federation/handoffs/{handoff_id}/confirmation",
+            post(confirm_federation_claim_handoff),
+        )
+        .route(
+            "/api/v1/federation/handoffs/{handoff_id}/decline",
+            post(decline_federation_claim_handoff),
         )
         .route(
             "/api/v1/apiary/catalog-acknowledgement",
@@ -2904,6 +2935,78 @@ async fn release_federation_claim(
         .map_err(federation_claim_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(claim)).into_response())
 }
+
+async fn offer_federation_claim_handoff(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(claim_id): Path<String>,
+    Json(request): Json<OfferFederationClaimHandoffRequest>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let handoff = apiary_service(&state)?
+        .offer_federation_claim_handoff(
+            credential,
+            parse_federation_claim_id(&claim_id)?,
+            request.target_node_id,
+            request.reason.as_deref(),
+            unix_timestamp(),
+        )
+        .map_err(federation_claim_error)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(handoff),
+    )
+        .into_response())
+}
+
+async fn list_federation_claim_handoffs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let handoffs = apiary_service(&state)?
+        .federation_claim_handoffs(credential, unix_timestamp())
+        .map_err(federation_claim_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(handoffs)).into_response())
+}
+
+macro_rules! handoff_transition_handler {
+    ($name:ident, $method:ident) => {
+        async fn $name(
+            State(state): State<Arc<AppState>>,
+            headers: HeaderMap,
+            Path(handoff_id): Path<String>,
+        ) -> Result<Response, ApiError> {
+            let credential = federation_node_credential(&headers)?;
+            let handoff = apiary_service(&state)?
+                .$method(
+                    credential,
+                    parse_federation_handoff_id(&handoff_id)?,
+                    unix_timestamp(),
+                )
+                .map_err(federation_claim_error)?;
+            Ok(([(header::CACHE_CONTROL, "no-store")], Json(handoff)).into_response())
+        }
+    };
+}
+
+handoff_transition_handler!(
+    accept_federation_claim_handoff,
+    accept_federation_claim_handoff
+);
+handoff_transition_handler!(
+    confirm_federation_claim_handoff,
+    confirm_federation_claim_handoff
+);
+handoff_transition_handler!(
+    decline_federation_claim_handoff,
+    decline_federation_claim_handoff
+);
+handoff_transition_handler!(
+    cancel_federation_claim_handoff,
+    cancel_federation_claim_handoff
+);
 
 async fn acknowledge_federation_catalog(
     State(state): State<Arc<AppState>>,
@@ -5085,6 +5188,16 @@ fn parse_federation_claim_id(value: &str) -> Result<FederationClaimId, ApiError>
     })
 }
 
+fn parse_federation_handoff_id(value: &str) -> Result<FederationClaimHandoffId, ApiError> {
+    FederationClaimHandoffId::from_str(value).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_federation_handoff",
+            "federation handoff ID must be a UUID",
+        )
+    })
+}
+
 fn jira_adapter_error(error: jira::JiraAdapterError) -> ApiError {
     match error {
         jira::JiraAdapterError::NotConfigured => ApiError::new(
@@ -5391,6 +5504,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "invalid_federation_claim",
             error.to_string(),
         ),
+        TaskStoreError::InvalidFederationHandoff => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_federation_handoff",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidFederationSync => ApiError::new(
             StatusCode::FORBIDDEN,
             "apiary_member_required",
@@ -5424,6 +5542,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::FederationClaimConflict => ApiError::new(
             StatusCode::CONFLICT,
             "federation_claim_conflict",
+            error.to_string(),
+        ),
+        TaskStoreError::FederationHandoffConflict => ApiError::new(
+            StatusCode::CONFLICT,
+            "federation_handoff_conflict",
             error.to_string(),
         ),
         TaskStoreError::FederationInvitationConflict => ApiError::new(

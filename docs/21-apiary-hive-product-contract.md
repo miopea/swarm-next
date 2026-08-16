@@ -364,6 +364,14 @@ Only after verifying the receipt does the Member remove shared projections and
 its credential. Private workers, repositories, provider conversations, tasks,
 settings, and Hive integrations remain; Apiary Jira bindings become Hive-owned.
 
+A confirmed Jira home moves through a Keeper-authoritative offer rather than a
+direct reassignment. The current home offers one active destination Hive; the
+destination durably accepts, assigns Jira through her own integration, then
+confirms at Keeper. Keeper changes the home Hive only in that final atomic
+confirmation. Exact retries return the same result, accepted handoffs never
+expire silently, and the destination Queen waits for confirmed Hive ownership
+before assigning a private worker.
+
 ## Jira-backed Apiaries
 
 Jira identity maps one-to-one with the operator who owns a Hive. Jira remains
