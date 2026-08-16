@@ -964,3 +964,12 @@ the independently updated terminal host through the API to worker settings:
   read-only MCP discovery against the preserved Queen credential returned both
   new tool names. API PID advanced to `3537204`; terminal-host PID remained
   `2966127`, preserving the active Queen session.
+- Release `0.1.0-dev-4dcc2f52e794` extends the Queen bridge with governed
+  Member-side `swarm_claim_apiary_task` and `swarm_transition_apiary_task`
+  commands. Mutations enter the Member's durable outbound queue and retain the
+  existing revision, retry, and conflict rules; ordinary workers still cannot
+  discover or invoke Apiary authority. The full Rust gate passed 343 tests and
+  warnings-denied Clippy after clearing one corrupted incremental compiler
+  cache. Live read-only MCP discovery against the preserved Queen credential
+  returned list, create, claim, and transition. API PID advanced to `3544183`;
+  terminal-host PID remained `2966127`, preserving the active Queen session.
