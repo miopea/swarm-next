@@ -382,17 +382,34 @@ fn actionable_count(connection: &rusqlite::Connection) -> Result<i64, rusqlite::
         "SELECT COUNT(*) FROM tasks WHERE state IN ('blocked','review') OR (state = 'ready' AND assigned_worker_id IS NULL)",
         [], |row| row.get(0),
     )?;
-    let stale_count: i64 = connection.query_row(
+    let coordination_attention_count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM coordinator_actions action
          JOIN tasks task ON task.id = action.task_id
-         JOIN worker_sessions session ON session.session_id = action.session_id AND session.ended_at IS NULL
-         WHERE action.kind = 'stale_owned_work_attention' AND action.state = 'completed'
+         JOIN worker_sessions session ON session.session_id = action.session_id
+         WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention')
+           AND action.state = 'completed'
            AND task.state = 'active' AND task.assigned_worker_id = action.worker_id
-           AND task.updated_at = action.evidence_revision AND session.worker_id = action.worker_id",
+           AND task.updated_at = action.evidence_revision AND session.worker_id = action.worker_id
+           AND (
+               (action.kind = 'stale_owned_work_attention' AND session.ended_at IS NULL)
+               OR (action.kind = 'owned_work_worker_exited_attention'
+                   AND session.ended_at IS NOT NULL
+                   AND session.session_id = (
+                       SELECT latest.session_id FROM worker_sessions latest
+                       WHERE latest.worker_id = action.worker_id
+                         AND latest.ended_at IS NOT NULL
+                       ORDER BY latest.ended_at DESC, latest.started_at DESC, latest.session_id DESC
+                       LIMIT 1
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM worker_sessions live
+                       WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
+                   ))
+           )",
         [],
         |row| row.get(0),
     )?;
-    Ok(task_count + stale_count)
+    Ok(task_count + coordination_attention_count)
 }
 
 fn actionable_fingerprint(
@@ -416,23 +433,41 @@ fn actionable_fingerprint(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     let mut attention_statement = connection.prepare(
-        "SELECT action.id, task.id, action.evidence_revision
+        "SELECT action.kind, action.id, task.id, action.evidence_revision
          FROM coordinator_actions action
          JOIN tasks task ON task.id = action.task_id
-         JOIN worker_sessions session ON session.session_id = action.session_id AND session.ended_at IS NULL
-         WHERE action.kind = 'stale_owned_work_attention' AND action.state = 'completed'
+         JOIN worker_sessions session ON session.session_id = action.session_id
+         WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention')
+           AND action.state = 'completed'
            AND task.state = 'active' AND task.assigned_worker_id = action.worker_id
            AND task.updated_at = action.evidence_revision AND session.worker_id = action.worker_id
+           AND (
+               (action.kind = 'stale_owned_work_attention' AND session.ended_at IS NULL)
+               OR (action.kind = 'owned_work_worker_exited_attention'
+                   AND session.ended_at IS NOT NULL
+                   AND session.session_id = (
+                       SELECT latest.session_id FROM worker_sessions latest
+                       WHERE latest.worker_id = action.worker_id
+                         AND latest.ended_at IS NOT NULL
+                       ORDER BY latest.ended_at DESC, latest.started_at DESC, latest.session_id DESC
+                       LIMIT 1
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM worker_sessions live
+                       WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
+                   ))
+           )
          ORDER BY action.id LIMIT ?1",
     )?;
     rows.extend(
         attention_statement
             .query_map([MAX_FINGERPRINT_TASKS], |row| {
                 Ok(format!(
-                    "stale:{}:{}:{}",
+                    "attention:{}:{}:{}:{}",
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?,
@@ -648,5 +683,67 @@ mod tests {
         assert!(store.current_coordinator_attention().unwrap().is_empty());
         let status = store.queen_automation_status(1_002).unwrap();
         assert_eq!(status.actionable_count, 1);
+    }
+
+    #[test]
+    fn exited_worker_owned_work_enters_and_leaves_the_queen_review_fingerprint() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Aster",
+                ProviderKind::ClaudeCode,
+                "/workspace/aster",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Recover interrupted work", "/workspace/aster")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET updated_at = 100 WHERE id = ?1",
+                [task.id.to_string()],
+            )
+            .unwrap();
+        assert!(store.release_worker_session(session).unwrap());
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE worker_sessions SET ended_at = 400 WHERE session_id = ?1",
+                [session.to_string()],
+            )
+            .unwrap();
+        let candidate = store
+            .exited_worker_owned_work_candidates(700, 300)
+            .unwrap()
+            .pop()
+            .unwrap();
+        store
+            .record_exited_worker_owned_work_attention(&candidate, 700, 300)
+            .unwrap();
+
+        let status = store.set_queen_automation_enabled(true, 701).unwrap();
+        assert_eq!(status.actionable_count, 1);
+        assert_eq!(status.state, QueenAutomationState::Queued);
+
+        store
+            .bind_worker_session(worker.id, WorkerSessionId::new())
+            .unwrap();
+        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        assert_eq!(
+            store.queen_automation_status(702).unwrap().actionable_count,
+            0
+        );
     }
 }

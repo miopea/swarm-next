@@ -6,6 +6,7 @@ use super::{TaskStore, TaskStoreError, events::insert_control_room_event};
 
 const MAX_WAKE_CLAIMS: i64 = 8;
 const MAX_STALE_CANDIDATES: i64 = 32;
+const MAX_EXITED_WORK_CANDIDATES: i64 = 32;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoordinatorWorkerWake {
@@ -24,8 +25,18 @@ pub struct StaleOwnedWorkCandidate {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExitedWorkerOwnedWorkCandidate {
+    pub worker_id: WorkerId,
+    pub session_id: WorkerSessionId,
+    pub task_id: TaskId,
+    pub task_revision: i64,
+    pub age_seconds: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoordinatorAttention {
     pub action_id: String,
+    pub kind: String,
     pub worker_id: WorkerId,
     pub worker_name: String,
     pub task_id: TaskId,
@@ -42,6 +53,7 @@ pub struct CoordinatorStatus {
     pub uncertain_actions: usize,
     pub queued_actions: usize,
     pub stale_attention_actions: usize,
+    pub worker_exit_attention_actions: usize,
     pub last_action_at: Option<i64>,
 }
 
@@ -89,6 +101,161 @@ pub(crate) fn enqueue_queen_worker_wake(
 }
 
 impl TaskStore {
+    /// Returns bounded durable candidates whose worker process ended while it
+    /// still owned Active work. The newest ended session is the exact process
+    /// incarnation bound into the observation; a replacement live session
+    /// suppresses the candidate.
+    ///
+    /// # Errors
+    /// Returns a persistence or identity-integrity error.
+    pub fn exited_worker_owned_work_candidates(
+        &self,
+        now: i64,
+        minimum_age_seconds: i64,
+    ) -> Result<Vec<ExitedWorkerOwnedWorkCandidate>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT task.assigned_worker_id, session.session_id, task.id,
+                    task.updated_at, MAX(0, ?1 - session.ended_at)
+             FROM tasks task
+             JOIN worker_profiles worker
+               ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
+             JOIN worker_sessions session ON session.session_id = (
+                 SELECT latest.session_id FROM worker_sessions latest
+                 WHERE latest.worker_id = worker.id AND latest.ended_at IS NOT NULL
+                 ORDER BY latest.ended_at DESC, latest.started_at DESC, latest.session_id DESC
+                 LIMIT 1
+             )
+             WHERE task.state = 'active' AND session.ended_at + ?2 <= ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM worker_sessions live
+                   WHERE live.worker_id = worker.id AND live.ended_at IS NULL
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM worker_engagements engagement
+                   WHERE engagement.worker_id = worker.id AND engagement.expires_at > ?1
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM coordinator_actions action
+                   WHERE action.kind = 'owned_work_worker_exited_attention'
+                     AND action.task_id = task.id AND action.worker_id = worker.id
+                     AND action.session_id = session.session_id
+                     AND action.evidence_revision = task.updated_at
+               )
+             ORDER BY session.ended_at, task.id LIMIT ?3",
+        )?;
+        statement
+            .query_map(
+                params![now, minimum_age_seconds, MAX_EXITED_WORK_CANDIDATES],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )?
+            .map(|row| {
+                let (worker_id, session_id, task_id, task_revision, age_seconds) = row?;
+                Ok::<_, rusqlite::Error>(ExitedWorkerOwnedWorkCandidate {
+                    worker_id: worker_id
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    session_id: session_id
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    task_id: task_id.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    task_revision,
+                    age_seconds,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(TaskStoreError::from)
+    }
+
+    /// Records one exact worker-exit observation after the grace period. The
+    /// task revision, owner, ended session, lack of a replacement session, and
+    /// lack of operator engagement are rechecked atomically.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn record_exited_worker_owned_work_attention(
+        &self,
+        candidate: &ExitedWorkerOwnedWorkCandidate,
+        now: i64,
+        minimum_age_seconds: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let still_current: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM tasks task
+                 JOIN worker_sessions session ON session.session_id = ?4
+                 WHERE task.id = ?1 AND task.state = 'active'
+                   AND task.assigned_worker_id = ?2 AND task.updated_at = ?3
+                   AND session.worker_id = ?2 AND session.ended_at IS NOT NULL
+                   AND session.ended_at + ?5 <= ?6
+                   AND session.session_id = (
+                       SELECT latest.session_id FROM worker_sessions latest
+                       WHERE latest.worker_id = ?2 AND latest.ended_at IS NOT NULL
+                       ORDER BY latest.ended_at DESC, latest.started_at DESC, latest.session_id DESC
+                       LIMIT 1
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM worker_sessions live
+                       WHERE live.worker_id = ?2 AND live.ended_at IS NULL
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM worker_engagements engagement
+                       WHERE engagement.worker_id = ?2 AND engagement.expires_at > ?6
+                   )
+             )",
+            params![
+                candidate.task_id.to_string(),
+                candidate.worker_id.to_string(),
+                candidate.task_revision,
+                candidate.session_id.to_string(),
+                minimum_age_seconds,
+                now,
+            ],
+            |row| row.get(0),
+        )?;
+        if !still_current {
+            transaction.commit()?;
+            return Ok(false);
+        }
+        let idempotency_key = format!(
+            "owned-work-worker-exited:{}:{}:{}:{}",
+            candidate.task_id, candidate.worker_id, candidate.session_id, candidate.task_revision
+        );
+        let changed = transaction.execute(
+            "INSERT OR IGNORE INTO coordinator_actions
+                 (id, idempotency_key, kind, worker_id, task_id, session_id,
+                  evidence_revision, observed_age_seconds, state, reason,
+                  finished_at, updated_at)
+             VALUES (?1, ?2, 'owned_work_worker_exited_attention', ?3, ?4, ?5, ?6, ?7,
+                     'completed', 'Active work lost its loaded worker after the process exited',
+                     ?8, ?8)",
+            params![
+                Uuid::now_v7().to_string(),
+                idempotency_key,
+                candidate.worker_id.to_string(),
+                candidate.task_id.to_string(),
+                candidate.session_id.to_string(),
+                candidate.task_revision,
+                candidate.age_seconds,
+                now,
+            ],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
     /// Returns bounded durable candidates for stale-owned-work observation.
     /// Runtime/provider evidence is deliberately evaluated by the API before
     /// any attention action is recorded.
@@ -236,18 +403,33 @@ impl TaskStore {
     ) -> Result<Vec<CoordinatorAttention>, TaskStoreError> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
-            "SELECT action.id, worker.id, worker.name, task.id, task.title,
+            "SELECT action.id, action.kind, worker.id, worker.name, task.id, task.title,
                     action.reason, action.finished_at, action.observed_age_seconds
              FROM coordinator_actions action
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
-             JOIN worker_sessions session
-               ON session.session_id = action.session_id AND session.ended_at IS NULL
-             WHERE action.kind = 'stale_owned_work_attention'
+             JOIN worker_sessions session ON session.session_id = action.session_id
+             WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention')
                AND action.state = 'completed' AND task.state = 'active'
                AND task.assigned_worker_id = action.worker_id
                AND task.updated_at = action.evidence_revision
                AND session.worker_id = action.worker_id
+               AND (
+                   (action.kind = 'stale_owned_work_attention' AND session.ended_at IS NULL)
+                   OR (action.kind = 'owned_work_worker_exited_attention'
+                       AND session.ended_at IS NOT NULL
+                       AND session.session_id = (
+                           SELECT latest.session_id FROM worker_sessions latest
+                           WHERE latest.worker_id = action.worker_id
+                             AND latest.ended_at IS NOT NULL
+                           ORDER BY latest.ended_at DESC, latest.started_at DESC, latest.session_id DESC
+                           LIMIT 1
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM worker_sessions live
+                           WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
+                       ))
+               )
              ORDER BY action.finished_at DESC, action.id DESC LIMIT 32",
         )?;
         statement
@@ -259,13 +441,15 @@ impl TaskStore {
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
-                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(6)?,
                     row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
                 ))
             })?
             .map(|row| {
                 let (
                     action_id,
+                    kind,
                     worker_id,
                     worker_name,
                     task_id,
@@ -276,6 +460,7 @@ impl TaskStore {
                 ) = row?;
                 Ok::<_, rusqlite::Error>(CoordinatorAttention {
                     action_id,
+                    kind,
                     worker_id: worker_id
                         .parse()
                         .map_err(|_| rusqlite::Error::InvalidQuery)?,
@@ -417,18 +602,19 @@ impl TaskStore {
     /// Returns a persistence error.
     pub fn coordinator_status(&self) -> Result<CoordinatorStatus, TaskStoreError> {
         let connection = self.connection()?;
-        let (completed, uncertain, queued, stale_attention, last_action_at):
-            (i64, i64, i64, i64, Option<i64>) =
+        let (completed, uncertain, queued, stale_attention, worker_exit_attention, last_action_at):
+            (i64, i64, i64, i64, i64, Option<i64>) =
             connection.query_row(
                 "SELECT
                     COALESCE(SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN state = 'uncertain' THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN state IN ('queued','running') THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN kind = 'stale_owned_work_attention' AND state = 'completed' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN kind = 'owned_work_worker_exited_attention' AND state = 'completed' THEN 1 ELSE 0 END), 0),
                     MAX(CASE WHEN state = 'completed' THEN finished_at ELSE updated_at END)
                  FROM coordinator_actions",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )?;
         let wake_completed: i64 = connection.query_row(
             "SELECT COUNT(*) FROM coordinator_actions
@@ -442,6 +628,8 @@ impl TaskStore {
             uncertain_actions: usize::try_from(uncertain).unwrap_or_default(),
             queued_actions: usize::try_from(queued).unwrap_or_default(),
             stale_attention_actions: usize::try_from(stale_attention).unwrap_or_default(),
+            worker_exit_attention_actions: usize::try_from(worker_exit_attention)
+                .unwrap_or_default(),
             last_action_at,
         })
     }
@@ -530,6 +718,56 @@ pub(super) fn migrate_coordinator_attention(
              ON coordinator_actions(state, created_at, id);
          PRAGMA legacy_alter_table = OFF;
          PRAGMA user_version = 63;",
+    )
+}
+
+pub(super) fn migrate_coordinator_worker_exit_attention(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let prerequisite_tables = transaction.query_row(
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE type = 'table' AND name IN ('tasks', 'worker_profiles', 'coordinator_actions')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if prerequisite_tables != 3 {
+        transaction.pragma_update(None, "user_version", 64)?;
+        return Ok(());
+    }
+    transaction.execute_batch(
+        "DROP INDEX IF EXISTS coordinator_actions_queue;
+         PRAGMA legacy_alter_table = ON;
+         ALTER TABLE coordinator_actions RENAME TO coordinator_actions_v63;
+         CREATE TABLE coordinator_actions (
+             id TEXT PRIMARY KEY,
+             idempotency_key TEXT NOT NULL UNIQUE,
+             kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention')),
+             worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             session_id TEXT,
+             evidence_revision INTEGER,
+             observed_age_seconds INTEGER,
+             state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+             reason TEXT NOT NULL,
+             attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+             attempted_at INTEGER,
+             finished_at INTEGER,
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );
+         INSERT INTO coordinator_actions (
+             id, idempotency_key, kind, worker_id, task_id, session_id,
+             evidence_revision, observed_age_seconds, state, reason, attempts,
+             attempted_at, finished_at, created_at, updated_at
+         ) SELECT id, idempotency_key, kind, worker_id, task_id, session_id,
+                  evidence_revision, observed_age_seconds, state, reason, attempts,
+                  attempted_at, finished_at, created_at, updated_at
+           FROM coordinator_actions_v63;
+         DROP TABLE coordinator_actions_v63;
+         CREATE INDEX coordinator_actions_queue
+             ON coordinator_actions(state, created_at, id);
+         PRAGMA legacy_alter_table = OFF;
+         PRAGMA user_version = 64;",
     )
 }
 
@@ -679,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v62_wake_actions_survive_the_attention_migration() {
+    fn schema_v62_wake_actions_survive_both_attention_migrations() {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         let worker = store
@@ -760,6 +998,21 @@ mod tests {
             .unwrap();
         assert!(new_columns.contains(&"session_id".to_owned()));
         assert!(new_columns.contains(&"evidence_revision".to_owned()));
+        migrate_coordinator_worker_exit_attention(&transaction).unwrap();
+        assert_eq!(
+            transaction
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            64
+        );
+        let table_sql: String = transaction
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'coordinator_actions'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(table_sql.contains("owned_work_worker_exited_attention"));
         transaction.commit().unwrap();
     }
 
@@ -844,6 +1097,113 @@ mod tests {
         assert!(
             !store
                 .record_stale_owned_work_attention(&candidate, 1_000, 600)
+                .unwrap()
+        );
+        assert!(store.current_coordinator_attention().unwrap().is_empty());
+    }
+
+    #[test]
+    fn exited_worker_attention_is_grace_perioded_revision_bound_and_clears_on_recovery() {
+        let store = TaskStore::in_memory().unwrap();
+        let (worker, session, task) = active_owned_work(&store, "Poppy", 100);
+        assert!(store.release_worker_session(session).unwrap());
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE worker_sessions SET ended_at = 400 WHERE session_id = ?1",
+                [session.to_string()],
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .exited_worker_owned_work_candidates(699, 300)
+                .unwrap()
+                .is_empty()
+        );
+        let candidate = store
+            .exited_worker_owned_work_candidates(700, 300)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(candidate.worker_id, worker);
+        assert_eq!(candidate.session_id, session);
+        assert_eq!(candidate.task_id, task);
+        assert_eq!(candidate.task_revision, 100);
+        assert_eq!(candidate.age_seconds, 300);
+        assert!(
+            store
+                .record_exited_worker_owned_work_attention(&candidate, 700, 300)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .record_exited_worker_owned_work_attention(&candidate, 701, 300)
+                .unwrap()
+        );
+
+        let attention = store.current_coordinator_attention().unwrap();
+        assert_eq!(attention.len(), 1);
+        assert_eq!(attention[0].kind, "owned_work_worker_exited_attention");
+        assert_eq!(attention[0].worker_name, "Poppy");
+        assert_eq!(attention[0].age_seconds, 300);
+        let first_action_id = attention[0].action_id.clone();
+        let status = store.coordinator_status().unwrap();
+        assert_eq!(status.worker_exit_attention_actions, 1);
+        assert_eq!(status.stale_attention_actions, 0);
+
+        let replacement = WorkerSessionId::new();
+        store.bind_worker_session(worker, replacement).unwrap();
+        assert!(store.current_coordinator_attention().unwrap().is_empty());
+
+        assert!(store.release_worker_session(replacement).unwrap());
+        let replacement_candidate = store
+            .exited_worker_owned_work_candidates(i64::MAX / 2, 0)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(replacement_candidate.session_id, replacement);
+        assert!(
+            store
+                .record_exited_worker_owned_work_attention(&replacement_candidate, i64::MAX / 2, 0,)
+                .unwrap()
+        );
+        let attention = store.current_coordinator_attention().unwrap();
+        assert_eq!(attention.len(), 1);
+        assert_ne!(attention[0].action_id, first_action_id);
+    }
+
+    #[test]
+    fn exited_worker_attention_rechecks_task_revision_before_recording() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, session, task) = active_owned_work(&store, "Aster", 100);
+        assert!(store.release_worker_session(session).unwrap());
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE worker_sessions SET ended_at = 400 WHERE session_id = ?1",
+                [session.to_string()],
+            )
+            .unwrap();
+        let candidate = store
+            .exited_worker_owned_work_candidates(700, 300)
+            .unwrap()
+            .pop()
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET updated_at = 650 WHERE id = ?1",
+                [task.to_string()],
+            )
+            .unwrap();
+
+        assert!(
+            !store
+                .record_exited_worker_owned_work_attention(&candidate, 700, 300)
                 .unwrap()
         );
         assert!(store.current_coordinator_attention().unwrap().is_empty());

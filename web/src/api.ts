@@ -179,6 +179,7 @@ export type CoordinatorStatus = {
   uncertain_actions: number;
   queued_actions: number;
   stale_attention_actions: number;
+  worker_exit_attention_actions: number;
   last_action_at: number | null;
   automatic_start_admission: "allowed" | "deferred_advisory" | "deferred_critical" | "deferred_unavailable";
 };

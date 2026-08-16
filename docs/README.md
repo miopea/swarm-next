@@ -77,3 +77,4 @@ Current decision records:
 - [ADR 0038: Deterministic assigned-worker wake](decisions/0038-deterministic-assigned-worker-wake.md)
 - [ADR 0039: Deterministic stale-owned-work attention](decisions/0039-deterministic-stale-owned-work-attention.md)
 - [ADR 0040: Resource-pressure admission for automatic worker starts](decisions/0040-resource-pressure-admission-for-automatic-starts.md)
+- [ADR 0041: Deterministic exited-worker owned-work attention](decisions/0041-deterministic-exited-worker-owned-work-attention.md)

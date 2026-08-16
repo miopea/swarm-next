@@ -285,7 +285,7 @@ test("makes Queen automation observable, opt-in, and manually runnable", async (
       return ok(queenAutomation());
     }
     if (url.endsWith("/orchestration/coordinator")) {
-      return ok({ completed_actions: 9, queen_calls_avoided: 7, uncertain_actions: 0, queued_actions: 1, stale_attention_actions: 2, last_action_at: 100, automatic_start_admission: "deferred_advisory" });
+      return ok({ completed_actions: 9, queen_calls_avoided: 7, uncertain_actions: 0, queued_actions: 1, stale_attention_actions: 2, worker_exit_attention_actions: 1, last_action_at: 100, automatic_start_admission: "deferred_advisory" });
     }
     if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
     if (url.includes("integrations/jira/bindings") || url.includes("feedback/reports")) return ok([]);
@@ -304,7 +304,7 @@ test("makes Queen automation observable, opt-in, and manually runnable", async (
   expect(screen.getByText(/nothing runs automatically/)).toBeInTheDocument();
   expect(await screen.findByLabelText("Deterministic coordinator status")).toHaveTextContent("7Queen calls avoided");
   expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("1Waiting");
-  expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("2Stale work surfaced");
+  expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("3" + "2 stale · 1 exited");
   expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("waiting for memory pressure to settle");
 
   fireEvent.click(toggle);

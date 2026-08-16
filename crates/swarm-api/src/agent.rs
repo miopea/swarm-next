@@ -271,6 +271,7 @@ impl ServerHandler for AgentMcp {
                             structured(json!({
                                 "attention": attention.into_iter().map(|item| json!({
                                     "action_id": item.action_id,
+                                    "kind": item.kind,
                                     "worker_id": item.worker_id,
                                     "worker_name": item.worker_name,
                                     "task_id": item.task_id,

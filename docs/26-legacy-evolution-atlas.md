@@ -167,6 +167,13 @@ assignments remain manual, and an ambiguous wake never replays. Settings shows
 the completed action and avoided-Queen-call count so the layer's value and
 failure state are visible during dogfooding.
 
+The next two evidence rules are also live. Revision-stale Active work surfaces
+only when its loaded worker is resting and unengaged. Active work whose worker
+process exited surfaces only after the five-minute recovery window, when no
+replacement session or engagement exists. Both observations are bound to the
+exact task revision, owner, and process incarnation; neither injects a terminal,
+changes a task, or spends a Queen call merely to discover the condition.
+
 ## Complete commit ledger
 
 The repeatable ledger pass now covers all 1,431 reachable commits. It records

@@ -862,11 +862,43 @@ impl AppState {
     }
 
     async fn run_deterministic_coordinator(&self, store: &TaskStore) {
+        self.observe_exited_worker_owned_work(store);
         self.observe_stale_owned_work(store).await;
         let admission = runtime::coordinator_start_admission(self).await;
         self.coordinator_start_admission
             .store(admission.code(), Ordering::Relaxed);
         self.run_deterministic_worker_wakes(store, admission).await;
+    }
+
+    fn observe_exited_worker_owned_work(&self, store: &TaskStore) {
+        self.observe_exited_worker_owned_work_after(store, WORKER_RECOVERY_STABILITY_SECONDS);
+    }
+
+    fn observe_exited_worker_owned_work_after(&self, store: &TaskStore, minimum_age_seconds: i64) {
+        let now = unix_timestamp();
+        let candidates = match store.exited_worker_owned_work_candidates(now, minimum_age_seconds) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(message = %error, "deterministic coordinator could not inspect exited workers with owned work");
+                return;
+            }
+        };
+        for candidate in candidates {
+            match store.record_exited_worker_owned_work_attention(
+                &candidate,
+                now,
+                minimum_age_seconds,
+            ) {
+                Ok(true) => self.control_room_notify.notify_waiters(),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    task_id = %candidate.task_id,
+                    worker_id = %candidate.worker_id,
+                    message = %error,
+                    "exited-worker owned-work attention could not be recorded"
+                ),
+            }
+        }
     }
 
     async fn run_deterministic_worker_wakes(
@@ -1366,7 +1398,7 @@ fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
 }
 fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Vec<u8> {
     format!(
-        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Coordination attention can identify Active work that is unchanged while its loaded worker is resting; recheck the current task and worker before deciding whether to steer, wait, or ask the operator. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. Ask for a decision when intent or authority is unclear. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
+        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Coordination attention can identify Active work that is unchanged while its loaded worker is resting or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. Ask for a decision when intent or authority is unclear. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
         delivery.run_id,
         delivery.actionable_count,
         delivery.presence,
@@ -9785,6 +9817,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deterministic_coordinator_surfaces_active_work_after_worker_recovery_window() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Aster",
+                ProviderKind::ClaudeCode,
+                "/workspace/aster",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Recover interrupted work", "/workspace/aster")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(
+                task.id,
+                worker.id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        assert!(store.release_worker_session(session).unwrap());
+        let state = AppState::default().with_task_store(store.clone());
+
+        state.observe_exited_worker_owned_work_after(&store, 0);
+
+        let attention = store.current_coordinator_attention().unwrap();
+        assert_eq!(attention.len(), 1);
+        assert_eq!(attention[0].worker_id, worker.id);
+        assert_eq!(attention[0].task_id, task.id);
+        assert_eq!(attention[0].kind, "owned_work_worker_exited_attention");
+    }
+
+    #[tokio::test]
     async fn jira_readiness_is_private_and_explicit_when_not_configured() {
         let app = router(
             AppState::default()
@@ -10775,6 +10845,7 @@ mod tests {
         assert_eq!(coordinator["queued_actions"], 0);
         assert_eq!(coordinator["uncertain_actions"], 0);
         assert_eq!(coordinator["stale_attention_actions"], 0);
+        assert_eq!(coordinator["worker_exit_attention_actions"], 0);
         assert_eq!(
             coordinator["automatic_start_admission"],
             "deferred_unavailable"

@@ -89,6 +89,22 @@ queue retention, API visibility, and the operator-facing explanation. Rendered
 desktop and 412 by 915 acceptance must confirm that the admission explanation
 does not crowd the coordinator metrics before promotion.
 
+## Exited-worker owned-work attention
+
+An Active task no longer disappears from routine coordination when its worker
+process exits. After the existing five-minute recovery window, the coordinator
+records one revision- and process-bound observation only if no replacement
+session or operator engagement exists. The observation enters Queen's bounded
+review fingerprint and read-only coordination tool, but never restarts a
+worker, injects a terminal, transitions a task, or writes to Jira. Recovery,
+reassignment, task progress, or a lifecycle change makes it non-current.
+
+Automated acceptance covers the grace boundary, idempotency, revision recheck,
+replacement-session cancellation, schema 63-to-64 preservation, Queen
+fingerprinting, API visibility, and the operator-facing combined work-surfaced
+metric. Rendered desktop and 412 by 915 acceptance must confirm that the added
+breakdown remains readable before promotion.
+
 ## Dogfood usability correction (2026-08-12)
 
 An isolated local runtime and the rendered 1280 by 720 browser surface verified

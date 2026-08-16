@@ -30,6 +30,7 @@ pub(super) struct CoordinatorStatusResponse {
     uncertain_actions: usize,
     queued_actions: usize,
     stale_attention_actions: usize,
+    worker_exit_attention_actions: usize,
     last_action_at: Option<i64>,
     automatic_start_admission: super::runtime::CoordinatorStartAdmission,
 }
@@ -92,6 +93,7 @@ pub(super) async fn coordinator_status(
             uncertain_actions: status.uncertain_actions,
             queued_actions: status.queued_actions,
             stale_attention_actions: status.stale_attention_actions,
+            worker_exit_attention_actions: status.worker_exit_attention_actions,
             last_action_at: status.last_action_at,
             automatic_start_admission: state.coordinator_start_admission(),
         }),
