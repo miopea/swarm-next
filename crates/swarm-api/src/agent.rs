@@ -203,6 +203,7 @@ impl ServerHandler for AgentMcp {
         if self.principal.role == WorkerRole::Queen {
             tools.extend([
                 list_workers_tool(),
+                list_coordination_attention_tool(),
                 create_task_tool(),
                 assign_task_tool(),
                 list_apiary_hives_tool(),
@@ -260,6 +261,30 @@ impl ServerHandler for AgentMcp {
                 .tasks
                 .list_workers(self.principal)
                 .and_then(|workers| structured(json!({ "workers": workers }))),
+            "swarm_list_coordination_attention" => {
+                if self.principal.role == WorkerRole::Queen {
+                    self.tasks
+                        .store()
+                        .current_coordinator_attention()
+                        .map_err(ApplicationError::Store)
+                        .and_then(|attention| {
+                            structured(json!({
+                                "attention": attention.into_iter().map(|item| json!({
+                                    "action_id": item.action_id,
+                                    "worker_id": item.worker_id,
+                                    "worker_name": item.worker_name,
+                                    "task_id": item.task_id,
+                                    "task_title": item.task_title,
+                                    "reason": item.reason,
+                                    "observed_at": item.observed_at,
+                                    "age_seconds": item.age_seconds,
+                                })).collect::<Vec<_>>()
+                            }))
+                        })
+                } else {
+                    Err(ApplicationError::NotAuthorized)
+                }
+            }
             "swarm_create_task" => parse::<CreateTaskInput>(arguments).and_then(|input| {
                 self.tasks
                     .create_task(
@@ -846,6 +871,15 @@ fn list_workers_tool() -> Tool {
     )
 }
 
+fn list_coordination_attention_tool() -> Tool {
+    tool(
+        "swarm_list_coordination_attention",
+        "Queen only: list current deterministic coordination attention, including Active work that is durably unchanged while its loaded worker is resting. Recheck the task and worker before deciding whether to steer, wait, or ask the operator.",
+        &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        true,
+    )
+}
+
 fn finish_automation_run_tool() -> Tool {
     tool(
         "swarm_finish_automation_run",
@@ -1302,6 +1336,7 @@ mod tests {
         assert!(queen_names.contains(&"swarm_refresh_jira_project"));
         assert!(queen_names.contains(&"swarm_list_jira_comments"));
         assert!(queen_names.contains(&"swarm_comment_jira_task"));
+        assert!(queen_names.contains(&"swarm_list_coordination_attention"));
         assert!(queen_names.contains(&"swarm_finish_automation_run"));
         assert!(!worker_names.contains(&"swarm_preview_jira_project"));
         assert!(!worker_names.contains(&"swarm_sync_jira_project"));
@@ -1312,6 +1347,7 @@ mod tests {
         assert!(!worker_names.contains(&"swarm_claim_apiary_task"));
         assert!(!worker_names.contains(&"swarm_send_apiary_task_to_worker"));
         assert!(!worker_names.contains(&"swarm_transition_apiary_task"));
+        assert!(!worker_names.contains(&"swarm_list_coordination_attention"));
         assert!(!worker_names.contains(&"swarm_finish_automation_run"));
         assert_eq!(
             worker_names,
@@ -1353,6 +1389,26 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn coordination_attention_tool_is_queen_read_only() {
+        let (bridge, _, queen_id, worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let request = |token: &str| {
+            mcp_request(
+                Some(token),
+                "tools/call",
+                &json!({ "name": "swarm_list_coordination_attention", "arguments": {} }),
+            )
+        };
+
+        let attention = response_json(handle(bridge.clone(), request(&queen_token)).await).await;
+        assert!(attention["result"]["structuredContent"]["attention"].is_array());
+
+        let denied = response_json(handle(bridge, request(&worker_token)).await).await;
+        assert!(denied["result"]["isError"].as_bool().unwrap_or(false));
     }
 
     #[tokio::test]

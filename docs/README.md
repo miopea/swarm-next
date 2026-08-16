@@ -74,3 +74,5 @@ Current decision records:
 - [ADR 0031: Retry-safe Apiary departure](decisions/0031-retry-safe-apiary-departure.md)
 - [ADR 0032: Confirmed Jira claim handoff](decisions/0032-confirmed-jira-claim-handoff.md)
 - [ADR 0037: Bounded Queen conductor](decisions/0037-bounded-queen-conductor.md)
+- [ADR 0038: Deterministic assigned-worker wake](decisions/0038-deterministic-assigned-worker-wake.md)
+- [ADR 0039: Deterministic stale-owned-work attention](decisions/0039-deterministic-stale-owned-work-attention.md)

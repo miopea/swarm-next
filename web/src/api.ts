@@ -178,6 +178,7 @@ export type CoordinatorStatus = {
   queen_calls_avoided: number;
   uncertain_actions: number;
   queued_actions: number;
+  stale_attention_actions: number;
   last_action_at: number | null;
 };
 export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };

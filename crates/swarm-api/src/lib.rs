@@ -109,6 +109,7 @@ const MAX_TERMINAL_WEBSOCKETS: usize = 32;
 const RESOURCE_ADVISORY_BYTES: u64 = 256 * 1024 * 1024;
 const RESOURCE_CRITICAL_BYTES: u64 = 512 * 1024 * 1024;
 const WORKER_RECOVERY_STABILITY_SECONDS: i64 = 5 * 60;
+const STALE_OWNED_WORK_SECONDS: i64 = 30 * 60;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
 #[derive(Clone)]
@@ -854,6 +855,7 @@ impl AppState {
     }
 
     async fn run_deterministic_coordinator(&self, store: &TaskStore) {
+        self.observe_stale_owned_work(store).await;
         let actions = match store.claim_coordinator_worker_wakes(unix_timestamp()) {
             Ok(actions) => actions,
             Err(error) => {
@@ -892,6 +894,37 @@ impl AppState {
                 Err(error) => {
                     tracing::warn!(action_id = %action.action_id, message = %error, "coordinator action outcome could not be persisted");
                 }
+            }
+        }
+    }
+
+    async fn observe_stale_owned_work(&self, store: &TaskStore) {
+        let now = unix_timestamp();
+        let candidates = match store.stale_owned_work_candidates(now, STALE_OWNED_WORK_SECONDS) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(message = %error, "deterministic coordinator could not inspect stale owned work");
+                return;
+            }
+        };
+        if candidates.is_empty() {
+            return;
+        }
+        let activity = self.provider_activity.read().await;
+        for candidate in candidates {
+            if !should_surface_stale_owned_work(activity.get(&candidate.session_id)) {
+                continue;
+            }
+            match store.record_stale_owned_work_attention(&candidate, now, STALE_OWNED_WORK_SECONDS)
+            {
+                Ok(true) => self.control_room_notify.notify_waiters(),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    task_id = %candidate.task_id,
+                    worker_id = %candidate.worker_id,
+                    message = %error,
+                    "stale owned work attention could not be recorded"
+                ),
             }
         }
     }
@@ -1306,7 +1339,7 @@ fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
 }
 fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Vec<u8> {
     format!(
-        "[Swarm automation {}] Review {} actionable task records while the operator is {}. Use swarm_list_tasks and swarm_list_workers as the authority. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. Ask for a decision when intent or authority is unclear. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
+        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Coordination attention can identify Active work that is unchanged while its loaded worker is resting; recheck the current task and worker before deciding whether to steer, wait, or ask the operator. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. Ask for a decision when intent or authority is unclear. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
         delivery.run_id,
         delivery.actionable_count,
         delivery.presence,
@@ -1704,6 +1737,10 @@ fn worker_view(
         runtime_error,
         system_role: is_scout.then_some("scout"),
     }
+}
+
+fn should_surface_stale_owned_work(activity: Option<&ProviderActivity>) -> bool {
+    activity == Some(&ProviderActivity::Resting)
 }
 
 fn default_provider() -> ProviderKind {
@@ -9615,6 +9652,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stale_owned_work_surfaces_only_for_a_loaded_resting_provider() {
+        assert!(should_surface_stale_owned_work(Some(
+            &ProviderActivity::Resting
+        )));
+        assert!(!should_surface_stale_owned_work(Some(
+            &ProviderActivity::Active
+        )));
+        assert!(!should_surface_stale_owned_work(Some(
+            &ProviderActivity::AwaitingOperator
+        )));
+        assert!(!should_surface_stale_owned_work(Some(
+            &ProviderActivity::Unknown
+        )));
+        assert!(!should_surface_stale_owned_work(None));
+    }
+
     #[tokio::test]
     async fn jira_readiness_is_private_and_explicit_when_not_configured() {
         let app = router(
@@ -10605,6 +10659,7 @@ mod tests {
         assert_eq!(coordinator["queen_calls_avoided"], 0);
         assert_eq!(coordinator["queued_actions"], 0);
         assert_eq!(coordinator["uncertain_actions"], 0);
+        assert_eq!(coordinator["stale_attention_actions"], 0);
 
         let initial = response_json(
             authorized_get(app.clone(), "/api/v1/orchestration/queen-automation").await,

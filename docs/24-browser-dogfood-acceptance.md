@@ -58,6 +58,23 @@ This pass proves functional redraw and recovery, not long-duration performance.
 The multi-day soak and outbound feedback submission transport remain separate
 promotion work.
 
+## Deterministic stale-work attention
+
+The next Queen-automation dogfood rule is deliberately observable rather than
+interventionist. A loaded, Resting worker with durably owned Active work that
+has not changed for 30 minutes produces one revision-bound coordination alert
+only when the operator is not engaged with that session. The coordinator does
+not type into the terminal or mutate local or Jira task state. Settings reports
+the bounded count separately from mechanical wake actions, and Queen can read
+the current evidence through a role-scoped tool before choosing to wait, steer,
+or involve the operator.
+
+Automated tests cover loaded/sleeping, Resting/non-Resting, engagement,
+revision, idempotency, Queen fingerprinting, role-scoped tool access, and the
+v62-to-v63 action-ledger migration. Rendered desktop and 412 by 915 acceptance
+must confirm that the added coordinator metric remains readable before the
+release is promoted.
+
 ## Dogfood usability correction (2026-08-12)
 
 An isolated local runtime and the rendered 1280 by 720 browser surface verified

@@ -378,10 +378,21 @@ fn queue_run(
 }
 
 fn actionable_count(connection: &rusqlite::Connection) -> Result<i64, rusqlite::Error> {
-    connection.query_row(
+    let task_count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM tasks WHERE state IN ('blocked','review') OR (state = 'ready' AND assigned_worker_id IS NULL)",
         [], |row| row.get(0),
-    )
+    )?;
+    let stale_count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM coordinator_actions action
+         JOIN tasks task ON task.id = action.task_id
+         JOIN worker_sessions session ON session.session_id = action.session_id AND session.ended_at IS NULL
+         WHERE action.kind = 'stale_owned_work_attention' AND action.state = 'completed'
+           AND task.state = 'active' AND task.assigned_worker_id = action.worker_id
+           AND task.updated_at = action.evidence_revision AND session.worker_id = action.worker_id",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(task_count + stale_count)
 }
 
 fn actionable_fingerprint(
@@ -394,7 +405,7 @@ fn actionable_fingerprint(
          WHERE task.state IN ('blocked','review') OR (task.state = 'ready' AND task.assigned_worker_id IS NULL)
          GROUP BY task.id, task.state ORDER BY task.id LIMIT ?1",
     )?;
-    let rows = statement
+    let mut rows = statement
         .query_map([MAX_FINGERPRINT_TASKS], |row| {
             Ok(format!(
                 "{}:{}:{}",
@@ -404,6 +415,28 @@ fn actionable_fingerprint(
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    let mut attention_statement = connection.prepare(
+        "SELECT action.id, task.id, action.evidence_revision
+         FROM coordinator_actions action
+         JOIN tasks task ON task.id = action.task_id
+         JOIN worker_sessions session ON session.session_id = action.session_id AND session.ended_at IS NULL
+         WHERE action.kind = 'stale_owned_work_attention' AND action.state = 'completed'
+           AND task.state = 'active' AND task.assigned_worker_id = action.worker_id
+           AND task.updated_at = action.evidence_revision AND session.worker_id = action.worker_id
+         ORDER BY action.id LIMIT ?1",
+    )?;
+    rows.extend(
+        attention_statement
+            .query_map([MAX_FINGERPRINT_TASKS], |row| {
+                Ok(format!(
+                    "stale:{}:{}:{}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?,
+    );
     Ok((
         format!("{}|{}", count, rows.join("|")),
         usize::try_from(count).unwrap_or_default(),
@@ -492,7 +525,7 @@ pub(super) fn migrate_queen_conductor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::{TaskPriority, TaskState};
+    use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
 
     #[test]
     fn opt_in_queues_changed_work_and_defers_while_operator_is_engaged() {
@@ -564,5 +597,56 @@ mod tests {
             QueenAutomationState::Uncertain
         );
         assert!(store.claim_queen_automation(12).unwrap().is_none());
+    }
+
+    #[test]
+    fn current_stale_attention_enters_the_bounded_queen_review_fingerprint() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Clover",
+                ProviderKind::ClaudeCode,
+                "/workspace/clover",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Finish the release", "/workspace/clover")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET updated_at = 100 WHERE id = ?1",
+                [task.id.to_string()],
+            )
+            .unwrap();
+        let candidate = store
+            .stale_owned_work_candidates(1_000, 600)
+            .unwrap()
+            .pop()
+            .unwrap();
+        store
+            .record_stale_owned_work_attention(&candidate, 1_000, 600)
+            .unwrap();
+
+        let status = store.set_queen_automation_enabled(true, 1_001).unwrap();
+        assert_eq!(status.actionable_count, 1);
+        assert_eq!(status.state, QueenAutomationState::Queued);
+
+        store
+            .transition_task_with_note(task.id, TaskState::Review, "Ready")
+            .unwrap();
+        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        let status = store.queen_automation_status(1_002).unwrap();
+        assert_eq!(status.actionable_count, 1);
     }
 }

@@ -238,7 +238,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
           <div className={`coordinator-status ${coordinatorStatus?.uncertain_actions ? "needs-attention" : ""}`} aria-label="Deterministic coordinator status">
             <span>
               <strong>Routine coordination</strong>
-              <small>Assigned Ready work wakes its sleeping worker without another Queen call.</small>
+              <small>Swarm wakes assigned sleeping workers and surfaces Active work that becomes stale while its loaded worker is resting.</small>
             </span>
             <span className="coordinator-metrics">
               <strong>{coordinatorStatus?.queen_calls_avoided ?? 0}</strong>
@@ -247,6 +247,10 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
             <span className="coordinator-metrics">
               <strong>{coordinatorStatus?.queued_actions ?? 0}</strong>
               <small>Waiting</small>
+            </span>
+            <span className="coordinator-metrics">
+              <strong>{coordinatorStatus?.stale_attention_actions ?? 0}</strong>
+              <small>Stale work surfaced</small>
             </span>
             <span className="coordinator-metrics">
               <strong>{coordinatorStatus?.uncertain_actions ?? 0}</strong>
