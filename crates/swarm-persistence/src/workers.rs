@@ -188,9 +188,9 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let (role, system_role, current_provider, running) = transaction
+        let (current_name, role, system_role, current_provider, running) = transaction
             .query_row(
-                "SELECT role, system_role, provider,
+                "SELECT name, role, system_role, provider,
                         EXISTS(SELECT 1 FROM worker_sessions
                                WHERE worker_id = worker_profiles.id AND ended_at IS NULL)
                  FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
@@ -198,9 +198,10 @@ impl TaskStore {
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, bool>(3)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, bool>(4)?,
                     ))
                 },
             )
@@ -209,7 +210,8 @@ impl TaskStore {
         if role == WorkerRole::Queen.to_string() {
             return Err(TaskStoreError::QueenProfileImmutable);
         }
-        if system_role.as_deref() == Some("scout") && name.is_some() {
+        if system_role.as_deref() == Some("scout") && name.is_some_and(|name| name != current_name)
+        {
             return Err(TaskStoreError::ScoutIdentityImmutable);
         }
         if let Some(name) = name {
@@ -1070,7 +1072,7 @@ mod tests {
         let updated = store
             .update_worker_profile(
                 scout.id,
-                None,
+                Some("Scout"),
                 Some("Routes larger cross-repository work."),
                 Some(ProviderKind::Codex),
                 Some(false),
