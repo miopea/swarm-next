@@ -176,11 +176,12 @@ the same record and another member receives a conflict. Reservations expire
 after two minutes and may be explicitly released if Jira assignment fails.
 Only the reserving member can confirm after Jira acknowledges assignment, and
 confirmation makes home-Hive ownership durable. A confirmed claim cannot be
-released through this recovery endpoint; it requires the later explicit
-handoff/release workflow. All claim endpoints require the bounded member node
-credential, disable caching, and never receive or expose Jira credentials.
-This is the Keeper serialization primitive, not yet the complete Member-side
-Jira claim saga or background reconciliation loop.
+released through the reservation recovery endpoint; it moves through the
+explicit handoff workflow described below. All claim endpoints require the
+bounded member node credential, disable caching, and never receive or expose
+Jira credentials. The Member-side claim and handoff sagas journal intent before
+side effects, reconcile in the background, and preserve ambiguous outcomes for
+retry instead of replaying Jira writes.
 
 Keeper can now inspect a bounded, operator-authenticated ownership rollup built
 from that same authoritative claim ledger. It includes only unexpired

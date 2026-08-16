@@ -153,6 +153,15 @@ async function checkMemberSurface(browser, surface) {
   await page.route("**/api/v1/apiary/shared-work", (route) => fulfill(route, [{
     id: "visual-claim", apiary_id: "visual-apiary", project_id: "10001", issue_id: "20001", issue_key: "WWD-101", home_node_id: "private-node", home_hive_id: "visual-member-hive", home_operator_id: "visual-member-operator", state: "confirmed", reserved_at: 1, reservation_expires_at: 2, confirmed_at: 2, released_at: null, project_key: "WWD", project_name: "Website Development", home_hive_name: "Clover Hive", home_operator_display_name: "Cora",
   }]));
+  await page.route("**/api/v1/apiary/handoff-targets", (route) => fulfill(route, [{
+    node_id: "visual-keeper-node", hive_id: "visual-keeper-hive", hive_name: "Meadow Hive", operator_id: "visual-keeper-operator", operator_display_name: "Bea",
+  }]));
+  await page.route("**/api/v1/apiary/handoffs", (route) => fulfill(route, [{
+    id: "visual-handoff", apiary_id: "visual-apiary", claim_id: "visual-incoming-claim", project_id: "10001", issue_id: "20002", issue_key: "WWD-202",
+    source_node_id: "visual-keeper-node", source_hive_id: "visual-keeper-hive", source_operator_id: "visual-keeper-operator",
+    target_node_id: "visual-member-node", target_hive_id: "visual-member-hive", target_operator_id: "visual-member-operator",
+    state: "offered", reason: "Clover owns the affected service", offered_at: 1_786_780_000, accepted_at: null, completed_at: null, closed_at: null,
+  }]));
   await page.route("**/api/v1/apiary/sync-health", (route) => fulfill(route, { condition: "current", last_attempt_at: 1_786_780_000, last_success_at: 1_786_780_000, consecutive_failures: 0, next_attempt_at: null }));
   await page.route("**/api/v1/apiary/my-stewardship", (route) => fulfill(route, {
     schema_version: 1, protocol_version: 1, apiary_id: "visual-apiary", member_node_id: "visual-member-node", member_operator_id: "visual-member-operator", generated_at: 1_786_780_000,
@@ -188,6 +197,18 @@ async function checkMemberSurface(browser, surface) {
     await page.getByRole("list", { name: "Member shared work ownership" }).waitFor();
     await page.getByRole("heading", { name: "Trusted support for 1 Hive" }).waitFor();
     await page.getByText("Observe, Assist, Take over", { exact: true }).waitFor();
+    const handoffList = page.getByRole("list", { name: "Active Jira work handoffs" });
+    await page.getByRole("heading", { name: "Another Hive needs your help" }).waitFor();
+    await handoffList.getByText("WWD-202", { exact: true }).waitFor();
+    await handoffList.getByRole("button", { name: "Decline" }).waitFor();
+    await handoffList.getByRole("button", { name: "Accept work" }).waitFor();
+    await handoffList.scrollIntoViewIfNeeded();
+    await handoffList.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-member-handoff.png`) });
+    const sharedClaims = page.getByRole("list", { name: "Member shared work ownership" });
+    await sharedClaims.getByRole("button", { name: "Offer to another Hive" }).click();
+    await sharedClaims.getByRole("combobox", { name: "Receiving Hive" }).waitFor();
+    await sharedClaims.getByRole("textbox", { name: /Why hand this off/ }).waitFor();
+    await sharedClaims.getByRole("button", { name: "Keep here" }).click();
     if (await page.getByText("private-node", { exact: true }).count() || await page.getByText("private-digest", { exact: true }).count()) {
       throw new Error(`${surface.name}/member-apiary: private federation material was rendered`);
     }

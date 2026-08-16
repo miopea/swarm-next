@@ -1114,3 +1114,20 @@ the independently updated terminal host through the API to worker settings:
   1,110,016-byte schema-53 pre-update backup; both it and the live database
   passed `quick_check=ok`. API PID advanced to `3775469`; terminal-host PID
   `2966127` remained unchanged.
+- Release `0.1.0-dev-24d64f4626a7` completes confirmed Jira claim handoff as
+  one operator-facing, Keeper-authoritative workflow. A source Hive offers one
+  destination; the destination explicitly accepts or declines, records its
+  reconciliation intent before assigning through its own Jira identity, and
+  becomes the durable home only after Keeper confirmation. Exact retries,
+  cancellation before acceptance, authentication rejection, and restart-safe
+  recovery are covered across persistence, transport, local API, and React
+  tests. Full Rust workspace tests, warnings-denied Clippy, all 225 frontend
+  tests, strict TypeScript, and the production build passed. The live API moved
+  to schema 55 with `quick_check=ok`; API PID advanced to `3810111` while
+  terminal-host PID `2966127` remained unchanged. The authenticated browser
+  gate populated incoming and outgoing handoff controls with route-local public
+  fixtures and passed every live primary, Member, and personal-Hive surface at
+  1,440 by 900 and Android-size 412 by 915 with zero horizontal overflow.
+  Image review confirmed readable stacked mobile actions and compact desktop
+  actions. No Jira or live Apiary mutation occurred, authentication survived
+  complete browser restarts, and every proof browser closed after the run.
