@@ -253,12 +253,16 @@ export class XtermSurface implements TerminalSurface {
     // reinterpret a drag that Swarm has already translated into scrollback.
     event.stopPropagation();
     const lineHeight = this.#terminalLineHeight();
-    const lines = this.#touchRemainderY < 0
+    const gestureLines = this.#touchRemainderY < 0
       ? Math.ceil(this.#touchRemainderY / lineHeight)
       : Math.floor(this.#touchRemainderY / lineHeight);
-    if (lines === 0) return;
-    this.#terminal.scrollLines(lines);
-    this.#touchRemainderY -= lines * lineHeight;
+    if (gestureLines === 0) return;
+    // A finger moving upward has a positive gesture delta, but xterm defines
+    // negative scrollLines as moving the viewport up toward older history.
+    // Keep the physical remainder in gesture coordinates and invert only at
+    // the xterm boundary.
+    this.#terminal.scrollLines(-gestureLines);
+    this.#touchRemainderY -= gestureLines * lineHeight;
     this.#publishBufferMetrics();
   }
 

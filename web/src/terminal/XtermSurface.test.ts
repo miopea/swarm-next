@@ -167,7 +167,7 @@ test("authoritative fit waits until xterm can propose real dimensions", async ()
   expect(xterm.terminal).toMatchObject({ rows: 38, cols: 132 });
 });
 
-test("turns a one-finger vertical drag into terminal scrollback", () => {
+test("turns an upward one-finger drag into older terminal scrollback", () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -187,7 +187,7 @@ test("turns a one-finger vertical drag into terminal scrollback", () => {
 
   expect(move.defaultPrevented).toBe(true);
   expect(xterm.scrollLines).toHaveBeenCalledOnce();
-  expect(xterm.scrollLines).toHaveBeenCalledWith(3);
+  expect(xterm.scrollLines).toHaveBeenCalledWith(-3);
   surface.dispose();
 });
 
@@ -222,7 +222,7 @@ test("uses the Android primary pointer path without handing the drag back to xte
   expect(move.defaultPrevented).toBe(true);
   expect(downstreamMove).not.toHaveBeenCalled();
   expect(xterm.scrollLines).toHaveBeenCalledOnce();
-  expect(xterm.scrollLines).toHaveBeenCalledWith(3);
+  expect(xterm.scrollLines).toHaveBeenCalledWith(-3);
   surface.dispose();
 });
 
@@ -248,7 +248,7 @@ test("captures a real xterm-child drag even when the child stops bubbling", () =
   xtermChild.dispatchEvent(move);
 
   expect(move.defaultPrevented).toBe(true);
-  expect(xterm.scrollLines).toHaveBeenCalledWith(2);
+  expect(xterm.scrollLines).toHaveBeenCalledWith(-2);
   surface.dispose();
 });
 
@@ -269,9 +269,9 @@ test("accumulates small touch movement and scrolls in both directions", () => {
   element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 91 }]));
   expect(xterm.scrollLines).not.toHaveBeenCalled();
   element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 82 }]));
-  expect(xterm.scrollLines).toHaveBeenLastCalledWith(1);
-  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 108 }]));
   expect(xterm.scrollLines).toHaveBeenLastCalledWith(-1);
+  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 108 }]));
+  expect(xterm.scrollLines).toHaveBeenLastCalledWith(1);
   surface.dispose();
 });
 
