@@ -241,7 +241,9 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dro
   const [draftError, setDraftError] = useState("");
   const [improvingDescription, setImprovingDescription] = useState(false);
   const [draftStatus, setDraftStatus] = useState("");
+  const [draftSource, setDraftSource] = useState<"local" | "claude" | undefined>();
   const attention = workerAttention(worker);
+  const descriptionChanged = description !== (worker.description ?? "");
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -258,6 +260,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dro
     setConfirmingRemoval(false);
     setDraftError("");
     setDraftStatus("");
+    setDraftSource(undefined);
     setEditing(false);
   }
 
@@ -271,7 +274,8 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dro
     setDraftStatus("");
     try {
       setDescription(await onDraftDescription(worker.id));
-      setDraftStatus("Local draft is ready. Review it, then choose Save.");
+      setDraftSource("local");
+      setDraftStatus("Local draft ready");
     } catch (error) {
       setDraftError(error instanceof Error ? error.message : "Swarm could not draft from this repository. You can still enter the description yourself.");
     } finally {
@@ -286,7 +290,8 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dro
     setDraftStatus("");
     try {
       setDescription(await onImproveDescription(worker.id));
-      setDraftStatus("Claude improved the editable draft. Review it, then choose Save.");
+      setDraftSource("claude");
+      setDraftStatus("Claude draft ready");
     } catch (error) {
       setDraftError(error instanceof Error ? error.message : "Claude could not improve this description. The current editable draft is unchanged.");
     } finally {
@@ -311,13 +316,13 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dro
           <label><span>Worker name</span><input value={name} disabled={managed} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus /></label>
           {managed && <small className="privacy-note">Scout is pinned after Queen and keeps ordinary worker authority for deliberate cross-repository work.</small>}
           <small className="worker-repository-path"><span>Repository</span><code>{worker.workspace}</code></small>
-          <div className="worker-description-field"><span className="worker-description-heading"><label htmlFor={`worker-description-${worker.id}`}>Queen routing description</label><span className="worker-description-actions"><button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void draftDescription()}>{draftingDescription ? "Reading repository…" : description ? "Refresh local draft" : "Draft locally"}</button>{onImproveDescription && <button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void improveDescription()}>{improvingDescription ? "Claude is reviewing…" : "Improve with Claude"}</button>}</span></span><textarea id={`worker-description-${worker.id}`} value={description} onChange={(event) => { setDescription(event.target.value); setDraftStatus(""); }} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" /><small>Local drafting reads bounded README and manifest metadata. Improve with Claude sends only that metadata in one tool-free turn (up to $0.10). Nothing is saved until you choose Save.</small>{draftStatus && <small className="field-success" role="status">{draftStatus}</small>}{draftError && <small className="field-error" role="alert">{draftError}</small>}</div>
+          <div className="worker-description-field"><span className="worker-description-heading"><label htmlFor={`worker-description-${worker.id}`}>Queen routing description</label><span className="worker-description-actions"><button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void draftDescription()}>{draftingDescription ? "Reading repository…" : description ? "Refresh local draft" : "Draft locally"}</button>{onImproveDescription && <button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void improveDescription()}>{improvingDescription ? "Claude is reviewing…" : draftSource === "claude" ? "Regenerate with Claude" : "Improve with Claude"}</button>}</span></span><textarea className={draftSource ? "worker-description-generated" : undefined} id={`worker-description-${worker.id}`} value={description} onChange={(event) => { setDescription(event.target.value); setDraftSource(undefined); setDraftStatus(""); }} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" />{improvingDescription && <div className="worker-description-progress" role="status" aria-live="polite"><span aria-hidden="true" /><p><strong>Claude is reviewing repository metadata</strong><small>This bounded, tool-free review usually takes a few seconds.</small></p></div>}{draftStatus && <div className={`worker-description-result ${draftSource === "claude" ? "claude-result" : ""}`} role="status" aria-live="polite"><strong>{draftStatus}</strong><span>Review the editable text, then choose <b>Save worker changes</b>. Nothing has been saved yet.</span></div>}<small>Local drafting reads bounded README and manifest metadata. Improve with Claude sends only that metadata in one tool-free turn (up to $0.10).</small>{draftError && <small className="field-error" role="alert">{draftError}</small>}</div>
           <div className="worker-provider-field"><label htmlFor={`worker-provider-${worker.id}`}>Default coding provider</label><select id={`worker-provider-${worker.id}`} value={provider} disabled={worker.running} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
             <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · unavailable"}</option>
           </select><small>{worker.running ? "Put this worker to sleep before changing provider." : "Used the next time this worker wakes. Existing history remains available."}</small></div>
           <label className="worker-autostart"><input type="checkbox" checked={autostart} onChange={(event) => setAutostart(event.target.checked)} />Keep this worker active automatically</label>
-          <span className="worker-edit-actions"><button disabled={busy || !name.trim()}>Save</button><button type="button" className="secondary-button" disabled={busy} onClick={cancel}>Cancel</button></span>
+          <span className="worker-edit-actions"><button disabled={busy || !name.trim()}>{descriptionChanged ? "Save worker changes" : "Save worker"}</button><button type="button" className="secondary-button" disabled={busy} onClick={cancel}>Cancel</button></span>
           {!managed && <div className="worker-remove-zone">
             {confirmingRemoval ? <><p><strong>Remove {worker.name} from this Hive?</strong><small>Repository files are untouched. Historical sessions remain, but this worker must be sleeping and have no open assigned tasks.</small></p><span><button type="button" className="danger-button" disabled={busy || worker.running} onClick={() => void remove()}>Confirm removal</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmingRemoval(false)}>Keep worker</button></span></> : <button type="button" className="danger-link" disabled={busy || worker.running} onClick={() => setConfirmingRemoval(true)}>Remove worker</button>}
           </div>}

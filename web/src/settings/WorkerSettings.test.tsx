@@ -54,7 +54,7 @@ test("configures and reorders durable workers with progressive path completion",
   fireEvent.change(within(editForm).getByLabelText("Worker name"), { target: { value: "Marigold" } });
   fireEvent.change(within(editForm).getByLabelText("Queen routing description"), { target: { value: "Owns budgets and bills." } });
   fireEvent.click(within(editForm).getByLabelText("Keep this worker active automatically"));
-  fireEvent.click(within(editForm).getByRole("button", { name: "Save" }));
+  fireEvent.click(within(editForm).getByRole("button", { name: "Save worker changes" }));
   expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", "Owns budgets and bills.", "claude_code", true);
 });
 
@@ -182,9 +182,19 @@ test("drafts private repository context into an editable unsaved description", a
   fireEvent.click(screen.getByRole("button", { name: "Improve with Claude" }));
   expect(await screen.findByDisplayValue("BudgetBug owns household budgeting, bills, and financial planning.")).toBeInTheDocument();
   expect(onImproveDescription).toHaveBeenCalledWith(budget.id);
-  expect(screen.getByRole("status")).toHaveTextContent("Claude improved the editable draft. Review it, then choose Save.");
+  expect(screen.getByRole("status")).toHaveTextContent("Claude draft ready");
+  expect(screen.getByRole("status")).toHaveTextContent("Nothing has been saved yet");
+  expect(screen.getByRole("button", { name: "Regenerate with Claude" })).toBeInTheDocument();
   expect(onUpdate).not.toHaveBeenCalled();
   expect(screen.getByText(/one tool-free turn \(up to \$0.10\)/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Save worker changes" }));
+  expect(onUpdate).toHaveBeenCalledWith(
+    budget.id,
+    budget.name,
+    "BudgetBug owns household budgeting, bills, and financial planning.",
+    budget.provider,
+    budget.autostart,
+  );
 });
 
 test("shows the real Claude improvement failure instead of appearing inert", async () => {
