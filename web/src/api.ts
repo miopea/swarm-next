@@ -357,6 +357,21 @@ export type ApiaryCollapseReadiness = {
   open_cross_hive_work_count: number;
   departed_node_count: number;
 };
+export type FederationDepartureReadiness = {
+  apiary_id: string;
+  member_node_id: string;
+  member_hive_id: string;
+  active_jira_claim_count: number;
+  open_swarm_task_count: number;
+  active_stewardship_count: number;
+  pending_task_command_count: number;
+  pending_jira_claim_count: number;
+};
+export type ApiaryDepartureStatus = {
+  state: "active" | "departing";
+  readiness: FederationDepartureReadiness;
+  keeper_reachable: boolean;
+};
 export type ApiaryJiraProject = {
   apiary_id: string;
   project_id: string;
@@ -977,6 +992,20 @@ export async function fetchApiaryCollapseReadiness(
 
 export async function collapseApiary(operatorToken: string): Promise<LocalApiaryContext> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/collapse", {
+    method: "POST",
+  });
+  return response.json() as Promise<LocalApiaryContext>;
+}
+
+export async function fetchApiaryDepartureStatus(
+  operatorToken: string,
+): Promise<ApiaryDepartureStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/departure-readiness");
+  return response.json() as Promise<ApiaryDepartureStatus>;
+}
+
+export async function leaveApiary(operatorToken: string): Promise<LocalApiaryContext> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/departure", {
     method: "POST",
   });
   return response.json() as Promise<LocalApiaryContext>;

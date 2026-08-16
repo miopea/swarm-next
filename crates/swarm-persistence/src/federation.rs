@@ -10,9 +10,11 @@ use swarm_domain::{
     ApiaryInvitationEnvelopePayload, ApiaryInvitationId, ApiaryJoinLink, ApiaryJoinLinkBundle,
     ApiaryJoinLinkId, ApiaryJoinLinkPoll, ApiaryJoinLinkState, ApiaryKeeperLink,
     FEDERATION_CATALOG_SCHEMA_VERSION, FEDERATION_CONNECTION_CARD_SCHEMA_VERSION,
-    FEDERATION_INVITATION_SCHEMA_VERSION, FEDERATION_MEMBERSHIP_SCHEMA_VERSION,
-    FEDERATION_PROTOCOL_VERSION, FederationCatalogAcknowledgement, FederationCatalogSnapshot,
-    FederationCatalogSnapshotPayload, FederationClaimId, FederationClaimState,
+    FEDERATION_DEPARTURE_SCHEMA_VERSION, FEDERATION_INVITATION_SCHEMA_VERSION,
+    FEDERATION_MEMBERSHIP_SCHEMA_VERSION, FEDERATION_PROTOCOL_VERSION,
+    FederationCatalogAcknowledgement, FederationCatalogSnapshot, FederationCatalogSnapshotPayload,
+    FederationClaimId, FederationClaimState, FederationDepartureReadiness,
+    FederationDepartureReceipt, FederationDepartureReceiptId, FederationDepartureReceiptPayload,
     FederationJoinAcceptance, FederationJoinInvitation, FederationJoinInvitationState,
     FederationJoinReadiness, FederationJoinSubmission, FederationJoinSubmissionPayload,
     FederationMembershipReceipt, FederationMembershipReceiptId, FederationMembershipReceiptPayload,
@@ -97,6 +99,12 @@ pub(crate) struct MemberCredentialContext {
     pub(crate) operator: OperatorId,
 }
 
+struct DepartureMemberContext {
+    member: MemberCredentialContext,
+    state: String,
+    receipt: FederationMembershipReceipt,
+}
+
 impl TaskStore {
     /// Returns the joined Member's host-private outbound Keeper connection.
     /// This is adapter material and must never enter browser or agent reads.
@@ -108,13 +116,25 @@ impl TaskStore {
         &self,
     ) -> Result<swarm_domain::FederationMemberConnection, TaskStoreError> {
         self.require_local_federation_member()?;
+        self.federation_departure_connection()
+    }
+
+    /// Returns the private Keeper connection while an explicit departure is
+    /// either active or safely frozen for retry. Ordinary federation traffic
+    /// must continue to use `federation_member_connection`.
+    ///
+    /// # Errors
+    /// Rejects missing or corrupt membership material and invalid endpoints.
+    pub fn federation_departure_connection(
+        &self,
+    ) -> Result<swarm_domain::FederationMemberConnection, TaskStoreError> {
         let connection = self.connection()?;
         let (keeper_endpoint, credential, credential_expires_at) = connection
             .query_row(
                 "SELECT i.keeper_endpoint, m.node_credential, m.credential_expires_at
                  FROM local_federation_membership m
                  JOIN apiary_join_invitations i ON i.id = m.invitation_id
-                 WHERE m.singleton = 1",
+                 WHERE m.singleton = 1 AND m.state IN ('active','departing')",
                 [],
                 |row| {
                     Ok((
@@ -222,12 +242,22 @@ impl TaskStore {
         Ok(health)
     }
 
-    fn require_local_federation_member(&self) -> Result<(), TaskStoreError> {
+    pub(crate) fn require_local_federation_member(&self) -> Result<(), TaskStoreError> {
         match self.local_apiary_context()? {
             swarm_domain::LocalApiaryContext::Federated {
                 local_role: swarm_domain::LocalApiaryRole::Member,
                 ..
-            } => Ok(()),
+            } => {
+                let active = self.connection()?.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM local_federation_membership
+                                   WHERE singleton = 1 AND state = 'active')",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                active
+                    .then_some(())
+                    .ok_or(TaskStoreError::InvalidFederationSync)
+            }
             _ => Err(TaskStoreError::InvalidFederationSync),
         }
     }
@@ -681,7 +711,7 @@ impl TaskStore {
             .query_row(
                 "SELECT member_node_id FROM apiary_federation_memberships
                  WHERE apiary_id = ?1 AND credential_digest = ?2
-                   AND credential_expires_at > ?3",
+                   AND credential_expires_at > ?3 AND state = 'active'",
                 params![apiary_id.to_string(), credential_digest.as_slice(), now],
                 |row| row.get::<_, String>(0),
             )
@@ -1847,6 +1877,338 @@ impl TaskStore {
         self.local_apiary_context()
     }
 
+    /// Reports only durable Member-local departure blockers. Keeper-owned
+    /// claims, tasks, and Stewardships are reported by the remote endpoint and
+    /// merged by the application boundary before the operator may leave.
+    ///
+    /// # Errors
+    /// Rejects personal or Keeper Hives and corrupt local membership state.
+    pub fn local_federation_departure_readiness(
+        &self,
+    ) -> Result<FederationDepartureReadiness, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let connection = self.connection()?;
+        local_departure_readiness(&connection, &identity)
+    }
+
+    /// Returns browser-safe local progress and blockers for a Member departure.
+    ///
+    /// # Errors
+    /// Rejects personal or Keeper Hives and corrupt local membership state.
+    pub fn local_federation_departure_overview(
+        &self,
+    ) -> Result<swarm_domain::FederationDepartureOverview, TaskStoreError> {
+        let readiness = self.local_federation_departure_readiness()?;
+        let state = self.connection()?.query_row(
+            "SELECT state FROM local_federation_membership WHERE singleton = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )?;
+        let state = match state.as_str() {
+            "active" => swarm_domain::FederationDepartureState::Active,
+            "departing" => swarm_domain::FederationDepartureState::Departing,
+            _ => return Err(TaskStoreError::InvalidFederationDeparture),
+        };
+        Ok(swarm_domain::FederationDepartureOverview { state, readiness })
+    }
+
+    /// Freezes new Member-side federation mutations after local blockers are
+    /// clear and returns the already durable Keeper connection for the one
+    /// explicit departure request. Exact retries return the same connection.
+    ///
+    /// # Errors
+    /// Rejects non-Members, outstanding local work, invalid time, and corrupt
+    /// private membership material.
+    pub fn begin_federation_departure(
+        &self,
+        now: i64,
+    ) -> Result<swarm_domain::FederationMemberConnection, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        let identity = self.local_hive_identity()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let readiness = local_departure_readiness(&transaction, &identity)?;
+        if !readiness.can_leave() {
+            return Err(TaskStoreError::ApiaryDepartureNotReady);
+        }
+        let (keeper_endpoint, credential, credential_expires_at) = transaction
+            .query_row(
+                "SELECT i.keeper_endpoint, m.node_credential, m.credential_expires_at
+                     FROM local_federation_membership m
+                     JOIN apiary_join_invitations i ON i.id = m.invitation_id
+                     WHERE m.singleton = 1 AND m.state IN ('active','departing')",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(TaskStoreError::InvalidFederationDeparture)?;
+        if credential.len() != 32 || credential_expires_at <= now {
+            return Err(TaskStoreError::InvalidFederationCredential);
+        }
+        validate_invitation_endpoint(&keeper_endpoint)
+            .map_err(|_| TaskStoreError::InvalidFederationDeparture)?;
+        transaction.execute(
+            "UPDATE local_federation_membership
+             SET state = 'departing', departure_started_at = COALESCE(departure_started_at, ?1)
+             WHERE singleton = 1 AND state IN ('active','departing')",
+            [now],
+        )?;
+        transaction.commit()?;
+        Ok(swarm_domain::FederationMemberConnection {
+            keeper_endpoint,
+            node_credential: Base64UrlUnpadded::encode_string(&credential),
+            credential_expires_at,
+        })
+    }
+
+    /// Returns a locally frozen departure to active only after the Keeper
+    /// explicitly reports that shared-work blockers still exist. A transport
+    /// ambiguity must stay frozen and retry instead.
+    ///
+    /// # Errors
+    /// Rejects missing or corrupt Member state.
+    pub fn cancel_federation_departure(&self) -> Result<(), TaskStoreError> {
+        if self.connection()?.execute(
+            "UPDATE local_federation_membership
+             SET state = 'active', departure_started_at = NULL
+             WHERE singleton = 1 AND state = 'departing'",
+            [],
+        )? != 1
+        {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        Ok(())
+    }
+
+    /// Reports Keeper-owned blockers for the exact authenticated Member. The
+    /// credential is accepted after departure only so a lost successful
+    /// response can be retried; ordinary federation endpoints reject it.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials, non-Keepers, invalid time, and corrupt
+    /// membership state.
+    pub fn federation_departure_readiness(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<FederationDepartureReadiness, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        let identity = self.local_hive_identity()?;
+        let credential = decode_node_credential(node_credential)?;
+        let connection = self.connection()?;
+        let member = departure_member_context(&connection, &identity, &credential, now)?;
+        keeper_departure_readiness(&connection, &member.member, now)
+    }
+
+    /// Atomically rechecks Keeper-owned blockers, ends one exact membership,
+    /// detaches the remote Hive, and returns one signed retry-stable receipt.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials, outstanding shared work, non-Keepers,
+    /// invalid time, and corrupt durable state.
+    pub fn depart_federation_member(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<FederationDepartureReceipt, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        let identity = self.local_hive_identity()?;
+        let local_node = self.local_federation_identity(now)?;
+        let credential = decode_node_credential(node_credential)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let context = departure_member_context(&transaction, &identity, &credential, now)?;
+        if context.state == "departed" {
+            return departure_receipt_for_membership(
+                &transaction,
+                context.receipt.payload.receipt_id,
+            )?
+            .ok_or(TaskStoreError::InvalidFederationDeparture);
+        }
+        let readiness = keeper_departure_readiness(&transaction, &context.member, now)?;
+        if !readiness.can_leave() {
+            return Err(TaskStoreError::ApiaryDepartureNotReady);
+        }
+        let payload = FederationDepartureReceiptPayload {
+            schema_version: FEDERATION_DEPARTURE_SCHEMA_VERSION,
+            protocol_version: FEDERATION_PROTOCOL_VERSION,
+            receipt_id: FederationDepartureReceiptId::new(),
+            membership_receipt_id: context.receipt.payload.receipt_id,
+            apiary_id: context.member.apiary,
+            keeper_node_id: local_node.node_id,
+            keeper_hive_id: identity.hive.id,
+            keeper_operator_id: identity.operator.id,
+            member_node_id: context.member.node,
+            member_hive_id: context.member.hive,
+            member_operator_id: context.member.operator,
+            departed_at: now,
+        };
+        let signature = local_node
+            .signing_key
+            .sign(&canonical_departure_receipt_payload(&payload)?);
+        let receipt = FederationDepartureReceipt {
+            payload,
+            signature: Base64UrlUnpadded::encode_string(&signature.to_bytes()),
+        };
+        transaction.execute(
+            "INSERT INTO apiary_federation_departures
+                (receipt_id, membership_receipt_id, apiary_id, member_node_id,
+                 member_hive_id, member_operator_id, receipt_json, departed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                receipt.payload.receipt_id.to_string(),
+                receipt.payload.membership_receipt_id.to_string(),
+                receipt.payload.apiary_id.to_string(),
+                receipt.payload.member_node_id.to_string(),
+                receipt.payload.member_hive_id.to_string(),
+                receipt.payload.member_operator_id.to_string(),
+                serde_json::to_string(&receipt)
+                    .map_err(|_| TaskStoreError::InvalidFederationDeparture)?,
+                now,
+            ],
+        )?;
+        if transaction.execute(
+            "UPDATE apiary_federation_memberships
+             SET state = 'departed', departed_at = ?1
+             WHERE receipt_id = ?2 AND state = 'active'",
+            params![now, context.receipt.payload.receipt_id.to_string()],
+        )? != 1
+        {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        if transaction.execute(
+            "UPDATE hives SET apiary_id = NULL, updated_at = ?1
+             WHERE id = ?2 AND apiary_id = ?3",
+            params![
+                now,
+                context.member.hive.to_string(),
+                context.member.apiary.to_string(),
+            ],
+        )? != 1
+        {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        transaction.commit()?;
+        Ok(receipt)
+    }
+
+    /// Verifies and atomically applies the Keeper's signed departure. Private
+    /// workers, tasks, repositories, Jira links, and provider sessions remain;
+    /// only shared projections and the bounded federation credential leave.
+    ///
+    /// # Errors
+    /// Rejects unsigned or misaddressed receipts, non-departing membership,
+    /// outstanding local work, and corrupt durable state.
+    pub fn apply_federation_departure(
+        &self,
+        receipt: &FederationDepartureReceipt,
+        now: i64,
+    ) -> Result<swarm_domain::LocalApiaryContext, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        let identity = self.local_hive_identity()?;
+        let readiness = self.local_federation_departure_readiness()?;
+        if !readiness.can_leave() {
+            return Err(TaskStoreError::ApiaryDepartureNotReady);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let stored = transaction
+            .query_row(
+                "SELECT m.receipt_json, i.keeper_public_key, m.state
+                 FROM local_federation_membership m
+                 JOIN apiary_join_invitations i ON i.id = m.invitation_id
+                 WHERE m.singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(TaskStoreError::InvalidFederationDeparture)?;
+        let membership: FederationMembershipReceipt = serde_json::from_str(&stored.0)
+            .map_err(|_| TaskStoreError::InvalidFederationDeparture)?;
+        if stored.2 != "departing"
+            || membership.payload.member_hive_id != identity.hive.id
+            || membership.payload.member_operator_id != identity.operator.id
+        {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        verify_federation_departure_receipt(receipt, &stored.1, &membership, now)?;
+        transaction.execute(
+            "INSERT INTO local_federation_departures
+                (receipt_id, apiary_id, receipt_json, departed_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                receipt.payload.receipt_id.to_string(),
+                receipt.payload.apiary_id.to_string(),
+                serde_json::to_string(receipt)
+                    .map_err(|_| TaskStoreError::InvalidFederationDeparture)?,
+                receipt.payload.departed_at,
+            ],
+        )?;
+        transaction.execute(
+            "UPDATE jira_project_bindings
+             SET scope = 'hive', apiary_id = NULL, updated_at = ?1
+             WHERE hive_id = ?2 AND apiary_id = ?3 AND scope = 'apiary'",
+            params![
+                now,
+                identity.hive.id.to_string(),
+                receipt.payload.apiary_id.to_string(),
+            ],
+        )?;
+        for table in [
+            "local_federation_stewardship",
+            "local_apiary_task_commands",
+            "local_apiary_tasks",
+            "local_apiary_task_sync",
+            "local_federation_catalog",
+            "local_federation_sync",
+        ] {
+            transaction.execute(&format!("DELETE FROM {table}"), [])?;
+        }
+        if transaction.execute(
+            "DELETE FROM local_federation_membership
+             WHERE singleton = 1 AND state = 'departing'",
+            [],
+        )? != 1
+        {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        if transaction.execute(
+            "UPDATE hives SET apiary_id = NULL, updated_at = ?1
+             WHERE id = ?2 AND apiary_id = ?3",
+            params![
+                now,
+                identity.hive.id.to_string(),
+                receipt.payload.apiary_id.to_string(),
+            ],
+        )? != 1
+        {
+            return Err(TaskStoreError::InvalidFederationDeparture);
+        }
+        transaction.commit()?;
+        drop(connection);
+        self.local_apiary_context()
+    }
+
     /// Reports the number of current distributed invitations for one pinned
     /// candidate without exposing their secret digests or envelopes.
     ///
@@ -2132,6 +2494,12 @@ fn canonical_membership_receipt_payload(
     serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
 }
 
+fn canonical_departure_receipt_payload(
+    payload: &FederationDepartureReceiptPayload,
+) -> Result<Vec<u8>, TaskStoreError> {
+    serde_json::to_vec(payload).map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))
+}
+
 fn canonical_catalog_snapshot_payload(
     payload: &FederationCatalogSnapshotPayload,
 ) -> Result<Vec<u8>, TaskStoreError> {
@@ -2205,7 +2573,7 @@ pub(crate) fn authenticate_member_credential(
             "SELECT member_node_id, member_hive_id, member_operator_id
              FROM apiary_federation_memberships
              WHERE apiary_id = ?1 AND credential_digest = ?2
-               AND credential_expires_at > ?3",
+               AND credential_expires_at > ?3 AND state = 'active'",
             params![apiary_id.to_string(), digest.as_slice(), now],
             |row| {
                 Ok(MemberCredentialContext {
@@ -2218,6 +2586,165 @@ pub(crate) fn authenticate_member_credential(
         )
         .optional()?
         .ok_or(TaskStoreError::InvalidFederationCredential)
+}
+
+fn departure_member_context(
+    connection: &rusqlite::Connection,
+    identity: &swarm_domain::HiveIdentity,
+    credential: &[u8; 32],
+    now: i64,
+) -> Result<DepartureMemberContext, TaskStoreError> {
+    let apiary_id = identity
+        .hive
+        .apiary_id
+        .ok_or(TaskStoreError::InvalidFederationCredential)?;
+    let keeper = connection
+        .query_row(
+            "SELECT keeper_operator_id FROM apiaries
+             WHERE id = ?1 AND collapsed_at IS NULL",
+            [apiary_id.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(TaskStoreError::InvalidFederationCredential)?;
+    if keeper != identity.operator.id.to_string() {
+        return Err(TaskStoreError::InvalidFederationCredential);
+    }
+    let digest = invitation_secret_digest(credential);
+    connection
+        .query_row(
+            "SELECT member_node_id, member_hive_id, member_operator_id,
+                    state, receipt_json
+             FROM apiary_federation_memberships
+             WHERE apiary_id = ?1 AND credential_digest = ?2
+               AND credential_expires_at > ?3
+               AND state IN ('active','departed')",
+            params![apiary_id.to_string(), digest.as_slice(), now],
+            |row| {
+                let receipt_json = row.get::<_, String>(4)?;
+                let receipt = serde_json::from_str(&receipt_json)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                Ok(DepartureMemberContext {
+                    member: MemberCredentialContext {
+                        apiary: apiary_id,
+                        node: parse_domain_id(&row.get::<_, String>(0)?)?,
+                        hive: parse_domain_id(&row.get::<_, String>(1)?)?,
+                        operator: parse_domain_id(&row.get::<_, String>(2)?)?,
+                    },
+                    state: row.get(3)?,
+                    receipt,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(TaskStoreError::InvalidFederationCredential)
+}
+
+fn keeper_departure_readiness(
+    connection: &rusqlite::Connection,
+    member: &MemberCredentialContext,
+    now: i64,
+) -> Result<FederationDepartureReadiness, TaskStoreError> {
+    let active_jira_claim_count = connection.query_row(
+        "SELECT COUNT(*) FROM apiary_federation_claims
+         WHERE apiary_id = ?1 AND home_hive_id = ?2
+           AND (state = 'confirmed'
+                OR (state = 'reserved' AND reservation_expires_at > ?3))",
+        params![member.apiary.to_string(), member.hive.to_string(), now],
+        |row| row.get::<_, usize>(0),
+    )?;
+    let open_swarm_task_count = connection.query_row(
+        "SELECT COUNT(*) FROM apiary_tasks
+         WHERE apiary_id = ?1 AND home_hive_id = ?2 AND state <> 'completed'",
+        params![member.apiary.to_string(), member.hive.to_string()],
+        |row| row.get::<_, usize>(0),
+    )?;
+    let active_stewardship_count = connection.query_row(
+        "SELECT COUNT(*) FROM stewardships s
+         WHERE s.apiary_id = ?1 AND s.revoked_at IS NULL
+           AND (s.steward_operator_id = ?2 OR EXISTS (
+                SELECT 1 FROM stewardship_hive_grants g
+                WHERE g.stewardship_id = s.id AND g.hive_id = ?3
+           ))",
+        params![
+            member.apiary.to_string(),
+            member.operator.to_string(),
+            member.hive.to_string(),
+        ],
+        |row| row.get::<_, usize>(0),
+    )?;
+    Ok(FederationDepartureReadiness {
+        apiary_id: member.apiary,
+        member_node_id: member.node,
+        member_hive_id: member.hive,
+        active_jira_claim_count,
+        open_swarm_task_count,
+        active_stewardship_count,
+        pending_task_command_count: 0,
+        pending_jira_claim_count: 0,
+    })
+}
+
+fn local_departure_readiness(
+    connection: &rusqlite::Connection,
+    identity: &swarm_domain::HiveIdentity,
+) -> Result<FederationDepartureReadiness, TaskStoreError> {
+    let receipt_json = connection
+        .query_row(
+            "SELECT receipt_json FROM local_federation_membership
+             WHERE singleton = 1 AND state IN ('active','departing')",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(TaskStoreError::InvalidFederationDeparture)?;
+    let receipt: FederationMembershipReceipt = serde_json::from_str(&receipt_json)
+        .map_err(|_| TaskStoreError::InvalidFederationDeparture)?;
+    if receipt.payload.member_hive_id != identity.hive.id
+        || receipt.payload.member_operator_id != identity.operator.id
+        || identity.hive.apiary_id != Some(receipt.payload.apiary_id)
+    {
+        return Err(TaskStoreError::InvalidFederationDeparture);
+    }
+    let pending_task_command_count = connection.query_row(
+        "SELECT COUNT(*) FROM local_apiary_task_commands WHERE state = 'queued'",
+        [],
+        |row| row.get::<_, usize>(0),
+    )?;
+    let pending_jira_claim_count = connection.query_row(
+        "SELECT COUNT(*) FROM federation_jira_claim_intents
+         WHERE phase <> 'complete'",
+        [],
+        |row| row.get::<_, usize>(0),
+    )?;
+    Ok(FederationDepartureReadiness {
+        apiary_id: receipt.payload.apiary_id,
+        member_node_id: receipt.payload.member_node_id,
+        member_hive_id: receipt.payload.member_hive_id,
+        active_jira_claim_count: 0,
+        open_swarm_task_count: 0,
+        active_stewardship_count: 0,
+        pending_task_command_count,
+        pending_jira_claim_count,
+    })
+}
+
+fn departure_receipt_for_membership(
+    connection: &rusqlite::Connection,
+    membership_receipt_id: FederationMembershipReceiptId,
+) -> Result<Option<FederationDepartureReceipt>, TaskStoreError> {
+    connection
+        .query_row(
+            "SELECT receipt_json FROM apiary_federation_departures
+             WHERE membership_receipt_id = ?1",
+            [membership_receipt_id.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|json| {
+            serde_json::from_str(&json).map_err(|_| TaskStoreError::InvalidFederationDeparture)
+        })
+        .transpose()
 }
 
 fn insert_federation_claim(
@@ -2916,6 +3443,50 @@ pub fn verify_federation_membership_receipt(
         .map_err(|_| TaskStoreError::InvalidFederationInvitation)
 }
 
+/// Verifies a retry-stable departure receipt against the Keeper key and the
+/// exact membership receipt that authorized the request.
+///
+/// # Errors
+/// Rejects unsupported versions, identity substitution, malformed encoding,
+/// impossible timestamps, and invalid signatures.
+pub fn verify_federation_departure_receipt(
+    receipt: &FederationDepartureReceipt,
+    expected_keeper_public_key: &str,
+    membership: &FederationMembershipReceipt,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let payload = &receipt.payload;
+    let joined = &membership.payload;
+    if now < 0
+        || payload.schema_version != FEDERATION_DEPARTURE_SCHEMA_VERSION
+        || payload.protocol_version != FEDERATION_PROTOCOL_VERSION
+        || payload.membership_receipt_id != joined.receipt_id
+        || payload.apiary_id != joined.apiary_id
+        || payload.keeper_node_id != joined.keeper_node_id
+        || payload.keeper_hive_id != joined.keeper_hive_id
+        || payload.keeper_operator_id != joined.keeper_operator_id
+        || payload.member_node_id != joined.member_node_id
+        || payload.member_hive_id != joined.member_hive_id
+        || payload.member_operator_id != joined.member_operator_id
+        || payload.departed_at < joined.joined_at
+        || payload.departed_at > now.saturating_add(MAX_CLOCK_SKEW_SECONDS)
+    {
+        return Err(TaskStoreError::InvalidFederationDeparture);
+    }
+    let public_key: [u8; 32] = Base64UrlUnpadded::decode_vec(expected_keeper_public_key)
+        .map_err(|_| TaskStoreError::InvalidFederationDeparture)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationDeparture)?;
+    let signature: [u8; 64] = Base64UrlUnpadded::decode_vec(&receipt.signature)
+        .map_err(|_| TaskStoreError::InvalidFederationDeparture)?
+        .try_into()
+        .map_err(|_| TaskStoreError::InvalidFederationDeparture)?;
+    let canonical = canonical_departure_receipt_payload(payload)?;
+    VerifyingKey::from_bytes(&public_key)
+        .and_then(|key| key.verify(&canonical, &Signature::from_bytes(&signature)))
+        .map_err(|_| TaskStoreError::InvalidFederationDeparture)
+}
+
 /// Verifies a short-lived catalog snapshot against the Keeper key pinned by
 /// the member Hive and every federation identity in its membership receipt.
 ///
@@ -3337,6 +3908,83 @@ pub(super) fn migrate_local_federation_membership(
     )
 }
 
+pub(super) fn migrate_federation_departures(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    if !federation_column_exists(transaction, "apiary_federation_memberships", "state")? {
+        transaction.execute_batch(
+            "ALTER TABLE apiary_federation_memberships
+                 ADD COLUMN state TEXT NOT NULL DEFAULT 'active'
+                     CHECK (state IN ('active','departed'));",
+        )?;
+    }
+    if !federation_column_exists(transaction, "apiary_federation_memberships", "departed_at")? {
+        transaction.execute_batch(
+            "ALTER TABLE apiary_federation_memberships
+                 ADD COLUMN departed_at INTEGER CHECK (departed_at >= joined_at);",
+        )?;
+    }
+    if !federation_column_exists(transaction, "local_federation_membership", "state")? {
+        transaction.execute_batch(
+            "ALTER TABLE local_federation_membership
+                 ADD COLUMN state TEXT NOT NULL DEFAULT 'active'
+                     CHECK (state IN ('active','departing'));",
+        )?;
+    }
+    if !federation_column_exists(
+        transaction,
+        "local_federation_membership",
+        "departure_started_at",
+    )? {
+        transaction.execute_batch(
+            "ALTER TABLE local_federation_membership
+                 ADD COLUMN departure_started_at INTEGER CHECK (departure_started_at >= joined_at);",
+        )?;
+    }
+    transaction.execute_batch(
+        "DROP TRIGGER IF EXISTS immutable_local_federation_membership;
+         CREATE TRIGGER immutable_local_federation_membership
+             BEFORE UPDATE OF receipt_id, invitation_id, apiary_id,
+                              keeper_node_id, receipt_json, node_credential,
+                              credential_digest, joined_at, credential_expires_at
+             ON local_federation_membership
+             BEGIN SELECT RAISE(ABORT, 'Local federation membership identity is immutable'); END;
+         CREATE TABLE IF NOT EXISTS apiary_federation_departures (
+             receipt_id TEXT PRIMARY KEY,
+             membership_receipt_id TEXT NOT NULL UNIQUE
+                 REFERENCES apiary_federation_memberships(receipt_id),
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             member_node_id TEXT NOT NULL,
+             member_hive_id TEXT NOT NULL REFERENCES hives(id),
+             member_operator_id TEXT NOT NULL REFERENCES operators(id),
+             receipt_json TEXT NOT NULL,
+             departed_at INTEGER NOT NULL CHECK (departed_at >= 0)
+         );
+         CREATE TABLE IF NOT EXISTS local_federation_departures (
+             receipt_id TEXT PRIMARY KEY,
+             apiary_id TEXT NOT NULL REFERENCES apiaries(id),
+             receipt_json TEXT NOT NULL,
+             departed_at INTEGER NOT NULL CHECK (departed_at >= 0)
+         );
+         PRAGMA user_version = 53;",
+    )
+}
+
+fn federation_column_exists(
+    transaction: &rusqlite::Transaction<'_>,
+    table: &str,
+    column: &str,
+) -> rusqlite::Result<bool> {
+    debug_assert!(
+        table
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    );
+    let query =
+        format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)");
+    transaction.query_row(&query, [column], |row| row.get(0))
+}
+
 pub(super) fn migrate_local_federation_catalog(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -3658,6 +4306,76 @@ mod tests {
         for forbidden in ["workspace", "terminal", "jira", "credential", "task"] {
             assert!(!serialized.to_ascii_lowercase().contains(forbidden));
         }
+    }
+
+    #[test]
+    fn schema_v52_adds_retry_safe_departure_state() {
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE apiary_federation_memberships (
+                     receipt_id TEXT PRIMARY KEY,
+                     joined_at INTEGER NOT NULL
+                 );
+                 CREATE TABLE local_federation_membership (
+                     singleton INTEGER PRIMARY KEY,
+                     receipt_id TEXT,
+                     invitation_id TEXT,
+                     apiary_id TEXT,
+                     keeper_node_id TEXT,
+                     receipt_json TEXT,
+                     node_credential BLOB,
+                     credential_digest BLOB,
+                     joined_at INTEGER NOT NULL,
+                     credential_expires_at INTEGER
+                 );
+                 CREATE TRIGGER immutable_local_federation_membership
+                     BEFORE UPDATE ON local_federation_membership
+                     BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+                 PRAGMA user_version = 52;",
+            )
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        migrate_federation_departures(&transaction).unwrap();
+        transaction.commit().unwrap();
+
+        for (table, column) in [
+            ("apiary_federation_memberships", "state"),
+            ("apiary_federation_memberships", "departed_at"),
+            ("local_federation_membership", "state"),
+            ("local_federation_membership", "departure_started_at"),
+        ] {
+            assert!(
+                connection
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+                        params![table, column],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .unwrap()
+            );
+        }
+        for table in [
+            "apiary_federation_departures",
+            "local_federation_departures",
+        ] {
+            assert!(
+                connection
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                         WHERE type = 'table' AND name = ?1)",
+                        [table],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .unwrap()
+            );
+        }
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            53
+        );
     }
 
     #[test]
@@ -4840,6 +5558,181 @@ mod tests {
             )
             .unwrap();
         (keeper, member)
+    }
+
+    #[test]
+    fn clean_member_departure_is_signed_retry_stable_and_preserves_private_work() {
+        let now = 120_000;
+        let (keeper, member) = joined_member(now);
+        let member_identity = member.local_hive_identity().unwrap();
+        let private_task = member
+            .create_task("Keep my private work", "/projects/private")
+            .unwrap();
+        let connection = member.federation_member_connection().unwrap();
+
+        let local = member.local_federation_departure_readiness().unwrap();
+        let remote = keeper
+            .federation_departure_readiness(&connection.node_credential, now + 10)
+            .unwrap();
+        assert!(local.merge(remote).can_leave());
+
+        let frozen = member.begin_federation_departure(now + 11).unwrap();
+        assert_eq!(frozen.keeper_endpoint, connection.keeper_endpoint);
+        assert_eq!(frozen.node_credential, connection.node_credential);
+        assert_eq!(
+            frozen.credential_expires_at,
+            connection.credential_expires_at
+        );
+        assert!(member.federation_member_connection().is_err());
+        assert_eq!(
+            member.local_federation_departure_overview().unwrap().state,
+            swarm_domain::FederationDepartureState::Departing
+        );
+        assert_eq!(
+            member
+                .federation_departure_connection()
+                .unwrap()
+                .node_credential,
+            connection.node_credential
+        );
+        let receipt = keeper
+            .depart_federation_member(&connection.node_credential, now + 13)
+            .unwrap();
+        let retry = keeper
+            .depart_federation_member(&connection.node_credential, now + 14)
+            .unwrap();
+        assert_eq!(receipt, retry);
+        assert!(matches!(
+            keeper.signed_federation_catalog(&connection.node_credential, now + 14),
+            Err(TaskStoreError::InvalidFederationCredential)
+        ));
+
+        let context = member
+            .apply_federation_departure(&receipt, now + 15)
+            .unwrap();
+        assert!(matches!(
+            context,
+            swarm_domain::LocalApiaryContext::Personal
+        ));
+        assert_eq!(
+            member.get_task(private_task.id).unwrap().title,
+            private_task.title
+        );
+        assert_eq!(
+            member.local_hive_identity().unwrap().hive.id,
+            member_identity.hive.id
+        );
+        assert!(member.federation_member_connection().is_err());
+        assert_eq!(
+            keeper
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT state FROM apiary_federation_memberships
+                     WHERE member_hive_id = ?1",
+                    [member_identity.hive.id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "departed"
+        );
+    }
+
+    #[test]
+    fn departure_readiness_counts_remote_authority_and_local_outboxes() {
+        let now = 130_000;
+        let (keeper, member) = joined_member(now);
+        let member_identity = member.local_hive_identity().unwrap();
+        let keeper_identity = keeper.local_hive_identity().unwrap();
+        let apiary_id = keeper_identity.hive.apiary_id.unwrap();
+        let connection = member.federation_member_connection().unwrap();
+        let member_node_id = member
+            .local_federation_departure_readiness()
+            .unwrap()
+            .member_node_id;
+
+        keeper
+            .promote_apiary_jira_project(
+                apiary_id,
+                "10000",
+                "WWD",
+                "Website Development",
+                keeper_identity.operator.id,
+                now + 10,
+            )
+            .unwrap();
+        keeper
+            .reserve_federation_claim(
+                &connection.node_credential,
+                "10000",
+                "20000",
+                "WWD-1",
+                now + 11,
+            )
+            .unwrap();
+        let task = keeper
+            .create_apiary_task(
+                "Shared outcome",
+                "",
+                swarm_domain::TaskPriority::Normal,
+                now + 12,
+            )
+            .unwrap();
+        keeper
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE apiary_tasks SET home_node_id = ?1, home_hive_id = ?2
+                 WHERE id = ?3",
+                params![
+                    member_node_id.to_string(),
+                    member_identity.hive.id.to_string(),
+                    task.id.to_string(),
+                ],
+            )
+            .unwrap();
+        keeper
+            .set_stewardship(
+                member_identity.operator.id,
+                &[member_identity.hive.id],
+                &[StewardCapability::Observe],
+                now + 13,
+            )
+            .unwrap();
+        member
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO local_apiary_task_commands
+                    (command_id, apiary_id, task_id, expected_revision, kind,
+                     target_state, command_json, state, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 1, 'claim', NULL, '{}', 'queued', ?4, ?4)",
+                params![
+                    swarm_domain::FederationTaskCommandId::new().to_string(),
+                    apiary_id.to_string(),
+                    task.id.to_string(),
+                    now + 14,
+                ],
+            )
+            .unwrap();
+
+        let remote = keeper
+            .federation_departure_readiness(&connection.node_credential, now + 15)
+            .unwrap();
+        assert_eq!(remote.active_jira_claim_count, 1);
+        assert_eq!(remote.open_swarm_task_count, 1);
+        assert_eq!(remote.active_stewardship_count, 1);
+        let local = member.local_federation_departure_readiness().unwrap();
+        assert_eq!(local.pending_task_command_count, 1);
+        assert!(!local.merge(remote).can_leave());
+        assert!(matches!(
+            member.begin_federation_departure(now + 16),
+            Err(TaskStoreError::ApiaryDepartureNotReady)
+        ));
+        assert!(matches!(
+            keeper.depart_federation_member(&connection.node_credential, now + 16),
+            Err(TaskStoreError::ApiaryDepartureNotReady)
+        ));
     }
 
     #[test]

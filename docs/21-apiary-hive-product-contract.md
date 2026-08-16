@@ -353,6 +353,17 @@ A Hive leaving an Apiary must complete, hand off, or release active shared work.
 The Apiary keeps authoritative shared history. The departing Hive retains only
 an audited departure receipt and its private records.
 
+Departure is Member-initiated and outbound-only. Before contacting Keeper, the
+Member atomically freezes new shared commands. Keeper rechecks active shared
+claims, Keeper-canonical tasks, and Stewardships in the same transaction that
+ends membership and creates a signed receipt. Exact retries return that receipt;
+ordinary federation operations reject the departed credential. A known Keeper
+conflict reactivates the Member so blockers can be cleared. An uncertain network
+outcome remains visibly frozen and reload-safe until the same request succeeds.
+Only after verifying the receipt does the Member remove shared projections and
+its credential. Private workers, repositories, provider conversations, tasks,
+settings, and Hive integrations remain; Apiary Jira bindings become Hive-owned.
+
 ## Jira-backed Apiaries
 
 Jira identity maps one-to-one with the operator who owns a Hive. Jira remains

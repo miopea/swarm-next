@@ -82,6 +82,7 @@ impl TaskStore {
         issue_key: &str,
         now: i64,
     ) -> Result<FederationJiraClaimIntent, TaskStoreError> {
+        self.require_local_federation_member()?;
         let issue_id = bounded_identity(issue_id)?;
         let issue_key = bounded_identity(issue_key)?;
         if now < 0 {
@@ -103,6 +104,14 @@ impl TaskStore {
 
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        if !transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_federation_membership
+             WHERE singleton = 1 AND state = 'active')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )? {
+            return Err(TaskStoreError::InvalidFederationSync);
+        }
         if let Some(existing) = transaction
             .query_row(
                 "SELECT id, binding_id, project_id, issue_id, issue_key, claim_id,

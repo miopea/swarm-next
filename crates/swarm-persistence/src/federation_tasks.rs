@@ -171,6 +171,7 @@ impl TaskStore {
         page: &FederationTaskPage,
         now: i64,
     ) -> Result<FederationTaskSyncStatus, TaskStoreError> {
+        self.require_local_federation_member()?;
         if page.schema_version != FEDERATION_TASK_FEED_SCHEMA_VERSION
             || page.protocol_version != FEDERATION_PROTOCOL_VERSION
             || page.next_cursor < 0
@@ -524,6 +525,7 @@ impl TaskStore {
         target_state: Option<TaskState>,
         now: i64,
     ) -> Result<FederationTaskOutboxEntry, TaskStoreError> {
+        self.require_local_federation_member()?;
         if now < 0 {
             return Err(TaskStoreError::InvalidFederationTask);
         }
@@ -537,6 +539,14 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        if !transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_federation_membership
+             WHERE singleton = 1 AND state = 'active')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )? {
+            return Err(TaskStoreError::InvalidFederationSync);
+        }
         let receipt_json = transaction.query_row(
             "SELECT receipt_json FROM local_federation_membership WHERE singleton = 1",
             [],
@@ -669,6 +679,7 @@ impl TaskStore {
         command_id: FederationTaskCommandId,
         now: i64,
     ) -> Result<(), TaskStoreError> {
+        self.require_local_federation_member()?;
         if now < 0 {
             return Err(TaskStoreError::InvalidFederationTask);
         }
@@ -695,6 +706,7 @@ impl TaskStore {
         receipt: &FederationTaskCommandReceipt,
         now: i64,
     ) -> Result<FederationTaskOutboxEntry, TaskStoreError> {
+        self.require_local_federation_member()?;
         if now < 0 || receipt.processed_at < 0 {
             return Err(TaskStoreError::InvalidFederationTask);
         }

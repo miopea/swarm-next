@@ -62,14 +62,15 @@ use swarm_application::{
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinLink,
     ApiaryJoinLinkId, ApiaryJoinReadiness, ApiaryKeeperLink, ApiaryTask, ApiaryTaskId,
-    DecisionRequestId, FederationCatalogSnapshot, FederationClaimId, FederationJoinSubmission,
-    FederationSharedClaim, FederationStewardshipSnapshot, FederationSyncCondition,
-    FederationTaskCommand, FederationTaskOutboxEntry, FederationTaskOutboxStatus,
-    FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard, HiveId, HiveIdentity,
-    JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
-    LocalApiaryContext, LocalApiaryRole, OperatorId, ProviderKind, SharedWorkBackend,
-    StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority, TaskState,
-    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    DecisionRequestId, FederationCatalogSnapshot, FederationClaimId, FederationDepartureReadiness,
+    FederationDepartureReceipt, FederationJoinSubmission, FederationSharedClaim,
+    FederationStewardshipSnapshot, FederationSyncCondition, FederationTaskCommand,
+    FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
+    FederationTaskSyncStatus, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
+    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext, LocalApiaryRole,
+    OperatorId, ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId,
+    TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile,
+    WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
@@ -1695,6 +1696,11 @@ fn api_router(state: AppState) -> Router {
             get(federation_transport_readiness),
         )
         .route(
+            "/api/v1/apiary/departure-readiness",
+            get(apiary_departure_readiness),
+        )
+        .route("/api/v1/apiary/departure", post(leave_apiary))
+        .route(
             "/api/v1/apiary/join-links",
             get(apiary_join_links).post(create_apiary_join_link),
         )
@@ -1744,6 +1750,14 @@ fn api_router(state: AppState) -> Router {
             post(poll_federation_bootstrap),
         )
         .route("/api/v1/federation/catalog", get(federation_catalog))
+        .route(
+            "/api/v1/federation/departure-readiness",
+            get(federation_member_departure_readiness),
+        )
+        .route(
+            "/api/v1/federation/departure",
+            post(depart_federation_member),
+        )
         .route(
             "/api/v1/federation/stewardship",
             get(federation_stewardship),
@@ -2686,6 +2700,92 @@ async fn consume_federation_join(
         .into_response())
 }
 
+async fn apiary_departure_readiness(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let service = apiary_service(&state)?;
+    let local = service
+        .local_departure_overview()
+        .map_err(application_error)?;
+    let connection = service.departure_connection().map_err(application_error)?;
+    let remote = match federation_http::FederationHttpClient::new(&connection.keeper_endpoint) {
+        Ok(client) => {
+            client
+                .departure_readiness(&connection.node_credential)
+                .await
+        }
+        Err(error) => Err(error),
+    };
+    let remote = match remote {
+        Ok(remote) => remote,
+        Err(federation_http::FederationHttpError::TransportUnavailable) => {
+            return Ok((
+                [(header::CACHE_CONTROL, "no-store")],
+                Json(ApiaryDepartureStatus {
+                    state: local.state,
+                    readiness: local.readiness,
+                    keeper_reachable: false,
+                }),
+            )
+                .into_response());
+        }
+        Err(error) => return Err(federation_http_error(error)),
+    };
+    if local.readiness.apiary_id != remote.apiary_id
+        || local.readiness.member_node_id != remote.member_node_id
+        || local.readiness.member_hive_id != remote.member_hive_id
+    {
+        return Err(task_store_error(
+            &TaskStoreError::InvalidFederationDeparture,
+        ));
+    }
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(ApiaryDepartureStatus {
+            state: local.state,
+            readiness: local.readiness.merge(remote),
+            keeper_reachable: true,
+        }),
+    )
+        .into_response())
+}
+
+#[derive(Serialize)]
+struct ApiaryDepartureStatus {
+    state: swarm_domain::FederationDepartureState,
+    readiness: FederationDepartureReadiness,
+    keeper_reachable: bool,
+}
+
+async fn leave_apiary(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let service = apiary_service(&state)?;
+    let now = unix_timestamp();
+    let connection = service.begin_departure(now).map_err(application_error)?;
+    let receipt = match federation_http::FederationHttpClient::new(&connection.keeper_endpoint)
+        .map_err(federation_http_error)?
+        .depart(&connection.node_credential)
+        .await
+    {
+        Ok(receipt) => receipt,
+        Err(federation_http::FederationHttpError::Conflict) => {
+            service.cancel_departure().map_err(application_error)?;
+            return Err(task_store_error(&TaskStoreError::ApiaryDepartureNotReady));
+        }
+        Err(error) => return Err(federation_http_error(error)),
+    };
+    let context = service
+        .apply_departure(&receipt, now)
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
+}
+
 async fn federation_catalog(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2695,6 +2795,29 @@ async fn federation_catalog(
         .federation_catalog(credential, unix_timestamp())
         .map_err(federation_catalog_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
+}
+
+async fn federation_member_departure_readiness(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let readiness: FederationDepartureReadiness = apiary_service(&state)?
+        .remote_departure_readiness(credential, unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(readiness)).into_response())
+}
+
+async fn depart_federation_member(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let receipt: FederationDepartureReceipt = apiary_service(&state)?
+        .depart_remote_member(credential, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)).into_response())
 }
 
 async fn federation_stewardship(
@@ -5273,6 +5396,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "apiary_member_required",
             error.to_string(),
         ),
+        TaskStoreError::ApiaryDepartureNotReady => ApiError::new(
+            StatusCode::CONFLICT,
+            "apiary_departure_not_ready",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidFederationDeparture => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_federation_departure",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidFederationJiraClaim => ApiError::new(
             StatusCode::CONFLICT,
             "invalid_federated_jira_claim",
@@ -6898,6 +7031,96 @@ mod tests {
         let projected = invited.list_local_apiary_tasks().unwrap();
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].title, "Coordinate the release across Hives");
+
+        keeper_server.abort();
+        let _ = keeper_server.await;
+    }
+
+    #[tokio::test]
+    async fn member_leaves_through_one_outbound_retry_safe_request() {
+        let now = unix_timestamp();
+        let keeper = TaskStore::in_memory().unwrap();
+        keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now - 1)
+            .unwrap();
+        let (keeper_endpoint, keeper_server) = start_keeper_join_test_server(keeper.clone()).await;
+
+        let member = TaskStore::in_memory().unwrap();
+        let card = member.issue_hive_connection_card(now, 3_600).unwrap();
+        keeper.pin_hive_candidate(&card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(card.payload.hive_id, &keeper_endpoint, now, 3_600)
+            .unwrap();
+        let invitation = member
+            .import_apiary_invitation_bundle(&bundle, now)
+            .unwrap();
+        member
+            .accept_federation_join_policy(invitation.invitation_id, 1, now)
+            .unwrap();
+        let submission = member
+            .prepare_federation_join_submission(
+                invitation.invitation_id,
+                &swarm_domain::FederationJoinReadiness {
+                    jira_connection: JiraConnectionState::Ready,
+                    projects: Vec::new(),
+                    blockers: Vec::new(),
+                },
+                now,
+            )
+            .unwrap();
+        let acceptance = keeper
+            .consume_federation_join_submission(&submission, now)
+            .unwrap();
+        member
+            .apply_federation_join_acceptance(invitation.invitation_id, &acceptance, now)
+            .unwrap();
+
+        let app = router(
+            AppState::default()
+                .with_terminal_host(
+                    HostClient::new("/unreachable/terminal.sock"),
+                    "member-secret",
+                )
+                .with_task_store(member.clone()),
+        );
+        let readiness = authorized_get_with_token(
+            app.clone(),
+            "/api/v1/apiary/departure-readiness",
+            "member-secret",
+        )
+        .await;
+        assert_eq!(readiness.status(), StatusCode::OK);
+        let readiness = response_json(readiness).await;
+        assert_eq!(readiness["state"], "active");
+        assert_eq!(readiness["keeper_reachable"], true);
+        for field in [
+            "active_jira_claim_count",
+            "open_swarm_task_count",
+            "active_stewardship_count",
+            "pending_task_command_count",
+            "pending_jira_claim_count",
+        ] {
+            assert_eq!(readiness["readiness"][field], 0);
+        }
+
+        let departed = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/apiary/departure")
+                    .header(header::AUTHORIZATION, "Bearer member-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(departed.status(), StatusCode::OK);
+        assert_eq!(response_json(departed).await["mode"], "personal");
+        assert!(matches!(
+            member.local_apiary_context().unwrap(),
+            LocalApiaryContext::Personal
+        ));
+        assert_eq!(keeper.list_apiary_members().unwrap().len(), 1);
 
         keeper_server.abort();
         let _ = keeper_server.await;

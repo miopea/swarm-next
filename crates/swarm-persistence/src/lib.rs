@@ -31,7 +31,8 @@ pub use federation::{
     MAX_CONNECTION_CARD_LIFETIME_SECONDS, MAX_FEDERATION_INVITATION_LIFETIME_SECONDS,
     MIN_CONNECTION_CARD_LIFETIME_SECONDS, MIN_FEDERATION_INVITATION_LIFETIME_SECONDS,
     verify_apiary_invitation_envelope, verify_federation_catalog_snapshot,
-    verify_federation_membership_receipt, verify_hive_connection_card,
+    verify_federation_departure_receipt, verify_federation_membership_receipt,
+    verify_hive_connection_card,
 };
 pub use federation_jira_claims::{
     FederationJiraClaimIntent, FederationJiraClaimPhase, MAX_FEDERATION_JIRA_CLAIM_BATCH,
@@ -71,7 +72,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 52;
+const CURRENT_SCHEMA_VERSION: i64 = 53;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -150,6 +151,10 @@ pub enum TaskStoreError {
     InvalidFederationClaim,
     #[error("The local federation synchronization state is invalid")]
     InvalidFederationSync,
+    #[error("This Hive still owns or is sending shared Apiary work")]
+    ApiaryDepartureNotReady,
+    #[error("The Apiary departure receipt or state is invalid")]
+    InvalidFederationDeparture,
     #[error("The federated Jira claim state is invalid")]
     InvalidFederationJiraClaim,
     #[error("This Hive already has the maximum number of pending federated Jira claims")]
@@ -1548,6 +1553,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 52 {
         federation_stewardships::migrate_federation_stewardship_projection(transaction)?;
+    }
+    if schema_version < 53 {
+        federation::migrate_federation_departures(transaction)?;
     }
     Ok(())
 }

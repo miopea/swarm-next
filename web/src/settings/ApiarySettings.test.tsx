@@ -565,6 +565,7 @@ test("shows honest Member convergence while waiting for the first automatic poll
       }],
       blockers: ["catalog_missing"],
     });
+    if (url === "/api/v1/apiary/departure-readiness") return ok(departureStatus());
     throw new Error(`unexpected request ${url}`);
   }));
 
@@ -606,6 +607,23 @@ function memberIdentity(): HiveIdentity {
       mode: "federated",
       apiary: { id: "apiary-1", name: "Wildflower Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" },
       local_role: "member",
+    },
+  };
+}
+
+function departureStatus() {
+  return {
+    state: "active",
+    keeper_reachable: true,
+    readiness: {
+      apiary_id: "apiary-1",
+      member_node_id: "node-2",
+      member_hive_id: "hive-2",
+      active_jira_claim_count: 0,
+      open_swarm_task_count: 0,
+      active_stewardship_count: 0,
+      pending_task_command_count: 0,
+      pending_jira_claim_count: 0,
     },
   };
 }

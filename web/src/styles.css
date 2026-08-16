@@ -810,6 +810,18 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-member-sync dl > div { display: grid; gap: 2px; padding: 8px 9px; border-radius: var(--radius-sm); background: var(--panel); }
 .apiary-member-sync dt { color: var(--muted); font-size: .67rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .apiary-member-sync dd { margin: 0; font-size: .82rem; font-weight: 650; }
+.apiary-departure { display: grid; gap: 11px; padding: 13px; border: 1px solid color-mix(in srgb, var(--bad) 32%, var(--line)); border-radius: var(--radius-md); background: color-mix(in srgb, var(--bad-soft) 42%, var(--surface-soft)); }
+.apiary-departure.departure-paused { border-color: color-mix(in srgb, var(--warn) 48%, var(--line)); background: color-mix(in srgb, var(--warn-soft) 42%, var(--surface-soft)); }
+.apiary-departure-state { width: fit-content; padding: 4px 8px; border-radius: 999px; color: var(--warn); background: var(--warn-soft); font-size: .68rem; font-weight: 750; }
+.apiary-departure-boundary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.apiary-departure-boundary > span { display: grid; gap: 2px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.apiary-departure-boundary strong { font-size: .76rem; }
+.apiary-departure-boundary small, .apiary-departure-explanation { color: var(--muted); font-size: .69rem; line-height: 1.4; }
+.apiary-departure-readiness { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; margin: 0; }
+.apiary-departure-readiness > div { display: grid; gap: 2px; padding: 8px 9px; border-radius: var(--radius-sm); background: var(--panel); }
+.apiary-departure-readiness dt { color: var(--muted); font-size: .65rem; }
+.apiary-departure-readiness dd { margin: 0; font-size: .86rem; font-weight: 700; }
+.apiary-departure-explanation { margin: 0; }
 .apiary-sync-indicator { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 4px color-mix(in srgb, var(--muted) 14%, transparent); }
 .apiary-sync-current { background: var(--good); box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 16%, transparent); }
 .apiary-sync-offline, .apiary-sync-authentication_required { background: var(--warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 16%, transparent); }
@@ -1101,6 +1113,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-project-list li, .apiary-promotion-list > div { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .apiary-shared-work li { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .apiary-member-sync dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .apiary-departure-boundary { grid-template-columns: minmax(0, 1fr); }
+  .apiary-departure-readiness { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .apiary-departure .settings-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .apiary-departure .settings-actions button { width: 100%; }
   .apiary-project-list li > small { text-align: left; }
   .apiary-promotion-list button { width: 100%; }
   .apiary-confirmation .settings-actions { display: grid; grid-template-columns: minmax(0, 1fr); }

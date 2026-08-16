@@ -5,9 +5,9 @@ use reqwest::{Client, Method, StatusCode, Url};
 use serde::{Serialize, de::DeserializeOwned};
 use swarm_domain::{
     ApiaryJoinLinkId, ApiaryJoinLinkPoll, FederationCatalogSnapshot, FederationClaimId,
-    FederationJoinAcceptance, FederationJoinSubmission, FederationSharedClaim,
-    FederationStewardshipSnapshot, FederationTaskCommand, FederationTaskCommandReceipt,
-    FederationTaskPage, HiveConnectionCard,
+    FederationDepartureReadiness, FederationDepartureReceipt, FederationJoinAcceptance,
+    FederationJoinSubmission, FederationSharedClaim, FederationStewardshipSnapshot,
+    FederationTaskCommand, FederationTaskCommandReceipt, FederationTaskPage, HiveConnectionCard,
 };
 use thiserror::Error;
 
@@ -153,6 +153,42 @@ impl FederationHttpClient {
         self.send_json::<(), _>(
             Method::GET,
             "api/v1/federation/stewardship",
+            Some(node_credential),
+            None,
+        )
+        .await
+    }
+
+    /// Reads Keeper-owned departure blockers for this exact Member without
+    /// mutating either installation.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, conflict, bound, or protocol failures.
+    pub async fn departure_readiness(
+        &self,
+        node_credential: &str,
+    ) -> Result<FederationDepartureReadiness, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::GET,
+            "api/v1/federation/departure-readiness",
+            Some(node_credential),
+            None,
+        )
+        .await
+    }
+
+    /// Requests one retry-stable Keeper-signed membership departure receipt.
+    /// No implicit retry is performed because the caller owns durable recovery.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, conflict, bound, or protocol failures.
+    pub async fn depart(
+        &self,
+        node_credential: &str,
+    ) -> Result<FederationDepartureReceipt, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::POST,
+            "api/v1/federation/departure",
             Some(node_credential),
             None,
         )
@@ -364,6 +400,7 @@ mod tests {
     use serde_json::json;
     use swarm_domain::{
         ApiaryId, ApiaryInvitationId, ApiaryTaskId, FederationClaimState,
+        FederationDepartureReceiptId, FederationDepartureReceiptPayload,
         FederationJoinSubmissionPayload, FederationMembershipReceipt,
         FederationMembershipReceiptId, FederationMembershipReceiptPayload, FederationNodeId,
         FederationTaskCommandId, FederationTaskCommandKind, FederationTaskCommandOutcome, HiveId,
@@ -569,6 +606,67 @@ mod tests {
         let address = spawn_server(app).await;
         let client = FederationHttpClient::new(&format!("http://{address}/swarm")).unwrap();
         assert_eq!(client.stewardship("member-secret").await.unwrap(), snapshot);
+    }
+
+    #[tokio::test]
+    async fn departure_transport_uses_member_auth_for_readiness_and_receipt() {
+        let apiary_id = ApiaryId::new();
+        let member_node_id = FederationNodeId::new();
+        let member_hive_id = HiveId::new();
+        let readiness = FederationDepartureReadiness {
+            apiary_id,
+            member_node_id,
+            member_hive_id,
+            active_jira_claim_count: 0,
+            open_swarm_task_count: 0,
+            active_stewardship_count: 0,
+            pending_task_command_count: 0,
+            pending_jira_claim_count: 0,
+        };
+        let receipt = FederationDepartureReceipt {
+            payload: FederationDepartureReceiptPayload {
+                schema_version: 1,
+                protocol_version: 1,
+                receipt_id: FederationDepartureReceiptId::new(),
+                membership_receipt_id: FederationMembershipReceiptId::new(),
+                apiary_id,
+                keeper_node_id: FederationNodeId::new(),
+                keeper_hive_id: HiveId::new(),
+                keeper_operator_id: OperatorId::new(),
+                member_node_id,
+                member_hive_id,
+                member_operator_id: OperatorId::new(),
+                departed_at: 1_000,
+            },
+            signature: "keeper-signature".into(),
+        };
+        let expected_readiness = readiness;
+        let expected_receipt = receipt.clone();
+        let app = Router::new()
+            .route(
+                "/swarm/api/v1/federation/departure-readiness",
+                get(move |headers: axum::http::HeaderMap| async move {
+                    assert_eq!(headers[header::AUTHORIZATION], "Bearer member-secret");
+                    Json(expected_readiness)
+                }),
+            )
+            .route(
+                "/swarm/api/v1/federation/departure",
+                axum::routing::post(move |headers: axum::http::HeaderMap| {
+                    let expected_receipt = expected_receipt.clone();
+                    async move {
+                        assert_eq!(headers[header::AUTHORIZATION], "Bearer member-secret");
+                        Json(expected_receipt)
+                    }
+                }),
+            );
+        let address = spawn_server(app).await;
+        let client = FederationHttpClient::new(&format!("http://{address}/swarm")).unwrap();
+        assert_eq!(
+            client.departure_readiness("member-secret").await.unwrap(),
+            readiness
+        );
+        assert_eq!(client.depart("member-secret").await.unwrap(), receipt);
     }
 
     #[tokio::test]

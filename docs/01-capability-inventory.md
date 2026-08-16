@@ -106,6 +106,16 @@ her own managed Hives and granted capability names. Browser acceptance uses rout
 fixture data so desktop and Android layouts can be proved without changing the
 dogfood Keeper, Jira, membership, or federation credentials.
 
+Member departure checkpoint: a joined Hive can explicitly return to Personal
+Hive mode only after Member-local outboxes and Keeper-owned shared authority are
+clear. The Member freezes new shared mutations before its one outbound request;
+the Keeper atomically rechecks ownership, stores a signed retry-stable receipt,
+and ends the exact membership. A lost response leaves a visible, reload-safe
+paused state and retries the same operation. Private workers, repositories,
+provider conversations, settings, tasks, and Hive integrations remain local;
+Apiary Jira bindings become Hive-owned and shared projections are removed only
+after receipt verification.
+
 ## Platform and administration
 
 | Capability | Decision | Rationale and intended direction |

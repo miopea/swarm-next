@@ -44,6 +44,7 @@ domain_id!(ApiaryInvitationId);
 domain_id!(ApiaryJoinLinkId);
 domain_id!(FederationNodeId);
 domain_id!(FederationMembershipReceiptId);
+domain_id!(FederationDepartureReceiptId);
 domain_id!(FederationClaimId);
 domain_id!(ApiaryTaskId);
 domain_id!(FederationTaskCommandId);
@@ -246,6 +247,7 @@ pub struct HiveIdentity {
 pub const FEDERATION_CONNECTION_CARD_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_INVITATION_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_MEMBERSHIP_SCHEMA_VERSION: u16 = 1;
+pub const FEDERATION_DEPARTURE_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_CATALOG_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_TASK_FEED_SCHEMA_VERSION: u16 = 1;
 pub const FEDERATION_PROTOCOL_VERSION: u16 = 1;
@@ -951,6 +953,96 @@ pub struct FederationMembershipReceipt {
 pub struct FederationJoinAcceptance {
     pub receipt: FederationMembershipReceipt,
     pub node_credential: String,
+}
+
+/// Content-free evidence that one Member Hive can leave without abandoning
+/// Apiary-owned work or an unresolved outbound side effect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationDepartureReadiness {
+    pub apiary_id: ApiaryId,
+    pub member_node_id: FederationNodeId,
+    pub member_hive_id: HiveId,
+    pub active_jira_claim_count: usize,
+    pub open_swarm_task_count: usize,
+    pub active_stewardship_count: usize,
+    pub pending_task_command_count: usize,
+    pub pending_jira_claim_count: usize,
+}
+
+/// Browser-safe local progress for an explicit Member departure. `Departing`
+/// means shared mutations are frozen while the same Keeper request is retried;
+/// it does not mean membership has been partially removed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationDepartureState {
+    Active,
+    Departing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationDepartureOverview {
+    pub state: FederationDepartureState,
+    pub readiness: FederationDepartureReadiness,
+}
+
+impl FederationDepartureReadiness {
+    #[must_use]
+    pub const fn can_leave(self) -> bool {
+        self.active_jira_claim_count == 0
+            && self.open_swarm_task_count == 0
+            && self.active_stewardship_count == 0
+            && self.pending_task_command_count == 0
+            && self.pending_jira_claim_count == 0
+    }
+
+    #[must_use]
+    pub const fn merge(self, other: Self) -> Self {
+        Self {
+            apiary_id: self.apiary_id,
+            member_node_id: self.member_node_id,
+            member_hive_id: self.member_hive_id,
+            active_jira_claim_count: self
+                .active_jira_claim_count
+                .saturating_add(other.active_jira_claim_count),
+            open_swarm_task_count: self
+                .open_swarm_task_count
+                .saturating_add(other.open_swarm_task_count),
+            active_stewardship_count: self
+                .active_stewardship_count
+                .saturating_add(other.active_stewardship_count),
+            pending_task_command_count: self
+                .pending_task_command_count
+                .saturating_add(other.pending_task_command_count),
+            pending_jira_claim_count: self
+                .pending_jira_claim_count
+                .saturating_add(other.pending_jira_claim_count),
+        }
+    }
+}
+
+/// Keeper-signed, retry-stable evidence that one exact membership was ended.
+/// The Member stores this audit receipt before removing its local credential
+/// and shared projections.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationDepartureReceiptPayload {
+    pub schema_version: u16,
+    pub protocol_version: u16,
+    pub receipt_id: FederationDepartureReceiptId,
+    pub membership_receipt_id: FederationMembershipReceiptId,
+    pub apiary_id: ApiaryId,
+    pub keeper_node_id: FederationNodeId,
+    pub keeper_hive_id: HiveId,
+    pub keeper_operator_id: OperatorId,
+    pub member_node_id: FederationNodeId,
+    pub member_hive_id: HiveId,
+    pub member_operator_id: OperatorId,
+    pub departed_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationDepartureReceipt {
+    pub payload: FederationDepartureReceiptPayload,
+    pub signature: String,
 }
 
 /// Host-private transport material for a joined Member Hive. This value may

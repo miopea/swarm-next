@@ -59,6 +59,7 @@ impl TaskStore {
         snapshot: &FederationStewardshipSnapshot,
         now: i64,
     ) -> Result<(), TaskStoreError> {
+        self.require_local_federation_member()?;
         validate_snapshot_shape(snapshot, now)?;
         let identity = self.local_hive_identity()?;
         let LocalApiaryContext::Federated { apiary, local_role } = self.local_apiary_context()?

@@ -69,3 +69,4 @@ Current decision records:
 - [ADR 0023: Jira canonical sync boundary](decisions/0023-jira-canonical-sync-boundary.md)
 - [ADR 0024: Provider-derived worker attention](decisions/0024-provider-derived-worker-attention.md)
 - [ADR 0025: Authenticated federation bootstrap](decisions/0025-authenticated-federation-bootstrap.md)
+- [ADR 0031: Retry-safe Apiary departure](decisions/0031-retry-safe-apiary-departure.md)

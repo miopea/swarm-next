@@ -30,6 +30,7 @@ import {
 } from "../api";
 import { federationSyncCopy } from "../apiary/presentation";
 import KeeperInvitationManager from "./KeeperInvitationManager";
+import MemberDeparturePanel from "./MemberDeparturePanel";
 import PersonalHiveJoin from "./PersonalHiveJoin";
 
 type Props = {
@@ -598,7 +599,14 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
               )}
             </div>
             </>
-          ) : <small className="privacy-note">Membership changes require the Keeper and the explicit leave workflow. Nothing moves between Apiaries automatically.</small>}
+          ) : context?.mode === "federated" ? (
+            <MemberDeparturePanel
+              apiaryName={context.apiary.name}
+              busy={busy || working}
+              operatorToken={operatorToken}
+              onLeft={refreshIdentity}
+            />
+          ) : null}
         </>
       )}
       {message ? <p className="form-message" role="status">{message}</p> : null}

@@ -1088,3 +1088,15 @@ the independently updated terminal host through the API to worker settings:
   surface remained free of horizontal overflow, and browser authentication
   survived complete restarts. API PID advanced to `3733677`; terminal-host PID
   `2966127` remained unchanged. Every proof browser and context closed.
+- Pending release adds retry-safe Member departure without sacrificing private
+  Hive work. The flow names exactly what stays local, blocks departure while
+  shared Jira claims, Apiary tasks, Stewardships, or queued shared mutations
+  remain, and requires the Apiary name before leaving. If the Keeper response
+  is lost, the Member remains safely paused and retries the same signed request;
+  no partial departure is presented as complete. The full Rust workspace,
+  225 frontend tests, warnings-denied Clippy, formatting, strict TypeScript,
+  and the production build passed. The real component was visually proofed in
+  an isolated non-mutating Member surface at 1,440 by 900 and Android-size 412
+  by 915. Normal, confirmation, and paused-recovery states had zero horizontal
+  overflow and kept all safeguards readable. The proof tab closed immediately
+  after the run.

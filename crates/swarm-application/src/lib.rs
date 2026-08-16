@@ -5,6 +5,7 @@ use swarm_domain::{
     ApiaryKeeperLink, ApiaryMemberSummary, ApiaryTask, DecisionRequest, DecisionRequestId,
     DecisionRequestKind, DecisionUrgency, FederationCatalogAcknowledgement,
     FederationCatalogReadiness, FederationCatalogSnapshot, FederationClaimId,
+    FederationDepartureOverview, FederationDepartureReadiness, FederationDepartureReceipt,
     FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
     FederationJoinSubmission, FederationMemberConnection, FederationSharedClaim,
     FederationStewardshipSnapshot, FederationSyncCondition, FederationSyncHealth,
@@ -398,6 +399,108 @@ impl ApiaryService {
     ) -> Result<FederationMemberConnection, ApplicationError> {
         self.store
             .federation_member_connection()
+            .map_err(Into::into)
+    }
+
+    /// Returns only local durable blockers before any Keeper request is made.
+    ///
+    /// # Errors
+    /// Rejects non-Members and corrupt local membership state.
+    pub fn local_departure_readiness(
+        &self,
+    ) -> Result<FederationDepartureReadiness, ApplicationError> {
+        self.store
+            .local_federation_departure_readiness()
+            .map_err(Into::into)
+    }
+
+    /// Returns local progress and blockers even when a prior departure request
+    /// is frozen for an exact retry after an uncertain transport outcome.
+    ///
+    /// # Errors
+    /// Rejects non-Members and corrupt local membership state.
+    pub fn local_departure_overview(
+        &self,
+    ) -> Result<FederationDepartureOverview, ApplicationError> {
+        self.store
+            .local_federation_departure_overview()
+            .map_err(Into::into)
+    }
+
+    /// Returns host-private Keeper transport material for a departure retry.
+    ///
+    /// # Errors
+    /// Rejects missing or corrupt membership material and invalid endpoints.
+    pub fn departure_connection(&self) -> Result<FederationMemberConnection, ApplicationError> {
+        self.store
+            .federation_departure_connection()
+            .map_err(Into::into)
+    }
+
+    /// Freezes new local shared-work mutations and returns the existing private
+    /// Keeper connection for the explicit departure request.
+    ///
+    /// # Errors
+    /// Rejects outstanding local work, non-Members, and invalid time/state.
+    pub fn begin_departure(
+        &self,
+        now: i64,
+    ) -> Result<FederationMemberConnection, ApplicationError> {
+        self.store
+            .begin_federation_departure(now)
+            .map_err(Into::into)
+    }
+
+    /// Unfreezes a departure only after an authoritative Keeper readiness
+    /// conflict. Transport ambiguity is deliberately not a reason to call it.
+    ///
+    /// # Errors
+    /// Rejects missing or corrupt departure state.
+    pub fn cancel_departure(&self) -> Result<(), ApplicationError> {
+        self.store.cancel_federation_departure().map_err(Into::into)
+    }
+
+    /// Returns Keeper-owned blockers for one exact authenticated Member.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials, non-Keepers, and corrupt shared state.
+    pub fn remote_departure_readiness(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<FederationDepartureReadiness, ApplicationError> {
+        self.store
+            .federation_departure_readiness(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Atomically ends one Keeper-side membership and returns its signed,
+    /// retry-stable receipt.
+    ///
+    /// # Errors
+    /// Rejects outstanding shared work, invalid credentials, and corrupt state.
+    pub fn depart_remote_member(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<FederationDepartureReceipt, ApplicationError> {
+        self.store
+            .depart_federation_member(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Applies the Keeper-signed receipt and returns this installation to a
+    /// personal Hive without deleting private work or integrations.
+    ///
+    /// # Errors
+    /// Rejects invalid receipts, outstanding local work, and corrupt state.
+    pub fn apply_departure(
+        &self,
+        receipt: &FederationDepartureReceipt,
+        now: i64,
+    ) -> Result<LocalApiaryContext, ApplicationError> {
+        self.store
+            .apply_federation_departure(receipt, now)
             .map_err(Into::into)
     }
 
