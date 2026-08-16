@@ -989,3 +989,16 @@ the independently updated terminal host through the API to worker settings:
   capture was not recorded because the in-app Chromium target closed during
   capture; all proof tabs were closed immediately. API PID advanced to
   `3583500`; terminal-host PID remained `2966127`, preserving Queen.
+- Release `0.1.0-c7ad3db2d390` completes the local-first routing-description
+  flow by generating the same bounded private draft when a repository worker
+  is first added. The operator can review, revise, or discard it before the
+  description becomes Queen-visible; creation still makes no provider call.
+  The implementation gate passed 349 Rust tests, warnings-denied Clippy, 220
+  frontend tests, strict TypeScript, and the production build. A fresh live
+  acceptance run exercised every primary and Apiary surface at 1,440 by 900
+  and 412 by 915 with zero horizontal overflow, 344 and 312 named controls,
+  safe Jira and email review, and authentication preserved across complete
+  browser restarts. Both mocked Member Apiary surfaces also passed. API PID
+  advanced to `3587600`; terminal-host PID remained `2966127`, preserving the
+  active Queen session. Every headless browser and context closed after the
+  run.
