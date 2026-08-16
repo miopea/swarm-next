@@ -729,7 +729,7 @@ fn list_tasks_tool() -> Tool {
 fn list_workers_tool() -> Tool {
     tool(
         "swarm_list_workers",
-        "Queen only: list stable worker profiles, repository workspaces, and active session bindings before assigning work.",
+        "Queen only: list stable worker profiles, operator-reviewed routing descriptions, repository workspaces, and active session bindings before assigning work.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )
@@ -1192,6 +1192,43 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn queen_worker_roster_includes_operator_reviewed_routing_description() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        store
+            .update_worker_profile(
+                worker_id,
+                None,
+                Some("Owns petal rendering and its repository-scoped release checks."),
+                None,
+                None,
+            )
+            .unwrap();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let workers = response_json(
+            handle(
+                bridge,
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_workers", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let petal = workers["result"]["structuredContent"]["workers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["id"] == worker_id.to_string())
+            .unwrap();
+        assert_eq!(
+            petal["description"],
+            "Owns petal rendering and its repository-scoped release checks."
+        );
     }
 
     #[tokio::test]
