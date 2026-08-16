@@ -1,3 +1,5 @@
+import { useState, type FormEvent } from "react";
+
 import type { Task, TaskState, Worker } from "../api";
 import { workerAttention } from "../workers/workerAttention";
 
@@ -22,7 +24,7 @@ export default function TaskAssignment({ task, workers, workerRunning, busy, onA
   busy: boolean;
   onAssign: (task: Task, workerId: string) => Promise<void>;
   onOpenWorker: (sessionId: string) => void;
-  onTransition: (task: Task, state: TaskState) => Promise<void>;
+  onTransition: (task: Task, state: TaskState, note?: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
 }) {
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
@@ -65,7 +67,7 @@ function PrimaryTaskAction({ task, workerRunning, targetWorker, busy, onTransiti
   workerRunning: boolean;
   targetWorker: Worker | undefined;
   busy: boolean;
-  onTransition: (task: Task, state: TaskState) => Promise<void>;
+  onTransition: (task: Task, state: TaskState, note?: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
 }) {
   if (task.state === "draft") return <button disabled={busy} onClick={() => void onTransition(task, "ready")}>Mark ready</button>;
@@ -73,6 +75,46 @@ function PrimaryTaskAction({ task, workerRunning, targetWorker, busy, onTransiti
   if (task.state === "ready") return <button disabled={busy} onClick={() => void onTransition(task, "active")}>Start work</button>;
   if (task.state === "active") return <button disabled={busy} onClick={() => void onTransition(task, "review")}>Send to review</button>;
   if (task.state === "blocked") return <button disabled={busy} onClick={() => void onTransition(task, "active")}>Resume work</button>;
-  if (task.state === "review") return <button disabled={busy} onClick={() => void onTransition(task, "completed")}>Complete</button>;
+  if (task.state === "review") return <CompletionReview task={task} busy={busy} onTransition={onTransition} />;
   return null;
+}
+
+function CompletionReview({ task, busy, onTransition }: {
+  task: Task;
+  busy: boolean;
+  onTransition: (task: Task, state: TaskState, note?: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [evidence, setEvidence] = useState("");
+  const trimmedEvidence = evidence.trim();
+
+  async function complete(event: FormEvent) {
+    event.preventDefault();
+    if (!trimmedEvidence) return;
+    await onTransition(task, "completed", trimmedEvidence);
+  }
+
+  if (!open) {
+    return <button disabled={busy} onClick={() => setOpen(true)}>Finish review</button>;
+  }
+
+  return (
+    <form className="task-completion-form" aria-label={`Complete ${task.title}`} onSubmit={(event) => void complete(event)}>
+      <label htmlFor={`completion-evidence-${task.id}`}>Completion evidence</label>
+      <textarea
+        id={`completion-evidence-${task.id}`}
+        value={evidence}
+        onChange={(event) => setEvidence(event.target.value)}
+        placeholder="What did you verify? Include release or handoff evidence when shipping was part of done."
+        maxLength={4000}
+        rows={3}
+        autoFocus
+      />
+      <p>This becomes part of the durable task history.</p>
+      <div>
+        <button disabled={busy || !trimmedEvidence}>Complete task</button>
+        <button type="button" className="text-button" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
+      </div>
+    </form>
+  );
 }

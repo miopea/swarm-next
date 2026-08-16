@@ -1946,9 +1946,7 @@ impl TaskService {
         task_id: TaskId,
         target: TaskState,
     ) -> Result<Task, ApplicationError> {
-        self.store
-            .transition_task_with_note_as(task_id, target, "", &TaskActivityActor::operator())
-            .map_err(Into::into)
+        self.transition_operator_task_with_note(task_id, target, "")
     }
     /// Applies one domain-valid task transition with an optional audit note.
     ///
@@ -1960,6 +1958,7 @@ impl TaskService {
         target: TaskState,
         note: &str,
     ) -> Result<Task, ApplicationError> {
+        require_completion_evidence(target, note)?;
         self.store
             .transition_task_with_note_as(task_id, target, note, &TaskActivityActor::operator())
             .map_err(Into::into)
@@ -2083,6 +2082,7 @@ impl TaskService {
                 .transition_worker_task(task_id, target, note, session_id)
                 .map_err(Into::into);
         }
+        require_completion_evidence(target, note)?;
         if target == TaskState::Active {
             let task = self.store.get_task(task_id)?;
             let session_id = task
@@ -2206,6 +2206,16 @@ fn require_queen(principal: AgentPrincipal) -> Result<(), ApplicationError> {
         Ok(())
     } else {
         Err(ApplicationError::NotAuthorized)
+    }
+}
+
+fn require_completion_evidence(target: TaskState, note: &str) -> Result<(), ApplicationError> {
+    if target == TaskState::Completed && note.trim().is_empty() {
+        Err(ApplicationError::Store(
+            TaskStoreError::CompletionEvidenceRequired,
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -2481,14 +2491,16 @@ mod tests {
         );
         assert!(service.store().get_task(other.id).is_ok());
 
-        for state in [
-            TaskState::Ready,
-            TaskState::Active,
-            TaskState::Review,
-            TaskState::Completed,
-        ] {
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
             service.transition_operator_task(mine.id, state).unwrap();
         }
+        service
+            .transition_operator_task_with_note(
+                mine.id,
+                TaskState::Completed,
+                "Desktop and Android verification passed; release is live.",
+            )
+            .unwrap();
         let activity = service.store().list_task_activity(mine.id, 20).unwrap();
         assert!(activity.events[2..].iter().all(|entry| {
             entry.actor_kind == swarm_domain::TaskActivityActorKind::Operator
@@ -2550,6 +2562,61 @@ mod tests {
             service.transition_task(worker_principal, task.id, TaskState::Completed, ""),
             Err(ApplicationError::NotAuthorized)
         ));
+    }
+
+    #[test]
+    fn operator_and_queen_completion_require_verification_evidence() {
+        let (service, queen, worker) = setup();
+        let task = service
+            .create_task(
+                AgentPrincipal::from(&queen),
+                "Prove completion",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            service.transition_operator_task(task.id, state).unwrap();
+        }
+
+        assert!(matches!(
+            service.transition_operator_task_with_note(task.id, TaskState::Completed, "  "),
+            Err(ApplicationError::Store(
+                TaskStoreError::CompletionEvidenceRequired
+            ))
+        ));
+        assert!(matches!(
+            service.transition_task(
+                AgentPrincipal::from(&queen),
+                task.id,
+                TaskState::Completed,
+                ""
+            ),
+            Err(ApplicationError::Store(
+                TaskStoreError::CompletionEvidenceRequired
+            ))
+        ));
+        let completed = service
+            .transition_task(
+                AgentPrincipal::from(&queen),
+                task.id,
+                TaskState::Completed,
+                "Tests passed and the approved release is live.",
+            )
+            .unwrap();
+        assert_eq!(completed.state, TaskState::Completed);
+        assert_eq!(
+            service
+                .store()
+                .list_task_activity(task.id, 10)
+                .unwrap()
+                .events
+                .last()
+                .unwrap()
+                .note,
+            "Tests passed and the approved release is live."
+        );
     }
 
     #[test]

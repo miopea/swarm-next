@@ -21,7 +21,7 @@ type Props = {
   busy: boolean;
   onCreate: (input: TaskDraftInput) => Promise<void>;
   onUpdate: (task: Task, input: TaskUpdateInput) => Promise<void>;
-  onTransition: (task: Task, state: TaskState) => Promise<void>;
+  onTransition: (task: Task, state: TaskState, note?: string) => Promise<void>;
   onAssign: (task: Task, workerId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
   onOpenWorker: (sessionId: string) => void;
@@ -68,7 +68,9 @@ const validTargets: Record<TaskState, TaskState[]> = {
   ready: ["active", "blocked"],
   active: ["blocked", "review"],
   blocked: ["ready", "active"],
-  review: ["active", "completed"],
+  // Completion carries durable verification evidence and therefore uses the
+  // explicit review form rather than an evidence-free drag shortcut.
+  review: ["active"],
   completed: [],
 };
 

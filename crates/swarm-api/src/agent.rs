@@ -1080,13 +1080,13 @@ fn refresh_jira_project_tool() -> Tool {
 fn transition_task_tool() -> Tool {
     tool(
         "swarm_transition_task",
-        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Queen must wake an assigned sleeping worker and observe its live session before moving Ready or Blocked work to Active. Include a concise Blocked reason or Review handoff note; Queen receives it when not operator-engaged.",
+        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Queen must wake an assigned sleeping worker and observe its live session before moving Ready or Blocked work to Active. Include a concise Blocked reason or Review handoff note. Completed requires verification evidence, including release or handoff evidence when shipping was part of done.",
         &json!({
             "type": "object",
             "properties": {
                 "task_id": { "type": "string", "format": "uuid" },
                 "state": { "type": "string", "enum": ["draft", "ready", "active", "blocked", "review", "completed"] },
-                "note": { "type": "string", "maxLength": 4000, "description": "Concise blocker reason, review handoff, or transition context" }
+                "note": { "type": "string", "maxLength": 4000, "description": "Concise blocker reason, review handoff, or completion verification evidence. Required for Completed." }
             },
             "required": ["task_id", "state"],
             "additionalProperties": false

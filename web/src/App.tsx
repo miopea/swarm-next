@@ -528,10 +528,10 @@ export function App() {
     }
   }
 
-  async function moveTask(task: Task, state: TaskState) {
+  async function moveTask(task: Task, state: TaskState, note = "") {
     if (!operatorToken) return;
     await perform(async () => {
-      const updated = await transitionTask(operatorToken, task.id, state);
+      const updated = await transitionTask(operatorToken, task.id, state, note);
       replaceTask(updated);
     });
   }

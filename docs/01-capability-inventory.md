@@ -36,7 +36,7 @@ Decision meanings:
 | Crash/revival automation | Redesign | Becomes worker lifecycle recovery, not a drone. |
 | Host pressure management | Redesign | Observation-first API and terminal-host memory evidence now has explicit thresholds and operator visibility; automated recovery waits for soak evidence and a safe target. |
 | Context-pressure handling | Investigate | Reassess against current provider compaction and context-management capabilities. |
-| Completion verification | Redesign | Preserve as an optional verification policy; deterministic checks before model review. |
+| Completion verification | Redesign | Review-to-Completed now requires concise durable verification evidence from the operator or Queen, including release or handoff evidence when shipping was part of done. Deterministic, task-specific verification policies remain a later orchestration layer before model review. |
 | Queen task assignment | Redesign | Preserve assisted coordination but clarify recommendation, authorization, and execution. |
 | Queen completion detection | Redesign | Prefer explicit agent/task protocol signals; retain inference only as a fallback. |
 | Queen unattended conductor | Redesign | Implemented as an opt-in durable event-driven review marker. It defers to operator engagement and Steward takeover, coordinates only local work within the presence ceiling, requires an exact MCP completion signal, and fails uncertain rather than replaying after interrupted delivery. Jira, Apiary, email, deployment, messages, purchases, and other external effects remain separately authorized. |

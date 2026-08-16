@@ -27,7 +27,7 @@ export type TaskCardProps = {
   workers: Worker[];
   busy: boolean;
   onUpdate: (task: Task, input: TaskUpdateInput) => Promise<void>;
-  onTransition: (task: Task, state: TaskState) => Promise<void>;
+  onTransition: (task: Task, state: TaskState, note?: string) => Promise<void>;
   onAssign: (task: Task, workerId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
   onOpenWorker: (sessionId: string) => void;

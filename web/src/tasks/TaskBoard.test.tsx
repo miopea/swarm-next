@@ -168,6 +168,29 @@ test("distinguishes assigned work from work that has started", () => {
   expect(within(screen.getByRole("article", { name: active.title })).getByText("In progress", { selector: ".task-state" })).toBeInTheDocument();
 });
 
+test("records verification evidence before review work can be completed", async () => {
+  const reviewTask = { ...task, state: "review" as const, assigned_worker_id: worker.id };
+  const onTransition = vi.fn().mockResolvedValue(undefined);
+  renderBoard({ tasks: [reviewTask], onTransition });
+
+  fireEvent.click(screen.getByRole("button", { name: "Finish review" }));
+  const form = screen.getByRole("form", { name: `Complete ${reviewTask.title}` });
+  const complete = within(form).getByRole("button", { name: "Complete task" });
+  expect(complete).toBeDisabled();
+  expect(within(form).getByText("This becomes part of the durable task history.")).toBeInTheDocument();
+
+  fireEvent.change(within(form).getByLabelText("Completion evidence"), {
+    target: { value: "Desktop and Android recovery verified; release 42 is live." },
+  });
+  fireEvent.click(complete);
+
+  await waitFor(() => expect(onTransition).toHaveBeenCalledWith(
+    reviewTask,
+    "completed",
+    "Desktop and Android recovery verified; release 42 is live.",
+  ));
+});
+
 test("keeps Jira identity and remote status visible while routing work", () => {
   const onRetryJira = vi.fn();
   renderBoard({

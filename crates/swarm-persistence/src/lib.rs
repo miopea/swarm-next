@@ -235,6 +235,8 @@ pub enum TaskStoreError {
     InvalidVapidKey,
     #[error("task handoff note must not exceed {MAX_TASK_ACTIVITY_NOTE_BYTES} bytes")]
     InvalidTaskActivityNote,
+    #[error("completed work requires concise verification evidence")]
+    CompletionEvidenceRequired,
     #[error("this Hive already has the maximum number of pending Queen handoffs")]
     TaskOutcomeQueueFull,
     #[error("Jira comment content is invalid")]

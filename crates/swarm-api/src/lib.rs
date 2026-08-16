@@ -6603,7 +6603,8 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         | TaskStoreError::InvalidDescription
         | TaskStoreError::InvalidWorkspace
         | TaskStoreError::EmptyTaskDetailsUpdate
-        | TaskStoreError::InvalidTaskActivityNote => {
+        | TaskStoreError::InvalidTaskActivityNote
+        | TaskStoreError::CompletionEvidenceRequired => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_task", error.to_string())
         }
         TaskStoreError::InvalidTransition { .. } | TaskStoreError::CompletedTask => ApiError::new(
@@ -11940,6 +11941,64 @@ mod tests {
         assert_eq!(
             response_json(response).await["code"],
             "task_transition_rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn task_completion_requires_and_persists_verification_evidence() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("Verified work", "/workspace").unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(task.id, state).unwrap();
+        }
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/tasks/{}/state", task.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"state":"completed","note":"  "}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_json(missing).await["code"], "invalid_task");
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Review);
+
+        let completed = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/tasks/{}/state", task.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"state":"completed","note":"Desktop and Android checks passed; release 42 is live."}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(completed.status(), StatusCode::OK);
+        assert_eq!(response_json(completed).await["state"], "completed");
+        assert_eq!(
+            store
+                .list_task_activity(task.id, 10)
+                .unwrap()
+                .events
+                .last()
+                .unwrap()
+                .note,
+            "Desktop and Android checks passed; release 42 is live."
         );
     }
 

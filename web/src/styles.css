@@ -542,6 +542,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .protected-worker { display: inline-flex; align-items: center; min-height: 30px; padding: 0 10px; border: 1px solid var(--good); border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .72rem; }
 .task-assignment-cell { grid-area: assignment; display: grid; align-content: center; gap: 7px; min-width: 0; }
 .task-assignment-cell > button { width: 100%; min-height: 30px; padding: 5px 9px; font-size: .73rem; }
+.task-completion-form { display: grid; gap: 6px; padding: 9px; border: 1px solid var(--accent-strong); border-radius: var(--radius-sm); background: var(--accent-soft); }
+.task-completion-form label { color: var(--text); font-size: .7rem; font-weight: 700; }
+.task-completion-form textarea { min-height: 68px; padding: 8px; resize: vertical; font-size: .74rem; line-height: 1.4; }
+.task-completion-form p { margin: 0; color: var(--muted); font-size: .64rem; line-height: 1.35; }
+.task-completion-form > div { display: flex; align-items: center; gap: 6px; }
+.task-completion-form > div button { flex: 1; min-height: 30px; padding: 5px 8px; font-size: .7rem; }
 .task-current-worker .task-owner { max-width: 100%; color: var(--text); font-size: .79rem; font-weight: 650; }
 .assignment-row { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; gap: 8px; margin: 0; }
 .assignment-row select { min-height: 34px; padding: 6px 9px; font-size: .76rem; }
