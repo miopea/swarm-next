@@ -1061,3 +1061,17 @@ the independently updated terminal host through the API to worker settings:
   restarts. API PID advanced to `3708322`; terminal-host PID `2966127` and its
   worker-engine build remained unchanged. Every proof browser and context
   closed after the run.
+- Release `0.1.0-dev-7017a2ad1fc7` lets a Keeper cancel an invitation that has
+  not yet delivered its signed membership. Cancellation and delivery compete
+  in one atomic persistence update: an open, identity-presented, or approved
+  private link can be revoked, while a link whose invitation was already
+  issued is deliberately too late to cancel. The Keeper UI requires an
+  explicit confirmation and offers **Keep link** before making the private
+  link unusable. Full Rust workspace tests, warnings-denied Clippy, formatting,
+  all 221 frontend tests, strict TypeScript, and the production build passed.
+  Live proof opened and backed out of that guard without cancelling the real
+  pending invitation. Every primary, Member, and personal-Hive surface passed
+  at 1,440 by 900 and Android-size 412 by 915 with zero horizontal overflow;
+  image review confirmed the guard is readable and unambiguous at both sizes.
+  API PID advanced to `3725960`; terminal-host PID `2966127` remained unchanged,
+  preserving all active workers. Every proof browser and context closed.
