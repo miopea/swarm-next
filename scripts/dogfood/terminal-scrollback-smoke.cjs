@@ -81,7 +81,10 @@ async function verifySurface(browser, surface, finalSurface, restoreSleepingWork
     }
     await page.waitForTimeout(250);
     const afterGesture = await scrollbackMetrics(page);
-    if (afterGesture.viewportRow >= beforeGesture.viewportRow) {
+    const gestureMoved = surface.mobile
+      ? afterGesture.viewportRow < beforeGesture.viewportRow
+      : afterGesture.viewportScrollTop < beforeGesture.viewportScrollTop;
+    if (!gestureMoved) {
       throw new Error(`${surface.name}: terminal viewport did not move into scrollback (${JSON.stringify({ beforeGesture, afterGesture })})`);
     }
     await page.screenshot({ path: path.join(outputRoot, `${surface.name}-restored-scrollback.png`), fullPage: false });
@@ -220,6 +223,7 @@ async function scrollbackMetrics(page) {
       bufferLines: Number(surface.dataset.terminalBufferLines || 0),
       childCount: surface.childElementCount,
       scrollbackRows,
+      viewportScrollTop: surface.querySelector(".xterm-viewport")?.scrollTop ?? 0,
       viewportRow: Number(surface.dataset.terminalViewportRow || 0),
       scrollable: scrollbackRows > 0,
     };
