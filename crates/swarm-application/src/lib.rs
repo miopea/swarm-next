@@ -15,10 +15,10 @@ use swarm_domain::{
     FederationStewardTakeoverCommand, FederationStewardTakeoverCommandId,
     FederationStewardTakeoverInbox, FederationStewardTakeoverLeaseId,
     FederationStewardTakeoverLocalState, FederationStewardTakeoverOutboxEntry,
-    FederationStewardTakeoverReceipt, FederationStewardTaskAuditEntry,
-    FederationStewardTaskCommand, FederationStewardTaskCommandId, FederationStewardTaskOutboxEntry,
-    FederationStewardTaskReceipt, FederationStewardshipSnapshot, FederationSyncCondition,
-    FederationSyncHealth, FederationTaskCommand, FederationTaskCommandId,
+    FederationStewardTakeoverReceipt, FederationStewardTakeoverRelayAuthorization,
+    FederationStewardTaskAuditEntry, FederationStewardTaskCommand, FederationStewardTaskCommandId,
+    FederationStewardTaskOutboxEntry, FederationStewardTaskReceipt, FederationStewardshipSnapshot,
+    FederationSyncCondition, FederationSyncHealth, FederationTaskCommand, FederationTaskCommandId,
     FederationTaskCommandReceipt, FederationTaskOutboxEntry, FederationTaskOutboxStatus,
     FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard, HiveId, JiraConnectionState,
     JiraProjectBindingId, LocalApiaryContext, LocalApiaryRole, LocalApiaryTaskExecution,
@@ -393,6 +393,22 @@ impl ApiaryService {
     ) -> Result<FederationStewardTakeoverInbox, ApplicationError> {
         self.store
             .federation_steward_takeover_inbox(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Revalidates one exact active participant immediately before relay I/O.
+    ///
+    /// # Errors
+    /// Returns authentication, scope, revision, expiry, or persistence errors.
+    pub fn authorize_federation_steward_takeover_relay(
+        &self,
+        node_credential: &str,
+        lease_id: FederationStewardTakeoverLeaseId,
+        revision: u64,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverRelayAuthorization, ApplicationError> {
+        self.store
+            .authorize_federation_steward_takeover_relay(node_credential, lease_id, revision, now)
             .map_err(Into::into)
     }
 

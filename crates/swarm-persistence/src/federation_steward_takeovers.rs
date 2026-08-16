@@ -7,7 +7,8 @@ use swarm_domain::{
     FederationStewardTakeoverLease, FederationStewardTakeoverLeaseId,
     FederationStewardTakeoverLocalState, FederationStewardTakeoverOutboxEntry,
     FederationStewardTakeoverOutboxState, FederationStewardTakeoverOutcome,
-    FederationStewardTakeoverReceipt, FederationStewardTakeoverState, HiveId, LocalApiaryContext,
+    FederationStewardTakeoverReceipt, FederationStewardTakeoverRelayAuthorization,
+    FederationStewardTakeoverRelayRole, FederationStewardTakeoverState, HiveId, LocalApiaryContext,
     LocalApiaryRole, StewardCapability, StewardshipId,
 };
 
@@ -143,6 +144,53 @@ impl TaskStore {
             leases,
             generated_at: now,
         })
+    }
+
+    /// Authenticates one exact active relay participant without exposing any
+    /// private target-Hive or terminal identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the credential, lease, revision, current scope,
+    /// membership, or active lifetime no longer authorizes relay traffic.
+    pub fn authorize_federation_steward_takeover_relay(
+        &self,
+        node_credential: &str,
+        lease_id: FederationStewardTakeoverLeaseId,
+        revision: u64,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverRelayAuthorization, TaskStoreError> {
+        let identity = self.local_hive_identity()?;
+        let credential = decode_node_credential(node_credential)?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let member = authenticate_member_credential(&transaction, &identity, &credential, now)?;
+        expire_open_leases(&transaction, member.apiary, now)?;
+        let lease = lease_by_id(&transaction, lease_id)?
+            .filter(|lease| {
+                lease.apiary_id == member.apiary
+                    && lease.state == FederationStewardTakeoverState::Active
+                    && lease.revision == revision
+                    && lease.expires_at > now
+            })
+            .ok_or(TaskStoreError::InvalidFederationStewardTakeover)?;
+        let role = if member.hive == lease.target_hive_id {
+            FederationStewardTakeoverRelayRole::Target
+        } else if member.hive == lease.source_hive_id
+            && member.operator == lease.source_operator_id
+            && authorized_stewardship(
+                &transaction,
+                member.apiary,
+                member.operator,
+                lease.target_hive_id,
+            )? == Some(lease.stewardship_id)
+        {
+            FederationStewardTakeoverRelayRole::Source
+        } else {
+            return Err(TaskStoreError::InvalidFederationStewardTakeover);
+        };
+        transaction.commit()?;
+        Ok(FederationStewardTakeoverRelayAuthorization { lease, role })
     }
 
     /// Journals a reasoned Steward takeover request before network I/O.
@@ -1231,6 +1279,16 @@ mod tests {
             Some(FederationStewardTakeoverState::Requested)
         );
         assert!(requested.lease.as_ref().unwrap().acknowledged_at.is_none());
+        assert!(
+            keeper
+                .authorize_federation_steward_takeover_relay(
+                    &steward_acceptance.node_credential,
+                    requested.lease.as_ref().unwrap().id,
+                    requested.lease.as_ref().unwrap().revision,
+                    now + 54,
+                )
+                .is_err()
+        );
         assert_eq!(
             keeper
                 .apply_federation_steward_takeover_command(
@@ -1283,6 +1341,40 @@ mod tests {
         assert_eq!(active_lease.revision, 2);
         assert_eq!(active_lease.acknowledged_at, Some(now + 60));
         assert_eq!(active_lease.expires_at, now + 60 + ACTIVE_LIFETIME_SECONDS);
+        assert_eq!(
+            keeper
+                .authorize_federation_steward_takeover_relay(
+                    &steward_acceptance.node_credential,
+                    active_lease.id,
+                    active_lease.revision,
+                    now + 60,
+                )
+                .expect("source relay authority")
+                .role,
+            FederationStewardTakeoverRelayRole::Source
+        );
+        assert_eq!(
+            keeper
+                .authorize_federation_steward_takeover_relay(
+                    &target_acceptance.node_credential,
+                    active_lease.id,
+                    active_lease.revision,
+                    now + 60,
+                )
+                .expect("target relay authority")
+                .role,
+            FederationStewardTakeoverRelayRole::Target
+        );
+        assert!(
+            keeper
+                .authorize_federation_steward_takeover_relay(
+                    &steward_acceptance.node_credential,
+                    active_lease.id,
+                    active_lease.revision.saturating_sub(1),
+                    now + 60,
+                )
+                .is_err()
+        );
         target
             .apply_federation_steward_takeover_receipt(&active, now + 61)
             .expect("target receipt");
@@ -1433,9 +1525,30 @@ mod tests {
         let scope = keeper
             .federation_stewardship_snapshot(&acceptance.node_credential, now + 62)
             .expect("scope");
+        let active_lease = active.lease.as_ref().unwrap();
+        assert!(
+            keeper
+                .authorize_federation_steward_takeover_relay(
+                    &acceptance.node_credential,
+                    active_lease.id,
+                    active_lease.revision,
+                    now + 62,
+                )
+                .is_ok()
+        );
         keeper
             .revoke_stewardship(scope.stewardship.as_ref().unwrap().id, now + 63)
             .expect("revoke");
+        assert!(
+            keeper
+                .authorize_federation_steward_takeover_relay(
+                    &acceptance.node_credential,
+                    active_lease.id,
+                    active_lease.revision,
+                    now + 63,
+                )
+                .is_err()
+        );
         let rejected = keeper
             .apply_federation_steward_takeover_command(
                 &acceptance.node_credential,

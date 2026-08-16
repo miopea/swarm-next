@@ -1158,6 +1158,19 @@ pub struct FederationStewardTakeoverLocalState {
     pub outbox: Vec<FederationStewardTakeoverOutboxEntry>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationStewardTakeoverRelayRole {
+    Source,
+    Target,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardTakeoverRelayAuthorization {
+    pub lease: FederationStewardTakeoverLease,
+    pub role: FederationStewardTakeoverRelayRole,
+}
+
 /// Durable Member-side evidence that one exact Keeper catalog was verified.
 /// This does not claim local Jira readiness or policy acceptance.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
