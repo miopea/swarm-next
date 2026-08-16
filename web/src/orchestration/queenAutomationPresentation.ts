@@ -36,3 +36,8 @@ export function queenAutomationStateTone(status: QueenAutomationStatus | undefin
   if (status?.state === "running" || status?.state === "delivering") return "online";
   return "waiting";
 }
+
+export function queenAutomationNeedsAttention(status: QueenAutomationStatus | undefined) {
+  return status?.state === "uncertain"
+    || (status?.state === "completed" && status.outcome === "needs_operator");
+}

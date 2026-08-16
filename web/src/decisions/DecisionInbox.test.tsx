@@ -129,3 +129,21 @@ test("reveals and focuses a resolved decision selected through global navigation
   expect(screen.getByRole("checkbox", { name: "Show resolved" })).toBeChecked();
   expect(scrollIntoView).toHaveBeenCalled();
 });
+
+test("counts and displays first-class attention that does not originate as a worker decision", () => {
+  render(
+    <DecisionInbox
+      decisions={[]}
+      tasks={[]}
+      workers={[]}
+      busy={false}
+      additionalPendingCount={1}
+      attentionCards={<article>Queen needs you</article>}
+      onResolve={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByRole("tab", { name: "Needs you 1" })).toBeInTheDocument();
+  expect(screen.getByText("Queen needs you")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Nothing needs your attention" })).not.toBeInTheDocument();
+});

@@ -494,6 +494,62 @@ test("notification navigation overrides a previously saved surface", async () =>
   expect(await screen.findByRole("heading", { name: "Needs you" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Needs you 0" })).toHaveAttribute("aria-current", "page");
 });
+
+test("makes an operator-blocked Queen review first-class attention", async () => {
+  const queenSession = "019fedfc-1c30-70e1-a5e2-9a3c94268093";
+  const queen = {
+    id: "worker-queen",
+    hive_id: "hive-1",
+    name: "Queen",
+    role: "queen",
+    provider: "claude_code",
+    workspace: "/workspace/queen",
+    autostart: true,
+    position: 0,
+    active_session_id: queenSession,
+    running: true,
+    attention_state: "resting",
+    created_at: 1,
+    updated_at: 1,
+  };
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: queenSession, running: true }] }));
+    if (url === "/api/v1/workers") return Promise.resolve(ok([queen]));
+    if (url === "/api/v1/workspaces" || url === "/api/v1/tasks" || url === "/api/v1/decisions" || url === "/api/v1/integrations/jira/task-links") return Promise.resolve(ok([]));
+    if (url === "/api/v1/orchestration/queen-policy") return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
+    if (url === "/api/v1/orchestration/queen-automation") return Promise.resolve(ok({
+      enabled: true,
+      state: "completed",
+      run_id: "run-1",
+      trigger: "actionable_work",
+      actionable_count: 1,
+      attempts: 1,
+      requested_at: 1,
+      delivered_at: 2,
+      finished_at: 3,
+      outcome: "needs_operator",
+      waiting_reason: null,
+    }));
+    if (url === "/api/v1/providers") return Promise.resolve(ok({ claude_code: true, codex: false }));
+    if (url === "/api/v1/preferences/presentation/desktop") return Promise.resolve(ok({ device_class: "desktop", color_theme: "light", terminal_keys_visible: true, configured: true }));
+    if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+
+  const needsYou = await screen.findByRole("button", { name: "Needs you 1" });
+  fireEvent.click(needsYou);
+  expect(await screen.findByRole("heading", { name: "Queen needs you" })).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Needs you 1" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Open Queen" }));
+  expect(await screen.findByText("Terminal ready")).toBeInTheDocument();
+});
 test("keyboard shortcuts switch workspaces but pause while editing a field", async () => {
   const fetch = vi
     .fn()

@@ -66,6 +66,8 @@ import BeeMascot from "./brand/BeeMascot";
 import KeeperControlRoom from "./apiary/KeeperControlRoom";
 import MemberControlRoom from "./apiary/MemberControlRoom";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
+import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
+import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
 import { workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
 import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
@@ -739,7 +741,8 @@ export function App() {
   const openTaskCount = tasks.filter((task) => task.state !== "completed").length;
   const pendingDecisionCount = decisions.filter((decision) => decision.state === "pending").length;
   const pendingAssistCount = stewardAssists?.incoming?.filter((request) => request.state === "pending").length ?? 0;
-  const attentionCount = pendingDecisionCount + pendingAssistCount;
+  const queenAutomationAttentionCount = queenAutomationNeedsAttention(queenAutomation) ? 1 : 0;
+  const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount;
   const orphanSessions = useMemo(
     () => sessions.filter((session) => session.running && !workers.some((worker) => worker.active_session_id === session.session_id)),
     [sessions, workers],
@@ -770,6 +773,12 @@ export function App() {
     setSurface("settings");
   };
   const openApiarySettings = () => openSettings("settings-apiary");
+  const openQueenForAttention = () => {
+    const queen = workers.find((worker) => worker.role === "queen");
+    if (!queen) return openSettings("settings-queen");
+    if (queen.active_session_id) return openWorker(queen.active_session_id);
+    void startExistingWorker(queen);
+  };
   const commandChoices = useMemo<CommandChoice[]>(() => [
     { id: "decisions", label: "Needs you", detail: `${attentionCount} pending`, group: "Go to", run: () => setSurface("decisions") },
     { id: "tasks", label: "Tasks", detail: `${openTaskCount} open`, group: "Go to", run: () => setSurface("tasks") },
@@ -1025,8 +1034,22 @@ export function App() {
           </form>
         ) : surface === "decisions" ? (
           <div className="attention-workspace">
-            <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
-            <DecisionInbox decisions={decisions} tasks={tasks} workers={workers} busy={busy} focusDecisionId={decisionFocus?.id} focusRequest={decisionFocus?.request} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} onFetchActivity={() => fetchRecentTaskActivity(operatorToken)} onResolve={resolveInboxDecision} />
+            <DecisionInbox
+              decisions={decisions}
+              tasks={tasks}
+              workers={workers}
+              busy={busy}
+              focusDecisionId={decisionFocus?.id}
+              focusRequest={decisionFocus?.request}
+              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount}
+              attentionCards={<>
+                <QueenAutomationAttentionCard status={queenAutomation} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-queen")} />
+                <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
+              </>}
+              onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
+              onFetchActivity={() => fetchRecentTaskActivity(operatorToken)}
+              onResolve={resolveInboxDecision}
+            />
           </div>
         ) : surface === "tasks" ? (
           <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />

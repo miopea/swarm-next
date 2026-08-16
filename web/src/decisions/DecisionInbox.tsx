@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { DecisionRequest, Task, TaskActivityPage, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -19,12 +19,14 @@ type Props = {
   busy: boolean;
   focusDecisionId?: string;
   focusRequest?: number;
+  additionalPendingCount?: number;
+  attentionCards?: ReactNode;
   onOpenTask?: (taskId: string) => void;
   onFetchActivity?: () => Promise<TaskActivityPage>;
   onResolve: (decision: DecisionRequest, action: string, note: string) => Promise<void>;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, onOpenTask, onFetchActivity, onResolve }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, onOpenTask, onFetchActivity, onResolve }: Props) {
   const [view, setView] = useState<"attention" | "activity">("attention");
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -35,6 +37,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   const workerNames = useMemo(() => new Map(workers.map((worker) => [worker.id, worker.name])), [workers]);
   const visible = decisions.filter((decision) => showResolved || decision.state === "pending");
   const pending = decisions.filter((decision) => decision.state === "pending").length;
+  const pendingTotal = pending + additionalPendingCount;
 
   useEffect(() => {
     if (!focusDecisionId) return;
@@ -63,7 +66,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   return (
     <section className="decision-inbox" aria-labelledby="decision-inbox-heading">
       <div className="attention-tabs" role="tablist" aria-label="Attention workspace">
-        <button role="tab" aria-selected={view === "attention"} onClick={() => setView("attention")}>Needs you <small>{pending}</small></button>
+        <button role="tab" aria-selected={view === "attention"} onClick={() => setView("attention")}>Needs you <small>{pendingTotal}</small></button>
         <button role="tab" aria-selected={view === "activity"} onClick={() => { setView("activity"); if (activity) void loadActivity(); }}>Activity</button>
       </div>
       {view === "activity" ? <WorkActivity activity={activity} tasks={tasks} workers={workers} loading={activityLoading} failed={activityFailed} onRetry={() => void loadActivity()} onOpenTask={onOpenTask} /> : <>
@@ -79,7 +82,9 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
         </label>
       </div>
 
-      {visible.length === 0 ? (
+      {attentionCards}
+
+      {visible.length === 0 && additionalPendingCount === 0 ? (
         <div className="decision-empty">
           <BeeMascot className="empty-bee" expression="available" />
           <p className="eyebrow">All clear</p>
