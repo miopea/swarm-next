@@ -26,6 +26,7 @@ test("configures and reorders durable workers with progressive path completion",
       providers={{ claude_code: true, codex: false }}
       onCreate={onCreate}
       onUpdate={onUpdate}
+      onRemove={vi.fn().mockResolvedValue(undefined)}
       onReorder={onReorder}
     />,
   );
@@ -49,9 +50,32 @@ test("configures and reorders durable workers with progressive path completion",
   const editForm = screen.getByRole("form", { name: "Edit Daisy" });
   expect(within(editForm).getByText(budget.workspace)).toBeInTheDocument();
   fireEvent.change(within(editForm).getByLabelText("Worker name"), { target: { value: "Marigold" } });
+  fireEvent.change(within(editForm).getByLabelText("Queen routing description"), { target: { value: "Owns budgets and bills." } });
   fireEvent.click(within(editForm).getByLabelText("Keep this worker active automatically"));
   fireEvent.click(within(editForm).getByRole("button", { name: "Save" }));
-  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", true);
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", "Owns budgets and bills.", "claude_code", true);
+});
+
+test("requires explicit confirmation before removing a sleeping worker", async () => {
+  const onRemove = vi.fn().mockResolvedValue(undefined);
+  render(
+    <WorkerSettings
+      workers={[queen, budget]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onRemove={onRemove}
+      onReorder={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove worker" }));
+  expect(screen.getByText("Remove Daisy from this Hive?")).toBeInTheDocument();
+  expect(onRemove).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Confirm removal" }));
+  expect(onRemove).toHaveBeenCalledWith(budget.id);
 });
 
 test("accepts a complete typed path when it is not in the bounded suggestions", () => {
@@ -64,6 +88,7 @@ test("accepts a complete typed path when it is not in the bounded suggestions", 
       providers={{ claude_code: true, codex: false }}
       onCreate={onCreate}
       onUpdate={vi.fn()}
+      onRemove={vi.fn()}
       onReorder={vi.fn()}
     />,
   );
@@ -87,6 +112,7 @@ test("offers Codex only when the terminal host reports it ready", () => {
       providers={{ claude_code: true, codex: true }}
       onCreate={onCreate}
       onUpdate={vi.fn()}
+      onRemove={vi.fn()}
       onReorder={vi.fn()}
     />,
   );
@@ -109,6 +135,7 @@ test("desktop drag ordering keeps accessible arrow controls as a fallback", () =
       providers={{ claude_code: true, codex: false }}
       onCreate={vi.fn()}
       onUpdate={vi.fn()}
+      onRemove={vi.fn()}
       onReorder={onReorder}
     />,
   );

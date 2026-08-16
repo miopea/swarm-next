@@ -38,6 +38,8 @@ pub(super) struct CreateWorkerRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct UpdateWorkerRequest {
     name: Option<String>,
+    description: Option<String>,
+    provider: Option<ProviderKind>,
     autostart: Option<bool>,
 }
 
@@ -308,7 +310,13 @@ pub(super) async fn update_worker(
     authorize(&state, &headers)?;
     let worker_id = parse_worker_id(&worker_id)?;
     let profile = task_store(&state)?
-        .update_worker_profile(worker_id, request.name.as_deref(), request.autostart)
+        .update_worker_profile(
+            worker_id,
+            request.name.as_deref(),
+            request.description.as_deref(),
+            request.provider,
+            request.autostart,
+        )
         .map_err(|error| task_store_error(&error))?;
     if request.autostart.is_some() {
         state.worker_errors.write().await.remove(&worker_id);
@@ -328,6 +336,27 @@ pub(super) async fn update_worker(
         ProviderActivity::Unknown,
     ))
     .into_response())
+}
+
+pub(super) async fn remove_worker(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(worker_id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let _guard = state.worker_lifecycle.lock().await;
+    let worker_id = parse_worker_id(&worker_id)?;
+    task_store(&state)?
+        .archive_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    state.worker_errors.write().await.remove(&worker_id);
+    state
+        .worker_recovery_attempts
+        .write()
+        .await
+        .remove(&worker_id);
+    state.control_room_notify.notify_waiters();
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 pub(super) async fn start_worker(

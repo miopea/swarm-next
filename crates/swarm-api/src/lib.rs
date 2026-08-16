@@ -1973,7 +1973,10 @@ fn api_router(state: AppState) -> Router {
             post(retry_email_reply),
         )
         .route("/api/v1/workers/order", put(workers::reorder_workers))
-        .route("/api/v1/workers/{worker_id}", patch(workers::update_worker))
+        .route(
+            "/api/v1/workers/{worker_id}",
+            patch(workers::update_worker).delete(workers::remove_worker),
+        )
         .route("/api/v1/workspaces", get(workers::list_workspaces))
         .route(
             "/api/v1/workers/{worker_id}/start",
@@ -4909,7 +4912,9 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::WorkerNotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "worker_not_found", error.to_string())
         }
-        TaskStoreError::InvalidWorkerName | TaskStoreError::EmptyWorkerUpdate => {
+        TaskStoreError::InvalidWorkerName
+        | TaskStoreError::InvalidWorkerDescription
+        | TaskStoreError::EmptyWorkerUpdate => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_worker", error.to_string())
         }
         TaskStoreError::DuplicateWorkerName
@@ -4922,6 +4927,13 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "worker_already_running",
             error.to_string(),
         ),
+        TaskStoreError::WorkerMustBeSleeping | TaskStoreError::WorkerOwnsOpenTasks => {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "worker_profile_conflict",
+                error.to_string(),
+            )
+        }
         TaskStoreError::WorkerSessionNotActive => ApiError::new(
             StatusCode::CONFLICT,
             "worker_session_not_active",
@@ -5362,6 +5374,7 @@ mod tests {
         assert_eq!(response_json(status).await["enabled"], false);
 
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -5977,6 +5990,7 @@ mod tests {
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
 
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -8455,13 +8469,16 @@ mod tests {
         );
 
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("PATCH")
                     .uri(format!("/api/v1/workers/{}", worker.id))
                     .header("authorization", "Bearer secret")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"name":"Clover","autostart":true}"#))
+                    .body(Body::from(
+                        r#"{"name":"Clover","description":"Owns billing and subscriptions.","provider":"codex","autostart":true}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -8470,6 +8487,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let response = response_json(response).await;
         assert_eq!(response["name"], "Clover");
+        assert_eq!(response["description"], "Owns billing and subscriptions.");
+        assert_eq!(response["provider"], "codex");
         assert_eq!(response["autostart"], true);
         assert_eq!(response["workspace"], worker.workspace);
         assert_eq!(
@@ -8479,6 +8498,23 @@ mod tests {
                 .provider_conversation_id,
             conversation
         );
+
+        let removed = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/workers/{}", worker.id))
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+        assert!(matches!(
+            store.get_worker_profile(worker.id),
+            Err(TaskStoreError::WorkerNotFound)
+        ));
     }
 
     #[tokio::test]

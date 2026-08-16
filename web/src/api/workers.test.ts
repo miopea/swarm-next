@@ -4,6 +4,7 @@ import {
   createWorker,
   fetchWorkers,
   fetchWorkspaces,
+  removeWorker,
   reorderWorkers,
   startWorker,
   stopWorker,
@@ -38,6 +39,7 @@ test("owns worker discovery, configuration, ordering, and lifecycle commands", a
     null,
     { ...worker, running: true, attention_state: "resting" },
     worker,
+    null,
   ];
   const fetch = vi.fn().mockImplementation(() => {
     const body = responses.shift();
@@ -59,6 +61,7 @@ test("owns worker discovery, configuration, ordering, and lifecycle commands", a
   await expect(reorderWorkers("operator", ["worker/one", "worker-two"])).resolves.toBeUndefined();
   await expect(startWorker("operator", "worker/one")).resolves.toMatchObject({ running: true });
   await expect(stopWorker("operator", "worker/one")).resolves.toEqual(worker);
+  await expect(removeWorker("operator", "worker/one")).resolves.toBeUndefined();
 
   expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/workers", expect.objectContaining({
     method: "POST",
@@ -82,6 +85,9 @@ test("owns worker discovery, configuration, ordering, and lifecycle commands", a
     body: JSON.stringify({ rows: 24, columns: 80 }),
   }));
   expect(fetch).toHaveBeenNthCalledWith(7, "/api/v1/workers/worker%2Fone/session", expect.objectContaining({
+    method: "DELETE",
+  }));
+  expect(fetch).toHaveBeenNthCalledWith(8, "/api/v1/workers/worker%2Fone", expect.objectContaining({
     method: "DELETE",
   }));
 });

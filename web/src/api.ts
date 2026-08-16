@@ -30,6 +30,7 @@ export {
   createWorker,
   fetchWorkers,
   fetchWorkspaces,
+  removeWorker,
   reorderWorkers,
   startWorker,
   stopWorker,

@@ -21,6 +21,7 @@ import {
   fetchRecentTaskActivity,
   fetchJiraComments,
   addJiraComment,
+  removeWorker,
   reorderTasks,
   reorderWorkers,
   reconcileJira,
@@ -403,11 +404,21 @@ export function App() {
     });
   }
 
-  async function maintainWorkerProfile(workerId: string, name: string, autostart: boolean) {
+  async function maintainWorkerProfile(workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean) {
     if (!operatorToken) return;
     await perform(async () => {
-      const updated = await updateWorker(operatorToken, workerId, { name, autostart });
+      const updated = await updateWorker(operatorToken, workerId, { name, description, provider, autostart });
       setWorkers((current) => current.map((worker) => worker.id === updated.id ? updated : worker));
+    });
+  }
+
+  async function removeWorkerProfile(workerId: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await removeWorker(operatorToken, workerId);
+      const controlRoom = await loadControlRoom(operatorToken);
+      setWorkers(controlRoom.workers);
+      setWorkspaces(controlRoom.workspaces);
     });
   }
 
@@ -999,6 +1010,7 @@ export function App() {
             onTestNotification={testNotification}
             onCreateWorker={configureWorker}
             onUpdateWorker={maintainWorkerProfile}
+            onRemoveWorker={removeWorkerProfile}
             onReorderWorkers={reorderWorkerProfiles}
             onUpdateWorkerEngine={maintainWorkerEngine}
             onReloadDevelopment={reloadDevelopmentBuild}

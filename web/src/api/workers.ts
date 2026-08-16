@@ -14,6 +14,7 @@ export type Worker = {
   id: string;
   hive_id: string;
   name: string;
+  description?: string;
   role: WorkerRole;
   provider: ProviderKind;
   workspace: string;
@@ -43,7 +44,12 @@ export type CreateWorkerInput = {
   allow_outside_roots?: boolean;
 };
 
-export type UpdateWorkerInput = { name?: string; autostart?: boolean };
+export type UpdateWorkerInput = {
+  name?: string;
+  description?: string;
+  provider?: ProviderKind;
+  autostart?: boolean;
+};
 
 export async function fetchWorkers(operatorToken: string): Promise<Worker[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/workers");
@@ -71,6 +77,12 @@ export async function updateWorker(operatorToken: string, workerId: string, inpu
     body: JSON.stringify(input),
   });
   return response.json() as Promise<Worker>;
+}
+
+export async function removeWorker(operatorToken: string, workerId: string): Promise<void> {
+  await authenticatedFetch(operatorToken, `/api/v1/workers/${encodeURIComponent(workerId)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function reorderWorkers(operatorToken: string, workerIds: string[]): Promise<void> {

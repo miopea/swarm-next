@@ -66,7 +66,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 48;
+const CURRENT_SCHEMA_VERSION: i64 = 49;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -223,7 +223,9 @@ pub enum TaskStoreError {
     InvalidWorkerName,
     #[error("worker name already exists")]
     DuplicateWorkerName,
-    #[error("worker update must contain a name or startup preference")]
+    #[error("worker description must not exceed 2000 bytes or contain control characters")]
+    InvalidWorkerDescription,
+    #[error("worker update must contain a name, description, provider, or startup preference")]
     EmptyWorkerUpdate,
     #[error("the Queen profile is managed by Swarm and cannot be edited")]
     QueenProfileImmutable,
@@ -231,6 +233,10 @@ pub enum TaskStoreError {
     QueenAlreadyExists,
     #[error("worker already has an active session")]
     WorkerAlreadyRunning,
+    #[error("the worker must be sleeping before changing provider or removing it")]
+    WorkerMustBeSleeping,
+    #[error("reassign or complete this worker's open tasks before removing it")]
+    WorkerOwnsOpenTasks,
     #[error("agent credential digest must be exactly 32 bytes")]
     InvalidAgentCredentialDigest,
     #[error("worker session is not active")]
@@ -1520,7 +1526,50 @@ fn migrate_recent_schema(
     if schema_version < 48 {
         federation_tasks::migrate_federation_task_commands(transaction)?;
     }
+    if schema_version < 49 {
+        migrate_worker_profile_metadata(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_worker_profile_metadata(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let worker_profiles_exist = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                       WHERE type = 'table' AND name = 'worker_profiles')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if worker_profiles_exist {
+        let columns = {
+            let mut statement = transaction.prepare("PRAGMA table_info(worker_profiles)")?;
+            statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<HashSet<_>, _>>()?
+        };
+        if !columns.contains("description") {
+            transaction.execute_batch(
+                "ALTER TABLE worker_profiles
+                 ADD COLUMN description TEXT NOT NULL DEFAULT '';",
+            )?;
+        }
+        if !columns.contains("archived_at") {
+            transaction
+                .execute_batch("ALTER TABLE worker_profiles ADD COLUMN archived_at INTEGER;")?;
+        }
+        let has_roster_columns = ["role", "position", "created_at", "id"]
+            .iter()
+            .all(|column| columns.contains(*column));
+        if has_roster_columns {
+            transaction.execute_batch(
+                "CREATE INDEX IF NOT EXISTS worker_profiles_active_roster
+                     ON worker_profiles(role, position, created_at, id)
+                     WHERE archived_at IS NULL;",
+            )?;
+        }
+    }
+    transaction.pragma_update(None, "user_version", 49)
 }
 
 fn migrate_task_activity_actors(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -2835,6 +2884,8 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert!(worker_columns.contains(&"provider_conversation_id".to_owned()));
+        assert!(worker_columns.contains(&"description".to_owned()));
+        assert!(worker_columns.contains(&"archived_at".to_owned()));
         assert_eq!(
             store
                 .connection()

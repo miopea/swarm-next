@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::{MAX_WORKSPACE_BYTES, TaskStore, TaskStoreError, insert_control_room_event};
 
 const MAX_WORKER_NAME_BYTES: usize = 80;
+const MAX_WORKER_DESCRIPTION_BYTES: usize = 2_000;
 
 impl TaskStore {
     /// Returns the singleton Queen profile, creating it on first start.
@@ -60,22 +61,37 @@ impl TaskStore {
         &self,
         worker_id: WorkerId,
         name: Option<&str>,
+        description: Option<&str>,
+        provider: Option<ProviderKind>,
         autostart: Option<bool>,
     ) -> Result<WorkerProfile, TaskStoreError> {
-        if name.is_none() && autostart.is_none() {
+        if name.is_none() && description.is_none() && provider.is_none() && autostart.is_none() {
             return Err(TaskStoreError::EmptyWorkerUpdate);
         }
         let name = name.map(str::trim);
         if let Some(name) = name {
             validate_worker_name(name)?;
         }
+        let description = description.map(str::trim);
+        if let Some(description) = description {
+            validate_worker_description(description)?;
+        }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let role = transaction
+        let (role, current_provider, running) = transaction
             .query_row(
-                "SELECT role FROM worker_profiles WHERE id = ?1",
+                "SELECT role, provider,
+                        EXISTS(SELECT 1 FROM worker_sessions
+                               WHERE worker_id = worker_profiles.id AND ended_at IS NULL)
+                 FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
                 [worker_id.to_string()],
-                |row| row.get::<_, String>(0),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, bool>(2)?,
+                    ))
+                },
             )
             .optional()?
             .ok_or(TaskStoreError::WorkerNotFound)?;
@@ -99,6 +115,23 @@ impl TaskStore {
                 params![worker_id.to_string(), name],
             )?;
         }
+        if let Some(description) = description {
+            transaction.execute(
+                "UPDATE worker_profiles SET description = ?2 WHERE id = ?1",
+                params![worker_id.to_string(), description],
+            )?;
+        }
+        if let Some(provider) = provider
+            && provider.to_string() != current_provider
+        {
+            if running {
+                return Err(TaskStoreError::WorkerMustBeSleeping);
+            }
+            transaction.execute(
+                "UPDATE worker_profiles SET provider = ?2 WHERE id = ?1",
+                params![worker_id.to_string(), provider.to_string()],
+            )?;
+        }
         if let Some(autostart) = autostart {
             transaction.execute(
                 "UPDATE worker_profiles SET autostart = ?2 WHERE id = ?1",
@@ -115,6 +148,63 @@ impl TaskStore {
         self.get_worker_profile(worker_id)
     }
 
+    /// Removes a sleeping worker from the active roster while retaining historical identity.
+    ///
+    /// # Errors
+    /// Rejects Queen, running workers, workers that still own open tasks, and unknown workers.
+    pub fn archive_worker_profile(&self, worker_id: WorkerId) -> Result<(), TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let (name, role, running, owns_open_tasks) = transaction
+            .query_row(
+                "SELECT name, role,
+                        EXISTS(SELECT 1 FROM worker_sessions
+                               WHERE worker_id = worker_profiles.id AND ended_at IS NULL),
+                        EXISTS(SELECT 1 FROM tasks
+                               WHERE assigned_worker_id = worker_profiles.id
+                                 AND state != 'completed')
+                 FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
+                [worker_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, bool>(2)?,
+                        row.get::<_, bool>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(TaskStoreError::WorkerNotFound)?;
+        if role == WorkerRole::Queen.to_string() {
+            return Err(TaskStoreError::QueenProfileImmutable);
+        }
+        if running {
+            return Err(TaskStoreError::WorkerMustBeSleeping);
+        }
+        if owns_open_tasks {
+            return Err(TaskStoreError::WorkerOwnsOpenTasks);
+        }
+        let archived_name = format!("{name} (removed {})", &worker_id.to_string()[..8]);
+        transaction.execute(
+            "UPDATE worker_profiles
+             SET name = ?2, autostart = 0, archived_at = unixepoch(), updated_at = unixepoch()
+             WHERE id = ?1",
+            params![worker_id.to_string(), archived_name],
+        )?;
+        transaction.execute(
+            "DELETE FROM worker_agent_credentials WHERE worker_id = ?1",
+            [worker_id.to_string()],
+        )?;
+        transaction.execute(
+            "DELETE FROM worker_engagements WHERE worker_id = ?1",
+            [worker_id.to_string()],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// Replaces the stable operator order of every non-Queen worker.
     ///
     /// # Errors
@@ -127,7 +217,9 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let expected = {
             let mut statement = transaction.prepare(
-                "SELECT id FROM worker_profiles WHERE role != 'queen' ORDER BY position, created_at, id",
+                "SELECT id FROM worker_profiles
+                 WHERE role != 'queen' AND archived_at IS NULL
+                 ORDER BY position, created_at, id",
             )?;
             statement
                 .query_map([], |row| row.get::<_, String>(0))?
@@ -171,13 +263,14 @@ impl TaskStore {
                    p.position, s.session_id, p.provider_conversation_id,
                    EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
                    e.expires_at,
-                   p.created_at, p.updated_at
+                   p.created_at, p.updated_at, p.description
             FROM worker_profiles p
             LEFT JOIN worker_sessions s
               ON s.worker_id = p.id AND s.ended_at IS NULL
             LEFT JOIN worker_engagements e
               ON e.worker_id = p.id AND e.session_id = s.session_id
              AND e.expires_at > unixepoch()
+            WHERE p.archived_at IS NULL
             ORDER BY CASE p.role WHEN 'queen' THEN 0 ELSE 1 END,
                      p.position, p.created_at, p.id
             ",
@@ -201,14 +294,14 @@ impl TaskStore {
                        p.position, s.session_id, p.provider_conversation_id,
                        EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
                        e.expires_at,
-                       p.created_at, p.updated_at
+                       p.created_at, p.updated_at, p.description
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
                 LEFT JOIN worker_engagements e
                   ON e.worker_id = p.id AND e.session_id = s.session_id
                  AND e.expires_at > unixepoch()
-                WHERE p.id = ?1
+                WHERE p.id = ?1 AND p.archived_at IS NULL
                 ",
                 [id.to_string()],
                 profile_from_row,
@@ -230,7 +323,7 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let exists = transaction
             .query_row(
-                "SELECT 1 FROM worker_profiles WHERE id = ?1",
+                "SELECT 1 FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
                 [worker_id.to_string()],
                 |_| Ok(()),
             )
@@ -326,7 +419,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let updated = connection.execute(
             "UPDATE worker_profiles SET provider_conversation_id = ?1, updated_at = unixepoch()
-             WHERE id = ?2 AND provider_conversation_id IS NULL
+             WHERE id = ?2 AND provider_conversation_id IS NULL AND archived_at IS NULL
                AND NOT EXISTS (
                    SELECT 1 FROM worker_sessions WHERE worker_id = worker_profiles.id
                )",
@@ -337,7 +430,7 @@ impl TaskStore {
         }
         let exists = connection
             .query_row(
-                "SELECT 1 FROM worker_profiles WHERE id = ?1",
+                "SELECT 1 FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
                 [worker_id.to_string()],
                 |_| Ok(()),
             )
@@ -445,7 +538,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let exists = connection
             .query_row(
-                "SELECT 1 FROM worker_profiles WHERE id = ?1",
+                "SELECT 1 FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
                 [worker_id.to_string()],
                 |_| Ok(()),
             )
@@ -553,7 +646,7 @@ impl TaskStore {
         let connection = self.connection()?;
         let updated = connection.execute(
             "INSERT INTO worker_agent_credentials (worker_id, token_digest)
-             SELECT id, ?2 FROM worker_profiles WHERE id = ?1
+             SELECT id, ?2 FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL
              ON CONFLICT(worker_id) DO UPDATE SET
                  token_digest = excluded.token_digest,
                  rotated_at = unixepoch()",
@@ -603,14 +696,14 @@ impl TaskStore {
                        p.position, s.session_id, p.provider_conversation_id,
                        EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
                        e.expires_at,
-                       p.created_at, p.updated_at
+                       p.created_at, p.updated_at, p.description
                 FROM worker_profiles p
                 LEFT JOIN worker_sessions s
                   ON s.worker_id = p.id AND s.ended_at IS NULL
                 LEFT JOIN worker_engagements e
                   ON e.worker_id = p.id AND e.session_id = s.session_id
                  AND e.expires_at > unixepoch()
-                WHERE p.role = ?1
+                WHERE p.role = ?1 AND p.archived_at IS NULL
                 ",
                 [role.to_string()],
                 profile_from_row,
@@ -636,7 +729,8 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let duplicate = transaction
             .query_row(
-                "SELECT 1 FROM worker_profiles WHERE name = ?1 COLLATE NOCASE",
+                "SELECT 1 FROM worker_profiles
+                 WHERE name = ?1 COLLATE NOCASE AND archived_at IS NULL",
                 [name],
                 |_| Ok(()),
             )
@@ -648,7 +742,8 @@ impl TaskStore {
         if role == WorkerRole::Queen
             && transaction
                 .query_row(
-                    "SELECT 1 FROM worker_profiles WHERE role = 'queen'",
+                    "SELECT 1 FROM worker_profiles
+                     WHERE role = 'queen' AND archived_at IS NULL",
                     [],
                     |_| Ok(()),
                 )
@@ -699,6 +794,14 @@ fn validate_worker_name(name: &str) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
+fn validate_worker_description(description: &str) -> Result<(), TaskStoreError> {
+    if description.len() > MAX_WORKER_DESCRIPTION_BYTES || description.chars().any(char::is_control)
+    {
+        return Err(TaskStoreError::InvalidWorkerDescription);
+    }
+    Ok(())
+}
+
 fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> {
     let id =
         WorkerId::from_str(&row.get::<_, String>(0)?).map_err(|_| rusqlite::Error::InvalidQuery)?;
@@ -722,6 +825,7 @@ fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> 
         id,
         hive_id,
         name: row.get(2)?,
+        description: row.get(14)?,
         role,
         provider,
         workspace: row.get(5)?,
@@ -854,11 +958,18 @@ mod tests {
         let conversation = worker.provider_conversation_id;
 
         let updated = store
-            .update_worker_profile(worker.id, Some(" Clover "), Some(true))
+            .update_worker_profile(
+                worker.id,
+                Some(" Clover "),
+                Some("Owns subscriptions and billing."),
+                None,
+                Some(true),
+            )
             .unwrap();
 
         assert_eq!(updated.name, "Clover");
         assert!(updated.autostart);
+        assert_eq!(updated.description, "Owns subscriptions and billing.");
         assert_eq!(updated.workspace, worker.workspace);
         assert_eq!(updated.provider_conversation_id, conversation);
     }
@@ -887,17 +998,102 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            store.update_worker_profile(queen.id, Some("Empress"), None),
+            store.update_worker_profile(queen.id, Some("Empress"), None, None, None),
             Err(TaskStoreError::QueenProfileImmutable)
         ));
         assert!(matches!(
-            store.update_worker_profile(daisy.id, Some("poppy"), None),
+            store.update_worker_profile(daisy.id, Some("poppy"), None, None, None),
             Err(TaskStoreError::DuplicateWorkerName)
         ));
         assert!(matches!(
-            store.update_worker_profile(poppy.id, None, None),
+            store.update_worker_profile(poppy.id, None, None, None, None),
             Err(TaskStoreError::EmptyWorkerUpdate)
         ));
+    }
+
+    #[test]
+    fn sleeping_worker_can_change_provider_without_losing_claude_conversation() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Aster",
+                ProviderKind::ClaudeCode,
+                "/workspace/aster",
+                false,
+                1,
+            )
+            .unwrap();
+        let conversation = worker.provider_conversation_id;
+
+        let updated = store
+            .update_worker_profile(worker.id, None, None, Some(ProviderKind::Codex), None)
+            .unwrap();
+        assert_eq!(updated.provider, ProviderKind::Codex);
+        assert_eq!(updated.provider_conversation_id, conversation);
+
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        assert!(matches!(
+            store.update_worker_profile(
+                worker.id,
+                None,
+                None,
+                Some(ProviderKind::ClaudeCode),
+                None,
+            ),
+            Err(TaskStoreError::WorkerMustBeSleeping)
+        ));
+    }
+
+    #[test]
+    fn removal_is_sleeping_unassigned_and_history_preserving() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Clover",
+                ProviderKind::ClaudeCode,
+                "/workspace/clover",
+                false,
+                1,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            store.archive_worker_profile(queen.id),
+            Err(TaskStoreError::QueenProfileImmutable)
+        ));
+        let task = store
+            .create_task("Owned work", worker.workspace.as_str())
+            .unwrap();
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+        assert!(matches!(
+            store.archive_worker_profile(worker.id),
+            Err(TaskStoreError::WorkerOwnsOpenTasks)
+        ));
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Active)
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Review)
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Completed)
+            .unwrap();
+
+        store.archive_worker_profile(worker.id).unwrap();
+        assert!(matches!(
+            store.get_worker_profile(worker.id),
+            Err(TaskStoreError::WorkerNotFound)
+        ));
+        assert_eq!(store.list_worker_profiles().unwrap(), vec![queen]);
+        let replacement = store
+            .create_worker("Clover", ProviderKind::Codex, "/workspace/clover", false, 1)
+            .unwrap();
+        assert_ne!(replacement.id, worker.id);
     }
 
     #[test]

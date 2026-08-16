@@ -11,11 +11,12 @@ type Props = {
   busy: boolean;
   providers: ProviderCapabilities;
   onCreate: (name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean) => Promise<void>;
-  onUpdate: (workerId: string, name: string, autostart: boolean) => Promise<void>;
+  onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean) => Promise<void>;
+  onRemove: (workerId: string) => Promise<void>;
   onReorder: (workerIds: string[]) => Promise<void>;
 };
 
-export default function WorkerSettings({ workers, workspaces, busy, providers, onCreate, onUpdate, onReorder }: Props) {
+export default function WorkerSettings({ workers, workspaces, busy, providers, onCreate, onUpdate, onRemove, onReorder }: Props) {
   const roster = workers.filter((worker) => worker.role !== "queen");
   const available = workspaces.filter((workspace) => !workspace.configured_worker_id);
   const [name, setName] = useState("");
@@ -97,6 +98,8 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             dropTarget={workerReorder.dropTargetId === worker.id && workerReorder.draggedId !== worker.id}
             onMove={(offset) => move(index, offset)}
             onUpdate={onUpdate}
+            onRemove={onRemove}
+            providers={providers}
             onDragStart={() => workerReorder.start(worker.id)}
             onDragEnd={workerReorder.end}
             onDragTarget={() => workerReorder.target(worker.id)}
@@ -186,6 +189,8 @@ type WorkerPreferenceRowProps = {
   dropTarget: boolean;
   onMove: (offset: -1 | 1) => void;
   onUpdate: Props["onUpdate"];
+  onRemove: Props["onRemove"];
+  providers: ProviderCapabilities;
   onDragStart: () => void;
   onDragEnd: () => void;
   onDragTarget: () => void;
@@ -193,23 +198,33 @@ type WorkerPreferenceRowProps = {
   onDrop: (event: DragEvent) => void;
 };
 
-function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, onMove, onUpdate, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
+function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, onMove, onUpdate, onRemove, providers, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(worker.name);
+  const [description, setDescription] = useState(worker.description ?? "");
+  const [provider, setProvider] = useState(worker.provider);
   const [autostart, setAutostart] = useState(worker.autostart);
+  const [confirmingRemoval, setConfirmingRemoval] = useState(false);
   const attention = workerAttention(worker);
 
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!name.trim()) return;
-    await onUpdate(worker.id, name, autostart);
+    await onUpdate(worker.id, name, description, provider, autostart);
     setEditing(false);
   }
 
   function cancel() {
     setName(worker.name);
+    setDescription(worker.description ?? "");
+    setProvider(worker.provider);
     setAutostart(worker.autostart);
+    setConfirmingRemoval(false);
     setEditing(false);
+  }
+
+  async function remove() {
+    await onRemove(worker.id);
   }
 
   return (
@@ -228,12 +243,20 @@ function WorkerPreferenceRow({ worker, busy, first, last, dragging, dropTarget, 
         <form className="worker-preference-form" aria-label={`Edit ${worker.name}`} onSubmit={(event) => void save(event)}>
           <label><span>Worker name</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus /></label>
           <small className="worker-repository-path"><span>Repository</span><code>{worker.workspace}</code></small>
+          <label className="worker-description-field"><span>Queen routing description</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" /></label>
+          <label className="worker-provider-field"><span>Default coding provider</span><select value={provider} disabled={worker.running} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
+            <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
+            <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · unavailable"}</option>
+          </select><small>{worker.running ? "Put this worker to sleep before changing provider." : "Used the next time this worker wakes. Existing history remains available."}</small></label>
           <label className="worker-autostart"><input type="checkbox" checked={autostart} onChange={(event) => setAutostart(event.target.checked)} />Keep this worker active automatically</label>
           <span className="worker-edit-actions"><button disabled={busy || !name.trim()}>Save</button><button type="button" className="secondary-button" disabled={busy} onClick={cancel}>Cancel</button></span>
+          <div className="worker-remove-zone">
+            {confirmingRemoval ? <><p><strong>Remove {worker.name} from this Hive?</strong><small>Repository files are untouched. Historical sessions remain, but this worker must be sleeping and have no open assigned tasks.</small></p><span><button type="button" className="danger-button" disabled={busy || worker.running} onClick={() => void remove()}>Confirm removal</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmingRemoval(false)}>Keep worker</button></span></> : <button type="button" className="danger-link" disabled={busy || worker.running} onClick={() => setConfirmingRemoval(true)}>Remove worker</button>}
+          </div>
         </form>
       ) : (
         <>
-          <span className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {attention.label}{worker.autostart ? " · always active" : ""}</small></span>
+          <span className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {attention.label}{worker.autostart ? " · always active" : ""}</small>{worker.description && <small className="worker-routing-summary">{worker.description}</small>}</span>
           <button type="button" className="worker-edit-button secondary-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
           <span className="worker-order-actions">
             <button type="button" className="secondary-button" aria-label={`Move ${worker.name} earlier`} disabled={busy || first} onClick={() => onMove(-1)}>↑</button>

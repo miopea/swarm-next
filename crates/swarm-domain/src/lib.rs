@@ -1799,6 +1799,8 @@ pub struct WorkerProfile {
     pub id: WorkerId,
     pub hive_id: HiveId,
     pub name: String,
+    /// Operator-reviewed routing context describing what this worker owns.
+    pub description: String,
     pub role: WorkerRole,
     pub provider: ProviderKind,
     pub workspace: String,
@@ -2779,6 +2781,7 @@ mod tests {
             id: WorkerId::new(),
             hive_id: HiveId::new(),
             name: "Queen".into(),
+            description: "Coordinates this Hive.".into(),
             role: WorkerRole::Queen,
             provider: ProviderKind::ClaudeCode,
             workspace: "/workspace/queen".into(),

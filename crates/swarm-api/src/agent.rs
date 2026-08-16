@@ -27,7 +27,9 @@ use rmcp::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use swarm_application::{AgentPrincipal, ApiaryService, ApplicationError, DecisionRequestInput, TaskService};
+use swarm_application::{
+    AgentPrincipal, ApiaryService, ApplicationError, DecisionRequestInput, TaskService,
+};
 use swarm_domain::{
     ApiaryTaskId, DecisionRequestKind, DecisionUrgency, JiraProjectBindingId, TaskId, TaskPriority,
     TaskState, WorkerId, WorkerRole,
@@ -1265,8 +1267,14 @@ mod tests {
         )
         .await;
         assert_eq!(queen["result"]["isError"], false);
-        assert_eq!(queen["result"]["structuredContent"]["title"], "Coordinate the release");
-        assert_eq!(queen["result"]["structuredContent"]["home_hive_id"], Value::Null);
+        assert_eq!(
+            queen["result"]["structuredContent"]["title"],
+            "Coordinate the release"
+        );
+        assert_eq!(
+            queen["result"]["structuredContent"]["home_hive_id"],
+            Value::Null
+        );
 
         let listed = response_json(
             handle(
@@ -1280,7 +1288,10 @@ mod tests {
             .await,
         )
         .await;
-        assert_eq!(listed["result"]["structuredContent"]["tasks"][0]["title"], "Coordinate the release");
+        assert_eq!(
+            listed["result"]["structuredContent"]["tasks"][0]["title"],
+            "Coordinate the release"
+        );
     }
 
     #[tokio::test]

@@ -86,6 +86,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       onTestNotification={onTestNotification}
       onCreateWorker={vi.fn().mockResolvedValue(undefined)}
       onUpdateWorker={vi.fn().mockResolvedValue(undefined)}
+      onRemoveWorker={vi.fn().mockResolvedValue(undefined)}
       onReorderWorkers={vi.fn().mockResolvedValue(undefined)}
       onUpdateWorkerEngine={onUpdateWorkerEngine}
       onReloadDevelopment={vi.fn().mockResolvedValue(undefined)}
@@ -278,7 +279,7 @@ function minimalProps() {
     recentEvents: [], sessions: [], workers: [], workspaces: [], providers: { claude_code: true, codex: false }, health: { status: "ok" as const, version: "0.1.0" },
     hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
     onThemeChange: vi.fn(), onPresenceChange: vi.fn(), onEnableLockDetection: vi.fn(), onNotificationPolicyChange: vi.fn(),
-    onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onReorderWorkers: vi.fn(), onUpdateWorkerEngine: vi.fn(), onReloadDevelopment: vi.fn(), onHiveIdentityChange: vi.fn(),
+    onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onRemoveWorker: vi.fn(), onReorderWorkers: vi.fn(), onUpdateWorkerEngine: vi.fn(), onReloadDevelopment: vi.fn(), onHiveIdentityChange: vi.fn(),
   };
 }
 function ok(body: unknown) {
