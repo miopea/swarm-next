@@ -27,6 +27,7 @@ tower-http.workspace = true
 tracing.workspace = true
 tower.workspace = true
 tracing-subscriber.workspace = true
+vt100.workspace = true
 web-push-native.workspace = true
 tempfile = "3"
 

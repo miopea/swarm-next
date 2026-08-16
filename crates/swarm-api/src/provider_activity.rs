@@ -11,8 +11,11 @@ use axum::{
 };
 use futures_util::{StreamExt, stream};
 use serde::Serialize;
+use swarm_domain::ProviderKind;
 use swarm_domain::{ControlRoomEventKind, WorkerProfile, WorkerSessionId};
-use swarm_terminal::{HostRequest, HostResponse, ProviderActivity, classify_provider_activity};
+use swarm_terminal::{
+    HostRequest, HostResponse, ProviderActivity, TerminalSnapshot, classify_provider_activity,
+};
 
 use crate::{ApiError, AppState, authorize, terminal_host::request_host};
 
@@ -50,7 +53,7 @@ async fn observe(
                     resume: swarm_terminal::Resume::Snapshot { snapshot },
                     running: true,
                     ..
-                }) => Some((session_id, classify_provider_activity(provider, &snapshot))),
+                }) => Some((session_id, classify_observed_activity(provider, &snapshot))),
                 _ => None,
             }
         })
@@ -58,6 +61,44 @@ async fn observe(
         .filter_map(async move |observation| observation)
         .collect()
         .await
+}
+
+/// Adds application-level provider UI recognition without changing the
+/// independently deployed terminal engine. Claude can leave a slash-command
+/// palette open below its input row; enough suggestions can push the prompt
+/// outside the terminal crate's deliberately small recent-line window even
+/// though the provider is visibly waiting for input.
+fn classify_observed_activity(
+    provider: ProviderKind,
+    snapshot: &TerminalSnapshot,
+) -> ProviderActivity {
+    let activity = classify_provider_activity(provider, snapshot);
+    if activity != ProviderActivity::Unknown {
+        return activity;
+    }
+    let mut parser = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
+    parser.process(&snapshot.bytes);
+    if input_palette_is_resting(provider, &parser.screen().contents()) {
+        ProviderActivity::Resting
+    } else {
+        activity
+    }
+}
+
+fn input_palette_is_resting(provider: ProviderKind, visible: &str) -> bool {
+    let lines = visible.lines().map(str::trim).collect::<Vec<_>>();
+    let Some(prompt_index) = lines.iter().rposition(|line| match provider {
+        ProviderKind::ClaudeCode => line == &"❯ /" || line.starts_with("❯ /"),
+        ProviderKind::Codex => line == &"› /" || line.starts_with("› /"),
+    }) else {
+        return false;
+    };
+    lines[prompt_index + 1..]
+        .iter()
+        .filter(|line| line.starts_with('/') && line.len() > 1)
+        .take(2)
+        .count()
+        >= 2
 }
 
 pub(super) async fn refresh(
@@ -102,4 +143,56 @@ pub(super) async fn capabilities(
         },
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(capabilities)).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swarm_terminal::{CanonicalTerminalState, JournalLimits, TerminalSize};
+
+    fn snapshot(text: &str) -> TerminalSnapshot {
+        let mut state = CanonicalTerminalState::new(
+            JournalLimits::new(64, 64 * 1024),
+            TerminalSize::new(24, 100),
+        );
+        state.push(text.as_bytes().to_vec());
+        state.snapshot()
+    }
+
+    #[test]
+    fn claude_slash_palette_remains_resting_when_suggestions_hide_the_prompt() {
+        let suggestions = (0..18)
+            .map(|index| format!("/command-{index}  Description {index}"))
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        let snapshot = snapshot(&format!("✻ Worked for 18s\r\n\r\n❯ /\r\n{suggestions}"));
+
+        assert_eq!(
+            classify_provider_activity(ProviderKind::ClaudeCode, &snapshot),
+            ProviderActivity::Unknown,
+            "the base classifier stays conservative once the prompt leaves its recent window"
+        );
+        assert_eq!(
+            classify_observed_activity(ProviderKind::ClaudeCode, &snapshot),
+            ProviderActivity::Resting
+        );
+    }
+
+    #[test]
+    fn historical_commands_do_not_turn_unknown_output_into_resting() {
+        let output = (0..12)
+            .map(|index| format!("provider output changed {index}"))
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        let snapshot = snapshot(&format!("❯ /status\r\n/one historical path\r\n{output}"));
+
+        assert_eq!(
+            classify_provider_activity(ProviderKind::ClaudeCode, &snapshot),
+            ProviderActivity::Unknown
+        );
+        assert_eq!(
+            classify_observed_activity(ProviderKind::ClaudeCode, &snapshot),
+            ProviderActivity::Unknown
+        );
+    }
 }

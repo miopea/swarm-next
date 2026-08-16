@@ -2702,6 +2702,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "vt100",
  "web-push-native",
 ]
 
