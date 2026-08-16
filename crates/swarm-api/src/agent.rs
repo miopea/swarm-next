@@ -29,8 +29,8 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use swarm_application::{AgentPrincipal, ApiaryService, ApplicationError, DecisionRequestInput, TaskService};
 use swarm_domain::{
-    DecisionRequestKind, DecisionUrgency, JiraProjectBindingId, TaskId, TaskPriority, TaskState,
-    WorkerId, WorkerRole,
+    ApiaryTaskId, DecisionRequestKind, DecisionUrgency, JiraProjectBindingId, TaskId, TaskPriority,
+    TaskState, WorkerId, WorkerRole,
 };
 use swarm_persistence::{
     JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, TaskStore, TaskStoreError,
@@ -204,6 +204,8 @@ impl ServerHandler for AgentMcp {
                 assign_task_tool(),
                 list_apiary_tasks_tool(),
                 create_apiary_task_tool(),
+                claim_apiary_task_tool(),
+                transition_apiary_task_tool(),
                 list_jira_projects_tool(),
                 preview_jira_project_tool(),
                 sync_jira_project_tool(),
@@ -269,6 +271,36 @@ impl ServerHandler for AgentMcp {
                                 &input.title,
                                 &input.description,
                                 input.priority,
+                                crate::unix_timestamp(),
+                            )
+                            .and_then(structured)
+                    })
+                } else {
+                    Err(ApplicationError::NotAuthorized)
+                }
+            }
+            "swarm_claim_apiary_task" => {
+                if self.principal.role == WorkerRole::Queen {
+                    parse::<ApiaryTaskInput>(arguments).and_then(|input| {
+                        let task_id = ApiaryTaskId::from_str(&input.task_id)
+                            .map_err(|_| ApplicationError::NotAuthorized)?;
+                        ApiaryService::new(self.tasks.store().clone())
+                            .queue_federation_task_claim(task_id, crate::unix_timestamp())
+                            .and_then(structured)
+                    })
+                } else {
+                    Err(ApplicationError::NotAuthorized)
+                }
+            }
+            "swarm_transition_apiary_task" => {
+                if self.principal.role == WorkerRole::Queen {
+                    parse::<TransitionApiaryTaskInput>(arguments).and_then(|input| {
+                        let task_id = ApiaryTaskId::from_str(&input.task_id)
+                            .map_err(|_| ApplicationError::NotAuthorized)?;
+                        ApiaryService::new(self.tasks.store().clone())
+                            .queue_federation_task_transition(
+                                task_id,
+                                input.state,
                                 crate::unix_timestamp(),
                             )
                             .and_then(structured)
@@ -588,6 +620,17 @@ struct CreateApiaryTaskInput {
 }
 
 #[derive(Deserialize)]
+struct ApiaryTaskInput {
+    task_id: String,
+}
+
+#[derive(Deserialize)]
+struct TransitionApiaryTaskInput {
+    task_id: String,
+    state: TaskState,
+}
+
+#[derive(Deserialize)]
 struct AssignTaskInput {
     task_id: String,
     worker_id: String,
@@ -747,6 +790,37 @@ fn create_apiary_task_tool() -> Tool {
                 "priority": { "type": "string", "enum": ["low", "normal", "high", "urgent"], "default": "normal" }
             },
             "required": ["title"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn claim_apiary_task_tool() -> Tool {
+    tool(
+        "swarm_claim_apiary_task",
+        "Member Queen only: queue a claim for one currently unassigned Keeper task. The command survives outages and Keeper resolves competing claims by revision.",
+        &json!({
+            "type": "object",
+            "properties": { "task_id": { "type": "string", "format": "uuid" } },
+            "required": ["task_id"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn transition_apiary_task_tool() -> Tool {
+    tool(
+        "swarm_transition_apiary_task",
+        "Member Queen only: queue the next valid lifecycle transition for Apiary work owned by this Hive. Keeper remains canonical and stale revisions become visible conflicts.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "state": { "type": "string", "enum": ["active", "blocked", "review", "completed"] }
+            },
+            "required": ["task_id", "state"],
             "additionalProperties": false
         }),
         false,
@@ -1061,6 +1135,8 @@ mod tests {
         assert!(queen_names.contains(&"swarm_assign_task"));
         assert!(queen_names.contains(&"swarm_list_apiary_tasks"));
         assert!(queen_names.contains(&"swarm_create_apiary_task"));
+        assert!(queen_names.contains(&"swarm_claim_apiary_task"));
+        assert!(queen_names.contains(&"swarm_transition_apiary_task"));
         assert!(queen_names.contains(&"swarm_list_jira_projects"));
         assert!(queen_names.contains(&"swarm_preview_jira_project"));
         assert!(queen_names.contains(&"swarm_sync_jira_project"));
@@ -1072,6 +1148,8 @@ mod tests {
         assert!(!worker_names.contains(&"swarm_refresh_jira_project"));
         assert!(!worker_names.contains(&"swarm_list_apiary_tasks"));
         assert!(!worker_names.contains(&"swarm_create_apiary_task"));
+        assert!(!worker_names.contains(&"swarm_claim_apiary_task"));
+        assert!(!worker_names.contains(&"swarm_transition_apiary_task"));
         assert_eq!(
             worker_names,
             [
