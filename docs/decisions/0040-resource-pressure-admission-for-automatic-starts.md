@@ -25,6 +25,11 @@ coordinator samples:
 - host memory use and Linux memory PSI when available; and
 - the terminal host's owned process-tree memory.
 
+The process-tree admission threshold is deliberately separate from the lower
+diagnostic "watch" threshold: a normal loaded provider commonly uses hundreds
+of MiB. Automatic starts become advisory at 2 GiB of owned provider processes
+and critical at 4 GiB, while machine-wide memory use and PSI can defer earlier.
+
 Critical evidence takes precedence over advisory evidence. Either level
 defers all automatic worker starts and leaves their durable actions queued.
 An unreachable terminal host also defers the claim, so a transient connection

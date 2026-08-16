@@ -19,6 +19,9 @@ use crate::{
     authorize, build_version, terminal_host::authorized_no_store_request, unix_timestamp,
 };
 
+const COORDINATOR_PROCESS_ADVISORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const COORDINATOR_PROCESS_CRITICAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
 #[derive(Debug, Serialize)]
 pub(super) struct RuntimeLimitsResponse {
     terminal: TerminalRuntimeLimits,
@@ -376,13 +379,31 @@ pub(super) async fn coordinator_start_admission(state: &AppState) -> Coordinator
     let machine = sample_machine_resources().pressure;
     let terminal_host = if let Some(client) = &state.terminal_host {
         match client.request(&HostRequest::HostStatus).await {
-            Ok(HostResponse::HostStatus { status }) => resource_response(status.resources).pressure,
+            Ok(HostResponse::HostStatus { status }) => {
+                coordinator_process_pressure(status.resources)
+            }
             Ok(_) | Err(_) => ResourcePressure::Unavailable,
         }
     } else {
         ResourcePressure::Unavailable
     };
     combine_coordinator_start_admission(machine, terminal_host)
+}
+
+pub(super) fn coordinator_process_pressure(
+    sample: Option<ProcessResourceSample>,
+) -> ResourcePressure {
+    let bytes = sample.and_then(|sample| {
+        sample
+            .process_tree_resident_memory_bytes
+            .or(sample.resident_memory_bytes)
+    });
+    match bytes {
+        Some(bytes) if bytes >= COORDINATOR_PROCESS_CRITICAL_BYTES => ResourcePressure::Critical,
+        Some(bytes) if bytes >= COORDINATOR_PROCESS_ADVISORY_BYTES => ResourcePressure::Advisory,
+        Some(_) => ResourcePressure::Normal,
+        None => ResourcePressure::Unavailable,
+    }
 }
 
 pub(super) const fn combine_coordinator_start_admission(

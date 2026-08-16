@@ -7179,6 +7179,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn coordinator_start_admission_does_not_treat_one_normal_provider_as_pressure() {
+        let sample = |resident_memory_bytes| {
+            runtime::coordinator_process_pressure(Some(ProcessResourceSample {
+                resident_memory_bytes: Some(resident_memory_bytes),
+                process_tree_resident_memory_bytes: Some(resident_memory_bytes),
+                process_tree_process_count: Some(2),
+            }))
+        };
+
+        assert_eq!(sample(512 * 1024 * 1024), ResourcePressure::Normal);
+        assert_eq!(sample(2 * 1024 * 1024 * 1024), ResourcePressure::Advisory);
+        assert_eq!(sample(4 * 1024 * 1024 * 1024), ResourcePressure::Critical);
+    }
+
     #[tokio::test]
     async fn pressure_deferral_leaves_an_automatic_worker_wake_durably_queued() {
         let store = TaskStore::in_memory().unwrap();
