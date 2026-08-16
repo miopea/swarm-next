@@ -46,6 +46,7 @@ test("configures and reorders durable workers with progressive path completion",
   expect(pathInput).toHaveValue("/projects/public-website");
   fireEvent.click(screen.getByRole("button", { name: "Add sleeping worker" }));
   expect(onCreate).toHaveBeenCalledWith("Clover", "/projects/public-website", "claude_code", false);
+  expect(screen.getByText(/New workers receive a private Queen-routing draft/)).toBeInTheDocument();
 
   fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
   const editForm = screen.getByRole("form", { name: "Edit Daisy" });

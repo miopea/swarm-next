@@ -265,9 +265,11 @@ pub(super) async fn create_worker(
         .max()
         .unwrap_or(0)
         .saturating_add(1);
+    let description = repository_description_draft(Path::new(&workspace)).await?;
     let profile = task_store(&state)?
-        .create_worker(
+        .create_worker_with_description(
             &request.name,
+            &description,
             request.provider,
             &workspace,
             request.autostart,

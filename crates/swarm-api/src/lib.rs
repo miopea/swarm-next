@@ -8454,6 +8454,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn worker_creation_stores_private_queen_routing_context_atomically() {
+        let root = TempDir::new().unwrap();
+        let repository = root.path().join("meadow");
+        std::fs::create_dir_all(&repository).unwrap();
+        std::fs::write(
+            repository.join("package.json"),
+            r#"{"name":"meadow","description":"Coordinates customer garden plans."}"#,
+        )
+        .unwrap();
+        let store = TaskStore::in_memory().unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone())
+                .with_workspace_roots(vec![root.path().to_path_buf()]),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/workers")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "Daisy",
+                            "provider": "claude_code",
+                            "workspace": repository,
+                            "autostart": false
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let created = response_json(response).await;
+        assert!(
+            created["description"]
+                .as_str()
+                .unwrap()
+                .contains("Coordinates customer garden plans")
+        );
+        let stored = store.list_worker_profiles().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].description, created["description"]);
+    }
+
+    #[tokio::test]
     async fn worker_preferences_update_without_changing_repository_or_conversation() {
         let store = TaskStore::in_memory().unwrap();
         let worker = store

@@ -23,11 +23,11 @@ impl TaskStore {
         }
         self.insert_profile(
             "Queen",
+            "",
             WorkerRole::Queen,
             ProviderKind::ClaudeCode,
             workspace,
-            true,
-            0,
+            (true, 0),
         )
     }
 
@@ -45,11 +45,34 @@ impl TaskStore {
     ) -> Result<WorkerProfile, TaskStoreError> {
         self.insert_profile(
             name,
+            "",
             WorkerRole::Worker,
             provider,
             workspace,
-            autostart,
-            position,
+            (autostart, position),
+        )
+    }
+
+    /// Creates one durable worker with operator-visible routing context without starting a process.
+    ///
+    /// # Errors
+    /// Returns an error for invalid or duplicate input or unavailable persistence.
+    pub fn create_worker_with_description(
+        &self,
+        name: &str,
+        description: &str,
+        provider: ProviderKind,
+        workspace: &str,
+        autostart: bool,
+        position: i64,
+    ) -> Result<WorkerProfile, TaskStoreError> {
+        self.insert_profile(
+            name,
+            description,
+            WorkerRole::Worker,
+            provider,
+            workspace,
+            (autostart, position),
         )
     }
 
@@ -715,15 +738,18 @@ impl TaskStore {
     fn insert_profile(
         &self,
         name: &str,
+        description: &str,
         role: WorkerRole,
         provider: ProviderKind,
         workspace: &str,
-        autostart: bool,
-        position: i64,
+        startup: (bool, i64),
     ) -> Result<WorkerProfile, TaskStoreError> {
+        let (autostart, position) = startup;
         let name = name.trim();
+        let description = description.trim();
         let workspace = workspace.trim();
         validate_profile(name, workspace)?;
+        validate_worker_description(description)?;
         let hive_id = self.local_hive_identity()?.hive.id;
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -757,13 +783,14 @@ impl TaskStore {
             (provider == ProviderKind::ClaudeCode).then(ProviderConversationId::new);
         transaction.execute(
             "INSERT INTO worker_profiles
-             (id, hive_id, name, role, provider, workspace, autostart, position,
+             (id, hive_id, name, description, role, provider, workspace, autostart, position,
               provider_conversation_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 id.to_string(),
                 hive_id.to_string(),
                 name,
+                description,
                 role.to_string(),
                 provider.to_string(),
                 workspace,

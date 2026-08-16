@@ -177,6 +177,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
         </div>
         <button disabled={busy || !name.trim() || !workspace || (customWorkspace && !allowOutsideRoots)}>Add sleeping worker</button>
       </form>
+      <small className="privacy-note">New workers receive a private Queen-routing draft from local README and project metadata. Review or refresh it from Edit whenever the repository changes.</small>
       {available.length === 0 && <small className="privacy-note">Every discovered repository already has a worker. Advanced repository-root configuration will live in backup and installation settings.</small>}
     </section>
   );
