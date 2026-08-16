@@ -55,6 +55,9 @@ make_bundle() {
 if [ "$(basename "$0")" = "swarmctl" ]; then
   command=${1:-}
   printf '%s\n' "$command" >> "$HOME/swarmctl.log"
+  if [ "$command" = "verify-database" ]; then
+    cat "$(dirname "$0")/../VERSION" >> "$HOME/verify-release.log"
+  fi
   if [ "$command" = "status" ]; then
     running=0
     [ ! -f "$HOME/running-sessions" ] || running=$(cat "$HOME/running-sessions")
@@ -209,6 +212,7 @@ fi
 [ -f "$SWARM_INSTALL_ROOT/assets/app-2.0.0.js" ]
 [ "$(find "$SWARM_INSTALL_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ]
 [ "$(cat "$SWARM_STATE_ROOT/backups/pre-update-2.0.0.sqlite3")" = "database-v1" ]
+[ "$(tail -n 1 "$HOME/verify-release.log")" = "2.0.0" ]
 [ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type f -name 'pre-update-*.sqlite3' | wc -l)" -eq 10 ]
 [ ! -e "$SWARM_STATE_ROOT/backups/pre-update-old-1.sqlite3" ]
 

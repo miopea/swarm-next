@@ -88,6 +88,7 @@ prune_update_backups() {
 
 create_update_backup() {
   current_release=$1
+  verifier_release=${2:-$current_release}
   database="$state_root/swarm-next.sqlite3"
   [ -f "$database" ] || return 0
   mkdir -p "$state_root/backups"
@@ -100,7 +101,7 @@ create_update_backup() {
   "$curl_bin" --fail --silent --show-error --config "$update_auth" --output "$update_incoming" "${health_url%/health}/api/v1/backups/database" || die "could not create the pre-update database backup"
   rm -f "$update_auth"
   update_auth=
-  "$current_release/bin/swarmctl" verify-database "$update_incoming" >/dev/null || die "pre-update database backup failed verification"
+  "$verifier_release/bin/swarmctl" verify-database "$update_incoming" >/dev/null || die "pre-update database backup failed verification"
   update_rollback="$state_root/backups/pre-update-$version.sqlite3"
   chmod 0600 "$update_incoming"
   mv -f "$update_incoming" "$update_rollback"
@@ -398,7 +399,7 @@ install_or_update() {
     host_protocol=$(cat "$host_release/PROTOCOL")
     [ "$host_protocol" = "$protocol" ] || die "protocol change requires an explicit compatibility migration"
   fi
-  [ -z "$old_release" ] || create_update_backup "$old_release"
+  [ -z "$old_release" ] || create_update_backup "$old_release" "$new_release"
   previous_release=$(release_from_link "$install_root/previous")
   [ -z "$previous_release" ] || publish_assets "$previous_release"
   [ -z "$old_release" ] || publish_assets "$old_release"
@@ -521,7 +522,7 @@ migrate_protocol() {
   case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
   [ "$running" -eq 0 ] || die "protocol migration deferred; $running sessions remain"
 
-  create_update_backup "$old_release"
+  create_update_backup "$old_release" "$new_release"
 
   previous_release=$(release_from_link "$install_root/previous")
   [ -z "$previous_release" ] || publish_assets "$previous_release"
