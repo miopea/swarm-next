@@ -1131,3 +1131,20 @@ the independently updated terminal host through the API to worker settings:
   Image review confirmed readable stacked mobile actions and compact desktop
   actions. No Jira or live Apiary mutation occurred, authentication survived
   complete browser restarts, and every proof browser closed after the run.
+- Release `0.1.0-dev-cccac50b1740` lets Keeper route a new Swarm-generated
+  shared task directly to one active Member Hive while preserving the private
+  worker boundary. The destination is selected from public Hive identities;
+  the receiving Queen still chooses her repository worker. Unknown or departed
+  Hives fail closed, ordinary workers cannot discover or invoke the authority,
+  and Keeper Queen can list only public Apiary Hive/operator identities before
+  routing. The full gate passed 378 Rust tests, warnings-denied Clippy, all 226
+  frontend tests, strict TypeScript, the production build, and dogfood harness
+  tests. The isolated live browser gate populated a Clover Hive destination
+  and passed Keeper routing, Member, personal-Hive, and every primary surface
+  at 1,440 by 900 and Android-size 412 by 915 with zero horizontal overflow.
+  Image review confirmed a compact four-field desktop form and a readable
+  single-column mobile form without a private worker selector. Authentication
+  survived complete browser restarts. The live database remained schema 55
+  with `quick_check=ok`; API PID advanced to `3827684` while terminal-host PID
+  `2966127` remained unchanged. Every isolated proof browser closed after the
+  run, and no Jira or live Apiary mutation occurred.
