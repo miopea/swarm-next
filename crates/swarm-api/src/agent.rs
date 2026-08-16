@@ -875,7 +875,7 @@ fn list_workers_tool() -> Tool {
 fn list_coordination_attention_tool() -> Tool {
     tool(
         "swarm_list_coordination_attention",
-        "Queen only: list current deterministic coordination attention, including Active work that is durably unchanged while its loaded worker is resting. Recheck the task and worker before deciding whether to steer, wait, or ask the operator.",
+        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Recheck the task and worker before deciding whether to steer, wait, or ask the operator.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )

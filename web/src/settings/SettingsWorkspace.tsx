@@ -238,7 +238,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
           <div className={`coordinator-status ${coordinatorStatus?.uncertain_actions ? "needs-attention" : ""}`} aria-label="Deterministic coordinator status">
             <span>
               <strong>Routine coordination</strong>
-              <small>Swarm loads an assigned sleeping worker before Active work begins, then surfaces work that becomes stale or loses its worker.</small>
+              <small>Swarm loads assigned sleeping workers, then surfaces delivered work that never starts, becomes stale, or loses its worker.</small>
               <small>{coordinatorAdmissionDetail(coordinatorStatus?.automatic_start_admission, coordinatorStatus?.automatic_start_batch_limit)}</small>
             </span>
             <span className="coordinator-metrics">
@@ -250,8 +250,8 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
               <small>Waiting</small>
             </span>
             <span className="coordinator-metrics">
-              <strong>{(coordinatorStatus?.stale_attention_actions ?? 0) + (coordinatorStatus?.worker_exit_attention_actions ?? 0)}</strong>
-              <small>{coordinatorStatus?.worker_exit_attention_actions ? `${coordinatorStatus.stale_attention_actions} stale · ${coordinatorStatus.worker_exit_attention_actions} exited` : "Work surfaced"}</small>
+              <strong>{coordinationAttentionTotal(coordinatorStatus)}</strong>
+              <small>{coordinationAttentionDetail(coordinatorStatus)}</small>
             </span>
             <span className="coordinator-metrics">
               <strong>{coordinatorStatus?.uncertain_actions ?? 0}</strong>
@@ -432,6 +432,17 @@ function coordinatorAdmissionDetail(admission: CoordinatorStatus["automatic_star
     case "deferred_unavailable": return `Automatic worker starts are waiting for reliable worker-engine evidence.${serialized}`;
     default: return "Checking whether automatic worker starts are safe.";
   }
+}
+
+function coordinationAttentionTotal(status: CoordinatorStatus | undefined) {
+  return (status?.unstarted_attention_actions ?? 0)
+    + (status?.stale_attention_actions ?? 0)
+    + (status?.worker_exit_attention_actions ?? 0);
+}
+
+function coordinationAttentionDetail(status: CoordinatorStatus | undefined) {
+  if (!status || coordinationAttentionTotal(status) === 0) return "Work surfaced";
+  return `${status.unstarted_attention_actions} not started · ${status.stale_attention_actions} stale · ${status.worker_exit_attention_actions} exited`;
 }
 
 function workerEngineLabel(health: Health | undefined, host: TerminalHostStatus | undefined, loaded: boolean) {

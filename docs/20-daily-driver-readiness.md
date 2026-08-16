@@ -80,6 +80,11 @@ live process assignment. The lifecycle write validates that exact session
 atomically, so a concurrent worker exit leaves the task unchanged for a later
 guarded retry.
 
+An acknowledged briefing that remains Ready for five minutes while its exact
+loaded worker is resting and unengaged becomes deterministic coordination
+attention. Swarm does not replay the briefing or change the task; Queen receives
+the revision-bound exception only after the normal start path failed to advance.
+
 ### E. Operator controls
 
 Keyboard navigation, accessible worker/task action menus, and settings for

@@ -285,7 +285,7 @@ test("makes Queen automation observable, opt-in, and manually runnable", async (
       return ok(queenAutomation());
     }
     if (url.endsWith("/orchestration/coordinator")) {
-      return ok({ completed_actions: 9, queen_calls_avoided: 7, uncertain_actions: 0, queued_actions: 1, stale_attention_actions: 2, worker_exit_attention_actions: 1, last_action_at: 100, automatic_start_admission: "deferred_advisory", automatic_start_batch_limit: 1 });
+      return ok({ completed_actions: 10, queen_calls_avoided: 7, uncertain_actions: 0, queued_actions: 1, stale_attention_actions: 2, worker_exit_attention_actions: 1, unstarted_attention_actions: 1, last_action_at: 100, automatic_start_admission: "deferred_advisory", automatic_start_batch_limit: 1 });
     }
     if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
     if (url.includes("integrations/jira/bindings") || url.includes("feedback/reports")) return ok([]);
@@ -304,10 +304,10 @@ test("makes Queen automation observable, opt-in, and manually runnable", async (
   expect(screen.getByText(/nothing runs automatically/)).toBeInTheDocument();
   expect(await screen.findByLabelText("Deterministic coordinator status")).toHaveTextContent("7Queen calls avoided");
   expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("1Waiting");
-  expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("3" + "2 stale · 1 exited");
+  expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("4" + "1 not started · 2 stale · 1 exited");
   expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("waiting for memory pressure to settle");
   expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("starts one worker at a time");
-  expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("before Active work begins");
+  expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("delivered work that never starts");
 
   fireEvent.click(toggle);
   expect(await screen.findByRole("checkbox", { name: "Automatic on" })).toBeChecked();

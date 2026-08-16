@@ -185,6 +185,13 @@ work cannot become Active through MCP until the assigned worker has a live,
 transaction-validated session. This closes the same-turn assign-then-start race
 without imposing local-worker semantics on Jira's externally canonical state.
 
+The next deterministic evidence rule closes the other side of that handoff.
+When an exact loaded worker acknowledges a task brief but remains resting with
+the task still Ready for five minutes, Swarm records one non-replaying,
+revision-bound attention item. Queen sees the exception only after durable
+delivery failed to become execution; the coordinator never sends the same brief
+again or guesses that work began.
+
 ## Complete commit ledger
 
 The repeatable ledger pass now covers all 1,431 reachable commits. It records

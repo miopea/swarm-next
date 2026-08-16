@@ -112,6 +112,7 @@ const MAX_TERMINAL_WEBSOCKETS: usize = 32;
 const RESOURCE_ADVISORY_BYTES: u64 = 256 * 1024 * 1024;
 const RESOURCE_CRITICAL_BYTES: u64 = 512 * 1024 * 1024;
 const WORKER_RECOVERY_STABILITY_SECONDS: i64 = 5 * 60;
+const ASSIGNED_READY_START_GRACE_SECONDS: i64 = 5 * 60;
 const STALE_OWNED_WORK_SECONDS: i64 = 30 * 60;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
@@ -863,6 +864,7 @@ impl AppState {
 
     async fn run_deterministic_coordinator(&self, store: &TaskStore) {
         self.observe_exited_worker_owned_work(store);
+        self.observe_assigned_ready_work_not_started(store).await;
         self.observe_stale_owned_work(store).await;
         let admission = runtime::coordinator_start_admission(self).await;
         self.coordinator_start_admission
@@ -977,6 +979,42 @@ impl AppState {
                     worker_id = %candidate.worker_id,
                     message = %error,
                     "stale owned work attention could not be recorded"
+                ),
+            }
+        }
+    }
+
+    async fn observe_assigned_ready_work_not_started(&self, store: &TaskStore) {
+        let now = unix_timestamp();
+        let candidates = match store
+            .assigned_ready_work_not_started_candidates(now, ASSIGNED_READY_START_GRACE_SECONDS)
+        {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(message = %error, "deterministic coordinator could not inspect delivered Ready work");
+                return;
+            }
+        };
+        if candidates.is_empty() {
+            return;
+        }
+        let activity = self.provider_activity.read().await;
+        for candidate in candidates {
+            if !should_surface_stale_owned_work(activity.get(&candidate.session_id)) {
+                continue;
+            }
+            match store.record_assigned_ready_work_not_started_attention(
+                &candidate,
+                now,
+                ASSIGNED_READY_START_GRACE_SECONDS,
+            ) {
+                Ok(true) => self.control_room_notify.notify_waiters(),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    task_id = %candidate.task_id,
+                    worker_id = %candidate.worker_id,
+                    message = %error,
+                    "delivered Ready work attention could not be recorded"
                 ),
             }
         }
@@ -1398,7 +1436,7 @@ fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
 }
 fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Vec<u8> {
     format!(
-        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Coordination attention can identify Active work that is unchanged while its loaded worker is resting or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. Ask for a decision when intent or authority is unclear. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
+        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. Ask for a decision when intent or authority is unclear. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
         delivery.run_id,
         delivery.actionable_count,
         delivery.presence,
@@ -9852,6 +9890,56 @@ mod tests {
         assert_eq!(attention[0].worker_id, worker.id);
         assert_eq!(attention[0].task_id, task.id);
         assert_eq!(attention[0].kind, "owned_work_worker_exited_attention");
+    }
+
+    #[tokio::test]
+    async fn deterministic_coordinator_surfaces_delivered_ready_work_that_never_started() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Clover",
+                ProviderKind::ClaudeCode,
+                "/workspace/clover",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Start the delivered task", "/workspace/clover")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(
+                task.id,
+                worker.id,
+                &swarm_domain::TaskActivityActor::operator(),
+            )
+            .unwrap();
+        let dispatch = store.claim_task_dispatches(1).unwrap().remove(0);
+        assert!(
+            store
+                .complete_task_dispatch(&dispatch.assignment_id, 2)
+                .unwrap()
+        );
+        let state = AppState::default().with_task_store(store.clone());
+        state
+            .provider_activity
+            .write()
+            .await
+            .insert(session, ProviderActivity::Resting);
+
+        state.observe_assigned_ready_work_not_started(&store).await;
+
+        let attention = store.current_coordinator_attention().unwrap();
+        assert_eq!(attention.len(), 1);
+        assert_eq!(attention[0].worker_id, worker.id);
+        assert_eq!(attention[0].task_id, task.id);
+        assert_eq!(
+            attention[0].kind,
+            "assigned_ready_work_not_started_attention"
+        );
     }
 
     #[tokio::test]

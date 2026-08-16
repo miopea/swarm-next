@@ -386,13 +386,15 @@ fn actionable_count(connection: &rusqlite::Connection) -> Result<i64, rusqlite::
         "SELECT COUNT(*) FROM coordinator_actions action
          JOIN tasks task ON task.id = action.task_id
          JOIN worker_sessions session ON session.session_id = action.session_id
-         WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention')
+         WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention')
            AND action.state = 'completed'
-           AND task.state = 'active' AND task.assigned_worker_id = action.worker_id
+           AND task.assigned_worker_id = action.worker_id
            AND task.updated_at = action.evidence_revision AND session.worker_id = action.worker_id
            AND (
-               (action.kind = 'stale_owned_work_attention' AND session.ended_at IS NULL)
+               (action.kind = 'stale_owned_work_attention'
+                   AND task.state = 'active' AND session.ended_at IS NULL)
                OR (action.kind = 'owned_work_worker_exited_attention'
+                   AND task.state = 'active'
                    AND session.ended_at IS NOT NULL
                    AND session.session_id = (
                        SELECT latest.session_id FROM worker_sessions latest
@@ -404,6 +406,18 @@ fn actionable_count(connection: &rusqlite::Connection) -> Result<i64, rusqlite::
                    AND NOT EXISTS (
                        SELECT 1 FROM worker_sessions live
                        WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
+                   ))
+               OR (action.kind = 'assigned_ready_work_not_started_attention'
+                   AND task.state = 'ready' AND session.ended_at IS NULL
+                   AND EXISTS (
+                       SELECT 1 FROM task_assignments assignment
+                       JOIN task_dispatches dispatch
+                         ON dispatch.assignment_id = assignment.id
+                            AND dispatch.state = 'delivered'
+                       WHERE assignment.task_id = task.id
+                         AND dispatch.worker_id = action.worker_id
+                         AND assignment.worker_session_id = action.session_id
+                         AND assignment.released_at IS NULL
                    ))
            )",
         [],
@@ -437,13 +451,15 @@ fn actionable_fingerprint(
          FROM coordinator_actions action
          JOIN tasks task ON task.id = action.task_id
          JOIN worker_sessions session ON session.session_id = action.session_id
-         WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention')
+         WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention')
            AND action.state = 'completed'
-           AND task.state = 'active' AND task.assigned_worker_id = action.worker_id
+           AND task.assigned_worker_id = action.worker_id
            AND task.updated_at = action.evidence_revision AND session.worker_id = action.worker_id
            AND (
-               (action.kind = 'stale_owned_work_attention' AND session.ended_at IS NULL)
+               (action.kind = 'stale_owned_work_attention'
+                   AND task.state = 'active' AND session.ended_at IS NULL)
                OR (action.kind = 'owned_work_worker_exited_attention'
+                   AND task.state = 'active'
                    AND session.ended_at IS NOT NULL
                    AND session.session_id = (
                        SELECT latest.session_id FROM worker_sessions latest
@@ -455,6 +471,18 @@ fn actionable_fingerprint(
                    AND NOT EXISTS (
                        SELECT 1 FROM worker_sessions live
                        WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
+                   ))
+               OR (action.kind = 'assigned_ready_work_not_started_attention'
+                   AND task.state = 'ready' AND session.ended_at IS NULL
+                   AND EXISTS (
+                       SELECT 1 FROM task_assignments assignment
+                       JOIN task_dispatches dispatch
+                         ON dispatch.assignment_id = assignment.id
+                            AND dispatch.state = 'delivered'
+                       WHERE assignment.task_id = task.id
+                         AND dispatch.worker_id = action.worker_id
+                         AND assignment.worker_session_id = action.session_id
+                         AND assignment.released_at IS NULL
                    ))
            )
          ORDER BY action.id LIMIT ?1",
@@ -683,6 +711,60 @@ mod tests {
         assert!(store.current_coordinator_attention().unwrap().is_empty());
         let status = store.queen_automation_status(1_002).unwrap();
         assert_eq!(status.actionable_count, 1);
+    }
+
+    #[test]
+    fn delivered_ready_work_not_started_enters_and_leaves_the_queen_review_fingerprint() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Start the delivered task", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::operator())
+            .unwrap();
+        let dispatch = store.claim_task_dispatches(100).unwrap().remove(0);
+        store
+            .complete_task_dispatch(&dispatch.assignment_id, 101)
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET updated_at = 90 WHERE id = ?1",
+                [task.id.to_string()],
+            )
+            .unwrap();
+        let candidate = store
+            .assigned_ready_work_not_started_candidates(401, 300)
+            .unwrap()
+            .pop()
+            .unwrap();
+        store
+            .record_assigned_ready_work_not_started_attention(&candidate, 401, 300)
+            .unwrap();
+
+        let status = store.set_queen_automation_enabled(true, 402).unwrap();
+        assert_eq!(status.actionable_count, 1);
+        assert_eq!(status.state, QueenAutomationState::Queued);
+
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        assert_eq!(
+            store.queen_automation_status(403).unwrap().actionable_count,
+            0
+        );
     }
 
     #[test]
