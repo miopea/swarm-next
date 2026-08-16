@@ -7,6 +7,8 @@ import type { Disposable, TerminalSurface } from "./TerminalController";
 
 const MAX_FIT_FRAMES = 60;
 const RESIZE_SETTLE_MS = 120;
+const TOUCH_DRAG_THRESHOLD_PX = 4;
+const FALLBACK_CELL_HEIGHT_PX = 17;
 export const MIN_TERMINAL_ROWS = 4;
 export const MIN_TERMINAL_COLUMNS = 20;
 
@@ -17,6 +19,10 @@ export class XtermSurface implements TerminalSurface {
   #resizeObserver: ResizeObserver | undefined;
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
   #element: HTMLElement | undefined;
+  #touchIdentifier: number | undefined;
+  #touchLastY = 0;
+  #touchDistanceY = 0;
+  #touchRemainderY = 0;
   #restorePending = false;
   #disposed = false;
 
@@ -40,6 +46,10 @@ export class XtermSurface implements TerminalSurface {
   open(element: HTMLElement): void {
     this.#element = element;
     this.#terminal.open(element);
+    element.addEventListener("touchstart", this.#handleTouchStart, { passive: true });
+    element.addEventListener("touchmove", this.#handleTouchMove, { passive: false });
+    element.addEventListener("touchend", this.#handleTouchEnd, { passive: true });
+    element.addEventListener("touchcancel", this.#handleTouchEnd, { passive: true });
     this.#resizeObserver = new ResizeObserver(() => this.#scheduleFit());
     this.#resizeObserver.observe(element);
   }
@@ -122,7 +132,71 @@ export class XtermSurface implements TerminalSurface {
     this.#cancelScheduledFit();
     this.#themeObserver?.disconnect();
     this.#resizeObserver?.disconnect();
+    this.#element?.removeEventListener("touchstart", this.#handleTouchStart);
+    this.#element?.removeEventListener("touchmove", this.#handleTouchMove);
+    this.#element?.removeEventListener("touchend", this.#handleTouchEnd);
+    this.#element?.removeEventListener("touchcancel", this.#handleTouchEnd);
+    this.#resetTouchGesture();
     this.#terminal.dispose();
+  }
+
+  readonly #handleTouchStart = (event: TouchEvent): void => {
+    if (this.#disposed || event.touches.length !== 1) {
+      this.#resetTouchGesture();
+      return;
+    }
+    const touch = event.touches.item(0);
+    if (!touch) return;
+    this.#touchIdentifier = touch.identifier;
+    this.#touchLastY = touch.clientY;
+    this.#touchDistanceY = 0;
+    this.#touchRemainderY = 0;
+  };
+
+  readonly #handleTouchMove = (event: TouchEvent): void => {
+    if (this.#touchIdentifier === undefined || event.touches.length !== 1) {
+      this.#resetTouchGesture();
+      return;
+    }
+    const touch = Array.from(event.touches).find(({ identifier }) => identifier === this.#touchIdentifier);
+    if (!touch) {
+      this.#resetTouchGesture();
+      return;
+    }
+    const deltaY = this.#touchLastY - touch.clientY;
+    this.#touchLastY = touch.clientY;
+    this.#touchDistanceY += Math.abs(deltaY);
+    this.#touchRemainderY += deltaY;
+    if (this.#touchDistanceY < TOUCH_DRAG_THRESHOLD_PX) return;
+
+    event.preventDefault();
+    const lineHeight = this.#terminalLineHeight();
+    const lines = this.#touchRemainderY < 0
+      ? Math.ceil(this.#touchRemainderY / lineHeight)
+      : Math.floor(this.#touchRemainderY / lineHeight);
+    if (lines === 0) return;
+    this.#terminal.scrollLines(lines);
+    this.#touchRemainderY -= lines * lineHeight;
+    this.#publishBufferMetrics();
+  };
+
+  readonly #handleTouchEnd = (event: TouchEvent): void => {
+    if (this.#touchIdentifier === undefined) return;
+    const ended = Array.from(event.changedTouches).some(({ identifier }) => identifier === this.#touchIdentifier);
+    if (ended) this.#resetTouchGesture();
+  };
+
+  #terminalLineHeight(): number {
+    const height = this.#element?.clientHeight ?? 0;
+    if (height > 0 && this.#terminal.rows > 0) return height / this.#terminal.rows;
+    return FALLBACK_CELL_HEIGHT_PX;
+  }
+
+  #resetTouchGesture(): void {
+    this.#touchIdentifier = undefined;
+    this.#touchLastY = 0;
+    this.#touchDistanceY = 0;
+    this.#touchRemainderY = 0;
   }
 
   #finishRestore(): void {
@@ -145,6 +219,7 @@ export class XtermSurface implements TerminalSurface {
     const buffer = this.#terminal.buffer.active;
     this.#element.dataset.terminalBufferLines = String(buffer.length);
     this.#element.dataset.terminalScrollbackRows = String(buffer.baseY);
+    this.#element.dataset.terminalViewportRow = String(buffer.viewportY);
   }
 
   #scheduleFit(): void {

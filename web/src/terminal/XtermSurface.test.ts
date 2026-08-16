@@ -8,7 +8,9 @@ const xterm = vi.hoisted(() => ({
   options: undefined as Record<string, unknown> | undefined,
   focus: vi.fn(),
   resize: vi.fn(),
+  scrollLines: vi.fn(),
   bufferBaseY: 0,
+  bufferViewportY: 0,
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
@@ -32,7 +34,11 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     rows = 24;
     cols = 80;
-    buffer = { active: { get baseY() { return xterm.bufferBaseY; }, length: 24 } };
+    buffer = { active: {
+      get baseY() { return xterm.bufferBaseY; },
+      get viewportY() { return xterm.bufferViewportY; },
+      length: 24,
+    } };
     options: Record<string, unknown>;
 
     constructor(options: Record<string, unknown>) {
@@ -50,6 +56,7 @@ vi.mock("@xterm/xterm", () => ({
       this.cols = columns;
       this.rows = rows;
     }
+    scrollLines(lines: number): void { xterm.scrollLines(lines); }
     write(_bytes: Uint8Array, callback: () => void): void {
       callback();
     }
@@ -151,6 +158,79 @@ test("authoritative fit waits until xterm can propose real dimensions", async ()
   frames.shift()?.(32);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
   expect(xterm.terminal).toMatchObject({ rows: 38, cols: 132 });
+});
+
+test("turns a one-finger vertical drag into terminal scrollback", () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const element = document.createElement("div");
+  Object.defineProperty(element, "clientHeight", { configurable: true, value: 408 });
+  const surface = new XtermSurface();
+  surface.open(element);
+  xterm.scrollLines.mockClear();
+
+  element.dispatchEvent(touchEvent("touchstart", [{ identifier: 7, clientY: 300 }]));
+  const move = touchEvent("touchmove", [{ identifier: 7, clientY: 249 }]);
+  element.dispatchEvent(move);
+
+  expect(move.defaultPrevented).toBe(true);
+  expect(xterm.scrollLines).toHaveBeenCalledOnce();
+  expect(xterm.scrollLines).toHaveBeenCalledWith(3);
+  surface.dispose();
+});
+
+test("accumulates small touch movement and scrolls in both directions", () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const element = document.createElement("div");
+  const surface = new XtermSurface();
+  surface.open(element);
+  xterm.scrollLines.mockClear();
+
+  element.dispatchEvent(touchEvent("touchstart", [{ identifier: 3, clientY: 100 }]));
+  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 91 }]));
+  expect(xterm.scrollLines).not.toHaveBeenCalled();
+  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 82 }]));
+  expect(xterm.scrollLines).toHaveBeenLastCalledWith(1);
+  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 108 }]));
+  expect(xterm.scrollLines).toHaveBeenLastCalledWith(-1);
+  surface.dispose();
+});
+
+test("ignores multi-touch gestures and removes touch handling on disposal", () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const element = document.createElement("div");
+  const surface = new XtermSurface();
+  surface.open(element);
+  xterm.scrollLines.mockClear();
+
+  element.dispatchEvent(touchEvent("touchstart", [
+    { identifier: 1, clientY: 200 },
+    { identifier: 2, clientY: 220 },
+  ]));
+  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 1, clientY: 100 }]));
+  expect(xterm.scrollLines).not.toHaveBeenCalled();
+
+  surface.dispose();
+  element.dispatchEvent(touchEvent("touchstart", [{ identifier: 4, clientY: 200 }]));
+  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 4, clientY: 100 }]));
+  expect(xterm.scrollLines).not.toHaveBeenCalled();
 });
 
 test("authoritative fit rejects non-finite geometry and normalizes fractional measurements", async () => {
@@ -309,3 +389,18 @@ test("snapshot geometry stays hidden until the visible renderer is refitted", as
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
   expect(element.style.visibility).toBe("");
 });
+
+function touchEvent(
+  type: "touchstart" | "touchmove" | "touchend" | "touchcancel",
+  touches: Array<Pick<Touch, "identifier" | "clientY">>,
+): TouchEvent {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as TouchEvent;
+  const touchList = Object.assign([...touches], {
+    item: (index: number) => touches[index] ?? null,
+  }) as unknown as TouchList;
+  Object.defineProperties(event, {
+    touches: { value: type === "touchend" || type === "touchcancel" ? Object.assign([], { item: () => null }) : touchList },
+    changedTouches: { value: touchList },
+  });
+  return event;
+}
