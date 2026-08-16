@@ -1016,3 +1016,19 @@ the independently updated terminal host through the API to worker settings:
   restarts. API PID `3641269` remained healthy; terminal-host PID `2966127`
   remained unchanged with the active Queen session preserved. Every proof
   browser and context closed after the run.
+- Release `0.1.0-dev-dea70797b2b3` gives a joined Member a separate,
+  credential-bound projection of only her own Keeper-granted Steward scope.
+  Grant replacement, exact retry, identity tampering, and explicit revocation
+  are covered at persistence; transport and API tests prove the node-bound,
+  content-free response; unsupported or malformed snapshots halt federation
+  reconciliation instead of retaining stale authority. The Member control
+  room now presents **My Stewardship** separately from personal Hive work and
+  names the managed Hives and capabilities without implying that staged remote
+  commands already exist. The full Rust workspace tests, 221 frontend tests,
+  warnings-denied Clippy, formatting, strict TypeScript, and production build
+  passed. A verified 1,085,440-byte SQLite backup preceded schema 52; the live
+  database then reported `integrity_check=ok`. Isolated live Member proof passed
+  at 1,440 by 900 and 412 by 915 with zero horizontal overflow, 11 and 10 named
+  controls, and a final image review corrected mobile capability truncation.
+  API PID advanced to `3682916`; terminal-host PID `2966127` remained unchanged,
+  preserving the active Queen session. Every proof browser and context closed.
