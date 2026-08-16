@@ -445,6 +445,41 @@ async function checkSurface(browser, surface) {
     if (!await page.getByText("Start with a repository name and Swarm completes the path. Full paths still work.", { exact: true }).isVisible()) {
       throw new Error(`${surface.name}: repository completion guidance is unavailable`);
     }
+    const configuredWorkers = page.locator(".configured-workers > .configured-worker");
+    const scoutRow = configuredWorkers.filter({ hasText: "Scout" }).first();
+    await scoutRow.waitFor();
+    if (!await configuredWorkers.nth(1).getByText("Scout", { exact: true }).isVisible().catch(() => false)) {
+      throw new Error(`${surface.name}: managed Scout is not pinned directly after Queen`);
+    }
+    await scoutRow.getByRole("button", { name: "Edit" }).click();
+    const scoutEditor = page.getByRole("form", { name: "Edit Scout" });
+    await scoutEditor.waitFor();
+    if (!await scoutEditor.getByText(/pinned after Queen/i).isVisible()) {
+      throw new Error(`${surface.name}: Scout's managed role is not explained`);
+    }
+    const scoutName = scoutEditor.getByLabel("Worker name");
+    if (await scoutName.isEnabled()) {
+      throw new Error(`${surface.name}: managed Scout identity can be renamed`);
+    }
+    if (!await scoutEditor.getByLabel("Default coding provider").isVisible()
+      || !await scoutEditor.getByRole("button", { name: /Refresh local draft|Draft locally/ }).isVisible()
+      || !await scoutEditor.getByRole("button", { name: "Improve with Claude" }).isVisible()) {
+      throw new Error(`${surface.name}: Scout provider or bounded description controls are unavailable`);
+    }
+    if (await scoutEditor.getByRole("button", { name: /Remove worker|Move Scout/ }).count()) {
+      throw new Error(`${surface.name}: managed Scout exposes ordinary removal or ordering controls`);
+    }
+    const scoutEditorOverflow = await scoutEditor.evaluate((editor) => ({
+      scrollWidth: editor.scrollWidth,
+      clientWidth: editor.clientWidth,
+      overflowingControls: [...editor.querySelectorAll("input, textarea, select, button")]
+        .filter((control) => control.scrollWidth > control.clientWidth + 1).length,
+    }));
+    if (scoutEditorOverflow.scrollWidth > scoutEditorOverflow.clientWidth + 1 || scoutEditorOverflow.overflowingControls > 0) {
+      throw new Error(`${surface.name}: Scout editor overflows its layout`);
+    }
+    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-settings-scout.png`), fullPage: true });
+    await scoutEditor.getByRole("button", { name: "Cancel" }).click();
     if (await page.getByRole("button", { name: /Settings 3/ }).count()) {
       throw new Error(`${surface.name}: Settings exposes a false pending-item count`);
     }
@@ -564,6 +599,9 @@ async function checkSurface(browser, surface) {
     }));
     if (apiaryGuideSteps !== 2 || !await firstExchangeControl.isVisible() || !await secondExchangeControl.isVisible()) {
       throw new Error(`${surface.name}: Apiary invitation exchange is incomplete`);
+    }
+    if (!personalExchange && !await apiaryExchange.getByText(/Settings → Apiary → Join a Keeper's Apiary/).isVisible()) {
+      throw new Error(`${surface.name}: Keeper invitation does not explain how the receiving personal Hive ingests the link`);
     }
     if (apiaryOverflow.scrollWidth > apiaryOverflow.clientWidth + 1 || apiaryOverflow.overflowingSteps > 0 || apiaryOverflow.overflowingDrops > 0) {
       throw new Error(`${surface.name}: Apiary invitation exchange overflows its layout`);
