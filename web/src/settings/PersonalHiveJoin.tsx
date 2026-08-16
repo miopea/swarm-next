@@ -15,6 +15,7 @@ import {
 } from "../api";
 import { readApiaryHandoffLink } from "./apiaryHandoff";
 import {
+  ApiaryExchangeStep,
   ApiaryFileFallback,
   ApiaryLinkEntry,
 } from "./ApiaryHandoffControls";
@@ -173,8 +174,12 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   return (
     <div className="personal-hive-join">
       <div className="apiary-exchange-intro">
-        <span><strong>Join a Keeper&apos;s Apiary</strong><small>Paste the private link she sent you. This Hive connects outward, presents its signed identity, and keeps polling her Keeper—she never needs network access to this computer.</small></span>
-        <p className="privacy-note">You are in the receiving personal Hive. Paste the link created on the Keeper&apos;s Apiary screen below.</p>
+        <span><strong>Join a Keeper&apos;s Apiary</strong><small>The private link is handed to this personal Hive; opening it does not join through the Keeper&apos;s browser.</small></span>
+        <ol className="apiary-exchange-guide" aria-label="How this Hive joins an Apiary">
+          <ApiaryExchangeStep number="1" title="Paste her private link" detail="Copy the complete link the Keeper sent and paste it below in this Hive." />
+          <ApiaryExchangeStep number="2" title="Wait for her approval" detail="This Hive introduces only its signed identity and keeps polling outward." />
+          <ApiaryExchangeStep number="3" title="Review and join" detail="After approval, check policy and Jira readiness before joining explicitly." />
+        </ol>
         <ApiaryLinkEntry label="Keeper invitation link" value={keeperLink} action={working ? "Connecting…" : "Connect to Keeper"} disabled={busy || working} onChange={setKeeperLink} onAction={() => void connectToKeeper()} />
         <div className="apiary-transport-boundary" role="note">
           <span><strong>Jira work</strong><small>This Hive continues polling Jira directly as you.</small></span>

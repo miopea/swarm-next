@@ -34,27 +34,81 @@ async function main() {
   });
   const results = [];
   const memberResults = [];
+  const personalHiveResults = [];
   try {
     if (!memberOnly) for (const surface of surfaces) results.push(await checkSurface(browser, surface));
     for (const surface of surfaces) {
       memberResults.push(await checkMemberSurface(browser, surface));
+      personalHiveResults.push(await checkPersonalHiveSurface(browser, surface));
     }
   } finally {
     await browser.close();
   }
   const browserRestartPersistence = memberOnly ? [] : await verifyBrowserRestartPersistence();
-  const report = { baseUrl, results, memberResults, browserRestartPersistence };
+  const report = { baseUrl, results, memberResults, personalHiveResults, browserRestartPersistence };
   const output = compactOutput ? {
     baseUrl,
     surfaces: results.map(({ surface, status, surfaces, accessibleControlCount, apiaryGuideSteps }) => ({
       surface, status, surfaces, accessibleControlCount, apiaryGuideSteps,
     })),
     memberSurfaces: memberResults,
+    personalHiveSurfaces: personalHiveResults,
     browserRestartPersistence,
   } : report;
   const serialized = `${JSON.stringify(output, null, 2)}\n`;
   if (resultPath) await fs.writeFile(resultPath, serialized, "utf8");
   process.stdout.write(serialized);
+}
+
+async function checkPersonalHiveSurface(browser, surface) {
+  const context = await browser.newContext({
+    viewport: surface.viewport,
+    isMobile: surface.mobile,
+    hasTouch: surface.mobile,
+    ...(surface.mobile ? { userAgent: "Mozilla/5.0 (Linux; Android 15; Swarm Dogfood) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36" } : {}),
+  });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+  page.on("pageerror", (error) => errors.push(error.message));
+  const fulfill = (route, payload) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+  await page.route("**/api/v1/hive", (route) => fulfill(route, {
+    operator: { id: "visual-personal-operator", display_name: "Cora" },
+    hive: { id: "visual-personal-hive", name: "Clover Hive", operator_id: "visual-personal-operator", apiary_id: null },
+    apiary_context: { mode: "personal" },
+  }));
+  await page.route("**/api/v1/apiary/keeper-links", (route) => fulfill(route, []));
+  await page.route("**/api/v1/apiary/join-invitations", (route) => fulfill(route, []));
+
+  try {
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    const tokenInput = page.getByLabel("Operator token");
+    if (await tokenInput.isVisible().catch(() => false)) {
+      await tokenInput.fill(operatorToken);
+      await page.getByRole("button", { name: "Unlock Swarm" }).click();
+    }
+    await page.getByRole("button", { name: /Settings/ }).click();
+    await page.getByRole("heading", { name: "Settings" }).waitFor();
+    errors.length = 0;
+    await page.getByRole("button", { name: "Apiary", exact: true }).click();
+    const joinGuide = page.getByRole("list", { name: "How this Hive joins an Apiary" });
+    await joinGuide.waitFor();
+    for (const step of ["Paste her private link", "Wait for her approval", "Review and join"]) {
+      await joinGuide.getByText(step, { exact: true }).waitFor();
+    }
+    await page.getByLabel("Keeper invitation link").waitFor();
+    await page.getByRole("button", { name: "Connect to Keeper" }).waitFor();
+    const dimensions = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
+    if (dimensions.scrollWidth > dimensions.clientWidth + 1) {
+      throw new Error(`${surface.name}/personal-apiary: horizontal overflow ${dimensions.scrollWidth}px > ${dimensions.clientWidth}px`);
+    }
+    const accessibleControlCount = await verifyAccessibleControls(page, `${surface.name}/personal-apiary`);
+    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-personal-join.png`), fullPage: true });
+    if (errors.length) throw new Error(`${surface.name}/personal-apiary: browser errors: ${errors.join(" | ")}`);
+    return { surface: surface.name, ...dimensions, accessibleControlCount, status: "passed" };
+  } finally {
+    await context.close();
+  }
 }
 
 async function checkMemberSurface(browser, surface) {
