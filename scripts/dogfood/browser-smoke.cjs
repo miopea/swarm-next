@@ -11,6 +11,7 @@ const browserExecutable = process.env.SWARM_BROWSER_EXECUTABLE;
 const outputRoot = process.env.SWARM_BROWSER_EVIDENCE || path.resolve("dist", "browser-smoke");
 const compactOutput = process.env.SWARM_BROWSER_COMPACT === "1";
 const resultPath = process.env.SWARM_BROWSER_RESULT;
+const memberOnly = process.env.SWARM_BROWSER_MEMBER_ONLY === "1";
 
 if (!operatorToken) {
   throw new Error("SWARM_OPERATOR_TOKEN is required");
@@ -33,16 +34,14 @@ async function main() {
   const results = [];
   const memberResults = [];
   try {
-    for (const surface of surfaces) {
-      results.push(await checkSurface(browser, surface));
-    }
+    if (!memberOnly) for (const surface of surfaces) results.push(await checkSurface(browser, surface));
     for (const surface of surfaces) {
       memberResults.push(await checkMemberSurface(browser, surface));
     }
   } finally {
     await browser.close();
   }
-  const browserRestartPersistence = await verifyBrowserRestartPersistence();
+  const browserRestartPersistence = memberOnly ? [] : await verifyBrowserRestartPersistence();
   const report = { baseUrl, results, memberResults, browserRestartPersistence };
   const output = compactOutput ? {
     baseUrl,
