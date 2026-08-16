@@ -1365,3 +1365,18 @@ the independently updated terminal host through the API to worker settings:
   advanced to `79485`; terminal-host PID `2966127`, worker-engine build
   `f8abd293`, and Queen provider PID `2966160` remained unchanged. No Jira or
   live-task mutation occurred, and the temporary viewport override was reset.
+- Main commit `8540fcd2` and host-compatible release
+  `0.1.0-f43ec1d66951` serialize deterministic sleeping-worker starts. One
+  coordination pass claims one wake; every additional Queen-originated Ready
+  assignment remains durable until a later pass samples the changed process
+  tree. Manual starts remain immediate. The complete gate passed 414 Rust
+  tests, warnings-denied Clippy, formatting, all 244 frontend tests, strict
+  TypeScript, and the production build. The live coordinator contract reported
+  `automatic_start_batch_limit=1`, normal admission, no queued or uncertain
+  action, and automatic Queen review remained off. The actual Settings surface
+  rendered at desktop and Android-size 412 by 915 with the memory-recheck
+  explanation and zero horizontal overflow. Schema 64 remained healthy with
+  `quick_check=ok`. API PID advanced to `92444`; terminal-host PID `2966127`,
+  worker-engine build `f8abd293`, and Queen provider PID `2966160` remained
+  unchanged. No Jira, task, worker, or Apiary mutation occurred, and the
+  temporary viewport override was reset.
