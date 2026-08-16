@@ -1148,3 +1148,20 @@ the independently updated terminal host through the API to worker settings:
   with `quick_check=ok`; API PID advanced to `3827684` while terminal-host PID
   `2966127` remained unchanged. Every isolated proof browser closed after the
   run, and no Jira or live Apiary mutation occurred.
+- Release `0.1.0-dev-5a7d2dc44f7b` turns a Keeper invitation into a guided
+  handoff that a personal-Hive operator can use without understanding URL
+  fragments or copying secrets between settings fields. The recipient can
+  retarget the exact private fragment to her normal HTTPS Hive address, or use
+  the already-open personal Hive and review the Keeper and Apiary before any
+  membership begins. The capability remains in the browser fragment and
+  transient module memory only: it is never relayed, written to browser
+  storage, or placed in navigation history at the destination. Manual paste
+  remains available as a recovery path. All 231 frontend tests, strict
+  TypeScript, the production build, and the responsive browser gate passed.
+  Image review confirmed a calm, legible handoff at 1,440 by 900 and Android-
+  size 412 by 915; every primary, Keeper-routing, Member, and personal-Hive
+  surface retained zero horizontal overflow, and authentication survived a
+  complete browser restart. The live database remains schema 55 with
+  `quick_check=ok`; API PID advanced to `3836749` while terminal-host PID
+  `2966127` remained unchanged. No Jira or live Apiary mutation occurred, and
+  every proof browser closed after the run.
