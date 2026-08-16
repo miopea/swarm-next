@@ -9,6 +9,7 @@ const xterm = vi.hoisted(() => ({
   focus: vi.fn(),
   resize: vi.fn(),
   refresh: vi.fn(),
+  clearTextureAtlas: vi.fn(),
   scrollLines: vi.fn(),
   bufferBaseY: 0,
   bufferViewportY: 0,
@@ -58,6 +59,7 @@ vi.mock("@xterm/xterm", () => ({
       this.rows = rows;
     }
     refresh(start: number, end: number): void { xterm.refresh(start, end); }
+    clearTextureAtlas(): void { xterm.clearTextureAtlas(); }
     scrollLines(lines: number): void { xterm.scrollLines(lines); }
     write(_bytes: Uint8Array, callback: () => void): void {
       callback();
@@ -371,6 +373,7 @@ test("continuous container movement produces one settled terminal resize", async
   xterm.propose.mockReset().mockReturnValue({ rows: 38, cols: 132 });
   xterm.resize.mockClear();
   xterm.refresh.mockClear();
+  xterm.clearTextureAtlas.mockClear();
   const surface = new XtermSurface();
   surface.open(element);
 
@@ -478,6 +481,7 @@ test("repaints unchanged geometry after a settled viewport change", async () => 
   xterm.propose.mockReset().mockReturnValue({ rows: 24, cols: 80 });
   xterm.resize.mockClear();
   xterm.refresh.mockClear();
+  xterm.clearTextureAtlas.mockClear();
   const surface = new XtermSurface();
   surface.open(element);
 
@@ -485,6 +489,7 @@ test("repaints unchanged geometry after a settled viewport change", async () => 
   await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_FOR_TEST_MS);
 
   expect(xterm.resize).not.toHaveBeenCalled();
+  expect(xterm.clearTextureAtlas).toHaveBeenCalledOnce();
   expect(xterm.refresh).toHaveBeenCalledWith(0, 23);
   surface.dispose();
   element.remove();

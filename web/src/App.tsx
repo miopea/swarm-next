@@ -14,6 +14,7 @@ import {
   retryJiraTaskLink,
   fetchNotificationSettings,
   fetchQueenAutonomyPolicy,
+  fetchQueenAutomationStatus,
   fetchPresence,
   fetchProviderCapabilities,
   fetchPresentationPreferences,
@@ -52,6 +53,7 @@ import {
   type ProviderCapabilities,
   type PresentationDeviceClass,
   type QueenAutonomyPolicy,
+  type QueenAutomationStatus,
   type SessionSummary,
   type Task,
   type TaskDraftInput,
@@ -137,6 +139,7 @@ export function App() {
   const [lockDetectionState, setLockDetectionState] = useState<LockDetectionState>("unsupported");
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>();
   const [queenPolicy, setQueenPolicy] = useState<QueenAutonomyPolicy>();
+  const [queenAutomation, setQueenAutomation] = useState<QueenAutomationStatus>();
   const [providers, setProviders] = useState<ProviderCapabilities>({ claude_code: true, codex: false });
   const [notificationState, setNotificationState] = useState<NotificationCapabilityState>("unsupported");
   const presenceController = useMemo(() => new PresenceController(), []);
@@ -180,11 +183,15 @@ export function App() {
   useEffect(() => {
     if (!operatorToken) {
       setQueenPolicy(undefined);
+      setQueenAutomation(undefined);
       return;
     }
     void fetchQueenAutonomyPolicy(operatorToken)
       .then(setQueenPolicy)
       .catch((error: unknown) => setOperationError(error instanceof Error ? error.message : "Queen policy could not be loaded"));
+    void fetchQueenAutomationStatus(operatorToken)
+      .then(setQueenAutomation)
+      .catch(() => setQueenAutomation(undefined));
   }, [operatorToken]);
 
   useEffect(() => {
@@ -261,7 +268,8 @@ export function App() {
       operatorToken,
       async (page) => {
         const runtimeChanged = page.events.some((event) => event.kind === "runtime_changed");
-        const [controlRoom, refreshedPresence, refreshedNotifications, refreshedQueenPolicy, refreshedPresentation, refreshedProviders] = await Promise.all([
+        const refreshQueenAutomation = page.events.some((event) => event.kind === "workers_changed");
+        const [controlRoom, refreshedPresence, refreshedNotifications, refreshedQueenPolicy, refreshedQueenAutomation, refreshedPresentation, refreshedProviders] = await Promise.all([
           controlRoomModel.refreshFromEvents(operatorToken, page, controller.signal),
           page.events.some((event) => event.kind === "presence_changed")
             ? fetchPresence(operatorToken)
@@ -271,6 +279,9 @@ export function App() {
             : Promise.resolve(undefined),
           runtimeChanged
             ? fetchQueenAutonomyPolicy(operatorToken)
+            : Promise.resolve(undefined),
+          refreshQueenAutomation
+            ? fetchQueenAutomationStatus(operatorToken).catch(() => undefined)
             : Promise.resolve(undefined),
           runtimeChanged
             ? fetchPresentationPreferences(operatorToken, presentationDevice)
@@ -283,6 +294,7 @@ export function App() {
         if (refreshedPresence) setPresence(refreshedPresence);
         if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
         if (refreshedQueenPolicy) setQueenPolicy(refreshedQueenPolicy);
+        if (refreshedQueenAutomation) setQueenAutomation(refreshedQueenAutomation);
         if (refreshedProviders) setProviders(refreshedProviders);
         if (refreshedPresentation?.configured) {
           setColorTheme(refreshedPresentation.color_theme);
@@ -375,13 +387,19 @@ export function App() {
   async function testNotification() {
     await perform(() => notificationController.test());
   }
-  async function refreshControlRoom() {
+  async function refreshControlRoom(recoverTerminal = false) {
     if (!operatorToken) return;
     await perform(async () => {
-      const controlRoom = await loadControlRoom(operatorToken);
+      const [controlRoom, automation] = await Promise.all([
+        loadControlRoom(operatorToken),
+        fetchQueenAutomationStatus(operatorToken).catch(() => undefined),
+      ]);
       controlRoomModel.replace(controlRoom);
-      setTerminalRevision((current) => current + 1);
-      if (activeSessionId) await terminalWorkspace.redrawSession(activeSessionId);
+      if (automation) setQueenAutomation(automation);
+      if (recoverTerminal && activeSessionId) {
+        terminalWorkspace.resetSessionRenderer(activeSessionId);
+        setTerminalRevision((current) => current + 1);
+      }
       setActiveSessionId((current) =>
         current && controlRoom.sessions.some((session) => session.session_id === current)
           ? current
@@ -921,7 +939,7 @@ export function App() {
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
             {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
             <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
-            {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" onClick={() => void refreshControlRoom()} disabled={busy}><RefreshIcon /></button>}
+            {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" title="Refresh data and rebuild the visible terminal" onClick={() => void refreshControlRoom(true)} disabled={busy}><RefreshIcon /></button>}
             {operatorToken && <button className="secondary-button" onClick={() => void logout()} disabled={busy}>Lock</button>}
           </div>
         </header>
@@ -1064,7 +1082,7 @@ export function App() {
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}:${terminalRevision}`}>
             <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
-              <TerminalView operatorToken={operatorToken} session={activeSession} onStop={() => void stopSession(activeSession.session_id)} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} />
+              <TerminalView operatorToken={operatorToken} session={activeSession} onStop={() => void stopSession(activeSession.session_id)} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} queenAutomation={activeWorker?.role === "queen" ? queenAutomation : undefined} onOpenQueenSettings={activeWorker?.role === "queen" ? () => openSettings("settings-queen") : undefined} />
             </Suspense>
           </TerminalLoadBoundary>
         ) : (

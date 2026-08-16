@@ -38,8 +38,13 @@ export class TerminalWorkspace {
     else this.#pendingFocus.set(sessionId, input);
   }
 
-  async redrawSession(sessionId: string): Promise<void> {
-    await this.#controllers.get(sessionId)?.redraw();
+  /**
+   * Discard only the browser renderer and its socket. The durable worker and
+   * provider process remain owned by the terminal host; the next view mount
+   * reconnects and restores the host's canonical snapshot.
+   */
+  resetSessionRenderer(sessionId: string): void {
+    this.#controllers.closeSession(sessionId);
   }
 
   closeSession(sessionId: string): void {

@@ -7,6 +7,7 @@ import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import type { LockDetectionState } from "../presence/PresenceController";
 import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
+import { queenAutomationStateDetail, queenAutomationStateLabel, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
 import { workerEngineUpdateRequired } from "../runtime/workerEngine";
 import ApiarySettings from "./ApiarySettings";
 import DevelopmentReloadAction from "./DevelopmentReloadAction";
@@ -459,36 +460,6 @@ function compactRuntimeVersion(version: string) {
   const release = version.split("-dev-")[0];
   return revision ? `Healthy · ${release} · ${revision}` : `Healthy · ${version}`;
 }
-
-function queenAutomationStateLabel(status: QueenAutomationStatus | undefined) {
-  if (!status) return "Checking Queen…";
-  if (status.state === "queued") return "Review queued";
-  if (status.state === "delivering") return "Sending work to Queen";
-  if (status.state === "running") return "Queen is reviewing work";
-  if (status.state === "uncertain") return "Review needs attention";
-  if (status.state === "completed" && status.outcome === "needs_operator") return "Queen needs you";
-  if (status.state === "completed" && status.outcome === "no_action") return "Nothing needed routing";
-  if (status.state === "completed") return "Review complete";
-  return status.enabled ? "Watching for new work" : "Manual review only";
-}
-
-function queenAutomationStateDetail(status: QueenAutomationStatus | undefined) {
-  if (!status) return "Loading durable automation state.";
-  if (status.waiting_reason) return status.waiting_reason;
-  if (status.state === "running") return `${status.actionable_count} actionable item${status.actionable_count === 1 ? "" : "s"} in this review.`;
-  if (status.state === "uncertain") return "Swarm will not silently repeat an interrupted review. Run Queen again after checking her terminal.";
-  if (status.state === "completed" && status.outcome === "needs_operator") return "Open Queen when you are ready to resolve her decision.";
-  if (status.state === "completed") return "The latest bounded review ended safely.";
-  if (status.enabled) return `${status.actionable_count} actionable item${status.actionable_count === 1 ? "" : "s"}; new durable changes trigger a review.`;
-  return `${status.actionable_count} actionable item${status.actionable_count === 1 ? "" : "s"}; nothing runs automatically.`;
-}
-
-function queenAutomationStateTone(status: QueenAutomationStatus | undefined) {
-  if (status?.state === "uncertain") return "offline";
-  if (status?.state === "running" || status?.state === "delivering") return "online";
-  return "waiting";
-}
-
 
 function notificationStateLabel(state: NotificationCapabilityState) {
   if (state === "enabled") return "Ready on this device";

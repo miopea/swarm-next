@@ -6,6 +6,8 @@ import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
 import { clipboardImage, terminalAttachmentPaste, terminalTextPaste, uploadTerminalImage } from "./TerminalAttachments";
+import type { QueenAutomationStatus } from "../api";
+import { queenAutomationCompactLabel, queenAutomationStateDetail, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
 
 export interface TerminalViewProps {
   session: { session_id: string; running: boolean };
@@ -15,9 +17,11 @@ export interface TerminalViewProps {
   canStop?: boolean;
   mobileKeysVisible?: boolean;
   onMobileKeysVisibleChange?: (visible: boolean) => void;
+  queenAutomation?: QueenAutomationStatus;
+  onOpenQueenSettings?: () => void;
 }
 
-export default function TerminalView({ session, operatorToken, onStop, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange }: TerminalViewProps) {
+export default function TerminalView({ session, operatorToken, onStop, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, queenAutomation, onOpenQueenSettings }: TerminalViewProps) {
   const mount = useRef<HTMLDivElement>(null);
   const controller = useMemo<TerminalController>(() => {
     terminalWorkspace.authenticate(operatorToken);
@@ -89,7 +93,20 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
         </div>
         {canStop ? (
           <button className="danger-button" onClick={onStop} disabled={busy}>Put worker to sleep</button>
-        ) : <span className="protected-worker">Always active</span>}
+        ) : <div className="terminal-worker-controls">
+          {queenAutomation && onOpenQueenSettings ? (
+            <button
+              type="button"
+              className={`queen-automation-chip ${queenAutomationStateTone(queenAutomation)}`}
+              title={queenAutomationStateDetail(queenAutomation)}
+              onClick={onOpenQueenSettings}
+            >
+              <span className={`presence ${queenAutomationStateTone(queenAutomation)}`} />
+              {queenAutomationCompactLabel(queenAutomation)}
+            </button>
+          ) : null}
+          <span className="protected-worker">Always active</span>
+        </div>}
       </div>
       <div className="terminal-mount" ref={mount} />
       <MobileTerminalComposer connectionState={connectionState} onInput={(text) => controller.sendInput(text)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onImage={addImage} attachmentState={attachmentState} />

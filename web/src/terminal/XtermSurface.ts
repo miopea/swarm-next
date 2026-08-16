@@ -295,6 +295,11 @@ export class XtermSurface implements TerminalSurface {
 
   #refreshViewport(): void {
     if (this.#disposed || this.#terminal.rows < 1) return;
+    // Chromium can preserve a corrupt or empty GPU texture after sleep,
+    // debugger attachment, or a large responsive resize. xterm documents this
+    // as the recovery path for Chromium/Nvidia texture loss; a plain refresh
+    // alone can leave the canvas visibly blank while its buffer is intact.
+    this.#terminal.clearTextureAtlas();
     this.#terminal.refresh(0, this.#terminal.rows - 1);
   }
 

@@ -578,6 +578,21 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).includes("/api/v1/orchestration/queen-policy")) {
       return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
     }
+    if (String(url).includes("/api/v1/orchestration/queen-automation")) {
+      return Promise.resolve(ok({
+        enabled: false,
+        state: "idle",
+        run_id: null,
+        trigger: null,
+        actionable_count: 0,
+        attempts: 0,
+        requested_at: null,
+        delivered_at: null,
+        finished_at: null,
+        outcome: null,
+        waiting_reason: null,
+      }));
+    }
     if (String(url).includes("/api/v1/providers")) {
       return Promise.resolve(ok({ claude_code: true, codex: false }));
     }
