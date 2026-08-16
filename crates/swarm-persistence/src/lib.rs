@@ -22,6 +22,7 @@ mod decisions;
 mod email;
 mod events;
 mod federation;
+mod federation_handoff_reconciliation;
 mod federation_handoffs;
 mod federation_jira_claims;
 mod federation_stewardships;
@@ -34,6 +35,9 @@ pub use federation::{
     verify_apiary_invitation_envelope, verify_federation_catalog_snapshot,
     verify_federation_departure_receipt, verify_federation_membership_receipt,
     verify_hive_connection_card,
+};
+pub use federation_handoff_reconciliation::{
+    FederationHandoffIntent, FederationHandoffIntentPhase, MAX_FEDERATION_HANDOFF_BATCH,
 };
 pub use federation_jira_claims::{
     FederationJiraClaimIntent, FederationJiraClaimPhase, MAX_FEDERATION_JIRA_CLAIM_BATCH,
@@ -73,7 +77,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 54;
+const CURRENT_SCHEMA_VERSION: i64 = 55;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1564,6 +1568,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 54 {
         federation_handoffs::migrate_federation_handoffs(transaction)?;
+    }
+    if schema_version < 55 {
+        federation_handoff_reconciliation::migrate_federation_handoff_reconciliation(transaction)?;
     }
     Ok(())
 }

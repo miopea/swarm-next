@@ -75,9 +75,10 @@ use swarm_domain::{
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
 use swarm_persistence::{
-    DecisionDeliveryFailure, DecisionDispatch, FederationJiraClaimPhase, JiraIssueSnapshot,
-    JiraProjectBindingInput, JiraTransitionFailure, TaskDispatch, TaskDispatchFailure,
-    TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
+    DecisionDeliveryFailure, DecisionDispatch, FederationHandoffIntentPhase,
+    FederationJiraClaimPhase, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionFailure,
+    TaskDispatch, TaskDispatchFailure, TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore,
+    TaskStoreError,
 };
 #[cfg(test)]
 use swarm_terminal::{
@@ -605,6 +606,18 @@ impl AppState {
             return;
         }
         if let Err(condition) = reconcile_federation_jira_claims(
+            store,
+            &self.jira_readiness,
+            &client,
+            &connection.node_credential,
+            now,
+        )
+        .await
+        {
+            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            return;
+        }
+        if let Err(condition) = reconcile_federation_claim_handoffs(
             store,
             &self.jira_readiness,
             &client,
@@ -4813,6 +4826,171 @@ async fn reconcile_federation_stewardship(
 }
 
 #[allow(clippy::too_many_lines)]
+async fn reconcile_federation_claim_handoffs(
+    store: &TaskStore,
+    jira: &jira::JiraReadinessProbe,
+    client: &federation_http::FederationHttpClient,
+    node_credential: &str,
+    now: i64,
+) -> Result<(), FederationSyncCondition> {
+    let handoffs = client
+        .claim_handoffs(node_credential)
+        .await
+        .map_err(federation_sync_condition)?;
+    for handoff in handoffs
+        .into_iter()
+        .filter(|handoff| handoff.state == swarm_domain::FederationClaimHandoffState::Accepted)
+    {
+        store.journal_accepted_federation_handoff(&handoff, now).map_err(|error| {
+            tracing::warn!(%error, handoff = %handoff.id, "accepted handoff could not be journaled");
+            FederationSyncCondition::Incompatible
+        })?;
+    }
+    let intents = store.pending_federation_handoffs(now).map_err(|error| {
+        tracing::warn!(%error, "federation handoff journal could not be read");
+        FederationSyncCondition::Incompatible
+    })?;
+    for mut intent in intents {
+        for _ in 0..3 {
+            match intent.phase {
+                FederationHandoffIntentPhase::Accepted => {
+                    let mut issues = jira
+                        .linked_issues(std::slice::from_ref(&intent.handoff.issue_id))
+                        .await
+                        .map_err(|error| {
+                            let condition = jira_federation_sync_condition(error);
+                            let _ = store.retry_federation_handoff(
+                                intent.handoff.id,
+                                now,
+                                "jira_read_failed",
+                            );
+                            condition
+                        })?;
+                    if issues.len() != 1 || issues[0].id != intent.handoff.issue_id {
+                        ensure_federated_jira_state_changed(
+                            store.require_attention_for_federation_handoff(
+                                intent.handoff.id,
+                                now,
+                                "jira_issue_missing",
+                            ),
+                        )?;
+                        break;
+                    }
+                    let account = jira.current_account().await.map_err(|error| {
+                        let condition = jira_federation_sync_condition(error);
+                        let _ = store.retry_federation_handoff(
+                            intent.handoff.id,
+                            now,
+                            "jira_identity_failed",
+                        );
+                        condition
+                    })?;
+                    if issues[0].assignee_account_id.as_deref() != Some(account.account_id.as_str())
+                    {
+                        jira.assign_issue(&intent.handoff.issue_id, &account.account_id)
+                            .await
+                            .map_err(|error| {
+                                let condition = jira_federation_sync_condition(error);
+                                let _ = store.retry_federation_handoff(
+                                    intent.handoff.id,
+                                    now,
+                                    "jira_assignment_failed",
+                                );
+                                condition
+                            })?;
+                        issues[0].assignee_account_id = Some(account.account_id);
+                        issues[0].assignee_name = account.display_name;
+                    }
+                    ensure_federated_jira_state_changed(store.advance_federation_handoff(
+                        intent.handoff.id,
+                        FederationHandoffIntentPhase::Accepted,
+                        FederationHandoffIntentPhase::JiraAssigned,
+                        now,
+                    ))?;
+                    intent.phase = FederationHandoffIntentPhase::JiraAssigned;
+                }
+                FederationHandoffIntentPhase::JiraAssigned => {
+                    match client
+                        .confirm_claim_handoff(node_credential, intent.handoff.id)
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(federation_http::FederationHttpError::Conflict) => {
+                            ensure_federated_jira_state_changed(
+                                store.require_attention_for_federation_handoff(
+                                    intent.handoff.id,
+                                    now,
+                                    "keeper_confirmation_conflict",
+                                ),
+                            )?;
+                            break;
+                        }
+                        Err(error) => {
+                            let condition = federation_sync_condition(error);
+                            ensure_federated_jira_state_changed(store.retry_federation_handoff(
+                                intent.handoff.id,
+                                now,
+                                "keeper_confirmation_failed",
+                            ))?;
+                            return Err(condition);
+                        }
+                    }
+                    ensure_federated_jira_state_changed(store.advance_federation_handoff(
+                        intent.handoff.id,
+                        FederationHandoffIntentPhase::JiraAssigned,
+                        FederationHandoffIntentPhase::KeeperConfirmed,
+                        now,
+                    ))?;
+                    intent.phase = FederationHandoffIntentPhase::KeeperConfirmed;
+                }
+                FederationHandoffIntentPhase::KeeperConfirmed => {
+                    let issues = jira
+                        .linked_issues(std::slice::from_ref(&intent.handoff.issue_id))
+                        .await
+                        .map_err(|error| {
+                            let condition = jira_federation_sync_condition(error);
+                            let _ = store.retry_federation_handoff(
+                                intent.handoff.id,
+                                now,
+                                "jira_import_read_failed",
+                            );
+                            condition
+                        })?;
+                    if issues.len() != 1 || issues[0].id != intent.handoff.issue_id {
+                        ensure_federated_jira_state_changed(
+                            store.require_attention_for_federation_handoff(
+                                intent.handoff.id,
+                                now,
+                                "jira_import_issue_missing",
+                            ),
+                        )?;
+                        break;
+                    }
+                    store.sync_jira_issues(
+                        intent.binding_id,
+                        &issues.iter().map(jira_issue_snapshot).collect::<Vec<_>>(),
+                    ).map_err(|error| {
+                        tracing::warn!(%error, handoff = %intent.handoff.id, "confirmed handoff issue could not be imported");
+                        FederationSyncCondition::Incompatible
+                    })?;
+                    ensure_federated_jira_state_changed(store.advance_federation_handoff(
+                        intent.handoff.id,
+                        FederationHandoffIntentPhase::KeeperConfirmed,
+                        FederationHandoffIntentPhase::Complete,
+                        now,
+                    ))?;
+                    intent.phase = FederationHandoffIntentPhase::Complete;
+                    break;
+                }
+                FederationHandoffIntentPhase::Complete
+                | FederationHandoffIntentPhase::Attention => break,
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
 async fn reconcile_federation_jira_claims(
     store: &TaskStore,
     jira: &jira::JiraReadinessProbe,
@@ -7458,6 +7636,197 @@ mod tests {
         assert_eq!(assignment_writes.load(Ordering::SeqCst), 1);
 
         jira_server.abort();
+        let _ = jira_server.await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn accepted_handoff_assigns_jira_confirms_keeper_and_imports_once() {
+        let now = unix_timestamp();
+        let keeper = TaskStore::in_memory().unwrap();
+        let context = keeper
+            .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, now - 1)
+            .unwrap();
+        let LocalApiaryContext::Federated { apiary, .. } = context else {
+            panic!("expected Keeper Apiary");
+        };
+        let (keeper_endpoint, keeper_server) = start_keeper_join_test_server(keeper.clone()).await;
+        let member = TaskStore::in_memory().unwrap();
+        let card = member.issue_hive_connection_card(now, 3_600).unwrap();
+        keeper.pin_hive_candidate(&card, now).unwrap();
+        let bundle = keeper
+            .issue_apiary_invitation_bundle(card.payload.hive_id, &keeper_endpoint, now, 3_600)
+            .unwrap();
+        let invitation = member
+            .import_apiary_invitation_bundle(&bundle, now)
+            .unwrap();
+        member
+            .accept_federation_join_policy(invitation.invitation_id, 1, now)
+            .unwrap();
+        let submission = member
+            .prepare_federation_join_submission(
+                invitation.invitation_id,
+                &swarm_domain::FederationJoinReadiness {
+                    jira_connection: JiraConnectionState::Ready,
+                    projects: Vec::new(),
+                    blockers: Vec::new(),
+                },
+                now,
+            )
+            .unwrap();
+        let acceptance = keeper
+            .consume_federation_join_submission(&submission, now)
+            .unwrap();
+        member
+            .apply_federation_join_acceptance(invitation.invitation_id, &acceptance, now)
+            .unwrap();
+        keeper
+            .promote_apiary_jira_project(
+                apiary.id,
+                "10001",
+                "WEB",
+                "Website",
+                keeper.local_hive_identity().unwrap().operator.id,
+                now,
+            )
+            .unwrap();
+        let binding = member
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WEB",
+                project_name: "Website",
+                scope: JiraProjectScope::Apiary,
+                apiary_id: Some(apiary.id),
+            })
+            .unwrap();
+        member
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "1".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+
+        let handoff = swarm_domain::FederationClaimHandoff {
+            id: FederationClaimHandoffId::new(),
+            apiary_id: apiary.id,
+            claim_id: FederationClaimId::new(),
+            project_id: "10001".into(),
+            issue_id: "20001".into(),
+            issue_key: "WEB-42".into(),
+            source_node_id: FederationNodeId::new(),
+            source_hive_id: HiveId::new(),
+            source_operator_id: OperatorId::new(),
+            target_node_id: acceptance.receipt.payload.member_node_id,
+            target_hive_id: acceptance.receipt.payload.member_hive_id,
+            target_operator_id: acceptance.receipt.payload.member_operator_id,
+            state: swarm_domain::FederationClaimHandoffState::Accepted,
+            reason: Some("Move to the owning repository".into()),
+            offered_at: now - 1,
+            accepted_at: Some(now),
+            completed_at: None,
+            closed_at: None,
+        };
+        let completed = swarm_domain::FederationClaimHandoff {
+            state: swarm_domain::FederationClaimHandoffState::Completed,
+            completed_at: Some(now),
+            ..handoff.clone()
+        };
+        let expected_feed = handoff.clone();
+        let expected_confirmation = completed.clone();
+        let federation_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let federation_address = federation_listener.local_addr().unwrap();
+        let federation_app = Router::new()
+            .route(
+                "/api/v1/federation/handoffs",
+                get(move || {
+                    let handoff = expected_feed.clone();
+                    async move { Json(vec![handoff]) }
+                }),
+            )
+            .route(
+                "/api/v1/federation/handoffs/{id}/confirmation",
+                post(move || {
+                    let completed = expected_confirmation.clone();
+                    async move { Json(completed) }
+                }),
+            );
+        let federation_server = tokio::spawn(async move {
+            axum::serve(federation_listener, federation_app)
+                .await
+                .unwrap();
+        });
+        let client =
+            federation_http::FederationHttpClient::new(&format!("http://{federation_address}"))
+                .unwrap();
+
+        let assigned = Arc::new(AtomicBool::new(false));
+        let writes = Arc::new(AtomicUsize::new(0));
+        let jira_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let jira_address = jira_listener.local_addr().unwrap();
+        let read_assigned = assigned.clone();
+        let write_assigned = assigned.clone();
+        let write_count = writes.clone();
+        let jira_app = Router::new()
+            .route("/rest/api/3/myself", get(|| async { Json(serde_json::json!({
+                "accountId": "operator-2", "displayName": "Fern"
+            })) }))
+            .route("/rest/api/3/search/jql", get(move || {
+                let assigned = read_assigned.clone();
+                async move { Json(serde_json::json!({
+                    "isLast": true,
+                    "issues": [{ "id": "20001", "key": "WEB-42", "fields": {
+                        "summary": "Move shared work safely", "description": null,
+                        "status": { "id": "1", "name": "To Do" },
+                        "assignee": assigned.load(Ordering::SeqCst).then(|| serde_json::json!({
+                            "accountId": "operator-2", "displayName": "Fern"
+                        })),
+                        "updated": "2026-08-16T13:00:00.000+0000"
+                    }}]
+                })) }
+            }))
+            .route("/rest/api/3/issue/20001/assignee", put(move |Json(body): Json<serde_json::Value>| {
+                let assigned = write_assigned.clone();
+                let writes = write_count.clone();
+                async move {
+                    assert_eq!(body["accountId"], "operator-2");
+                    assigned.store(true, Ordering::SeqCst);
+                    writes.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            }));
+        let jira_server =
+            tokio::spawn(async move { axum::serve(jira_listener, jira_app).await.unwrap() });
+        let jira = jira::JiraReadinessProbe::configured(
+            &format!("http://{jira_address}"),
+            "operator@example.test",
+            "token",
+        )
+        .unwrap();
+        let credential = member
+            .federation_member_connection()
+            .unwrap()
+            .node_credential;
+
+        reconcile_federation_claim_handoffs(&member, &jira, &client, &credential, now)
+            .await
+            .unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        assert_eq!(member.list_jira_issue_links(binding.id).unwrap().len(), 1);
+        assert!(member.pending_federation_handoffs(now).unwrap().is_empty());
+        reconcile_federation_claim_handoffs(&member, &jira, &client, &credential, now)
+            .await
+            .unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+
+        keeper_server.abort();
+        federation_server.abort();
+        jira_server.abort();
+        let _ = keeper_server.await;
+        let _ = federation_server.await;
         let _ = jira_server.await;
     }
 

@@ -5417,6 +5417,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn confirmed_claim_handoff_moves_home_only_after_target_confirmation() {
         let now = 35_000;
         let keeper = TaskStore::in_memory().unwrap();
@@ -5484,6 +5485,45 @@ mod tests {
             accepted.state,
             swarm_domain::FederationClaimHandoffState::Accepted
         );
+        second_member
+            .apply_federation_join_acceptance(
+                second.receipt.payload.invitation_id,
+                &second,
+                now + 25,
+            )
+            .unwrap();
+        let binding = second_member
+            .upsert_jira_project_binding(&crate::JiraProjectBindingInput {
+                project_id: "10001",
+                project_key: "WWD",
+                project_name: "Website Development",
+                scope: swarm_domain::JiraProjectScope::Apiary,
+                apiary_id: Some(apiary.id),
+            })
+            .unwrap();
+        second_member
+            .replace_jira_status_mappings(
+                binding.id,
+                &[swarm_domain::JiraStatusMapping {
+                    jira_status_id: "1".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: swarm_domain::TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let journaled = second_member
+            .journal_accepted_federation_handoff(&accepted, now + 25)
+            .unwrap();
+        assert_eq!(
+            second_member
+                .journal_accepted_federation_handoff(&accepted, now + 26)
+                .unwrap(),
+            journaled
+        );
+        assert_eq!(
+            second_member.pending_federation_handoffs(now + 26).unwrap(),
+            vec![journaled]
+        );
         assert_eq!(
             keeper.list_active_federation_claims(now + 25).unwrap()[0].home_node_id,
             first.receipt.payload.member_node_id
@@ -5492,9 +5532,45 @@ mod tests {
             keeper.cancel_federation_claim_handoff(&first.node_credential, offered.id, now + 26,),
             Err(TaskStoreError::FederationHandoffConflict)
         ));
+        assert!(
+            second_member
+                .advance_federation_handoff(
+                    accepted.id,
+                    crate::FederationHandoffIntentPhase::Accepted,
+                    crate::FederationHandoffIntentPhase::JiraAssigned,
+                    now + 26,
+                )
+                .unwrap()
+        );
         let completed = keeper
             .confirm_federation_claim_handoff(&second.node_credential, offered.id, now + 27)
             .unwrap();
+        assert!(
+            second_member
+                .advance_federation_handoff(
+                    accepted.id,
+                    crate::FederationHandoffIntentPhase::JiraAssigned,
+                    crate::FederationHandoffIntentPhase::KeeperConfirmed,
+                    now + 27,
+                )
+                .unwrap()
+        );
+        assert!(
+            second_member
+                .advance_federation_handoff(
+                    accepted.id,
+                    crate::FederationHandoffIntentPhase::KeeperConfirmed,
+                    crate::FederationHandoffIntentPhase::Complete,
+                    now + 28,
+                )
+                .unwrap()
+        );
+        assert!(
+            second_member
+                .pending_federation_handoffs(now + 28)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             completed.state,
             swarm_domain::FederationClaimHandoffState::Completed
