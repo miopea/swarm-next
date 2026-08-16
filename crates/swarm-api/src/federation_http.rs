@@ -8,8 +8,8 @@ use swarm_domain::{
     FederationClaimHandoffId, FederationClaimId, FederationDepartureReadiness,
     FederationDepartureReceipt, FederationHandoffTarget, FederationJoinAcceptance,
     FederationJoinSubmission, FederationNodeId, FederationSharedClaim,
-    FederationStewardshipSnapshot, FederationTaskCommand, FederationTaskCommandReceipt,
-    FederationTaskPage, HiveConnectionCard,
+    FederationStewardTaskCommand, FederationStewardTaskReceipt, FederationStewardshipSnapshot,
+    FederationTaskCommand, FederationTaskCommandReceipt, FederationTaskPage, HiveConnectionCard,
 };
 use thiserror::Error;
 
@@ -163,6 +163,25 @@ impl FederationHttpClient {
             "api/v1/federation/stewardship",
             Some(node_credential),
             None,
+        )
+        .await
+    }
+
+    /// Delivers one durable, already-authorized-locally Steward task request.
+    /// Keeper re-authorizes the exact scope before creating any work.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, conflict, bound, or protocol failures.
+    pub async fn submit_steward_task(
+        &self,
+        node_credential: &str,
+        command: &FederationStewardTaskCommand,
+    ) -> Result<FederationStewardTaskReceipt, FederationHttpError> {
+        self.send_json(
+            Method::POST,
+            "api/v1/federation/steward/tasks",
+            Some(node_credential),
+            Some(command),
         )
         .await
     }

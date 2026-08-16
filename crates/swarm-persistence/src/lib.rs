@@ -25,7 +25,9 @@ mod federation;
 mod federation_handoff_reconciliation;
 mod federation_handoffs;
 mod federation_jira_claims;
+mod federation_steward_tasks;
 mod federation_stewardships;
+pub use federation_steward_tasks::MAX_FEDERATION_STEWARD_TASK_BATCH;
 mod federation_tasks;
 pub use federation_tasks::MAX_FEDERATION_TASK_COMMAND_BATCH;
 mod feedback;
@@ -72,12 +74,12 @@ mod workers;
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
-const MAX_TASK_TITLE_BYTES: usize = 240;
-const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
+pub(crate) const MAX_TASK_TITLE_BYTES: usize = 240;
+pub(crate) const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 57;
+const CURRENT_SCHEMA_VERSION: i64 = 58;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -168,6 +170,12 @@ pub enum TaskStoreError {
     FederationJiraClaimQueueFull,
     #[error("The Apiary task or task feed is invalid")]
     InvalidFederationTask,
+    #[error("The Steward task command is invalid")]
+    InvalidFederationStewardTask,
+    #[error("The synchronized Steward scope does not allow that action")]
+    StewardActionDenied,
+    #[error("This Hive already has the maximum number of queued Steward tasks")]
+    FederationStewardTaskQueueFull,
     #[error("The Jira issue is already claimed by another Hive")]
     FederationClaimConflict,
     #[error("The federation claim already has a conflicting handoff")]
@@ -1578,6 +1586,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 57 {
         federation_tasks::migrate_local_apiary_task_lifecycle_intents(transaction)?;
+    }
+    if schema_version < 58 {
+        federation_steward_tasks::migrate_federation_steward_task_commands(transaction)?;
     }
     Ok(())
 }

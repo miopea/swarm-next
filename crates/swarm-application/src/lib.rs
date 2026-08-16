@@ -9,10 +9,11 @@ use swarm_domain::{
     FederationDepartureReadiness, FederationDepartureReceipt, FederationJoinAcceptance,
     FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
     FederationMemberConnection, FederationNodeId, FederationSharedClaim,
-    FederationStewardshipSnapshot, FederationSyncCondition, FederationSyncHealth,
-    FederationTaskCommand, FederationTaskCommandId, FederationTaskCommandReceipt,
-    FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
-    FederationTaskSyncStatus, HiveConnectionCard, HiveId, JiraConnectionState,
+    FederationStewardTaskCommand, FederationStewardTaskCommandId, FederationStewardTaskOutboxEntry,
+    FederationStewardTaskReceipt, FederationStewardshipSnapshot, FederationSyncCondition,
+    FederationSyncHealth, FederationTaskCommand, FederationTaskCommandId,
+    FederationTaskCommandReceipt, FederationTaskOutboxEntry, FederationTaskOutboxStatus,
+    FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard, HiveId, JiraConnectionState,
     JiraProjectBindingId, LocalApiaryContext, LocalApiaryRole, LocalApiaryTaskExecution,
     OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
     PresenceObservationState, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId,
@@ -131,6 +132,91 @@ impl ApiaryService {
     ) -> Result<Option<FederationStewardshipSnapshot>, ApplicationError> {
         self.store
             .local_federation_stewardship_snapshot()
+            .map_err(Into::into)
+    }
+
+    /// Applies one authenticated, retry-stable Steward task command on Keeper.
+    ///
+    /// # Errors
+    /// Returns authorization, validation, conflict, bound, or persistence errors.
+    pub fn apply_federation_steward_task_command(
+        &self,
+        node_credential: &str,
+        command: &FederationStewardTaskCommand,
+        now: i64,
+    ) -> Result<FederationStewardTaskReceipt, ApplicationError> {
+        self.store
+            .apply_federation_steward_task_command(node_credential, command, now)
+            .map_err(Into::into)
+    }
+
+    /// Queues one offline-safe Steward task for an explicitly managed Hive.
+    ///
+    /// # Errors
+    /// Returns scope, validation, outbox-bound, role, or persistence errors.
+    pub fn queue_federation_steward_task(
+        &self,
+        target_hive_id: HiveId,
+        title: &str,
+        description: &str,
+        priority: TaskPriority,
+        now: i64,
+    ) -> Result<FederationStewardTaskOutboxEntry, ApplicationError> {
+        self.store
+            .queue_federation_steward_task(target_hive_id, title, description, priority, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns one bounded batch of queued Steward commands.
+    ///
+    /// # Errors
+    /// Returns invalid-bound or persistence errors.
+    pub fn pending_federation_steward_tasks(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<FederationStewardTaskOutboxEntry>, ApplicationError> {
+        self.store
+            .pending_federation_steward_tasks(limit)
+            .map_err(Into::into)
+    }
+
+    /// Records one outbound Steward command attempt.
+    ///
+    /// # Errors
+    /// Returns role, validation, missing-command, or persistence errors.
+    pub fn record_federation_steward_task_attempt(
+        &self,
+        command_id: FederationStewardTaskCommandId,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .record_federation_steward_task_attempt(command_id, now)
+            .map_err(Into::into)
+    }
+
+    /// Applies one exact Keeper receipt to the local outbox.
+    ///
+    /// # Errors
+    /// Returns receipt conflict, validation, role, or persistence errors.
+    pub fn apply_federation_steward_task_receipt(
+        &self,
+        receipt: &FederationStewardTaskReceipt,
+        now: i64,
+    ) -> Result<FederationStewardTaskOutboxEntry, ApplicationError> {
+        self.store
+            .apply_federation_steward_task_receipt(receipt, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns recent local Steward command delivery evidence.
+    ///
+    /// # Errors
+    /// Returns corrupt-record or persistence errors.
+    pub fn federation_steward_task_outbox(
+        &self,
+    ) -> Result<Vec<FederationStewardTaskOutboxEntry>, ApplicationError> {
+        self.store
+            .list_federation_steward_task_outbox()
             .map_err(Into::into)
     }
 

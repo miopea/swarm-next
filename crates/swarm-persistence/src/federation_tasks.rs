@@ -19,7 +19,7 @@ use crate::{
 };
 
 const MAX_FEDERATION_TASK_PAGE: usize = 100;
-const MAX_APIARY_TASKS: usize = 10_000;
+pub(crate) const MAX_APIARY_TASKS: usize = 10_000;
 const MAX_APIARY_TASK_COMMANDS: usize = 10_000;
 const MAX_LOCAL_TASK_OUTBOX: usize = 1_024;
 pub const MAX_FEDERATION_TASK_COMMAND_BATCH: usize = 20;
@@ -75,76 +75,14 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let home_node_id = home_hive_id
-            .map(|hive_id| {
-                let raw_node_id = transaction
-                    .query_row(
-                        "SELECT member_node_id FROM apiary_federation_memberships
-                         WHERE apiary_id = ?1 AND member_hive_id = ?2 AND state = 'active'",
-                        params![apiary.id.to_string(), hive_id.to_string()],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()?
-                    .ok_or(TaskStoreError::InvalidFederationTask)?;
-                parse_domain_id::<FederationNodeId>(&raw_node_id).map_err(TaskStoreError::from)
-            })
-            .transpose()?;
-        let task = ApiaryTask {
-            id: ApiaryTaskId::new(),
-            apiary_id: apiary.id,
-            source: ApiaryTaskSource::Swarm,
-            title: title.to_owned(),
-            description: description.to_owned(),
+        let task = insert_apiary_task_for_hive(
+            &transaction,
+            apiary.id,
+            title,
+            description,
             priority,
-            state: TaskState::Ready,
-            home_node_id,
             home_hive_id,
-            revision: 1,
-            created_at: now,
-            updated_at: now,
-        };
-        let count = transaction.query_row(
-            "SELECT COUNT(*) FROM apiary_tasks WHERE apiary_id = ?1",
-            [apiary.id.to_string()],
-            |row| row.get::<_, usize>(0),
-        )?;
-        if count >= MAX_APIARY_TASKS {
-            return Err(TaskStoreError::InvalidFederationTask);
-        }
-        transaction.execute(
-            "INSERT INTO apiary_tasks
-                (id, apiary_id, source, title, description, priority, state,
-                 home_node_id, home_hive_id, revision, created_at, updated_at)
-             VALUES (?1, ?2, 'swarm', ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9)",
-            params![
-                task.id.to_string(),
-                task.apiary_id.to_string(),
-                task.title,
-                task.description,
-                task.priority.to_string(),
-                task.state.to_string(),
-                task.home_node_id.map(|id| id.to_string()),
-                task.home_hive_id.map(|id| id.to_string()),
-                now,
-            ],
-        )?;
-        let snapshot_json =
-            serde_json::to_string(&task).map_err(|_| TaskStoreError::InvalidFederationTask)?;
-        transaction.execute(
-            "INSERT INTO apiary_task_events
-                (apiary_id, sequence, task_id, task_revision, snapshot_json, occurred_at)
-             VALUES (
-                ?1,
-                (SELECT COALESCE(MAX(sequence), 0) + 1
-                 FROM apiary_task_events WHERE apiary_id = ?1),
-                ?2, 1, ?3, ?4
-             )",
-            params![
-                task.apiary_id.to_string(),
-                task.id.to_string(),
-                snapshot_json,
-                now
-            ],
+            now,
         )?;
         transaction.commit()?;
         Ok(task)
@@ -1156,6 +1094,73 @@ impl TaskStore {
             last_attempt_at,
         })
     }
+}
+
+/// Inserts one already-authorized Keeper task and its first ordered event in
+/// the caller's transaction. Authorization remains the caller's responsibility.
+pub(crate) fn insert_apiary_task_for_hive(
+    transaction: &rusqlite::Transaction<'_>,
+    apiary_id: ApiaryId,
+    title: &str,
+    description: &str,
+    priority: TaskPriority,
+    home_hive_id: Option<HiveId>,
+    now: i64,
+) -> Result<ApiaryTask, TaskStoreError> {
+    let home_node_id = home_hive_id
+        .map(|hive_id| {
+            let raw_node_id = transaction
+                .query_row(
+                    "SELECT member_node_id FROM apiary_federation_memberships
+                     WHERE apiary_id = ?1 AND member_hive_id = ?2 AND state = 'active'",
+                    params![apiary_id.to_string(), hive_id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .ok_or(TaskStoreError::InvalidFederationTask)?;
+            parse_domain_id::<FederationNodeId>(&raw_node_id).map_err(TaskStoreError::from)
+        })
+        .transpose()?;
+    let task = ApiaryTask {
+        id: ApiaryTaskId::new(),
+        apiary_id,
+        source: ApiaryTaskSource::Swarm,
+        title: title.to_owned(),
+        description: description.to_owned(),
+        priority,
+        state: TaskState::Ready,
+        home_node_id,
+        home_hive_id,
+        revision: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    let count = transaction.query_row(
+        "SELECT COUNT(*) FROM apiary_tasks WHERE apiary_id = ?1",
+        [apiary_id.to_string()],
+        |row| row.get::<_, usize>(0),
+    )?;
+    if count >= MAX_APIARY_TASKS {
+        return Err(TaskStoreError::InvalidFederationTask);
+    }
+    transaction.execute(
+        "INSERT INTO apiary_tasks
+            (id, apiary_id, source, title, description, priority, state,
+             home_node_id, home_hive_id, revision, created_at, updated_at)
+         VALUES (?1, ?2, 'swarm', ?3, ?4, ?5, 'ready', ?6, ?7, 1, ?8, ?8)",
+        params![
+            task.id.to_string(),
+            task.apiary_id.to_string(),
+            task.title,
+            task.description,
+            task.priority.to_string(),
+            task.home_node_id.map(|id| id.to_string()),
+            task.home_hive_id.map(|id| id.to_string()),
+            now,
+        ],
+    )?;
+    insert_task_event(transaction, &task, now)?;
+    Ok(task)
 }
 
 fn validate_apiary_task(task: &ApiaryTask, apiary_id: ApiaryId) -> Result<(), TaskStoreError> {

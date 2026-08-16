@@ -87,9 +87,15 @@ audit-preservingly revoke an explicit grant over selected Member Hives and
 capabilities. Each Member now polls a separate credential-bound snapshot of
 only her own authority, atomically replaces its local projection, and treats an
 empty snapshot as explicit revocation. The responsive Keeper and Member UIs
-expose only public member identity; **My Stewardship** is visually distinct and
-does not imply that staged remote commands already exist. Enforcement of
-Steward-scoped remote actions remains staged work.
+expose only public member identity; **My Stewardship** is visually distinct.
+The first guarded remote action is implemented: a Steward with explicit
+**Assign** authority can queue one Keeper-canonical Swarm task for a managed
+Hive. The Member journals the command before network I/O; Keeper authenticates
+the exact node and operator, rechecks the current grant and Hive scope, creates
+the task atomically, stores a retry-stable receipt, and audits rejections. The
+target Hive privately chooses its worker and repository. Observe, assist,
+takeover, member, and project actions remain staged until each receives its own
+bounded command and conflict rules.
 
 Keeper control-room checkpoint: a federated Keeper receives a first-class,
 read-only Apiary surface outside Settings. It summarizes registered membership,
@@ -102,9 +108,12 @@ Apiary navigation without being shown Keeper administration. Its read-only
 surface identifies the Keeper, local Hive and operator, catalog convergence,
 per-project readiness, synchronization health, blockers, and only shared work
 whose durable home is this Hive. A synchronized Steward additionally sees only
-her own managed Hives and granted capability names. Browser acceptance uses route-local public
-fixture data so desktop and Android layouts can be proved without changing the
-dogfood Keeper, Jira, membership, or federation credentials.
+her own managed Hives and granted capability names. With **Assign**, she can
+route an outcome through Keeper and see queued or rejected delivery state
+without seeing remote workers, repositories, terminals, or credentials.
+Browser acceptance uses route-local public fixture data so desktop and Android
+layouts can be proved without changing the dogfood Keeper, Jira, membership,
+or federation credentials.
 
 Member departure checkpoint: a joined Hive can explicitly return to Personal
 Hive mode only after Member-local outboxes and Keeper-owned shared authority are

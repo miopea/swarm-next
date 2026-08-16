@@ -257,6 +257,29 @@ export type FederationStewardshipSnapshot = {
   stewardship: Stewardship | null;
   generated_at: number;
 };
+export type FederationStewardTaskCommand = {
+  id: string;
+  apiary_id: string;
+  target_hive_id: string;
+  title: string;
+  description: string;
+  priority: TaskPriority;
+  created_at: number;
+};
+export type FederationStewardTaskReceipt = {
+  command_id: string;
+  outcome: "applied" | "rejected";
+  stewardship_id: string | null;
+  task: ApiaryTask | null;
+  processed_at: number;
+};
+export type FederationStewardTaskOutboxEntry = {
+  command: FederationStewardTaskCommand;
+  state: "queued" | "applied" | "rejected";
+  attempt_count: number;
+  last_attempt_at: number | null;
+  receipt: FederationStewardTaskReceipt | null;
+};
 export type ApiarySharedWorkClaim = {
   id: string;
   apiary_id: string;
@@ -883,6 +906,25 @@ export async function fetchMyFederationStewardship(
 ): Promise<FederationStewardshipSnapshot | null> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/my-stewardship");
   return response.json() as Promise<FederationStewardshipSnapshot | null>;
+}
+
+export async function fetchFederationStewardTaskOutbox(
+  operatorToken: string,
+): Promise<FederationStewardTaskOutboxEntry[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward/tasks");
+  return response.json() as Promise<FederationStewardTaskOutboxEntry[]>;
+}
+
+export async function queueFederationStewardTask(
+  operatorToken: string,
+  input: { target_hive_id: string; title: string; description: string; priority: TaskPriority },
+): Promise<FederationStewardTaskOutboxEntry> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward/tasks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return response.json() as Promise<FederationStewardTaskOutboxEntry>;
 }
 
 export async function fetchHiveConnectionCard(

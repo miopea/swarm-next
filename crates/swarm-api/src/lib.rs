@@ -65,7 +65,8 @@ use swarm_domain::{
     DecisionRequestId, FederationCatalogSnapshot, FederationClaimHandoff, FederationClaimHandoffId,
     FederationClaimId, FederationDepartureReadiness, FederationDepartureReceipt,
     FederationHandoffTarget, FederationJoinSubmission, FederationMemberConnection,
-    FederationNodeId, FederationSharedClaim, FederationStewardshipSnapshot,
+    FederationNodeId, FederationSharedClaim, FederationStewardTaskCommand,
+    FederationStewardTaskOutboxEntry, FederationStewardTaskReceipt, FederationStewardshipSnapshot,
     FederationSyncCondition, FederationTaskCommand, FederationTaskOutboxEntry,
     FederationTaskOutboxStatus, FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard,
     HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope,
@@ -538,6 +539,7 @@ impl AppState {
     /// Pulls one bounded federation snapshot from Keeper for a joined Member.
     /// Jira is deliberately absent from this path: every Hive continues to
     /// synchronize canonical Jira work directly with Jira.
+    #[allow(clippy::too_many_lines)]
     pub async fn reconcile_federation(&self) {
         let Some(store) = self.task_store.as_ref() else {
             return;
@@ -595,6 +597,13 @@ impl AppState {
         }
         if let Err(condition) =
             reconcile_federation_stewardship(&service, &client, &connection.node_credential, now)
+                .await
+        {
+            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            return;
+        }
+        if let Err(condition) =
+            reconcile_federation_steward_tasks(&service, &client, &connection.node_credential, now)
                 .await
         {
             record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
@@ -1419,6 +1428,16 @@ struct CreateApiaryTaskRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct CreateStewardTaskRequest {
+    target_hive_id: HiveId,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    priority: TaskPriority,
+}
+
+#[derive(Debug, Deserialize)]
 struct TransitionApiaryTaskRequest {
     target_state: TaskState,
 }
@@ -1811,6 +1830,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/federation/stewardship",
             get(federation_stewardship),
         )
+        .route(
+            "/api/v1/federation/steward/tasks",
+            post(apply_federation_steward_task),
+        )
         .route("/api/v1/federation/tasks", get(federation_tasks))
         .route(
             "/api/v1/federation/tasks/commands",
@@ -1864,6 +1887,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/apiary/my-stewardship",
             get(get_local_federation_stewardship),
+        )
+        .route(
+            "/api/v1/apiary/steward/tasks",
+            get(get_federation_steward_task_outbox).post(queue_federation_steward_task),
         )
         .route(
             "/api/v1/apiary/tasks",
@@ -3069,6 +3096,19 @@ async fn federation_stewardship(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
 }
 
+async fn apply_federation_steward_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(command): Json<FederationStewardTaskCommand>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let receipt: FederationStewardTaskReceipt = apiary_service(&state)?
+        .apply_federation_steward_task_command(credential, &command, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)).into_response())
+}
+
 async fn federation_tasks(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -3275,6 +3315,43 @@ async fn get_local_federation_stewardship(
         .local_federation_stewardship()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
+}
+
+async fn queue_federation_steward_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateStewardTaskRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let entry: FederationStewardTaskOutboxEntry = apiary_service(&state)?
+        .queue_federation_steward_task(
+            request.target_hive_id,
+            &request.title,
+            &request.description,
+            request.priority,
+            unix_timestamp(),
+        )
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    let reconcile_state = state.clone();
+    tokio::spawn(async move { reconcile_state.reconcile_federation().await });
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(entry),
+    )
+        .into_response())
+}
+
+async fn get_federation_steward_task_outbox(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let entries = apiary_service(&state)?
+        .federation_steward_task_outbox()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(entries)).into_response())
 }
 
 async fn get_apiary_tasks(
@@ -5071,6 +5148,39 @@ async fn reconcile_federation_stewardship(
         })
 }
 
+async fn reconcile_federation_steward_tasks(
+    service: &ApiaryService,
+    client: &federation_http::FederationHttpClient,
+    node_credential: &str,
+    now: i64,
+) -> Result<(), FederationSyncCondition> {
+    let commands = service
+        .pending_federation_steward_tasks(swarm_persistence::MAX_FEDERATION_STEWARD_TASK_BATCH)
+        .map_err(|error| {
+            tracing::warn!(%error, "Steward task outbox could not be read");
+            FederationSyncCondition::Incompatible
+        })?;
+    for entry in commands {
+        service
+            .record_federation_steward_task_attempt(entry.command.id, now)
+            .map_err(|error| {
+                tracing::warn!(%error, "Steward task attempt could not be recorded");
+                FederationSyncCondition::Incompatible
+            })?;
+        let receipt = client
+            .submit_steward_task(node_credential, &entry.command)
+            .await
+            .map_err(federation_sync_condition)?;
+        service
+            .apply_federation_steward_task_receipt(&receipt, now)
+            .map_err(|error| {
+                tracing::warn!(%error, "Keeper returned an incompatible Steward task receipt");
+                FederationSyncCondition::Incompatible
+            })?;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 async fn reconcile_federation_claim_handoffs(
     store: &TaskStore,
@@ -5891,6 +6001,21 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::InvalidStewardship => ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_stewardship",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidFederationStewardTask => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_steward_task",
+            error.to_string(),
+        ),
+        TaskStoreError::StewardActionDenied => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "steward_action_denied",
+            error.to_string(),
+        ),
+        TaskStoreError::FederationStewardTaskQueueFull => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "steward_task_queue_full",
             error.to_string(),
         ),
         TaskStoreError::StewardshipNotFound => ApiError::new(
@@ -8194,6 +8319,7 @@ mod tests {
         assert_keeper_has_two_hives(&keeper);
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn assert_stewardship_endpoints(
         app: Router,
         steward_operator_id: OperatorId,
@@ -8253,6 +8379,57 @@ mod tests {
         for forbidden in ["credential", "endpoint", "repository", "terminal", "jira"] {
             assert!(!remote_json.to_string().contains(forbidden));
         }
+
+        let steward_command_id = swarm_domain::FederationStewardTaskCommandId::new();
+        let command = serde_json::json!({
+            "id": steward_command_id,
+            "apiary_id": created_json["apiary_id"],
+            "target_hive_id": managed_hive_id,
+            "title": "Coordinate a managed Hive outcome",
+            "description": "The target Hive chooses its private worker.",
+            "priority": "normal",
+            "created_at": unix_timestamp(),
+        });
+        let routed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/federation/steward/tasks")
+                    .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(command.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(routed.status(), StatusCode::OK);
+        assert_eq!(routed.headers()[header::CACHE_CONTROL], "no-store");
+        let routed_json = response_json(routed).await;
+        assert_eq!(routed_json["outcome"], "applied");
+        assert_eq!(
+            routed_json["task"]["home_hive_id"],
+            managed_hive_id.to_string()
+        );
+        assert_eq!(
+            routed_json["task"]["title"],
+            "Coordinate a managed Hive outcome"
+        );
+
+        let exact_retry = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/federation/steward/tasks")
+                    .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(command.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response_json(exact_retry).await, routed_json);
 
         let listed = authorized_get(app.clone(), "/api/v1/apiary/stewardships").await;
         assert_eq!(listed.status(), StatusCode::OK);
