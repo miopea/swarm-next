@@ -1380,3 +1380,20 @@ the independently updated terminal host through the API to worker settings:
   worker-engine build `f8abd293`, and Queen provider PID `2966160` remained
   unchanged. No Jira, task, worker, or Apiary mutation occurred, and the
   temporary viewport override was reset.
+- Main commit `5356d09e` and host-compatible release
+  `0.1.0-20eb322d5139` restore mobile terminal scrolling on Android Chromium's
+  primary pointer-event path. Swarm captures one primary touch pointer, owns
+  the drag until release, and prevents xterm's document gesture recognizer
+  from reinterpreting the same movement. Older WebKit retains the bounded
+  TouchEvent fallback, while mouse selection and desktop wheel behavior are
+  unchanged. The regression exercises the real child-to-capture propagation
+  path and proves one drag produces one scroll operation without reaching the
+  competing downstream listener. The complete gate passed 414 Rust tests,
+  warnings-denied Clippy, formatting, all 245 frontend tests, strict
+  TypeScript, and the production build. The deployed terminal rendered at
+  Android-size 412 by 915 and desktop 1,142 by 888 with zero horizontal
+  overflow; its live canonical buffer exposed 1,000 scrollback rows. API PID
+  advanced to `101779`; terminal-host PID `2966127`, worker-engine build
+  `f8abd293`, and Queen provider PID `2966160` remained unchanged. Database
+  `quick_check` remained `ok`; no Jira, task, worker, or Apiary mutation
+  occurred, and the temporary viewport override was reset.
