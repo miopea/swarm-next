@@ -18,6 +18,7 @@ export class XtermSurface implements TerminalSurface {
   readonly #themeObserver: MutationObserver | undefined;
   #resizeObserver: ResizeObserver | undefined;
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  #redrawFrame: number | undefined;
   #element: HTMLElement | undefined;
   #pointerIdentifier: number | undefined;
   #touchIdentifier: number | undefined;
@@ -63,6 +64,9 @@ export class XtermSurface implements TerminalSurface {
     }
     this.#resizeObserver = new ResizeObserver(() => this.#scheduleFit());
     this.#resizeObserver.observe(element);
+    window.addEventListener("resize", this.#handleViewportChange);
+    window.addEventListener("pageshow", this.#handleViewportChange);
+    document.addEventListener("visibilitychange", this.#handleVisibilityChange);
   }
 
   focus(): void {
@@ -81,6 +85,7 @@ export class XtermSurface implements TerminalSurface {
         const usable = usableDimensions(dimensions);
         if (!usable) continue;
         this.#terminal.resize(usable.columns, usable.rows);
+        this.#refreshViewport();
         return usable;
       }
       throw new Error("Terminal renderer metrics were not ready within the bounded fit window");
@@ -141,8 +146,12 @@ export class XtermSurface implements TerminalSurface {
   dispose(): void {
     this.#disposed = true;
     this.#cancelScheduledFit();
+    this.#cancelScheduledRedraw();
     this.#themeObserver?.disconnect();
     this.#resizeObserver?.disconnect();
+    window.removeEventListener("resize", this.#handleViewportChange);
+    window.removeEventListener("pageshow", this.#handleViewportChange);
+    document.removeEventListener("visibilitychange", this.#handleVisibilityChange);
     this.#element?.removeEventListener("pointerdown", this.#handlePointerStart, true);
     this.#element?.removeEventListener("pointermove", this.#handlePointerMove, true);
     this.#element?.removeEventListener("pointerup", this.#handlePointerEnd, true);
@@ -212,6 +221,14 @@ export class XtermSurface implements TerminalSurface {
     if (ended) this.#resetTouchGesture();
   };
 
+  readonly #handleViewportChange = (): void => {
+    this.#scheduleFit();
+  };
+
+  readonly #handleVisibilityChange = (): void => {
+    if (document.visibilityState === "visible") this.#scheduleFit();
+  };
+
   #beginTouchGesture(clientY: number): void {
     this.#touchLastY = clientY;
     this.#touchDistanceY = 0;
@@ -257,6 +274,10 @@ export class XtermSurface implements TerminalSurface {
     if (!this.#restorePending) return;
     this.#restorePending = false;
     if (this.#element) this.#element.style.visibility = "";
+    // Chromium can retain a blank canvas when xterm writes a canonical
+    // snapshot while its surface is hidden. Paint again on the first visible
+    // frame instead of relying on the browser to invalidate the canvas.
+    this.#scheduleRedraw();
   }
 
   #fitIfUsable(): void {
@@ -264,8 +285,32 @@ export class XtermSurface implements TerminalSurface {
     const dimensions = this.#fit.proposeDimensions();
     const usable = usableDimensions(dimensions);
     if (!usable) return;
-    if (usable.rows === this.#terminal.rows && usable.columns === this.#terminal.cols) return;
-    this.#terminal.resize(usable.columns, usable.rows);
+    if (usable.rows !== this.#terminal.rows || usable.columns !== this.#terminal.cols) {
+      this.#terminal.resize(usable.columns, usable.rows);
+    }
+    // A stable row/column count does not mean Chromium's backing canvas is
+    // healthy. Explicitly repaint after responsive layout and PWA resumes.
+    this.#refreshViewport();
+  }
+
+  #refreshViewport(): void {
+    if (this.#disposed || this.#terminal.rows < 1) return;
+    this.#terminal.refresh(0, this.#terminal.rows - 1);
+  }
+
+  #scheduleRedraw(): void {
+    this.#cancelScheduledRedraw();
+    this.#redrawFrame = requestAnimationFrame(() => {
+      this.#redrawFrame = undefined;
+      if (!this.#element?.isConnected) return;
+      this.#refreshViewport();
+    });
+  }
+
+  #cancelScheduledRedraw(): void {
+    if (this.#redrawFrame === undefined) return;
+    cancelAnimationFrame(this.#redrawFrame);
+    this.#redrawFrame = undefined;
   }
 
   #publishBufferMetrics(): void {

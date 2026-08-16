@@ -198,6 +198,21 @@ test("mobile controls use the same terminal input transport", () => {
   expect(connection.sendInput).toHaveBeenCalledWith("/status\r");
 });
 
+test("manual redraw preserves the live transport while repainting its surface", async () => {
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledOnce());
+  vi.mocked(surface.fit).mockClear();
+
+  await controller.redraw();
+
+  expect(surface.fit).toHaveBeenCalledOnce();
+  expect(connection.start).toHaveBeenCalledOnce();
+  expect(connection.dispose).not.toHaveBeenCalled();
+});
+
 test("only explicit session close disposes the controller", () => {
   const surface = fakeSurface();
   const connection = fakeConnection();

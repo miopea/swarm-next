@@ -8,6 +8,7 @@ const xterm = vi.hoisted(() => ({
   options: undefined as Record<string, unknown> | undefined,
   focus: vi.fn(),
   resize: vi.fn(),
+  refresh: vi.fn(),
   scrollLines: vi.fn(),
   bufferBaseY: 0,
   bufferViewportY: 0,
@@ -56,6 +57,7 @@ vi.mock("@xterm/xterm", () => ({
       this.cols = columns;
       this.rows = rows;
     }
+    refresh(start: number, end: number): void { xterm.refresh(start, end); }
     scrollLines(lines: number): void { xterm.scrollLines(lines); }
     write(_bytes: Uint8Array, callback: () => void): void {
       callback();
@@ -368,6 +370,7 @@ test("continuous container movement produces one settled terminal resize", async
   document.body.append(element);
   xterm.propose.mockReset().mockReturnValue({ rows: 38, cols: 132 });
   xterm.resize.mockClear();
+  xterm.refresh.mockClear();
   const surface = new XtermSurface();
   surface.open(element);
 
@@ -380,6 +383,7 @@ test("continuous container movement produces one settled terminal resize", async
   await vi.advanceTimersByTimeAsync(1);
   expect(xterm.resize).toHaveBeenCalledOnce();
   expect(xterm.resize).toHaveBeenCalledWith(132, 38);
+  expect(xterm.refresh).toHaveBeenCalledWith(0, 37);
 
   surface.dispose();
   element.remove();
@@ -433,6 +437,7 @@ test("snapshot geometry stays hidden until the visible renderer is refitted", as
   xterm.propose.mockReset().mockReturnValue({ rows: 38, cols: 132 });
   const surface = new XtermSurface();
   const element = document.createElement("div");
+  document.body.append(element);
   surface.open(element);
   xterm.bufferBaseY = 48;
 
@@ -452,7 +457,40 @@ test("snapshot geometry stays hidden until the visible renderer is refitted", as
   frames.shift()?.(0);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
   expect(element.style.visibility).toBe("");
+  xterm.refresh.mockClear();
+  frames.shift()?.(16);
+  expect(xterm.refresh).toHaveBeenCalledWith(0, 37);
+  surface.dispose();
+  element.remove();
 });
+
+test("repaints unchanged geometry after a settled viewport change", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const element = document.createElement("div");
+  document.body.append(element);
+  xterm.propose.mockReset().mockReturnValue({ rows: 24, cols: 80 });
+  xterm.resize.mockClear();
+  xterm.refresh.mockClear();
+  const surface = new XtermSurface();
+  surface.open(element);
+
+  window.dispatchEvent(new Event("resize"));
+  await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_FOR_TEST_MS);
+
+  expect(xterm.resize).not.toHaveBeenCalled();
+  expect(xterm.refresh).toHaveBeenCalledWith(0, 23);
+  surface.dispose();
+  element.remove();
+});
+
+const RESIZE_SETTLE_FOR_TEST_MS = 120;
 
 function touchEvent(
   type: "touchstart" | "touchmove" | "touchend" | "touchcancel",

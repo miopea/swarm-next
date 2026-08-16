@@ -380,8 +380,8 @@ export function App() {
     await perform(async () => {
       const controlRoom = await loadControlRoom(operatorToken);
       controlRoomModel.replace(controlRoom);
-      if (activeSessionId) terminalWorkspace.closeSession(activeSessionId);
       setTerminalRevision((current) => current + 1);
+      if (activeSessionId) await terminalWorkspace.redrawSession(activeSessionId);
       setActiveSessionId((current) =>
         current && controlRoom.sessions.some((session) => session.session_id === current)
           ? current

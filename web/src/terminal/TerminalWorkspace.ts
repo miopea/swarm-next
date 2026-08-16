@@ -38,6 +38,10 @@ export class TerminalWorkspace {
     else this.#pendingFocus.set(sessionId, input);
   }
 
+  async redrawSession(sessionId: string): Promise<void> {
+    await this.#controllers.get(sessionId)?.redraw();
+  }
+
   closeSession(sessionId: string): void {
     this.#pendingFocus.delete(sessionId);
     this.#controllers.closeSession(sessionId);

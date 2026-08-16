@@ -101,6 +101,12 @@ export class TerminalController {
     this.#applyPendingFocus();
   }
 
+  /** Refit and repaint a connected renderer without replacing its transport. */
+  async redraw(): Promise<void> {
+    if (this.#disposed || !this.#opened || !this.#host.parentElement) return;
+    await this.#refitAttachedSurface();
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
