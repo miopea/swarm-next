@@ -1047,3 +1047,17 @@ the independently updated terminal host through the API to worker settings:
   changing live source data could not block or mutate the maintenance checks.
   API PID remained `3682916`; terminal-host PID `2966127` remained unchanged.
   Every proof browser and context closed after the run.
+- Release `0.1.0-dev-8b6ef0068439` makes the cross-installation handoff explicit
+  from both sides. A Keeper-generated link now repeats its exact destination;
+  the receiving personal Hive presents a compact three-step journey: paste the
+  private link in that Hive, wait for the Keeper to approve its signed public
+  identity, then review policy and Jira readiness before joining. Opening the
+  Keeper-hosted URL is explicitly distinguished from ingesting it into the
+  receiving Hive. All 221 frontend tests, strict TypeScript, and the production
+  build passed. Live acceptance covered every primary surface plus isolated
+  Keeper, Member, and personal-Hive views at 1,440 by 900 and Android-size 412
+  by 915. All surfaces had zero horizontal overflow; the personal-Hive view
+  exposed 88 named controls at both sizes; authentication survived full browser
+  restarts. API PID advanced to `3708322`; terminal-host PID `2966127` and its
+  worker-engine build remained unchanged. Every proof browser and context
+  closed after the run.
