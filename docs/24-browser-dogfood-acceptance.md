@@ -1397,3 +1397,17 @@ the independently updated terminal host through the API to worker settings:
   `f8abd293`, and Queen provider PID `2966160` remained unchanged. Database
   `quick_check` remained `ok`; no Jira, task, worker, or Apiary mutation
   occurred, and the temporary viewport override was reset.
+- Main commit `d814f868` and host-compatible release
+  `0.1.0-f3260fa27b7d` prevent Queen from moving Ready or Blocked work to
+  Active while its assigned worker is unloaded. The application transition is
+  guarded atomically against the exact assigned live session, and the direct
+  Queen MCP path proves a sleeping assignment remains Ready until that worker
+  has been loaded. The complete gate passed 416 Rust tests, warnings-denied
+  Clippy, formatting, all 245 frontend tests, strict TypeScript, and the
+  production build. The live Queen settings rendered at desktop 1,142 by 888
+  and Android-size 412 by 915 with the new wake-before-Active explanation and
+  zero horizontal overflow. Automatic Queen review remained off. API PID
+  advanced to `113653`; terminal-host PID `2966127`, worker-engine build
+  `f8abd293`, and Queen provider PID `2966160` remained unchanged. Database
+  `quick_check` remained `ok`; no Jira, task, worker, or Apiary mutation
+  occurred, and the temporary viewport override was reset.
