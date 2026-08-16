@@ -8,6 +8,7 @@ use swarm_domain::{
     FederationClaimHandoffId, FederationClaimId, FederationDepartureReadiness,
     FederationDepartureReceipt, FederationHandoffTarget, FederationJoinAcceptance,
     FederationJoinSubmission, FederationNodeId, FederationSharedClaim,
+    FederationStewardAssistCommand, FederationStewardAssistInbox, FederationStewardAssistReceipt,
     FederationStewardTaskCommand, FederationStewardTaskReceipt, FederationStewardshipSnapshot,
     FederationTaskCommand, FederationTaskCommandReceipt, FederationTaskPage, HiveConnectionCard,
 };
@@ -182,6 +183,42 @@ impl FederationHttpClient {
             "api/v1/federation/steward/tasks",
             Some(node_credential),
             Some(command),
+        )
+        .await
+    }
+
+    /// Delivers one queued assistance request or response. Keeper rechecks the
+    /// exact actor, target, and current delegation before applying it.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, authorization, or protocol failures.
+    pub async fn submit_steward_assist(
+        &self,
+        node_credential: &str,
+        command: &FederationStewardAssistCommand,
+    ) -> Result<FederationStewardAssistReceipt, FederationHttpError> {
+        self.send_json(
+            Method::POST,
+            "api/v1/federation/steward/assists",
+            Some(node_credential),
+            Some(command),
+        )
+        .await
+    }
+
+    /// Reads only assistance addressed to this authenticated Member Hive.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, bound, or protocol failures.
+    pub async fn steward_assists(
+        &self,
+        node_credential: &str,
+    ) -> Result<FederationStewardAssistInbox, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::GET,
+            "api/v1/federation/steward/assists",
+            Some(node_credential),
+            None,
         )
         .await
     }
@@ -555,8 +592,11 @@ mod tests {
         FederationDepartureReceiptId, FederationDepartureReceiptPayload,
         FederationJoinSubmissionPayload, FederationMembershipReceipt,
         FederationMembershipReceiptId, FederationMembershipReceiptPayload, FederationNodeId,
-        FederationTaskCommandId, FederationTaskCommandKind, FederationTaskCommandOutcome, HiveId,
-        OperatorId, SharedWorkBackend, TaskState,
+        FederationStewardAssistAction, FederationStewardAssistCommandId,
+        FederationStewardAssistOutcome, FederationStewardAssistRequest,
+        FederationStewardAssistRequestId, FederationStewardAssistState, FederationTaskCommandId,
+        FederationTaskCommandKind, FederationTaskCommandOutcome, HiveId, OperatorId,
+        SharedWorkBackend, TaskState,
     };
 
     use super::*;
@@ -826,6 +866,82 @@ mod tests {
                 .await
                 .unwrap(),
             receipt
+        );
+    }
+
+    #[tokio::test]
+    async fn steward_assist_transport_preserves_auth_command_and_inbox() {
+        let apiary_id = ApiaryId::new();
+        let source_hive_id = HiveId::new();
+        let target_hive_id = HiveId::new();
+        let request = FederationStewardAssistRequest {
+            id: FederationStewardAssistRequestId::new(),
+            apiary_id,
+            source_hive_id,
+            target_hive_id,
+            message: "I can help review the blocked rollout.".into(),
+            state: FederationStewardAssistState::Pending,
+            created_at: 1_000,
+            resolved_at: None,
+        };
+        let command = FederationStewardAssistCommand {
+            id: FederationStewardAssistCommandId::new(),
+            apiary_id,
+            action: FederationStewardAssistAction::Request {
+                target_hive_id,
+                message: request.message.clone(),
+            },
+            created_at: 1_000,
+        };
+        let receipt = FederationStewardAssistReceipt {
+            command_id: command.id,
+            outcome: FederationStewardAssistOutcome::Applied,
+            stewardship_id: None,
+            request: Some(request.clone()),
+            processed_at: 1_001,
+        };
+        let inbox = FederationStewardAssistInbox {
+            requests: vec![request],
+            generated_at: 1_002,
+        };
+        let expected_command = command.clone();
+        let expected_receipt = receipt.clone();
+        let expected_inbox = inbox.clone();
+        let app = Router::new().route(
+            "/swarm/api/v1/federation/steward/assists",
+            axum::routing::post(
+                move |headers: axum::http::HeaderMap,
+                      Json(body): Json<FederationStewardAssistCommand>| {
+                    let expected_command = expected_command.clone();
+                    let expected_receipt = expected_receipt.clone();
+                    async move {
+                        assert_eq!(headers[header::AUTHORIZATION], "Bearer member-secret");
+                        assert_eq!(body, expected_command);
+                        Json(expected_receipt)
+                    }
+                },
+            )
+            .get(move |headers: axum::http::HeaderMap| {
+                let expected_inbox = expected_inbox.clone();
+                async move {
+                    assert_eq!(headers[header::AUTHORIZATION], "Bearer member-secret");
+                    Json(expected_inbox)
+                }
+            }),
+        );
+        let address = spawn_server(app).await;
+        let client = FederationHttpClient::new(&format!("http://{address}/swarm")).unwrap();
+
+        assert_eq!(
+            client
+                .submit_steward_assist("member-secret", &command)
+                .await
+                .unwrap(),
+            receipt
+        );
+        assert_eq!(
+            client.steward_assists("member-secret").await.unwrap(),
+            inbox
         );
     }
 

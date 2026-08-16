@@ -25,6 +25,7 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
     if (url.endsWith("/task-outbox")) return Promise.resolve(ok([]));
     if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
     if (url.endsWith("/steward/tasks")) return Promise.resolve(ok([]));
+    if (url.endsWith("/steward/assists")) return Promise.resolve(ok({ incoming: [], outbox: [] }));
     if (url.endsWith("/local-executions")) return Promise.resolve(ok([]));
     if (url.endsWith("/my-stewardship")) return Promise.resolve(ok({
       schema_version: 1, protocol_version: 1, apiary_id: "apiary-1", member_node_id: "node-2", member_operator_id: "operator-2", generated_at: 100,
@@ -80,6 +81,7 @@ test("keeps local work usable when part of the Member rollup is unavailable", as
     if (url.endsWith("/task-outbox")) return Promise.resolve(ok([]));
     if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
     if (url.endsWith("/steward/tasks")) return Promise.resolve(ok([]));
+    if (url.endsWith("/steward/assists")) return Promise.resolve(ok({ incoming: [], outbox: [] }));
     if (url.endsWith("/local-executions")) return Promise.resolve(ok([]));
     if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
     if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "network_unavailable", projects: [], blockers: ["catalog_missing"] }));
@@ -104,6 +106,7 @@ test("sends Keeper-routed work to one private worker and opens the local task", 
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 1, task_count: 1, last_applied_at: 1 }));
     if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
     if (url.endsWith("/steward/tasks")) return Promise.resolve(ok([]));
+    if (url.endsWith("/steward/assists")) return Promise.resolve(ok({ incoming: [], outbox: [] }));
     if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
     if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: [] }));
     throw new Error(`Unexpected request: ${url}`);
@@ -127,6 +130,7 @@ test("shows linked worker progress as ordered Keeper synchronization", async () 
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 1, task_count: 1, last_applied_at: 1 }));
     if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 1, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
     if (url.endsWith("/steward/tasks")) return Promise.resolve(ok([]));
+    if (url.endsWith("/steward/assists")) return Promise.resolve(ok({ incoming: [], outbox: [] }));
     if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
     if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: [] }));
     throw new Error(`Unexpected request: ${url}`);
@@ -157,6 +161,7 @@ test("routes Steward work through Keeper without exposing the target Hive's work
       { hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye", role: "member", is_local: false },
     ]));
     if (url.endsWith("/shared-work") || url.endsWith("/handoffs") || url.endsWith("/handoff-targets") || url.endsWith("/task-outbox") || url.endsWith("/local-executions") || url.endsWith("/steward/tasks")) return Promise.resolve(ok([]));
+    if (url.endsWith("/steward/assists")) return Promise.resolve(ok({ incoming: [], outbox: [] }));
     if (url.endsWith("/tasks")) return Promise.resolve(ok([]));
     if (url.endsWith("/sync-health")) return Promise.resolve(ok({ condition: "current", last_attempt_at: 1, last_success_at: 1, consecutive_failures: 0, next_attempt_at: null }));
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 0, task_count: 0, last_applied_at: 1 }));
@@ -179,6 +184,48 @@ test("routes Steward work through Keeper without exposing the target Hive's work
   fireEvent.click(screen.getByRole("button", { name: "Route through Keeper" }));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/steward/tasks"), expect.objectContaining({ method: "POST" })));
   expect(document.body).not.toHaveTextContent("Fern worker");
+});
+
+test("offers and accepts Steward assistance without injecting a worker terminal", async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/steward/assists") && init?.method === "POST") {
+      expect(JSON.parse(String(init.body))).toEqual({ target_hive_id: "hive-3", message: "I can help review the release decision." });
+      return Promise.resolve(ok({ command: { id: "assist-command-1" }, state: "queued" }));
+    }
+    if (url.includes("/steward/assists/assist-1/response")) {
+      expect(JSON.parse(String(init?.body))).toEqual({ decision: "accepted" });
+      return Promise.resolve(ok({ command: { id: "response-1" }, state: "queued" }));
+    }
+    if (url.endsWith("/members")) return Promise.resolve(ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: false },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: true },
+      { hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye", role: "member", is_local: false },
+    ]));
+    if (url.endsWith("/steward/assists")) return Promise.resolve(ok({ incoming: [{ id: "assist-1", apiary_id: "apiary-1", source_hive_id: "hive-3", target_hive_id: "hive-2", message: "I can help verify the incident recovery.", state: "pending", created_at: 1, resolved_at: null }], outbox: [] }));
+    if (url.endsWith("/my-stewardship")) return Promise.resolve(ok({ schema_version: 1, protocol_version: 1, apiary_id: "apiary-1", member_node_id: "node-2", member_operator_id: "operator-2", generated_at: 100, stewardship: { id: "stewardship-1", apiary_id: "apiary-1", steward_operator_id: "operator-2", managed_hive_ids: ["hive-3"], capabilities: ["observe", "assist"] } }));
+    if (url.endsWith("/sync-health")) return Promise.resolve(ok({ condition: "current", last_attempt_at: 1, last_success_at: 1, consecutive_failures: 0, next_attempt_at: null }));
+    if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 0, task_count: 0, last_applied_at: 1 }));
+    if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
+    if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: [] }));
+    if (url.endsWith("/shared-work") || url.endsWith("/handoffs") || url.endsWith("/handoff-targets") || url.endsWith("/task-outbox") || url.endsWith("/local-executions") || url.endsWith("/steward/tasks") || url.endsWith("/tasks")) return Promise.resolve(ok([]));
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={[]} onManage={() => undefined} onOpenTask={() => undefined} />);
+
+  expect(await screen.findByRole("heading", { name: "A trusted Steward offered help" })).toBeInTheDocument();
+  expect(screen.getByText("I can help verify the incident recovery.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Accept help" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/assist-1/response"), expect.objectContaining({ method: "POST" })));
+  const targetPicker = screen.getAllByRole("combobox", { name: "Assistance target Hive" }).at(-1)!;
+  const assistComposer = screen.getAllByRole("textbox", { name: "Steward assistance message" }).at(-1)!;
+  const offerButton = screen.getAllByRole("button", { name: "Offer help through Keeper" }).at(-1)!;
+  fireEvent.change(targetPicker, { target: { value: "hive-3" } });
+  fireEvent.change(assistComposer, { target: { value: "I can help review the release decision." } });
+  fireEvent.click(offerButton);
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/steward\/assists$/), expect.objectContaining({ method: "POST" })));
+  expect(document.body).toHaveTextContent("never injected into a terminal");
 });
 
 function memberIdentity() { return { operator: { id: "operator-2", display_name: "Cora" }, hive: { id: "hive-2", name: "Clover Hive", operator_id: "operator-2", apiary_id: "apiary-1" }, apiary_context: { mode: "federated" as const, apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const }, local_role: "member" as const } }; }

@@ -50,6 +50,8 @@ domain_id!(FederationClaimHandoffId);
 domain_id!(ApiaryTaskId);
 domain_id!(FederationTaskCommandId);
 domain_id!(FederationStewardTaskCommandId);
+domain_id!(FederationStewardAssistCommandId);
+domain_id!(FederationStewardAssistRequestId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
@@ -799,6 +801,162 @@ pub struct FederationStewardTaskOutboxEntry {
     pub attempt_count: u32,
     pub last_attempt_at: Option<i64>,
     pub receipt: Option<FederationStewardTaskReceipt>,
+}
+
+/// One deliberately structured Steward request. It is addressed to the target
+/// Hive's operator and Queen, never injected into a worker terminal.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardAssistRequest {
+    pub id: FederationStewardAssistRequestId,
+    pub apiary_id: ApiaryId,
+    pub source_hive_id: HiveId,
+    pub target_hive_id: HiveId,
+    pub message: String,
+    pub state: FederationStewardAssistState,
+    pub created_at: i64,
+    pub resolved_at: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationStewardAssistState {
+    Pending,
+    Accepted,
+    Declined,
+}
+
+impl fmt::Display for FederationStewardAssistState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Pending => "pending",
+            Self::Accepted => "accepted",
+            Self::Declined => "declined",
+        })
+    }
+}
+
+impl FromStr for FederationStewardAssistState {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "accepted" => Ok(Self::Accepted),
+            "declined" => Ok(Self::Declined),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum FederationStewardAssistAction {
+    Request {
+        target_hive_id: HiveId,
+        message: String,
+    },
+    Respond {
+        request_id: FederationStewardAssistRequestId,
+        decision: FederationStewardAssistState,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardAssistCommand {
+    pub id: FederationStewardAssistCommandId,
+    pub apiary_id: ApiaryId,
+    pub action: FederationStewardAssistAction,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationStewardAssistOutcome {
+    Applied,
+    Rejected,
+}
+
+impl fmt::Display for FederationStewardAssistOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Applied => "applied",
+            Self::Rejected => "rejected",
+        })
+    }
+}
+
+impl FromStr for FederationStewardAssistOutcome {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "applied" => Ok(Self::Applied),
+            "rejected" => Ok(Self::Rejected),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardAssistReceipt {
+    pub command_id: FederationStewardAssistCommandId,
+    pub outcome: FederationStewardAssistOutcome,
+    pub stewardship_id: Option<StewardshipId>,
+    pub request: Option<FederationStewardAssistRequest>,
+    pub processed_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationStewardAssistOutboxState {
+    Queued,
+    Applied,
+    Rejected,
+}
+
+impl fmt::Display for FederationStewardAssistOutboxState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Queued => "queued",
+            Self::Applied => "applied",
+            Self::Rejected => "rejected",
+        })
+    }
+}
+
+impl FromStr for FederationStewardAssistOutboxState {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "queued" => Ok(Self::Queued),
+            "applied" => Ok(Self::Applied),
+            "rejected" => Ok(Self::Rejected),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardAssistOutboxEntry {
+    pub command: FederationStewardAssistCommand,
+    pub state: FederationStewardAssistOutboxState,
+    pub attempt_count: u32,
+    pub last_attempt_at: Option<i64>,
+    pub receipt: Option<FederationStewardAssistReceipt>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardAssistInbox {
+    pub requests: Vec<FederationStewardAssistRequest>,
+    pub generated_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardAssistLocalState {
+    pub incoming: Vec<FederationStewardAssistRequest>,
+    pub sent: Vec<FederationStewardAssistRequest>,
+    pub outbox: Vec<FederationStewardAssistOutboxEntry>,
 }
 
 /// Durable Member-side evidence that one exact Keeper catalog was verified.

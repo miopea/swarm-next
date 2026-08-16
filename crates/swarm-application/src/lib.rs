@@ -9,6 +9,9 @@ use swarm_domain::{
     FederationDepartureReadiness, FederationDepartureReceipt, FederationJoinAcceptance,
     FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
     FederationMemberConnection, FederationNodeId, FederationSharedClaim,
+    FederationStewardAssistCommand, FederationStewardAssistCommandId, FederationStewardAssistInbox,
+    FederationStewardAssistLocalState, FederationStewardAssistOutboxEntry,
+    FederationStewardAssistReceipt, FederationStewardAssistRequestId, FederationStewardAssistState,
     FederationStewardTaskAuditEntry, FederationStewardTaskCommand, FederationStewardTaskCommandId,
     FederationStewardTaskOutboxEntry, FederationStewardTaskReceipt, FederationStewardshipSnapshot,
     FederationSyncCondition, FederationSyncHealth, FederationTaskCommand, FederationTaskCommandId,
@@ -231,6 +234,132 @@ impl ApiaryService {
     ) -> Result<Vec<FederationStewardTaskAuditEntry>, ApplicationError> {
         self.store
             .list_federation_steward_task_audit(limit)
+            .map_err(Into::into)
+    }
+
+    /// Applies one authenticated, retry-stable Steward assistance command on Keeper.
+    ///
+    /// # Errors
+    /// Returns authentication, authorization, validation, or persistence errors.
+    pub fn apply_federation_steward_assist_command(
+        &self,
+        node_credential: &str,
+        command: &FederationStewardAssistCommand,
+        now: i64,
+    ) -> Result<FederationStewardAssistReceipt, ApplicationError> {
+        self.store
+            .apply_federation_steward_assist_command(node_credential, command, now)
+            .map_err(Into::into)
+    }
+
+    /// Reads assistance addressed only to the authenticated Member Hive.
+    ///
+    /// # Errors
+    /// Returns authentication or persistence errors.
+    pub fn federation_steward_assist_inbox(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<FederationStewardAssistInbox, ApplicationError> {
+        self.store
+            .federation_steward_assist_inbox(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Queues a structured Steward request without network I/O or terminal injection.
+    ///
+    /// # Errors
+    /// Returns role, scope, validation, queue-bound, or persistence errors.
+    pub fn queue_federation_steward_assist(
+        &self,
+        target_hive_id: HiveId,
+        message: &str,
+        now: i64,
+    ) -> Result<FederationStewardAssistOutboxEntry, ApplicationError> {
+        self.store
+            .queue_federation_steward_assist(target_hive_id, message, now)
+            .map_err(Into::into)
+    }
+
+    /// Queues the target operator's explicit accept or decline response.
+    ///
+    /// # Errors
+    /// Returns validation, queue-bound, or persistence errors.
+    pub fn queue_federation_steward_assist_response(
+        &self,
+        request_id: FederationStewardAssistRequestId,
+        decision: FederationStewardAssistState,
+        now: i64,
+    ) -> Result<FederationStewardAssistOutboxEntry, ApplicationError> {
+        self.store
+            .queue_federation_steward_assist_response(request_id, decision, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns queued Assist commands awaiting Keeper delivery.
+    ///
+    /// # Errors
+    /// Returns bound, corrupt-record, or persistence errors.
+    pub fn pending_federation_steward_assists(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<FederationStewardAssistOutboxEntry>, ApplicationError> {
+        self.store
+            .pending_federation_steward_assists(limit)
+            .map_err(Into::into)
+    }
+
+    /// Records a delivery attempt for a queued Assist command.
+    ///
+    /// # Errors
+    /// Returns state or persistence errors.
+    pub fn record_federation_steward_assist_attempt(
+        &self,
+        command_id: FederationStewardAssistCommandId,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .record_federation_steward_assist_attempt(command_id, now)
+            .map_err(Into::into)
+    }
+
+    /// Applies Keeper's receipt to the matching local Assist command.
+    ///
+    /// # Errors
+    /// Returns validation, state, or persistence errors.
+    pub fn apply_federation_steward_assist_receipt(
+        &self,
+        receipt: &FederationStewardAssistReceipt,
+        now: i64,
+    ) -> Result<FederationStewardAssistOutboxEntry, ApplicationError> {
+        self.store
+            .apply_federation_steward_assist_receipt(receipt, now)
+            .map_err(Into::into)
+    }
+
+    /// Replaces the local Assist projection with Keeper's bounded inbox.
+    ///
+    /// # Errors
+    /// Returns role, validation, or persistence errors.
+    pub fn apply_federation_steward_assist_inbox(
+        &self,
+        inbox: &FederationStewardAssistInbox,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .apply_federation_steward_assist_inbox(inbox, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns operator-facing local Assist state.
+    ///
+    /// # Errors
+    /// Returns invalid-identity, corrupt-record, or persistence errors.
+    pub fn federation_steward_assist_local_state(
+        &self,
+    ) -> Result<FederationStewardAssistLocalState, ApplicationError> {
+        self.store
+            .federation_steward_assist_local_state()
             .map_err(Into::into)
     }
 

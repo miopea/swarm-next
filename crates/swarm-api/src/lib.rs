@@ -65,15 +65,18 @@ use swarm_domain::{
     DecisionRequestId, FederationCatalogSnapshot, FederationClaimHandoff, FederationClaimHandoffId,
     FederationClaimId, FederationDepartureReadiness, FederationDepartureReceipt,
     FederationHandoffTarget, FederationJoinSubmission, FederationMemberConnection,
-    FederationNodeId, FederationSharedClaim, FederationStewardTaskAuditEntry,
-    FederationStewardTaskCommand, FederationStewardTaskOutboxEntry, FederationStewardTaskReceipt,
-    FederationStewardshipSnapshot, FederationSyncCondition, FederationTaskCommand,
-    FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
-    FederationTaskSyncStatus, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
-    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext, LocalApiaryRole,
-    LocalApiaryTaskExecution, OperatorId, ProviderKind, SharedWorkBackend, StewardCapability,
-    Stewardship, StewardshipId, TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId,
-    WorkerProfile, WorkerSessionId,
+    FederationNodeId, FederationSharedClaim, FederationStewardAssistCommand,
+    FederationStewardAssistInbox, FederationStewardAssistLocalState,
+    FederationStewardAssistOutboxEntry, FederationStewardAssistReceipt,
+    FederationStewardAssistRequestId, FederationStewardAssistState,
+    FederationStewardTaskAuditEntry, FederationStewardTaskCommand,
+    FederationStewardTaskOutboxEntry, FederationStewardTaskReceipt, FederationStewardshipSnapshot,
+    FederationSyncCondition, FederationTaskCommand, FederationTaskOutboxEntry,
+    FederationTaskOutboxStatus, FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard,
+    HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope,
+    JiraStatusMapping, LocalApiaryContext, LocalApiaryRole, LocalApiaryTaskExecution, OperatorId,
+    ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId,
+    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
@@ -606,6 +609,17 @@ impl AppState {
         if let Err(condition) =
             reconcile_federation_steward_tasks(&service, &client, &connection.node_credential, now)
                 .await
+        {
+            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            return;
+        }
+        if let Err(condition) = reconcile_federation_steward_assists(
+            &service,
+            &client,
+            &connection.node_credential,
+            now,
+        )
+        .await
         {
             record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
             return;
@@ -1439,6 +1453,17 @@ struct CreateStewardTaskRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct CreateStewardAssistRequest {
+    target_hive_id: HiveId,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RespondStewardAssistRequest {
+    decision: FederationStewardAssistState,
+}
+
+#[derive(Debug, Deserialize)]
 struct TransitionApiaryTaskRequest {
     target_state: TaskState,
 }
@@ -1839,6 +1864,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/federation/steward/tasks",
             post(apply_federation_steward_task),
         )
+        .route(
+            "/api/v1/federation/steward/assists",
+            get(federation_steward_assist_inbox).post(apply_federation_steward_assist),
+        )
         .route("/api/v1/federation/tasks", get(federation_tasks))
         .route(
             "/api/v1/federation/tasks/commands",
@@ -1896,6 +1925,14 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/apiary/steward/tasks",
             get(get_federation_steward_task_outbox).post(queue_federation_steward_task),
+        )
+        .route(
+            "/api/v1/apiary/steward/assists",
+            get(get_federation_steward_assist_state).post(queue_federation_steward_assist),
+        )
+        .route(
+            "/api/v1/apiary/steward/assists/{request_id}/response",
+            post(queue_federation_steward_assist_response),
         )
         .route(
             "/api/v1/apiary/tasks",
@@ -3125,6 +3162,30 @@ async fn apply_federation_steward_task(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)).into_response())
 }
 
+async fn apply_federation_steward_assist(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(command): Json<FederationStewardAssistCommand>,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let receipt: FederationStewardAssistReceipt = apiary_service(&state)?
+        .apply_federation_steward_assist_command(credential, &command, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(receipt)).into_response())
+}
+
+async fn federation_steward_assist_inbox(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let inbox: FederationStewardAssistInbox = apiary_service(&state)?
+        .federation_steward_assist_inbox(credential, unix_timestamp())
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(inbox)).into_response())
+}
+
 async fn federation_tasks(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -3368,6 +3429,58 @@ async fn get_federation_steward_task_outbox(
         .federation_steward_task_outbox()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(entries)).into_response())
+}
+
+async fn queue_federation_steward_assist(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateStewardAssistRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let entry: FederationStewardAssistOutboxEntry = apiary_service(&state)?
+        .queue_federation_steward_assist(request.target_hive_id, &request.message, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    let reconcile_state = state.clone();
+    tokio::spawn(async move { reconcile_state.reconcile_federation().await });
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(entry),
+    )
+        .into_response())
+}
+
+async fn queue_federation_steward_assist_response(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(request_id): Path<FederationStewardAssistRequestId>,
+    Json(request): Json<RespondStewardAssistRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let entry: FederationStewardAssistOutboxEntry = apiary_service(&state)?
+        .queue_federation_steward_assist_response(request_id, request.decision, unix_timestamp())
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    let reconcile_state = state.clone();
+    tokio::spawn(async move { reconcile_state.reconcile_federation().await });
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(entry),
+    )
+        .into_response())
+}
+
+async fn get_federation_steward_assist_state(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let assist: FederationStewardAssistLocalState = apiary_service(&state)?
+        .federation_steward_assist_local_state()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(assist)).into_response())
 }
 
 async fn get_apiary_tasks(
@@ -5197,6 +5310,46 @@ async fn reconcile_federation_steward_tasks(
     Ok(())
 }
 
+async fn reconcile_federation_steward_assists(
+    service: &ApiaryService,
+    client: &federation_http::FederationHttpClient,
+    node_credential: &str,
+    now: i64,
+) -> Result<(), FederationSyncCondition> {
+    let commands = service
+        .pending_federation_steward_assists(swarm_persistence::MAX_FEDERATION_STEWARD_ASSIST_BATCH)
+        .map_err(|error| {
+            tracing::warn!(%error, "Steward assistance outbox could not be read");
+            FederationSyncCondition::Incompatible
+        })?;
+    for entry in commands {
+        service
+            .record_federation_steward_assist_attempt(entry.command.id, now)
+            .map_err(|error| {
+                tracing::warn!(%error, "Steward assistance attempt could not be recorded");
+                FederationSyncCondition::Incompatible
+            })?;
+        let receipt = client
+            .submit_steward_assist(node_credential, &entry.command)
+            .await
+            .map_err(federation_sync_condition)?;
+        service.apply_federation_steward_assist_receipt(&receipt, now).map_err(|error| {
+            tracing::warn!(%error, "Keeper returned an incompatible Steward assistance receipt");
+            FederationSyncCondition::Incompatible
+        })?;
+    }
+    let inbox = client
+        .steward_assists(node_credential)
+        .await
+        .map_err(federation_sync_condition)?;
+    service
+        .apply_federation_steward_assist_inbox(&inbox, now)
+        .map_err(|error| {
+            tracing::warn!(%error, "Keeper returned an incompatible Steward assistance inbox");
+            FederationSyncCondition::Incompatible
+        })
+}
+
 #[allow(clippy::too_many_lines)]
 async fn reconcile_federation_claim_handoffs(
     store: &TaskStore,
@@ -6024,6 +6177,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "invalid_steward_task",
             error.to_string(),
         ),
+        TaskStoreError::InvalidFederationStewardAssist => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_steward_assist",
+            error.to_string(),
+        ),
         TaskStoreError::StewardActionDenied => ApiError::new(
             StatusCode::FORBIDDEN,
             "steward_action_denied",
@@ -6032,6 +6190,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::FederationStewardTaskQueueFull => ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "steward_task_queue_full",
+            error.to_string(),
+        ),
+        TaskStoreError::FederationStewardAssistQueueFull => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "steward_assist_queue_full",
             error.to_string(),
         ),
         TaskStoreError::StewardshipNotFound => ApiError::new(

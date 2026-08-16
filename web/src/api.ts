@@ -302,6 +302,42 @@ export type FederationStewardTaskOutboxEntry = {
   last_attempt_at: number | null;
   receipt: FederationStewardTaskReceipt | null;
 };
+export type FederationStewardAssistState = "pending" | "accepted" | "declined";
+export type FederationStewardAssistRequest = {
+  id: string;
+  apiary_id: string;
+  source_hive_id: string;
+  target_hive_id: string;
+  message: string;
+  state: FederationStewardAssistState;
+  created_at: number;
+  resolved_at: number | null;
+};
+export type FederationStewardAssistCommand = {
+  id: string;
+  apiary_id: string;
+  action: { kind: "request"; target_hive_id: string; message: string }
+    | { kind: "respond"; request_id: string; decision: FederationStewardAssistState };
+  created_at: number;
+};
+export type FederationStewardAssistOutboxEntry = {
+  command: FederationStewardAssistCommand;
+  state: "queued" | "applied" | "rejected";
+  attempt_count: number;
+  last_attempt_at: number | null;
+  receipt: {
+    command_id: string;
+    outcome: "applied" | "rejected";
+    stewardship_id: string | null;
+    request: FederationStewardAssistRequest | null;
+    processed_at: number;
+  } | null;
+};
+export type FederationStewardAssistLocalState = {
+  incoming: FederationStewardAssistRequest[];
+  sent?: FederationStewardAssistRequest[];
+  outbox: FederationStewardAssistOutboxEntry[];
+};
 export type ApiarySharedWorkClaim = {
   id: string;
   apiary_id: string;
@@ -954,6 +990,38 @@ export async function queueFederationStewardTask(
     body: JSON.stringify(input),
   });
   return response.json() as Promise<FederationStewardTaskOutboxEntry>;
+}
+
+export async function fetchFederationStewardAssists(
+  operatorToken: string,
+): Promise<FederationStewardAssistLocalState> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward/assists");
+  return response.json() as Promise<FederationStewardAssistLocalState>;
+}
+
+export async function queueFederationStewardAssist(
+  operatorToken: string,
+  input: { target_hive_id: string; message: string },
+): Promise<FederationStewardAssistOutboxEntry> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward/assists", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return response.json() as Promise<FederationStewardAssistOutboxEntry>;
+}
+
+export async function respondFederationStewardAssist(
+  operatorToken: string,
+  requestId: string,
+  decision: "accepted" | "declined",
+): Promise<FederationStewardAssistOutboxEntry> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/steward/assists/${encodeURIComponent(requestId)}/response`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ decision }),
+  });
+  return response.json() as Promise<FederationStewardAssistOutboxEntry>;
 }
 
 export async function fetchHiveConnectionCard(

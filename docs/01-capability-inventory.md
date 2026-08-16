@@ -97,8 +97,12 @@ target Hive privately chooses its worker and repository. **Observe** now adds a
 Keeper-derived, content-free shared-work pulse for each managed Hive: counts of
 Ready, Active, Blocked, Review, and active Jira ownership plus the last shared
 change. It never reports worker, repository, terminal, transcript, local-task,
-or credential data. Assist, takeover, member, and project actions remain staged
-until each receives its own bounded command and conflict rules.
+or credential data. **Assist** now provides a separate durable request/response
+loop: the Steward offers bounded help, Keeper rechecks scope, the target Hive
+polls it outward, and its operator accepts or declines without any terminal
+injection or engagement interruption. The Steward sees the resulting status on
+her next poll. Takeover, member, and project actions remain staged until each
+receives its own bounded command and conflict rules.
 
 Keeper control-room checkpoint: a federated Keeper receives a first-class,
 read-only Apiary surface outside Settings. It summarizes registered membership,

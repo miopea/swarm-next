@@ -18,9 +18,12 @@ import {
   fetchFederationTaskOutbox,
   fetchFederationTaskOutboxStatus,
   fetchFederationStewardTaskOutbox,
+  fetchFederationStewardAssists,
   materializeLocalApiaryTaskExecution,
   offerApiaryClaimHandoff,
   queueFederationStewardTask,
+  queueFederationStewardAssist,
+  respondFederationStewardAssist,
   type ApiaryMember,
   type ApiarySharedWorkClaim,
   type ApiaryTask,
@@ -29,6 +32,7 @@ import {
   type FederationHandoffTarget,
   type FederationStewardshipSnapshot,
   type FederationStewardTaskOutboxEntry,
+  type FederationStewardAssistLocalState,
   type FederationSyncHealth,
   type FederationTaskSyncStatus,
   type FederationTaskOutboxEntry,
@@ -59,12 +63,13 @@ type MemberSnapshot = {
   outboxStatus?: FederationTaskOutboxStatus;
   stewardship?: FederationStewardshipSnapshot | null;
   stewardTasks: FederationStewardTaskOutboxEntry[];
+  stewardAssists: FederationStewardAssistLocalState;
   handoffs: FederationClaimHandoff[];
   handoffTargets: FederationHandoffTarget[];
   executions: LocalApiaryTaskExecution[];
 };
 
-const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], stewardTasks: [], handoffs: [], handoffTargets: [], executions: [] };
+const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], stewardTasks: [], stewardAssists: { incoming: [], outbox: [] }, handoffs: [], handoffTargets: [], executions: [] };
 
 export default function MemberControlRoom({ identity, operatorToken, workers, onManage, onOpenTask }: Props) {
   const context = identity.apiary_context;
@@ -72,7 +77,7 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
   const [state, setState] = useState<"loading" | "ready" | "partial">("loading");
   const refresh = useCallback(async () => {
     setState("loading");
-    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, handoffs, handoffTargets, executions] = await Promise.allSettled([
+    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions] = await Promise.allSettled([
       fetchApiaryMembers(operatorToken),
       fetchApiarySharedWork(operatorToken),
       fetchApiaryTasks(operatorToken),
@@ -83,6 +88,7 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
       fetchFederationTaskOutboxStatus(operatorToken),
       fetchMyFederationStewardship(operatorToken),
       fetchFederationStewardTaskOutbox(operatorToken),
+      fetchFederationStewardAssists(operatorToken),
       fetchApiaryClaimHandoffs(operatorToken),
       fetchApiaryHandoffTargets(operatorToken),
       fetchLocalApiaryTaskExecutions(operatorToken),
@@ -98,11 +104,12 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
       outboxStatus: outboxStatus.status === "fulfilled" ? outboxStatus.value : current.outboxStatus,
       stewardship: stewardship.status === "fulfilled" ? stewardship.value : current.stewardship,
       stewardTasks: stewardTasks.status === "fulfilled" ? stewardTasks.value : current.stewardTasks,
+      stewardAssists: stewardAssists.status === "fulfilled" && stewardAssists.value ? stewardAssists.value : current.stewardAssists,
       handoffs: handoffs.status === "fulfilled" && Array.isArray(handoffs.value) ? handoffs.value : current.handoffs,
       handoffTargets: handoffTargets.status === "fulfilled" && Array.isArray(handoffTargets.value) ? handoffTargets.value : current.handoffTargets,
       executions: executions.status === "fulfilled" && Array.isArray(executions.value) ? executions.value : current.executions,
     }));
-    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, handoffs, handoffTargets, executions].some((result) => result.status === "rejected") ? "partial" : "ready");
+    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, stewardTasks, stewardAssists, handoffs, handoffTargets, executions].some((result) => result.status === "rejected") ? "partial" : "ready");
   }, [operatorToken]);
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -124,13 +131,25 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
   const managedMembers = stewardship?.managed_hive_ids.map((hiveId) => snapshot.members.find((member) => member.hive_id === hiveId) ?? { hive_id: hiveId, hive_name: "Registered Hive" }) ?? [];
   const managedHives = managedMembers.map((member) => member.hive_name);
   const stewardObservations = snapshot.stewardship?.observations ?? [];
+  const stewardAssists = {
+    incoming: snapshot.stewardAssists?.incoming ?? [],
+    sent: snapshot.stewardAssists?.sent ?? [],
+    outbox: snapshot.stewardAssists?.outbox ?? [],
+  };
+  const sentAssists = stewardAssists.sent;
   const canAssign = stewardship?.capabilities.includes("assign") ?? false;
+  const canAssist = stewardship?.capabilities.includes("assist") ?? false;
   const [stewardTarget, setStewardTarget] = useState("");
   const [stewardTitle, setStewardTitle] = useState("");
   const [stewardDescription, setStewardDescription] = useState("");
   const [stewardPriority, setStewardPriority] = useState<TaskPriority>("normal");
   const [routingStewardTask, setRoutingStewardTask] = useState(false);
   const [stewardTaskError, setStewardTaskError] = useState<string>();
+  const [assistTarget, setAssistTarget] = useState("");
+  const [assistMessage, setAssistMessage] = useState("");
+  const [sendingAssist, setSendingAssist] = useState(false);
+  const [actingAssist, setActingAssist] = useState<string>();
+  const [assistError, setAssistError] = useState<string>();
   const [actingTask, setActingTask] = useState<string>();
   const [workerChoices, setWorkerChoices] = useState<Record<string, string>>({});
   const [actingHandoff, setActingHandoff] = useState<string>();
@@ -184,6 +203,32 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
       setRoutingStewardTask(false);
     }
   }, [operatorToken, refresh, stewardDescription, stewardPriority, stewardTarget, stewardTitle]);
+  const requestStewardAssist = useCallback(async () => {
+    if (!assistTarget || !assistMessage.trim()) return;
+    setSendingAssist(true);
+    setAssistError(undefined);
+    try {
+      await queueFederationStewardAssist(operatorToken, { target_hive_id: assistTarget, message: assistMessage.trim() });
+      setAssistMessage("");
+      await refresh();
+    } catch (error) {
+      setAssistError(error instanceof Error ? error.message : "Keeper did not accept this assistance request.");
+    } finally {
+      setSendingAssist(false);
+    }
+  }, [assistMessage, assistTarget, operatorToken, refresh]);
+  const respondToAssist = useCallback(async (requestId: string, decision: "accepted" | "declined") => {
+    setActingAssist(requestId);
+    setAssistError(undefined);
+    try {
+      await respondFederationStewardAssist(operatorToken, requestId, decision);
+      await refresh();
+    } catch (error) {
+      setAssistError(error instanceof Error ? error.message : "Keeper did not accept this response.");
+    } finally {
+      setActingAssist(undefined);
+    }
+  }, [operatorToken, refresh]);
 
   if (context?.mode !== "federated" || context.local_role !== "member") return null;
 
@@ -205,6 +250,14 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
         <div><dt>Pending changes</dt><dd>{snapshot.outboxStatus?.queued_count ?? 0}</dd></div>
       </dl>
       <div className="keeper-dashboard-grid" aria-busy={state === "loading"}>
+        {stewardAssists.incoming.some((request) => request.state === "pending") ? <article className="keeper-panel steward-assist-inbox">
+          <header><div><p className="eyebrow">Steward assistance</p><h4>A trusted Steward offered help</h4></div><small>Visible queue · never injected into a terminal</small></header>
+          <ul aria-label="Pending Steward assistance requests">{stewardAssists.incoming.filter((request) => request.state === "pending").map((request) => <li key={request.id}>
+            <span><strong>{hiveName.get(request.source_hive_id) ?? "Steward Hive"}</strong><small>{request.message}</small></span>
+            <span className="member-handoff-actions"><button className="secondary-button" disabled={actingAssist === request.id} onClick={() => void respondToAssist(request.id, "declined")}>Decline</button><button className="primary-action" disabled={actingAssist === request.id} onClick={() => void respondToAssist(request.id, "accepted")}>{actingAssist === request.id ? "Saving…" : "Accept help"}</button></span>
+          </li>)}</ul>
+          {assistError ? <p className="member-command-attention" role="alert">{assistError}</p> : null}
+        </article> : null}
         {(incomingHandoffs.length > 0 || outgoingHandoffs.length > 0) ? <article className="keeper-panel member-handoff-panel">
           <header><div><p className="eyebrow">Work handoffs</p><h4>{incomingHandoffs.length ? "Another Hive needs your help" : "Waiting on another Hive"}</h4></div><small>Jira ownership changes only after acceptance</small></header>
           <ul className="member-handoff-list" aria-label="Active Jira work handoffs">
@@ -241,6 +294,14 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
               </li>;
             })}</ul>
           </section> : null}
+          {canAssist ? <form className="steward-assist-form" onSubmit={(event) => { event.preventDefault(); void requestStewardAssist(); }}>
+            <div className="steward-task-form-heading"><div><p className="eyebrow">Assist</p><h5>Offer help without interrupting anyone</h5></div><small>The target operator accepts or declines from her own Hive.</small></div>
+            <label>Hive<select aria-label="Assistance target Hive" required value={assistTarget} onChange={(event) => setAssistTarget(event.target.value)}><option value="">Choose a managed Hive</option>{managedMembers.map((member) => <option key={member.hive_id} value={member.hive_id}>{member.hive_name}</option>)}</select></label>
+            <label className="steward-assist-message">How can you help?<textarea aria-label="Steward assistance message" required maxLength={2000} value={assistMessage} onChange={(event) => setAssistMessage(event.target.value)} placeholder="A short, useful offer the operator can review when ready" /></label>
+            <button className="primary-action" disabled={sendingAssist || !assistTarget || !assistMessage.trim()} type="submit">{sendingAssist ? "Sending…" : "Offer help through Keeper"}</button>
+            {assistError ? <p className="member-command-attention" role="alert">{assistError}</p> : null}
+          </form> : null}
+          {sentAssists.length ? <ul className="steward-task-outbox" aria-label="Sent Steward assistance">{sentAssists.slice(0, 5).map((request) => <li key={request.id}><span><strong>{request.message}</strong><small>{managedMembers.find((member) => member.hive_id === request.target_hive_id)?.hive_name ?? "Managed Hive"}</small></span><span className={`keeper-role-badge ${request.state === "declined" ? "keeper" : "member"}`}>{request.state === "pending" ? "Waiting for operator" : request.state === "accepted" ? "Help accepted" : "Help declined"}</span></li>)}</ul> : null}
           {canAssign ? <form className="steward-task-form" onSubmit={(event) => { event.preventDefault(); void routeStewardTask(); }}>
             <div className="steward-task-form-heading"><div><p className="eyebrow">Route shared work</p><h5>Give a managed Hive a clear outcome</h5></div><small>The target Hive chooses its private worker and repository.</small></div>
             <label>Hive<select aria-label="Target Hive" required value={stewardTarget} onChange={(event) => setStewardTarget(event.target.value)}><option value="">Choose a managed Hive</option>{managedMembers.map((member) => <option key={member.hive_id} value={member.hive_id}>{member.hive_name}</option>)}</select></label>
@@ -251,6 +312,11 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
             {stewardTaskError ? <p className="member-command-attention" role="alert">{stewardTaskError}</p> : null}
           </form> : null}
           {snapshot.stewardTasks.some((entry) => entry.state !== "applied") ? <ul className="steward-task-outbox" aria-label="Steward task delivery status">{snapshot.stewardTasks.filter((entry) => entry.state !== "applied").map((entry) => <li key={entry.command.id}><span><strong>{entry.command.title}</strong><small>{managedMembers.find((member) => member.hive_id === entry.command.target_hive_id)?.hive_name ?? "Managed Hive"}</small></span><span className={`keeper-role-badge ${entry.state === "rejected" ? "keeper" : "member"}`}>{entry.state === "queued" ? "Sending to Keeper" : "Keeper declined"}</span></li>)}</ul> : null}
+          {stewardAssists.outbox.some((entry) => entry.state !== "applied" && entry.command.action.kind === "request") ? <ul className="steward-task-outbox" aria-label="Steward assistance delivery status">{stewardAssists.outbox.map((entry) => {
+            const action = entry.command.action;
+            if (entry.state === "applied" || action.kind !== "request") return null;
+            return <li key={entry.command.id}><span><strong>{action.message}</strong><small>{managedMembers.find((member) => member.hive_id === action.target_hive_id)?.hive_name ?? "Managed Hive"}</small></span><span className={`keeper-role-badge ${entry.state === "rejected" ? "keeper" : "member"}`}>{entry.state === "queued" ? "Sending to Keeper" : "Keeper declined"}</span></li>;
+          })}</ul> : null}
         </article> : null}
         <article className="keeper-panel member-coordination-panel">
           <header><div><p className="eyebrow">Coordination</p><h4>Your place in the Apiary</h4></div><small>One operator, one independent Hive</small></header>

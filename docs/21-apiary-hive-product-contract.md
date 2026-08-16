@@ -359,6 +359,16 @@ repositories, local tasks, terminals, transcripts, provider sessions, Jira
 issue content, or credentials. An older Keeper may temporarily return no pulse;
 authority and other Hive work remain usable during rolling updates.
 
+Assist is a structured, asynchronous offer to one managed Hive, not a task,
+message broadcast, or terminal command. The Steward's Hive journals it before
+network I/O; Keeper authenticates the Member, rechecks the current **Assist**
+grant and target scope, and stores one retry-stable request. The target Hive
+retrieves that request on its normal outbound poll. Its operator may explicitly
+accept or decline, and the Steward learns that disposition through the same
+polling path. Neither delivery nor acceptance opens a terminal, starts a worker,
+changes an engagement lease, or grants takeover. Requests and responses remain
+bounded, offline-safe, idempotent, visible, and auditable.
+
 ## Tasks
 
 The target canonical lifecycle is:
