@@ -1411,3 +1411,12 @@ the independently updated terminal host through the API to worker settings:
   `f8abd293`, and Queen provider PID `2966160` remained unchanged. Database
   `quick_check` remained `ok`; no Jira, task, worker, or Apiary mutation
   occurred, and the temporary viewport override was reset.
+- The isolated production-shaped Queen journey now proves the previously
+  separate handoff and conductor contracts as one chain. A disposable worker
+  owns a Ready task, advances it through Active to Review with verification
+  evidence, and the real terminal host delivers both the worker outcome and
+  exactly one bounded actionable-work review to the disposable Queen. The
+  exact run then closes as Completed. The prompt explicitly denies Jira,
+  Apiary, email, deployment, and other external effects. The API quality gate
+  passed warnings-denied Clippy and all 149 API binary and library tests. Live
+  automatic review remains off until the operator chooses a bounded real task.

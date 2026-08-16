@@ -11855,6 +11855,150 @@ mod tests {
         server_task.abort();
         let _ = server_task.await;
     }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn worker_review_handoff_drives_one_bounded_queen_automation_run() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(8192, 128), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec![
+                "-lc".into(),
+                "while IFS= read -r value; do printf 'received:%s\\n' \"$value\"; done".into(),
+            ],
+            working_directory: workspace.clone(),
+        };
+        let queen_terminal = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store
+            .ensure_queen(workspace.to_string_lossy().as_ref())
+            .unwrap();
+        store
+            .bind_worker_session(queen.id, queen_terminal.id())
+            .unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let worker_session = WorkerSessionId::new();
+        store
+            .bind_worker_session(worker.id, worker_session)
+            .unwrap();
+        let task = store
+            .create_task("Ship the bounded fix", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, worker_session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store
+            .transition_worker_task(
+                task.id,
+                TaskState::Review,
+                "Desktop and Android checks passed; no external effect was requested.",
+                worker_session,
+            )
+            .unwrap();
+        let queued = store.set_queen_automation_enabled(true, 100).unwrap();
+        assert_eq!(queued.state, swarm_domain::QueenAutomationState::Queued);
+        assert_eq!(queued.actionable_count, 1);
+
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
+        state.deliver_coordination().await;
+
+        let task = store.get_task(task.id).unwrap();
+        assert_eq!(
+            task.outcome_delivery_state,
+            Some(swarm_domain::TaskOutcomeDeliveryState::Delivered)
+        );
+        let automation = store.queen_automation_status(101).unwrap();
+        assert_eq!(
+            automation.state,
+            swarm_domain::QueenAutomationState::Running
+        );
+        assert_eq!(
+            automation.trigger,
+            Some(swarm_domain::QueenAutomationTrigger::ActionableWork)
+        );
+        assert_eq!(automation.actionable_count, 1);
+        let run_id = automation.run_id.unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let mut after_sequence = None;
+        let mut output = Vec::new();
+        loop {
+            let response = HostClient::new(&socket)
+                .request(&HostRequest::Read {
+                    session_id: queen_terminal.id(),
+                    after_sequence,
+                })
+                .await
+                .unwrap();
+            let HostResponse::Output { resume, .. } = response else {
+                panic!("terminal host should return Queen output");
+            };
+            match resume {
+                swarm_terminal::Resume::Deltas { frames } => {
+                    for frame in frames {
+                        after_sequence = Some(frame.sequence);
+                        output.extend_from_slice(&frame.bytes);
+                    }
+                }
+                swarm_terminal::Resume::Snapshot { snapshot } => {
+                    after_sequence = Some(snapshot.sequence);
+                    output = snapshot.bytes;
+                }
+            }
+            let rendered = String::from_utf8_lossy(&output);
+            if rendered.contains("[Swarm worker outcome]")
+                && rendered.contains("Desktop and Android checks passed")
+                && rendered.contains(&format!("[Swarm automation {run_id}]"))
+                && rendered.contains("Do not perform Jira, Apiary, email, deployment")
+            {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "{rendered}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert!(
+            store
+                .finish_queen_automation_run(
+                    &run_id,
+                    swarm_domain::QueenAutomationOutcome::Completed,
+                    102,
+                )
+                .unwrap()
+        );
+        let finished = store.queen_automation_status(103).unwrap();
+        assert_eq!(
+            finished.state,
+            swarm_domain::QueenAutomationState::Completed
+        );
+        assert_eq!(
+            finished.outcome,
+            Some(swarm_domain::QueenAutomationOutcome::Completed)
+        );
+        assert_eq!(finished.run_id.as_deref(), Some(run_id.as_str()));
+
+        queen_terminal.stop().unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
     #[tokio::test]
     async fn task_activity_rejects_invalid_limits() {
         let store = TaskStore::in_memory().unwrap();
