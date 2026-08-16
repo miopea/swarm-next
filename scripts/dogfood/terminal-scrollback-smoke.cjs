@@ -77,8 +77,7 @@ async function verifySurface(browser, surface, finalSurface, restoreSleepingWork
     if (surface.mobile) {
       await dragTerminalWithTouch(page, "down");
     } else {
-      await page.locator(".xterm").hover();
-      await page.mouse.wheel(0, -100_000);
+      await scrollTerminalWithWheel(page);
     }
     await page.waitForTimeout(250);
     const afterGesture = await scrollbackMetrics(page);
@@ -98,6 +97,29 @@ async function verifySurface(browser, surface, finalSurface, restoreSleepingWork
       if (await sleep.isVisible().catch(() => false)) await sleep.click().catch(() => undefined);
     }
     await context.close();
+  }
+}
+
+async function scrollTerminalWithWheel(page) {
+  const screen = page.locator(".xterm-screen");
+  const box = await screen.boundingBox();
+  if (!box) throw new Error("desktop: terminal screen has no wheel target");
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: box.x + box.width / 2,
+      y: box.y + box.height / 2,
+    });
+    await session.send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: box.x + box.width / 2,
+      y: box.y + box.height / 2,
+      deltaX: 0,
+      deltaY: -100_000,
+    });
+  } finally {
+    await session.detach();
   }
 }
 
