@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { downloadDatabaseBackup, draftWorkerDescription, fetchEmailReadiness, fetchJiraReadiness, fetchTerminalHostStatus, improveWorkerDescription, type ControlRoomEvent, type EmailReadiness, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, draftWorkerDescription, fetchEmailReadiness, fetchJiraReadiness, fetchQueenAutomationStatus, fetchTerminalHostStatus, improveWorkerDescription, runQueenAutomation, setQueenAutomationEnabled, type ControlRoomEvent, type EmailReadiness, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutomationStatus, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
 import { downloadBlob } from "../shared/download";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
@@ -61,6 +61,9 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
   const [emailReadiness, setEmailReadiness] = useState<EmailReadiness>();
   const [emailUnavailable, setEmailUnavailable] = useState(false);
+  const [queenAutomation, setQueenAutomation] = useState<QueenAutomationStatus>();
+  const [queenAutomationBusy, setQueenAutomationBusy] = useState(false);
+  const [queenAutomationError, setQueenAutomationError] = useState<string>();
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState(() => readSettingsSection() ?? "settings-crew");
   useEffect(() => {
@@ -105,6 +108,21 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
       .catch(() => { if (!cancelled) setJiraUnavailable(true); });
     return () => { cancelled = true; };
   }, [operatorToken]);
+  const latestEventSequence = recentEvents.reduce((latest, event) => Math.max(latest, event.sequence), 0);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchQueenAutomationStatus(operatorToken)
+      .then((status) => {
+        if (!cancelled) {
+          setQueenAutomation(status);
+          setQueenAutomationError(undefined);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setQueenAutomationError("Queen automation status is temporarily unavailable.");
+      });
+    return () => { cancelled = true; };
+  }, [operatorToken, latestEventSequence]);
   useEffect(() => {
     let cancelled = false;
     void fetchEmailReadiness(operatorToken)
@@ -181,6 +199,61 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
               </select>
             </label>
           ))}
+        </div>
+        <div className="queen-conductor" aria-labelledby="queen-conductor-heading">
+          <div className="queen-conductor-heading">
+            <div>
+              <strong id="queen-conductor-heading">Automatic work review</strong>
+              <small>Queen notices durable task changes and coordinates local workers within the presence policy.</small>
+            </div>
+            <label className="queen-automation-toggle">
+              <input
+                type="checkbox"
+                checked={queenAutomation?.enabled ?? false}
+                disabled={busy || queenAutomationBusy || !queenAutomation}
+                onChange={async (event) => {
+                  setQueenAutomationBusy(true);
+                  setQueenAutomationError(undefined);
+                  try {
+                    setQueenAutomation(await setQueenAutomationEnabled(operatorToken, event.target.checked));
+                  } catch {
+                    setQueenAutomationError("Queen automation could not be changed. Try again when the connection is stable.");
+                  } finally {
+                    setQueenAutomationBusy(false);
+                  }
+                }}
+              />
+              <span>{queenAutomation?.enabled ? "Automatic on" : "Automatic off"}</span>
+            </label>
+          </div>
+          <div className={`queen-automation-status ${queenAutomation?.state ?? "idle"}`} role="status">
+            <span className={`presence ${queenAutomationStateTone(queenAutomation)}`} />
+            <span>
+              <strong>{queenAutomationStateLabel(queenAutomation)}</strong>
+              <small>{queenAutomationStateDetail(queenAutomation)}</small>
+            </span>
+          </div>
+          {queenAutomationError && <p className="queen-automation-error" role="alert">{queenAutomationError}</p>}
+          <div className="queen-conductor-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy || queenAutomationBusy || !queenAutomation || ["queued", "delivering", "running"].includes(queenAutomation.state)}
+              onClick={async () => {
+                setQueenAutomationBusy(true);
+                setQueenAutomationError(undefined);
+                try {
+                  setQueenAutomation(await runQueenAutomation(operatorToken));
+                } catch {
+                  setQueenAutomationError("Queen could not start a review. Her current work was not changed.");
+                } finally {
+                  setQueenAutomationBusy(false);
+                }
+              }}
+            >{queenAutomationBusy ? "Checking…" : "Run Queen now"}</button>
+            <small>Manual review works even when automatic review is off.</small>
+          </div>
+          <p className="queen-conductor-boundary">She pauses while you are working with her. Jira, Apiary, email, deployment, purchases, messages, and other external effects remain blocked without separate operator approval.</p>
         </div>
         <small className="privacy-note">Pushes, deployments, messages, purchases, and other external effects still require a separately recorded approval. Repository and environment overrides come before unattended execution is enabled.</small>
       </section>
@@ -338,6 +411,35 @@ function compactRuntimeVersion(version: string) {
   const revision = version.match(/-dev-([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7);
   const release = version.split("-dev-")[0];
   return revision ? `Healthy · ${release} · ${revision}` : `Healthy · ${version}`;
+}
+
+function queenAutomationStateLabel(status: QueenAutomationStatus | undefined) {
+  if (!status) return "Checking Queen…";
+  if (status.state === "queued") return "Review queued";
+  if (status.state === "delivering") return "Sending work to Queen";
+  if (status.state === "running") return "Queen is reviewing work";
+  if (status.state === "uncertain") return "Review needs attention";
+  if (status.state === "completed" && status.outcome === "needs_operator") return "Queen needs you";
+  if (status.state === "completed" && status.outcome === "no_action") return "Nothing needed routing";
+  if (status.state === "completed") return "Review complete";
+  return status.enabled ? "Watching for new work" : "Manual review only";
+}
+
+function queenAutomationStateDetail(status: QueenAutomationStatus | undefined) {
+  if (!status) return "Loading durable automation state.";
+  if (status.waiting_reason) return status.waiting_reason;
+  if (status.state === "running") return `${status.actionable_count} actionable item${status.actionable_count === 1 ? "" : "s"} in this review.`;
+  if (status.state === "uncertain") return "Swarm will not silently repeat an interrupted review. Run Queen again after checking her terminal.";
+  if (status.state === "completed" && status.outcome === "needs_operator") return "Open Queen when you are ready to resolve her decision.";
+  if (status.state === "completed") return "The latest bounded review ended safely.";
+  if (status.enabled) return `${status.actionable_count} actionable item${status.actionable_count === 1 ? "" : "s"}; new durable changes trigger a review.`;
+  return `${status.actionable_count} actionable item${status.actionable_count === 1 ? "" : "s"}; nothing runs automatically.`;
+}
+
+function queenAutomationStateTone(status: QueenAutomationStatus | undefined) {
+  if (status?.state === "uncertain") return "offline";
+  if (status?.state === "running" || status?.state === "delivering") return "online";
+  return "waiting";
 }
 
 

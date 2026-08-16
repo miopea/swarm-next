@@ -71,6 +71,8 @@ pub use notifications::{
     VapidKeyMaterial,
 };
 mod orchestration;
+mod queen_conductor;
+pub use queen_conductor::{QueenAutomationDelivery, QueenAutomationFailure};
 mod presentation;
 pub use presentation::{PresentationColorTheme, PresentationDeviceClass, PresentationPreferences};
 mod task_dispatches;
@@ -86,7 +88,7 @@ pub(crate) const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 60;
+const CURRENT_SCHEMA_VERSION: i64 = 61;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1610,6 +1612,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 60 {
         federation_steward_takeovers::migrate_federation_steward_takeovers(transaction)?;
+    }
+    if schema_version < 61 {
+        queen_conductor::migrate_queen_conductor(transaction)?;
     }
     Ok(())
 }

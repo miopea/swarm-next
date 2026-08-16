@@ -31,8 +31,9 @@ use swarm_application::{
     AgentPrincipal, ApiaryService, ApplicationError, DecisionRequestInput, TaskService,
 };
 use swarm_domain::{
-    ApiaryTaskId, DecisionRequestKind, DecisionUrgency, HiveId, JiraProjectBindingId, TaskId,
-    TaskPriority, TaskState, WorkerId, WorkerRole,
+    ApiaryTaskId, DecisionRequestKind, DecisionUrgency, HiveId, JiraProjectBindingId,
+    QueenActionClass, QueenAutomationOutcome, TaskId, TaskPriority, TaskState, WorkerId,
+    WorkerRole,
 };
 use swarm_persistence::{
     JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, TaskStore, TaskStoreError,
@@ -214,6 +215,7 @@ impl ServerHandler for AgentMcp {
                 preview_jira_project_tool(),
                 sync_jira_project_tool(),
                 refresh_jira_project_tool(),
+                finish_automation_run_tool(),
             ]);
         }
         Ok(ListToolsResult::with_all_items(tools))
@@ -226,6 +228,26 @@ impl ServerHandler for AgentMcp {
         _context: RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let arguments = Value::Object(request.arguments.unwrap_or_default());
+        if self.principal.role == WorkerRole::Queen {
+            let action = match request.name.as_ref() {
+                "swarm_create_task" | "swarm_assign_task" | "swarm_transition_task" => {
+                    QueenActionClass::Coordinate
+                }
+                "swarm_create_apiary_task"
+                | "swarm_claim_apiary_task"
+                | "swarm_send_apiary_task_to_worker"
+                | "swarm_transition_apiary_task"
+                | "swarm_comment_jira_task"
+                | "swarm_sync_jira_project"
+                | "swarm_refresh_jira_project" => QueenActionClass::ExternalSideEffect,
+                _ => QueenActionClass::Advise,
+            };
+            if let Err(error) = self.require_automation_permission(action) {
+                return Ok(
+                    CallToolResult::error(vec![ContentBlock::text(error.to_string())]).into(),
+                );
+            }
+        }
         let result = match request.name.as_ref() {
             "swarm_list_tasks" => self
                 .tasks
@@ -387,6 +409,32 @@ impl ServerHandler for AgentMcp {
                         .and_then(structured)
                 })
             }
+            "swarm_finish_automation_run" => {
+                parse::<FinishAutomationRunInput>(arguments).and_then(|input| {
+                    if self.principal.role != WorkerRole::Queen {
+                        return Err(ApplicationError::NotAuthorized);
+                    }
+                    let changed = self
+                        .tasks
+                        .store()
+                        .finish_queen_automation_run(
+                            &input.run_id,
+                            input.outcome,
+                            crate::unix_timestamp(),
+                        )
+                        .map_err(ApplicationError::Store)?;
+                    if !changed {
+                        return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                            "No matching active Queen automation run".into(),
+                        )));
+                    }
+                    structured(json!({
+                        "run_id": input.run_id,
+                        "outcome": input.outcome,
+                        "state": "completed"
+                    }))
+                })
+            }
             _ => return Err(ErrorData::invalid_params("unknown Swarm tool", None)),
         };
         match result {
@@ -407,6 +455,24 @@ impl ServerHandler for AgentMcp {
 }
 
 impl AgentMcp {
+    fn require_automation_permission(
+        &self,
+        action: QueenActionClass,
+    ) -> Result<(), ApplicationError> {
+        let permitted = self
+            .tasks
+            .store()
+            .queen_automation_permits(action, crate::unix_timestamp())
+            .map_err(ApplicationError::Store)?;
+        if permitted {
+            Ok(())
+        } else {
+            Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                "The current unattended Queen run is not authorized for that action. Ask the operator for a decision or finish the run as needs_operator.".into(),
+            )))
+        }
+    }
+
     async fn transition_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
         let input = parse::<TransitionTaskInput>(arguments)?;
         let task_id =
@@ -723,6 +789,12 @@ struct RequestDecisionInput {
     allowed_actions: Vec<String>,
     deadline: Option<i64>,
 }
+
+#[derive(Deserialize)]
+struct FinishAutomationRunInput {
+    run_id: String,
+    outcome: QueenAutomationOutcome,
+}
 fn list_decisions_tool() -> Tool {
     tool(
         "swarm_list_decisions",
@@ -771,6 +843,23 @@ fn list_workers_tool() -> Tool {
         "Queen only: list stable worker profiles, operator-reviewed routing descriptions, repository workspaces, and active session bindings before assigning work.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
+    )
+}
+
+fn finish_automation_run_tool() -> Tool {
+    tool(
+        "swarm_finish_automation_run",
+        "Queen only: close the exact unattended review marker after coordinating authorized local work or requesting operator input. This does not authorize external side effects.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "run_id": { "type": "string", "minLength": 1, "maxLength": 80 },
+                "outcome": { "type": "string", "enum": ["completed", "needs_operator", "no_action"] }
+            },
+            "required": ["run_id", "outcome"],
+            "additionalProperties": false
+        }),
+        false,
     )
 }
 
@@ -1213,6 +1302,7 @@ mod tests {
         assert!(queen_names.contains(&"swarm_refresh_jira_project"));
         assert!(queen_names.contains(&"swarm_list_jira_comments"));
         assert!(queen_names.contains(&"swarm_comment_jira_task"));
+        assert!(queen_names.contains(&"swarm_finish_automation_run"));
         assert!(!worker_names.contains(&"swarm_preview_jira_project"));
         assert!(!worker_names.contains(&"swarm_sync_jira_project"));
         assert!(!worker_names.contains(&"swarm_refresh_jira_project"));
@@ -1222,6 +1312,7 @@ mod tests {
         assert!(!worker_names.contains(&"swarm_claim_apiary_task"));
         assert!(!worker_names.contains(&"swarm_send_apiary_task_to_worker"));
         assert!(!worker_names.contains(&"swarm_transition_apiary_task"));
+        assert!(!worker_names.contains(&"swarm_finish_automation_run"));
         assert_eq!(
             worker_names,
             [
@@ -1262,6 +1353,65 @@ mod tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn unattended_queen_run_blocks_external_effects_and_closes_only_its_exact_marker() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(queen_id, session).unwrap();
+        store.request_queen_automation_run(10).unwrap();
+        let delivery = store.claim_queen_automation(11).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&delivery.run_id, 12)
+            .unwrap();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+
+        let blocked = response_json(
+            handle(
+                bridge.clone(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_comment_jira_task",
+                        "arguments": { "task_id": TaskId::new().to_string(), "body": "Automated update" }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(blocked["result"]["isError"], true);
+        assert!(
+            blocked["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("not authorized")
+        );
+
+        let finished = response_json(
+            handle(
+                bridge,
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_finish_automation_run",
+                        "arguments": { "run_id": delivery.run_id, "outcome": "needs_operator" }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(finished["result"]["isError"], false);
+        assert_eq!(
+            finished["result"]["structuredContent"]["state"],
+            "completed"
+        );
+        let status = store.queen_automation_status(13).unwrap();
+        assert_eq!(status.outcome, Some(QueenAutomationOutcome::NeedsOperator));
     }
 
     #[tokio::test]

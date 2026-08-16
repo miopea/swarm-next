@@ -271,6 +271,45 @@ test("confirms an opt-in development reload without implying worker loss", async
   expect(onReloadDevelopment).toHaveBeenCalledOnce();
 });
 
+test("makes Queen automation observable, opt-in, and manually runnable", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/orchestration/queen-automation/run")) {
+      return ok(queenAutomation({ enabled: true, state: "running", actionable_count: 3, run_id: "run-safe" }));
+    }
+    if (url.endsWith("/orchestration/queen-automation")) {
+      if (init?.method === "PUT") {
+        const enabled = JSON.parse(String(init.body)).enabled as boolean;
+        return ok(queenAutomation({ enabled }));
+      }
+      return ok(queenAutomation());
+    }
+    if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("integrations/jira/bindings") || url.includes("feedback/reports")) return ok([]);
+    if (url.includes("integrations/email/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("runtime/resources")) return ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 1, critical_bytes: 2 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" } });
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 7, host_version: "0.1.0", draining: false, running_sessions: 0, retained_sessions: 0 } });
+    if (url.includes("runtime/development")) return ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false });
+    return ok({ type: "history_diagnostics", diagnostics: null });
+  }));
+
+  render(<SettingsWorkspace {...minimalProps()} />);
+
+  expect(await screen.findByText("Manual review only")).toBeInTheDocument();
+  const toggle = screen.getByRole("checkbox", { name: "Automatic off" });
+  expect(toggle).not.toBeChecked();
+  expect(screen.getByText(/nothing runs automatically/)).toBeInTheDocument();
+
+  fireEvent.click(toggle);
+  expect(await screen.findByRole("checkbox", { name: "Automatic on" })).toBeChecked();
+  expect(vi.mocked(fetch).mock.calls.some(([input, init]) => String(input).endsWith("/orchestration/queen-automation") && init?.method === "PUT")).toBe(true);
+
+  fireEvent.click(screen.getByRole("button", { name: "Run Queen now" }));
+  expect(await screen.findByText("Queen is reviewing work")).toBeInTheDocument();
+  expect(screen.getByText("3 actionable items in this review.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Run Queen now" })).toBeDisabled();
+});
+
 function minimalProps() {
   return {
     busy: false, colorTheme: "light" as const, feedbackRevision: 0, liveFeedState: "connected" as const, operatorToken: "secret-token",
@@ -284,4 +323,21 @@ function minimalProps() {
 }
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+}
+
+function queenAutomation(overrides: Record<string, unknown> = {}) {
+  return {
+    enabled: false,
+    state: "idle",
+    run_id: null,
+    trigger: null,
+    actionable_count: 0,
+    attempts: 0,
+    requested_at: null,
+    delivered_at: null,
+    finished_at: null,
+    outcome: null,
+    waiting_reason: null,
+    ...overrides,
+  };
 }

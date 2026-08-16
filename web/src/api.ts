@@ -160,6 +160,19 @@ export type NotificationPolicy = "important_only" | "all_decisions" | "off";
 export type NotificationSettings = { policy: NotificationPolicy; subscription_count: number; vapid_public_key: string };
 export type QueenAutonomyLevel = "advisory" | "coordinate" | "local_execution";
 export type QueenAutonomyPolicy = { at_hive: QueenAutonomyLevel; away: QueenAutonomyLevel; night_watch: QueenAutonomyLevel };
+export type QueenAutomationStatus = {
+  enabled: boolean;
+  state: "idle" | "queued" | "delivering" | "running" | "completed" | "uncertain";
+  run_id: string | null;
+  trigger: "actionable_work" | "manual" | null;
+  actionable_count: number;
+  attempts: number;
+  requested_at: number | null;
+  delivered_at: number | null;
+  finished_at: number | null;
+  outcome: "completed" | "needs_operator" | "no_action" | null;
+  waiting_reason: string | null;
+};
 export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };
 export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: number; reset_required: boolean };
 export type TerminalHostStatus = {
@@ -1415,6 +1428,32 @@ export async function setQueenAutonomyPolicy(
     body: JSON.stringify(policy),
   });
   return response.json() as Promise<QueenAutonomyPolicy>;
+}
+
+export async function fetchQueenAutomationStatus(
+  operatorToken: string,
+): Promise<QueenAutomationStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-automation");
+  return response.json() as Promise<QueenAutomationStatus>;
+}
+
+export async function setQueenAutomationEnabled(
+  operatorToken: string,
+  enabled: boolean,
+): Promise<QueenAutomationStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-automation", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  return response.json() as Promise<QueenAutomationStatus>;
+}
+
+export async function runQueenAutomation(operatorToken: string): Promise<QueenAutomationStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-automation/run", {
+    method: "POST",
+  });
+  return response.json() as Promise<QueenAutomationStatus>;
 }
 
 export async function downloadDatabaseBackup(operatorToken: string): Promise<Blob> {

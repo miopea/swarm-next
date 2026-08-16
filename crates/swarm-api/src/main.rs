@@ -138,6 +138,13 @@ fn recover_interrupted_deliveries(state: &AppState) -> Result<(), Box<dyn std::e
             "crash-interrupted Queen handoffs require operator review"
         );
     }
+    let recovered_queen_automation = state.recover_queen_automation()?;
+    if recovered_queen_automation > 0 {
+        tracing::warn!(
+            recovered_queen_automation,
+            "crash-interrupted Queen automation requires operator review"
+        );
+    }
     let recovered_jira_transitions = state.recover_jira_transition_deliveries()?;
     if recovered_jira_transitions > 0 {
         tracing::warn!(

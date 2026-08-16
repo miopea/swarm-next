@@ -71,3 +71,4 @@ Current decision records:
 - [ADR 0025: Authenticated federation bootstrap](decisions/0025-authenticated-federation-bootstrap.md)
 - [ADR 0031: Retry-safe Apiary departure](decisions/0031-retry-safe-apiary-departure.md)
 - [ADR 0032: Confirmed Jira claim handoff](decisions/0032-confirmed-jira-claim-handoff.md)
+- [ADR 0037: Bounded Queen conductor](decisions/0037-bounded-queen-conductor.md)

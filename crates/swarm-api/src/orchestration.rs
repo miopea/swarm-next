@@ -18,6 +18,11 @@ pub(super) struct SetQueenAutonomyPolicyRequest {
     night_watch: QueenAutonomyLevel,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct SetQueenAutomationRequest {
+    enabled: bool,
+}
+
 pub(super) async fn queen_autonomy_policy(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -47,4 +52,48 @@ pub(super) async fn set_queen_autonomy_policy(
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(policy)).into_response())
+}
+
+pub(super) async fn queen_automation_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let status = task_store(&state)?
+        .queen_automation_status(unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
+}
+
+pub(super) async fn set_queen_automation(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<SetQueenAutomationRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    task_store(&state)?
+        .set_queen_automation_enabled(request.enabled, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    state.deliver_coordination().await;
+    let status = task_store(&state)?
+        .queen_automation_status(unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
+}
+
+pub(super) async fn run_queen_automation(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    task_store(&state)?
+        .request_queen_automation_run(unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    state.deliver_coordination().await;
+    let status = task_store(&state)?
+        .queen_automation_status(unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
 }

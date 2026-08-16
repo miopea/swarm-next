@@ -39,6 +39,7 @@ Decision meanings:
 | Completion verification | Redesign | Preserve as an optional verification policy; deterministic checks before model review. |
 | Queen task assignment | Redesign | Preserve assisted coordination but clarify recommendation, authorization, and execution. |
 | Queen completion detection | Redesign | Prefer explicit agent/task protocol signals; retain inference only as a fallback. |
+| Queen unattended conductor | Redesign | Implemented as an opt-in durable event-driven review marker. It defers to operator engagement and Steward takeover, coordinates only local work within the presence ceiling, requires an exact MCP completion signal, and fails uncertain rather than replaying after interrupted delivery. Jira, Apiary, email, deployment, messages, purchases, and other external effects remain separately authorized. |
 | Queen interactive conversation | Investigate | Validate frequency and whether it belongs in the unified operator conversation surface. |
 | Proposal approval system | Merge | One generalized operator-decision inbox rather than feature-specific proposal surfaces. |
 | Approval-rule regex engine | Remove | Do not infer authorization from rendered terminal text or maintain a second permission authority. |

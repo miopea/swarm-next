@@ -83,8 +83,8 @@ use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
 use swarm_persistence::{
     DecisionDeliveryFailure, DecisionDispatch, FederationHandoffIntentPhase,
     FederationJiraClaimPhase, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionFailure,
-    TaskDispatch, TaskDispatchFailure, TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore,
-    TaskStoreError,
+    QueenAutomationDelivery, QueenAutomationFailure, TaskDispatch, TaskDispatchFailure,
+    TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
 #[cfg(test)]
 use swarm_terminal::{
@@ -846,6 +846,10 @@ impl AppState {
         self.deliver_decision_outcomes(store, client).await;
         self.deliver_task_briefs(store, client).await;
         self.deliver_task_outcomes(store, client).await;
+        if let Err(error) = store.observe_queen_automation(unix_timestamp()) {
+            tracing::warn!(message = %error, "Queen automation queue could not be observed");
+        }
+        self.deliver_queen_automation(store, client).await;
     }
 
     async fn deliver_decision_outcomes(&self, store: &TaskStore, client: &HostClient) {
@@ -1008,6 +1012,58 @@ impl AppState {
             }
         }
     }
+    async fn deliver_queen_automation(&self, store: &TaskStore, client: &HostClient) {
+        let delivery = match store.claim_queen_automation(unix_timestamp()) {
+            Ok(Some(delivery)) => delivery,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(message = %error, "Queen automation could not be claimed");
+                return;
+            }
+        };
+        let result = match submit_terminal_message(
+            client,
+            delivery.session_id,
+            queen_automation_message(&delivery),
+            &delivery_marker(&delivery.run_id),
+        )
+        .await
+        {
+            Ok(TerminalSubmission::Acknowledged) => {
+                store.complete_queen_automation_delivery(&delivery.run_id, unix_timestamp())
+            }
+            Ok(TerminalSubmission::Rejected { code, message }) => {
+                tracing::warn!(run_id = %delivery.run_id, %code, %message, "Queen automation was rejected by terminal host");
+                store.fail_queen_automation_delivery(
+                    &delivery.run_id,
+                    unix_timestamp(),
+                    QueenAutomationFailure::Retryable,
+                )
+            }
+            Ok(TerminalSubmission::Uncertain) => store.fail_queen_automation_delivery(
+                &delivery.run_id,
+                unix_timestamp(),
+                QueenAutomationFailure::Uncertain,
+            ),
+            Err(error) => {
+                tracing::warn!(run_id = %delivery.run_id, message = %error, "Queen automation delivery transport failed");
+                store.fail_queen_automation_delivery(
+                    &delivery.run_id,
+                    unix_timestamp(),
+                    QueenAutomationFailure::Uncertain,
+                )
+            }
+        };
+        match result {
+            Ok(true) => self.control_room_notify.notify_waiters(),
+            Ok(false) => {
+                tracing::warn!(run_id = %delivery.run_id, "Queen automation claim was no longer active");
+            }
+            Err(error) => {
+                tracing::warn!(run_id = %delivery.run_id, message = %error, "Queen automation outcome could not be persisted");
+            }
+        }
+    }
     /// Makes crash-interrupted delivery explicit before any new dispatch is attempted.
     ///
     /// # Errors
@@ -1034,6 +1090,15 @@ impl AppState {
         self.task_store
             .as_ref()
             .map_or(Ok(0), TaskStore::recover_inflight_task_outcomes)
+    }
+    /// Makes crash-interrupted Queen automation explicit rather than replaying it.
+    ///
+    /// # Errors
+    /// Returns a persistence error when recovery cannot be recorded.
+    pub fn recover_queen_automation(&self) -> Result<usize, TaskStoreError> {
+        self.task_store
+            .as_ref()
+            .map_or(Ok(0), TaskStore::recover_inflight_queen_automation)
     }
 }
 
@@ -1171,6 +1236,16 @@ fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
     format!(
         "[Swarm task {} assigned] {}. Priority: {}. Workspace: {}. Brief: {} Use swarm_list_tasks for the authoritative current assignment; if it is not visible, the assignment changed.\r",
         delivery.task_id, title, delivery.priority, workspace, description,
+    )
+    .into_bytes()
+}
+fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Vec<u8> {
+    format!(
+        "[Swarm automation {}] Review {} actionable task records while the operator is {}. Use swarm_list_tasks and swarm_list_workers as the authority. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. Ask for a decision when intent or authority is unclear. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
+        delivery.run_id,
+        delivery.actionable_count,
+        delivery.presence,
+        delivery.run_id,
     )
     .into_bytes()
 }
@@ -2000,6 +2075,14 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/orchestration/queen-policy",
             get(orchestration::queen_autonomy_policy).put(orchestration::set_queen_autonomy_policy),
+        )
+        .route(
+            "/api/v1/orchestration/queen-automation",
+            get(orchestration::queen_automation_status).put(orchestration::set_queen_automation),
+        )
+        .route(
+            "/api/v1/orchestration/queen-automation/run",
+            post(orchestration::run_queen_automation),
         )
         .route(
             "/api/v1/preferences/presentation/{device_class}",
@@ -10426,6 +10509,68 @@ mod tests {
             response_json(authorized_get(app, "/api/v1/orchestration/queen-policy").await).await;
         assert_eq!(fetched["at_hive"], "local_execution");
         assert_eq!(fetched["night_watch"], "coordinate");
+    }
+
+    #[tokio::test]
+    async fn queen_automation_routes_are_private_opt_in_and_durable_without_a_running_queen() {
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(TaskStore::in_memory().unwrap()),
+        );
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orchestration/queen-automation")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let initial = response_json(
+            authorized_get(app.clone(), "/api/v1/orchestration/queen-automation").await,
+        )
+        .await;
+        assert_eq!(initial["enabled"], false);
+        assert_eq!(initial["state"], "idle");
+
+        let enabled = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/orchestration/queen-automation")
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"enabled":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(enabled.status(), StatusCode::OK);
+        assert_eq!(enabled.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(enabled).await["enabled"], true);
+
+        let queued = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orchestration/queen-automation/run")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(queued.status(), StatusCode::OK);
+        let queued = response_json(queued).await;
+        assert_eq!(queued["state"], "queued");
+        assert_eq!(queued["trigger"], "manual");
+        assert_eq!(queued["waiting_reason"], "Waiting for Queen to wake");
     }
 
     #[tokio::test]

@@ -51,7 +51,7 @@ impl TaskStore {
     }
 }
 
-fn queen_autonomy_policy_from_connection(
+pub(super) fn queen_autonomy_policy_from_connection(
     connection: &Connection,
 ) -> Result<QueenAutonomyPolicy, TaskStoreError> {
     let operator_id = local_operator_id(connection)?;

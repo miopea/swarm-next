@@ -3210,6 +3210,108 @@ pub enum QueenActionClass {
     ExternalSideEffect,
 }
 
+/// Durable lifecycle of one bounded, unattended Queen review.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueenAutomationState {
+    Idle,
+    Queued,
+    Delivering,
+    Running,
+    Completed,
+    Uncertain,
+}
+
+impl fmt::Display for QueenAutomationState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Idle => "idle",
+            Self::Queued => "queued",
+            Self::Delivering => "delivering",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Uncertain => "uncertain",
+        })
+    }
+}
+
+impl FromStr for QueenAutomationState {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "idle" => Ok(Self::Idle),
+            "queued" => Ok(Self::Queued),
+            "delivering" => Ok(Self::Delivering),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "uncertain" => Ok(Self::Uncertain),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueenAutomationTrigger {
+    ActionableWork,
+    Manual,
+}
+
+impl fmt::Display for QueenAutomationTrigger {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ActionableWork => "actionable_work",
+            Self::Manual => "manual",
+        })
+    }
+}
+
+impl FromStr for QueenAutomationTrigger {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "actionable_work" => Ok(Self::ActionableWork),
+            "manual" => Ok(Self::Manual),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueenAutomationOutcome {
+    Completed,
+    NeedsOperator,
+    NoAction,
+}
+
+impl fmt::Display for QueenAutomationOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Completed => "completed",
+            Self::NeedsOperator => "needs_operator",
+            Self::NoAction => "no_action",
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct QueenAutomationStatus {
+    pub enabled: bool,
+    pub state: QueenAutomationState,
+    pub run_id: Option<String>,
+    pub trigger: Option<QueenAutomationTrigger>,
+    pub actionable_count: usize,
+    pub attempts: usize,
+    pub requested_at: Option<i64>,
+    pub delivered_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    pub outcome: Option<QueenAutomationOutcome>,
+    pub waiting_reason: Option<String>,
+}
+
 impl QueenAutonomyPolicy {
     /// Applies the deterministic presence policy. External effects always require a
     /// separately recorded approval; model confidence never expands authority.
