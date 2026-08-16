@@ -702,6 +702,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .worker-preference-form > label:not(.worker-autostart), .worker-provider-field { display: grid; gap: 4px; color: var(--muted); font-size: .72rem; font-weight: 700; }
 .worker-description-field { color: var(--muted); display: grid; font-size: .72rem; font-weight: 700; gap: 4px; grid-column: 1 / -1; }
 .worker-description-field textarea { min-height: 76px; resize: vertical; }
+.worker-description-field .field-success { color: var(--good); font-weight: 700; white-space: normal; }
+.worker-description-field .field-error { color: var(--danger); font-weight: 700; white-space: normal; }
 .worker-description-heading { align-items: center; display: flex; gap: 10px; justify-content: space-between; }
 .worker-description-heading .secondary-button { min-height: 30px; padding: 4px 8px; }
 .worker-provider-field small { color: var(--text-muted); font-weight: 400; line-height: 1.35; }

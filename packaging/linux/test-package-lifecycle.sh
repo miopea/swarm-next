@@ -102,6 +102,8 @@ grep -q "SWARM_ASSET_ROOT=$SWARM_INSTALL_ROOT/assets" "$SWARM_SYSTEMD_USER_ROOT/
 grep -q "SWARM_DATABASE_PATH=$SWARM_STATE_ROOT/swarm-next.sqlite3" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "SWARM_MAINTENANCE_REQUEST_PATH=$SWARM_STATE_ROOT/worker-engine-maintenance.request" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "EnvironmentFile=-$SWARM_CONFIG_ROOT/swarm-next-dev.env" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
+grep -q "CLAUDE_CONFIG_DIR=$SWARM_STATE_ROOT/providers/claude" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
+grep -q 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q '^Wants=swarm-next-terminal-host.service$' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 if grep -q '^Requires=swarm-next-terminal-host.service$' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"; then
   echo "API must remain online during a controlled terminal-host restart" >&2

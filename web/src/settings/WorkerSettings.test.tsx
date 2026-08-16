@@ -182,8 +182,30 @@ test("drafts private repository context into an editable unsaved description", a
   fireEvent.click(screen.getByRole("button", { name: "Improve with Claude" }));
   expect(await screen.findByDisplayValue("BudgetBug owns household budgeting, bills, and financial planning.")).toBeInTheDocument();
   expect(onImproveDescription).toHaveBeenCalledWith(budget.id);
+  expect(screen.getByRole("status")).toHaveTextContent("Claude improved the editable draft. Review it, then choose Save.");
   expect(onUpdate).not.toHaveBeenCalled();
   expect(screen.getByText(/one tool-free turn \(up to \$0.10\)/)).toBeInTheDocument();
+});
+
+test("shows the real Claude improvement failure instead of appearing inert", async () => {
+  const onImproveDescription = vi.fn().mockRejectedValue(new Error("Runtime request returned 503: Claude Code is not available"));
+  render(
+    <WorkerSettings
+      workers={[queen, budget]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
+      onImproveDescription={onImproveDescription}
+      onReorder={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Improve with Claude" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Runtime request returned 503: Claude Code is not available");
 });
 
 test("pins managed Scout after Queen while keeping provider and routing settings editable", () => {
