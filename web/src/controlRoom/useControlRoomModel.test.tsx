@@ -13,7 +13,8 @@ const populated = {
   tasks: [{ id: "task", title: "Do work" }],
   jiraTaskLinks: [{ task_id: "task", issue_key: "WWD-1" }],
   decisions: [{ id: "decision", title: "Choose" }],
-} as ControlRoomSnapshot;
+  stewardAssists: { incoming: [], sent: [], outbox: [] },
+} as unknown as ControlRoomSnapshot;
 
 test("replaces and clears the complete control-room snapshot as one ownership boundary", () => {
   const { result } = renderHook(() => useControlRoomModel());
@@ -31,6 +32,7 @@ test("replaces and clears the complete control-room snapshot as one ownership bo
   expect(result.current.tasks).toEqual([]);
   expect(result.current.jiraTaskLinks).toEqual([]);
   expect(result.current.decisions).toEqual([]);
+  expect(result.current.stewardAssists).toEqual({ incoming: [], sent: [], outbox: [] });
 });
 
 test("scoped command results update one aggregate without discarding the others", () => {

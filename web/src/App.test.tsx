@@ -174,7 +174,7 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
   vi.stubGlobal("fetch", fetch);
   render(<App />);
 
-  const apiary = await screen.findByRole("button", { name: "Apiary" });
+  const apiary = await screen.findByRole("button", { name: /^Apiary/ });
   fireEvent.click(apiary);
 
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
@@ -217,6 +217,20 @@ test("gives a Member Hive a first-class Apiary membership surface", async () => 
     if (url.endsWith("/apiary/task-outbox")) return Promise.resolve(ok([]));
     if (url.endsWith("/apiary/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
     if (url.endsWith("/apiary/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: ["catalog_missing"] }));
+    if (url.endsWith("/apiary/steward/assists")) return Promise.resolve(ok({
+      incoming: [{
+        id: "019fedfc-1c30-70e1-a5e2-9a3c94268094",
+        apiary_id: "apiary-1",
+        source_hive_id: "hive-1",
+        target_hive_id: "hive-2",
+        message: "I can help review the release decision.",
+        state: "pending",
+        created_at: 100,
+        resolved_at: null,
+      }],
+      sent: [],
+      outbox: [],
+    }));
     if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
     if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
     if (url.includes("/api/v1/providers")) return Promise.resolve(ok({ claude_code: true, codex: false }));
@@ -227,7 +241,15 @@ test("gives a Member Hive a first-class Apiary membership surface", async () => 
   vi.stubGlobal("fetch", fetch);
   render(<App />);
 
-  const apiary = await screen.findByRole("button", { name: "Apiary" });
+  const needsYou = await screen.findByRole("button", { name: "Needs you 1" });
+  expect(screen.getByLabelText("1 pending help offer")).toBeInTheDocument();
+  fireEvent.click(needsYou);
+  expect(await screen.findByRole("heading", { name: "A trusted Steward offered help" })).toBeInTheDocument();
+  expect(screen.getByText(/Nothing was sent to a worker or terminal/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Review in Apiary" }));
+  expect(await screen.findByRole("heading", { name: "Member Hive" })).toBeInTheDocument();
+
+  const apiary = await screen.findByRole("button", { name: /^Apiary/ });
   fireEvent.click(apiary);
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Member Hive" })).toBeInTheDocument();

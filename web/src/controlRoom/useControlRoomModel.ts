@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 import {
   BROWSER_SESSION_AUTH,
   fetchDecisions,
+  fetchFederationStewardAssists,
   fetchHive,
   fetchJiraTaskLinks,
   fetchSessions,
@@ -13,6 +14,7 @@ import {
   type ControlRoomEvent,
   type ControlRoomEventPage,
   type DecisionRequest,
+  type FederationStewardAssistLocalState,
   type HiveIdentity,
   type JiraTaskLink,
   type SessionSummary,
@@ -29,6 +31,7 @@ export type ControlRoomSnapshot = {
   tasks: Task[];
   jiraTaskLinks: JiraTaskLink[];
   decisions: DecisionRequest[];
+  stewardAssists?: FederationStewardAssistLocalState;
 };
 
 const emptySnapshot: ControlRoomSnapshot = {
@@ -39,6 +42,7 @@ const emptySnapshot: ControlRoomSnapshot = {
   tasks: [],
   jiraTaskLinks: [],
   decisions: [],
+  stewardAssists: { incoming: [], sent: [], outbox: [] },
 };
 
 type Dependencies = {
@@ -56,7 +60,10 @@ export async function loadControlRoomSnapshot(operatorToken: string): Promise<Co
     fetchDecisions(operatorToken),
     fetchJiraTaskLinks(operatorToken).catch(() => []),
   ]);
-  return { hiveIdentity, sessions, workers, workspaces, tasks, jiraTaskLinks, decisions };
+  const stewardAssists = hiveIdentity.hive.apiary_id
+    ? await fetchFederationStewardAssists(operatorToken).catch(() => ({ incoming: [], sent: [], outbox: [] }))
+    : { incoming: [], sent: [], outbox: [] };
+  return { hiveIdentity, sessions, workers, workspaces, tasks, jiraTaskLinks, decisions, stewardAssists };
 }
 
 /** Owns the browser's single typed view of the control room.

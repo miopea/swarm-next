@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use rusqlite::{OptionalExtension, Transaction, params};
 use swarm_domain::{
-    FederationStewardAssistAction, FederationStewardAssistCommand,
+    ControlRoomEventKind, FederationStewardAssistAction, FederationStewardAssistCommand,
     FederationStewardAssistCommandId, FederationStewardAssistInbox,
     FederationStewardAssistLocalState, FederationStewardAssistOutboxEntry,
     FederationStewardAssistOutboxState, FederationStewardAssistOutcome,
@@ -14,7 +14,7 @@ use swarm_domain::{
 use super::{
     TaskStore, TaskStoreError,
     federation::{MemberCredentialContext, authenticate_member_credential, decode_node_credential},
-    parse_domain_id,
+    insert_control_room_event, parse_domain_id,
 };
 
 pub const MAX_FEDERATION_STEWARD_ASSIST_BATCH: usize = 20;
@@ -402,6 +402,20 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        let existing = {
+            let mut statement = transaction.prepare(
+                "SELECT request_id, apiary_id, source_hive_id, target_hive_id,
+                        message, state, created_at, resolved_at
+                 FROM local_federation_steward_assist_requests
+                 ORDER BY created_at DESC, request_id DESC",
+            )?;
+            statement
+                .query_map([], request_from_row)?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        if existing == inbox.requests {
+            return Ok(());
+        }
         transaction.execute("DELETE FROM local_federation_steward_assist_requests", [])?;
         for request in &inbox.requests {
             transaction.execute(
@@ -422,6 +436,7 @@ impl TaskStore {
                 ],
             )?;
         }
+        insert_control_room_event(&transaction, ControlRoomEventKind::RuntimeChanged)?;
         transaction.commit()?;
         Ok(())
     }
@@ -855,9 +870,32 @@ mod tests {
             inbox.requests[0].state,
             FederationStewardAssistState::Pending
         );
+        let events_before_inbox = target
+            .list_control_room_events(0)
+            .expect("events before inbox")
+            .events
+            .len();
         target
             .apply_federation_steward_assist_inbox(&inbox, now + 58)
             .expect("local inbox");
+        let events_after_inbox = target
+            .list_control_room_events(0)
+            .expect("events after inbox")
+            .events
+            .len();
+        assert_eq!(events_after_inbox, events_before_inbox + 1);
+        target
+            .apply_federation_steward_assist_inbox(&inbox, now + 58)
+            .expect("unchanged inbox");
+        assert_eq!(
+            target
+                .list_control_room_events(0)
+                .expect("events after unchanged inbox")
+                .events
+                .len(),
+            events_after_inbox,
+            "unchanged polls must not churn the live feed"
+        );
         let response = target
             .queue_federation_steward_assist_response(
                 inbox.requests[0].id,

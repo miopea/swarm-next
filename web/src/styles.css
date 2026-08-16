@@ -604,6 +604,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 
 .decision-inbox { min-height: 0; padding: 26px; overflow-y: auto; }
+.attention-workspace { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
+.attention-workspace .decision-inbox { flex: 1; }
+.apiary-attention-card { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 20px; margin: 18px 26px 0; padding: 16px 18px; border: 1px solid color-mix(in srgb, var(--gold) 48%, var(--line)); border-radius: 16px; background: color-mix(in srgb, var(--honey-soft) 55%, var(--panel)); box-shadow: var(--shadow-soft); }
+.apiary-attention-card h3 { margin: 1px 0 3px; font-size: 1rem; }
+.apiary-attention-card p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: .76rem; line-height: 1.45; }
+.apiary-attention-card button { flex: 0 0 auto; }
 .attention-tabs { display: flex; max-width: 1180px; margin: 0 auto 22px; gap: 5px; padding: 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); }
 .attention-tabs button { min-height: 36px; padding: 6px 14px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; }
 .attention-tabs button[aria-selected="true"] { color: var(--text); background: var(--panel); box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 8%, transparent); }
@@ -1259,6 +1265,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .command-palette { max-height: calc(100dvh - 20px); padding: 16px; }
   .command-results > button, .command-results > button[data-group="Work"] { display: flex; align-items: flex-start; flex-direction: column; gap: 3px; }
   .decision-inbox { padding: 16px; }
+  .apiary-attention-card { align-items: stretch; flex-direction: column; gap: 11px; margin: 12px 12px 0; padding: 14px; }
+  .apiary-attention-card button { width: 100%; min-height: 44px; }
   .attention-tabs { margin-bottom: 16px; }
   .decision-inbox-intro { align-items: start; flex-direction: column; gap: 12px; }
   .work-activity-intro { grid-template-columns: 1fr; gap: 14px; }
