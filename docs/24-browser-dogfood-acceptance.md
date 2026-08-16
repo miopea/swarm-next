@@ -1165,3 +1165,21 @@ the independently updated terminal host through the API to worker settings:
   `quick_check=ok`; API PID advanced to `3836749` while terminal-host PID
   `2966127` remained unchanged. No Jira or live Apiary mutation occurred, and
   every proof browser closed after the run.
+- Release `0.1.0-dev-9ffaf493050d` completes the private side of Keeper task
+  routing. After the task reaches its Member Hive, that Hive's Queen can choose
+  one reviewed repository worker and materialize one durable local task.
+  Exact retries reuse the same task and worker; the Keeper receives no worker,
+  repository, terminal, provider-session, or execution evidence. The Queen-only
+  agent tool follows the same boundary, while ordinary workers cannot discover
+  it. The gate passed 379 Rust tests, warnings-denied Clippy, formatting, all
+  233 frontend tests, strict TypeScript, the production build, and the dogfood
+  harness. Isolated and deployed fixture proof rendered the private-worker route
+  at 1,440 by 900 and Android-size 412 by 915. The first desktop capture exposed
+  a clipped two-column action; moving Keeper tasks to the full dashboard width
+  resolved it before release. Every primary, Keeper, Member, and personal-Hive
+  surface passed with zero horizontal overflow, and authentication survived
+  complete browser restarts. The package created a verified 1,155,072-byte
+  pre-update backup and migrated the live database to schema 56 with
+  `quick_check=ok`. API PID advanced to `3855825`; terminal-host PID `2966127`
+  remained unchanged. No Jira or live Apiary mutation occurred, and every proof
+  browser closed after the run.
