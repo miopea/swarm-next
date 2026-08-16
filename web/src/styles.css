@@ -20,10 +20,23 @@
   --accent: #d69c28;
   --accent-strong: #b77d12;
   --accent-soft: #f3dfad;
+  --accent-ink: var(--accent-strong);
+  --accent-line: color-mix(in srgb, var(--accent) 38%, var(--line));
+  --gold: var(--accent);
+  --honey: var(--accent);
+  --honey-deep: var(--accent-strong);
+  --honey-line: var(--accent-line);
+  --honey-soft: var(--accent-soft);
+  --honey-strong: var(--accent-strong);
+  --honey-wash: color-mix(in srgb, var(--accent-soft) 45%, var(--panel));
+  --ink: var(--text);
+  --link: var(--accent-strong);
   --good: #748766;
   --good-soft: #dce5d2;
+  --sage-soft: var(--good-soft);
   --warn: #d69c28;
   --warn-soft: #f5e4b7;
+  --warning: var(--warn);
   --bad: #9b6967;
   --danger: var(--bad);
   --bad-soft: #eed8d4;
@@ -37,6 +50,9 @@
   --radius-md: var(--radius);
   --radius-lg: 16px;
   --shadow: 0 18px 45px rgba(58, 55, 39, .1);
+  --shadow-soft: 0 8px 20px rgba(58, 55, 39, .08);
+  --font-mono: "Atkinson Hyperlegible Mono Variable", "Cascadia Code", Consolas, monospace;
+  --rail-width: 286px;
 }
 
 :root[data-theme="dark"] {
@@ -385,7 +401,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .app-crash-recovery h1 { margin-bottom: 10px; font-size: clamp(1.45rem, 5vw, 2rem); }
 .app-crash-recovery p:not(.eyebrow) { max-width: 470px; color: var(--muted); line-height: 1.55; }
 
-.task-board { min-height: 0; padding: 26px; overflow-x: clip; overflow-y: auto; }
+.task-board { min-height: 0; padding: 26px; overflow-x: clip; overflow-y: auto; container-name: task-board; container-type: inline-size; }
 .task-compose { display: grid; max-width: 1600px; gap: 16px; margin: 0 auto 24px; padding: 18px 20px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 6%, transparent); }
 .task-compose-header { display: flex; min-width: 0; align-items: end; justify-content: space-between; gap: 22px; }
 .task-compose h3 { margin: 0 0 5px; font-size: 1.08rem; letter-spacing: -.015em; }
@@ -610,6 +626,31 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .completed-tasks summary:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
 .completed-tasks summary small { display: grid; min-width: 22px; height: 21px; place-items: center; border-radius: 7px; color: var(--muted); background: var(--panel-soft); font-size: .69rem; }
 .task-grid.compact .task-card { min-height: 96px; box-shadow: none; }
+
+/* The worker rail is user-resizable, so task density must follow the space
+   left for the board rather than the browser viewport. */
+@container task-board (max-width: 920px) {
+  .task-card {
+    grid-template-columns: minmax(260px, .9fr) minmax(0, 1.1fr);
+    grid-template-areas:
+      "metadata title"
+      "metadata description"
+      "assignment actions";
+    min-height: 146px;
+    align-items: start;
+  }
+  .task-metadata-panel { align-content: start; }
+  .task-card h4 { align-self: end; }
+  .task-description { align-self: start; }
+  .task-assignment-cell, .task-actions { align-self: end; }
+  .task-actions { justify-content: flex-start; }
+}
+
+@container task-board (max-width: 760px) {
+  .task-compose-header { align-items: stretch; flex-direction: column; gap: 13px; }
+  .task-entry-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
+  .task-entry-actions button { width: 100%; }
+}
 .task-owner { max-width: 52%; color: var(--muted); font-size: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
 
