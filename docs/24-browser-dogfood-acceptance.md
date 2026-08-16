@@ -1270,3 +1270,22 @@ the independently updated terminal host through the API to worker settings:
   terminal-host PID `2966127`, worker-engine build `f8abd293`, and Queen session
   `01a004fc-68b6-7720-9a6e-0eebf2434db1` remained unchanged. No Jira or live
   Apiary mutation occurred, and every proof browser closed after the run.
+- Release `0.1.0-dev-cda6410b3825` makes pending Steward help visible in the
+  Member operator's normal control room. Pending offers contribute to **Needs
+  you**, add a compact Apiary badge, and open the exact Apiary review surface;
+  the copy explicitly says that no worker or terminal was interrupted. Member
+  polling emits one content-free live-feed invalidation only when the bounded
+  Assist projection changes, so unchanged polls do not create event churn.
+  Personal Hives do not request the federated projection. The complete gate
+  passed 386 Rust tests, warnings-denied Clippy, formatting, all 238 frontend
+  tests, strict TypeScript, the production build, and the dogfood harness. The
+  actual attention component rendered at 1,440 by 900 and Android-size 412 by
+  915 with zero horizontal overflow; the mobile action measured 44 pixels and
+  navigated to Member Hive review. The deployed public Keeper and Apiary
+  surfaces reported exact release
+  `0.1.0-dev-cda6410b3825-20260816104056-3950888`, rendered with zero
+  horizontal overflow, and emitted no browser warnings or errors. Schema 59
+  remained healthy with `quick_check=ok` and a 1,257,472-byte database. API PID
+  advanced to `3952145`; terminal-host PID `2966127` and worker-engine build
+  `f8abd293` remained unchanged. No Jira or live Apiary mutation occurred, and
+  every proof browser closed after the run.
