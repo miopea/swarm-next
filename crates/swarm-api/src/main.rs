@@ -145,6 +145,13 @@ fn recover_interrupted_deliveries(state: &AppState) -> Result<(), Box<dyn std::e
             "crash-interrupted Queen automation requires operator review"
         );
     }
+    let recovered_coordinator_actions = state.recover_coordinator_actions()?;
+    if recovered_coordinator_actions > 0 {
+        tracing::warn!(
+            recovered_coordinator_actions,
+            "crash-interrupted deterministic coordination requires operator review"
+        );
+    }
     let recovered_jira_transitions = state.recover_jira_transition_deliveries()?;
     if recovered_jira_transitions > 0 {
         tracing::warn!(

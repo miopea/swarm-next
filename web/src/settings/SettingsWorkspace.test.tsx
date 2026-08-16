@@ -284,6 +284,9 @@ test("makes Queen automation observable, opt-in, and manually runnable", async (
       }
       return ok(queenAutomation());
     }
+    if (url.endsWith("/orchestration/coordinator")) {
+      return ok({ completed_actions: 7, queen_calls_avoided: 7, uncertain_actions: 0, queued_actions: 1, last_action_at: 100 });
+    }
     if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
     if (url.includes("integrations/jira/bindings") || url.includes("feedback/reports")) return ok([]);
     if (url.includes("integrations/email/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
@@ -299,6 +302,8 @@ test("makes Queen automation observable, opt-in, and manually runnable", async (
   const toggle = screen.getByRole("checkbox", { name: "Automatic off" });
   expect(toggle).not.toBeChecked();
   expect(screen.getByText(/nothing runs automatically/)).toBeInTheDocument();
+  expect(await screen.findByLabelText("Deterministic coordinator status")).toHaveTextContent("7Queen calls avoided");
+  expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("1Waiting");
 
   fireEvent.click(toggle);
   expect(await screen.findByRole("checkbox", { name: "Automatic on" })).toBeChecked();

@@ -173,6 +173,13 @@ export type QueenAutomationStatus = {
   outcome: "completed" | "needs_operator" | "no_action" | null;
   waiting_reason: string | null;
 };
+export type CoordinatorStatus = {
+  completed_actions: number;
+  queen_calls_avoided: number;
+  uncertain_actions: number;
+  queued_actions: number;
+  last_action_at: number | null;
+};
 export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };
 export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: number; reset_required: boolean };
 export type TerminalHostStatus = {
@@ -1435,6 +1442,11 @@ export async function fetchQueenAutomationStatus(
 ): Promise<QueenAutomationStatus> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/queen-automation");
   return response.json() as Promise<QueenAutomationStatus>;
+}
+
+export async function fetchCoordinatorStatus(operatorToken: string): Promise<CoordinatorStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/coordinator");
+  return response.json() as Promise<CoordinatorStatus>;
 }
 
 export async function setQueenAutomationEnabled(

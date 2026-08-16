@@ -161,6 +161,12 @@ or silently retry an action whose delivery became uncertain.
 The target is not maximum automation. It is fewer unnecessary LLM calls and
 interruptions without hiding failures or expanding authority.
 
+The first live rule is now implemented: a Queen-originated Ready assignment to
+a sleeping worker creates one revision-bound durable wake action. Operator
+assignments remain manual, and an ambiguous wake never replays. Settings shows
+the completed action and avoided-Queen-call count so the layer's value and
+failure state are visible during dogfooding.
+
 ## Remaining history passes
 
 1. Build a commit-to-capability ledger for all 1,431 commits, including files

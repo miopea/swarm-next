@@ -807,6 +807,17 @@ async function checkSurface(browser, surface) {
     if (settingsNavigationSize.clientHeight < 40) {
       throw new Error(`${surface.name}: Settings section navigation collapsed: ${JSON.stringify(settingsNavigationSize)}`);
     }
+    const queenJump = settingsNavigation.getByRole("button", { name: "Queen", exact: true });
+    await queenJump.click();
+    const coordinatorStatus = page.getByLabel("Deterministic coordinator status");
+    await coordinatorStatus.waitFor();
+    if (!await coordinatorStatus.getByText("Queen calls avoided", { exact: true }).isVisible()
+      || !await coordinatorStatus.getByText("Waiting", { exact: true }).isVisible()
+      || !await coordinatorStatus.getByText("Needs review", { exact: true }).isVisible()) {
+      throw new Error(`${surface.name}: deterministic coordinator evidence is incomplete`);
+    }
+    await coordinatorStatus.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-settings-queen-coordinator.png`), fullPage: true });
     const apiaryJump = settingsNavigation.getByRole("button", { name: "Apiary", exact: true });
     await apiaryJump.click();
     await page.getByRole("button", { name: "Edit names" }).click();

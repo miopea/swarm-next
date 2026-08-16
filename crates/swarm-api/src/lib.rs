@@ -81,7 +81,7 @@ use swarm_domain::{
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
 use swarm_persistence::{
-    DecisionDeliveryFailure, DecisionDispatch, FederationHandoffIntentPhase,
+    CoordinatorStatus, DecisionDeliveryFailure, DecisionDispatch, FederationHandoffIntentPhase,
     FederationJiraClaimPhase, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionFailure,
     QueenAutomationDelivery, QueenAutomationFailure, TaskDispatch, TaskDispatchFailure,
     TaskOutcomeDispatch, TaskOutcomeFailure, TaskStore, TaskStoreError,
@@ -843,6 +843,7 @@ impl AppState {
         let (Some(store), Some(client)) = (&self.task_store, &self.terminal_host) else {
             return;
         };
+        self.run_deterministic_coordinator(store).await;
         self.deliver_decision_outcomes(store, client).await;
         self.deliver_task_briefs(store, client).await;
         self.deliver_task_outcomes(store, client).await;
@@ -850,6 +851,60 @@ impl AppState {
             tracing::warn!(message = %error, "Queen automation queue could not be observed");
         }
         self.deliver_queen_automation(store, client).await;
+    }
+
+    async fn run_deterministic_coordinator(&self, store: &TaskStore) {
+        let actions = match store.claim_coordinator_worker_wakes(unix_timestamp()) {
+            Ok(actions) => actions,
+            Err(error) => {
+                tracing::warn!(message = %error, "deterministic coordinator could not claim worker wakes");
+                return;
+            }
+        };
+        for action in actions {
+            let result = worker_runtime::start_worker_process(
+                self,
+                action.worker_id,
+                TerminalSize::default(),
+            )
+            .await;
+            let outcome = match result {
+                Ok(_) => {
+                    store.complete_coordinator_worker_wake(&action.action_id, unix_timestamp())
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        action_id = %action.action_id,
+                        task_id = %action.task_id,
+                        worker_id = %action.worker_id,
+                        message = %error.message,
+                        "deterministic worker wake became uncertain and will not replay"
+                    );
+                    store
+                        .mark_coordinator_worker_wake_uncertain(&action.action_id, unix_timestamp())
+                }
+            };
+            match outcome {
+                Ok(true) => self.control_room_notify.notify_waiters(),
+                Ok(false) => {
+                    tracing::warn!(action_id = %action.action_id, "coordinator action was no longer active");
+                }
+                Err(error) => {
+                    tracing::warn!(action_id = %action.action_id, message = %error, "coordinator action outcome could not be persisted");
+                }
+            }
+        }
+    }
+
+    /// Returns content-free deterministic coordination evidence for the operator UI.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the evidence cannot be read.
+    pub fn coordinator_status(&self) -> Result<CoordinatorStatus, TaskStoreError> {
+        self.task_store.as_ref().map_or_else(
+            || Ok(CoordinatorStatus::default()),
+            TaskStore::coordinator_status,
+        )
     }
 
     async fn deliver_decision_outcomes(&self, store: &TaskStore, client: &HostClient) {
@@ -1099,6 +1154,16 @@ impl AppState {
         self.task_store
             .as_ref()
             .map_or(Ok(0), TaskStore::recover_inflight_queen_automation)
+    }
+
+    /// Prevents crash-ambiguous deterministic worker starts from replaying.
+    ///
+    /// # Errors
+    /// Returns a persistence error when recovery cannot be recorded.
+    pub fn recover_coordinator_actions(&self) -> Result<usize, TaskStoreError> {
+        self.task_store
+            .as_ref()
+            .map_or(Ok(0), TaskStore::recover_inflight_coordinator_actions)
     }
 }
 
@@ -2083,6 +2148,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/orchestration/queen-automation/run",
             post(orchestration::run_queen_automation),
+        )
+        .route(
+            "/api/v1/orchestration/coordinator",
+            get(orchestration::coordinator_status),
         )
         .route(
             "/api/v1/preferences/presentation/{device_class}",
@@ -10529,6 +10598,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let coordinator =
+            response_json(authorized_get(app.clone(), "/api/v1/orchestration/coordinator").await)
+                .await;
+        assert_eq!(coordinator["queen_calls_avoided"], 0);
+        assert_eq!(coordinator["queued_actions"], 0);
+        assert_eq!(coordinator["uncertain_actions"], 0);
 
         let initial = response_json(
             authorized_get(app.clone(), "/api/v1/orchestration/queen-automation").await,

@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use swarm_domain::{QueenAutonomyLevel, QueenAutonomyPolicy};
 
 use super::{ApiError, AppState, authorize, task_store, task_store_error, unix_timestamp};
@@ -21,6 +21,15 @@ pub(super) struct SetQueenAutonomyPolicyRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct SetQueenAutomationRequest {
     enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct CoordinatorStatusResponse {
+    completed_actions: usize,
+    queen_calls_avoided: usize,
+    uncertain_actions: usize,
+    queued_actions: usize,
+    last_action_at: Option<i64>,
 }
 
 pub(super) async fn queen_autonomy_policy(
@@ -63,6 +72,27 @@ pub(super) async fn queen_automation_status(
         .queen_automation_status(unix_timestamp())
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
+}
+
+pub(super) async fn coordinator_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let status = state
+        .coordinator_status()
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(CoordinatorStatusResponse {
+            completed_actions: status.completed_actions,
+            queen_calls_avoided: status.queen_calls_avoided,
+            uncertain_actions: status.uncertain_actions,
+            queued_actions: status.queued_actions,
+            last_action_at: status.last_action_at,
+        }),
+    )
+        .into_response())
 }
 
 pub(super) async fn set_queen_automation(

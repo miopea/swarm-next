@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { downloadDatabaseBackup, draftWorkerDescription, fetchEmailReadiness, fetchJiraReadiness, fetchQueenAutomationStatus, fetchTerminalHostStatus, improveWorkerDescription, runQueenAutomation, setQueenAutomationEnabled, type ControlRoomEvent, type EmailReadiness, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutomationStatus, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
+import { downloadDatabaseBackup, draftWorkerDescription, fetchCoordinatorStatus, fetchEmailReadiness, fetchJiraReadiness, fetchQueenAutomationStatus, fetchTerminalHostStatus, improveWorkerDescription, runQueenAutomation, setQueenAutomationEnabled, type ControlRoomEvent, type CoordinatorStatus, type EmailReadiness, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutomationStatus, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
 import { downloadBlob } from "../shared/download";
 import type { ColorTheme } from "../brand/theme";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
@@ -64,6 +64,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   const [queenAutomation, setQueenAutomation] = useState<QueenAutomationStatus>();
   const [queenAutomationBusy, setQueenAutomationBusy] = useState(false);
   const [queenAutomationError, setQueenAutomationError] = useState<string>();
+  const [coordinatorStatus, setCoordinatorStatus] = useState<CoordinatorStatus>();
   const [confirmMaintenance, setConfirmMaintenance] = useState(false);
   const [activeSettingsSection, setActiveSettingsSection] = useState(() => readSettingsSection() ?? "settings-crew");
   useEffect(() => {
@@ -111,10 +112,11 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
   const latestEventSequence = recentEvents.reduce((latest, event) => Math.max(latest, event.sequence), 0);
   useEffect(() => {
     let cancelled = false;
-    void fetchQueenAutomationStatus(operatorToken)
-      .then((status) => {
+    void Promise.all([fetchQueenAutomationStatus(operatorToken), fetchCoordinatorStatus(operatorToken)])
+      .then(([status, coordinator]) => {
         if (!cancelled) {
           setQueenAutomation(status);
+          setCoordinatorStatus(coordinator);
           setQueenAutomationError(undefined);
         }
       })
@@ -231,6 +233,24 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
             <span>
               <strong>{queenAutomationStateLabel(queenAutomation)}</strong>
               <small>{queenAutomationStateDetail(queenAutomation)}</small>
+            </span>
+          </div>
+          <div className={`coordinator-status ${coordinatorStatus?.uncertain_actions ? "needs-attention" : ""}`} aria-label="Deterministic coordinator status">
+            <span>
+              <strong>Routine coordination</strong>
+              <small>Assigned Ready work wakes its sleeping worker without another Queen call.</small>
+            </span>
+            <span className="coordinator-metrics">
+              <strong>{coordinatorStatus?.queen_calls_avoided ?? 0}</strong>
+              <small>Queen calls avoided</small>
+            </span>
+            <span className="coordinator-metrics">
+              <strong>{coordinatorStatus?.queued_actions ?? 0}</strong>
+              <small>Waiting</small>
+            </span>
+            <span className="coordinator-metrics">
+              <strong>{coordinatorStatus?.uncertain_actions ?? 0}</strong>
+              <small>Needs review</small>
             </span>
           </div>
           {queenAutomationError && <p className="queen-automation-error" role="alert">{queenAutomationError}</p>}

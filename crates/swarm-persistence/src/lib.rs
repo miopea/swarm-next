@@ -18,6 +18,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod apiary;
+mod coordinator;
+pub use coordinator::{CoordinatorStatus, CoordinatorWorkerWake};
 mod decisions;
 mod email;
 mod events;
@@ -88,7 +90,7 @@ pub(crate) const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 61;
+const CURRENT_SCHEMA_VERSION: i64 = 62;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1288,6 +1290,7 @@ impl TaskStore {
             )
             .optional()?;
         let session_id = worker.ok_or(TaskStoreError::WorkerNotFound)?;
+        let worker_is_sleeping = session_id.is_none();
         transaction.execute(
             "DELETE FROM task_outcome_deliveries WHERE task_id = ?1 AND state = 'queued'",
             [id.to_string()],
@@ -1344,6 +1347,16 @@ impl TaskStore {
             "INSERT INTO task_activity (task_id, kind, actor_kind, actor_id)
              VALUES (?1, 'assigned', ?2, ?3)",
             params![id.to_string(), actor.kind.to_string(), actor.id.as_deref()],
+        )?;
+        let assignment_sequence = transaction.last_insert_rowid();
+        coordinator::enqueue_queen_worker_wake(
+            &transaction,
+            id,
+            worker_id,
+            actor.id.as_deref(),
+            assignment_sequence,
+            &state,
+            worker_is_sleeping,
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
@@ -1615,6 +1628,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 61 {
         queen_conductor::migrate_queen_conductor(transaction)?;
+    }
+    if schema_version < 62 {
+        coordinator::migrate_coordinator(transaction)?;
     }
     Ok(())
 }
