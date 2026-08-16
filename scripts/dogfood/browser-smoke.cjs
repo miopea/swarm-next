@@ -811,6 +811,13 @@ async function checkSurface(browser, surface) {
     await queenJump.click();
     const coordinatorStatus = page.getByLabel("Deterministic coordinator status");
     await coordinatorStatus.waitFor();
+    const settingsWorkspaceWidth = await page.locator(".settings-workspace").evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    if (settingsWorkspaceWidth.scrollWidth > settingsWorkspaceWidth.clientWidth + 1) {
+      throw new Error(`${surface.name}: Settings workspace scrolls horizontally: ${JSON.stringify(settingsWorkspaceWidth)}`);
+    }
     if (!await coordinatorStatus.getByText("Queen calls avoided", { exact: true }).isVisible()
       || !await coordinatorStatus.getByText("Waiting", { exact: true }).isVisible()
       || !await coordinatorStatus.getByText("Needs review", { exact: true }).isVisible()) {
