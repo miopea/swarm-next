@@ -52,6 +52,8 @@ domain_id!(FederationTaskCommandId);
 domain_id!(FederationStewardTaskCommandId);
 domain_id!(FederationStewardAssistCommandId);
 domain_id!(FederationStewardAssistRequestId);
+domain_id!(FederationStewardTakeoverCommandId);
+domain_id!(FederationStewardTakeoverLeaseId);
 domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
@@ -957,6 +959,203 @@ pub struct FederationStewardAssistLocalState {
     pub incoming: Vec<FederationStewardAssistRequest>,
     pub sent: Vec<FederationStewardAssistRequest>,
     pub outbox: Vec<FederationStewardAssistOutboxEntry>,
+}
+
+/// Keeper-authoritative lifecycle of one exclusive Steward control lease over
+/// a managed Hive's Queen. Requested leases grant no terminal access.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationStewardTakeoverState {
+    Requested,
+    Active,
+    Released,
+    Reclaimed,
+    Expired,
+}
+
+impl FederationStewardTakeoverState {
+    #[must_use]
+    pub const fn is_open(self) -> bool {
+        matches!(self, Self::Requested | Self::Active)
+    }
+}
+
+impl fmt::Display for FederationStewardTakeoverState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Requested => "requested",
+            Self::Active => "active",
+            Self::Released => "released",
+            Self::Reclaimed => "reclaimed",
+            Self::Expired => "expired",
+        })
+    }
+}
+
+impl FromStr for FederationStewardTakeoverState {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "requested" => Ok(Self::Requested),
+            "active" => Ok(Self::Active),
+            "released" => Ok(Self::Released),
+            "reclaimed" => Ok(Self::Reclaimed),
+            "expired" => Ok(Self::Expired),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Public Apiary control-plane evidence. It deliberately contains no worker
+/// identity, provider conversation, terminal output, or terminal frame.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardTakeoverLease {
+    pub id: FederationStewardTakeoverLeaseId,
+    pub apiary_id: ApiaryId,
+    pub source_hive_id: HiveId,
+    pub target_hive_id: HiveId,
+    pub source_operator_id: OperatorId,
+    pub stewardship_id: StewardshipId,
+    pub reason: String,
+    pub state: FederationStewardTakeoverState,
+    pub revision: u64,
+    pub requested_at: i64,
+    pub acknowledged_at: Option<i64>,
+    pub expires_at: i64,
+    pub ended_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum FederationStewardTakeoverAction {
+    Request {
+        target_hive_id: HiveId,
+        reason: String,
+        relay_protocol_version: u16,
+        terminal_protocol_version: u16,
+    },
+    Acknowledge {
+        lease_id: FederationStewardTakeoverLeaseId,
+        expected_revision: u64,
+        relay_protocol_version: u16,
+        terminal_protocol_version: u16,
+    },
+    Renew {
+        lease_id: FederationStewardTakeoverLeaseId,
+        expected_revision: u64,
+    },
+    Release {
+        lease_id: FederationStewardTakeoverLeaseId,
+        expected_revision: u64,
+    },
+    Reclaim {
+        lease_id: FederationStewardTakeoverLeaseId,
+        expected_revision: u64,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardTakeoverCommand {
+    pub id: FederationStewardTakeoverCommandId,
+    pub apiary_id: ApiaryId,
+    pub action: FederationStewardTakeoverAction,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationStewardTakeoverOutcome {
+    Applied,
+    Rejected,
+    Conflict,
+}
+
+impl fmt::Display for FederationStewardTakeoverOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Applied => "applied",
+            Self::Rejected => "rejected",
+            Self::Conflict => "conflict",
+        })
+    }
+}
+
+impl FromStr for FederationStewardTakeoverOutcome {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "applied" => Ok(Self::Applied),
+            "rejected" => Ok(Self::Rejected),
+            "conflict" => Ok(Self::Conflict),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardTakeoverReceipt {
+    pub command_id: FederationStewardTakeoverCommandId,
+    pub outcome: FederationStewardTakeoverOutcome,
+    pub lease: Option<FederationStewardTakeoverLease>,
+    pub processed_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardTakeoverInbox {
+    pub leases: Vec<FederationStewardTakeoverLease>,
+    pub generated_at: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FederationStewardTakeoverOutboxState {
+    Queued,
+    Applied,
+    Rejected,
+    Conflict,
+}
+
+impl fmt::Display for FederationStewardTakeoverOutboxState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Queued => "queued",
+            Self::Applied => "applied",
+            Self::Rejected => "rejected",
+            Self::Conflict => "conflict",
+        })
+    }
+}
+
+impl FromStr for FederationStewardTakeoverOutboxState {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "queued" => Ok(Self::Queued),
+            "applied" => Ok(Self::Applied),
+            "rejected" => Ok(Self::Rejected),
+            "conflict" => Ok(Self::Conflict),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardTakeoverOutboxEntry {
+    pub command: FederationStewardTakeoverCommand,
+    pub state: FederationStewardTakeoverOutboxState,
+    pub attempt_count: u32,
+    pub last_attempt_at: Option<i64>,
+    pub receipt: Option<FederationStewardTakeoverReceipt>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardTakeoverLocalState {
+    pub leases: Vec<FederationStewardTakeoverLease>,
+    pub outbox: Vec<FederationStewardTakeoverOutboxEntry>,
 }
 
 /// Durable Member-side evidence that one exact Keeper catalog was verified.

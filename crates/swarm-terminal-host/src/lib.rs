@@ -397,8 +397,37 @@ fn dispatch_blocking(
             );
         }
         HostRequest::Write { session_id, bytes } => registry
-            .get(session_id)
-            .and_then(|session| session.write_input(&bytes))
+            .write_local(session_id, &bytes)
+            .map(|()| HostResponse::Acknowledged)
+            .map_err(|error| error.to_string()),
+        HostRequest::InstallTakeover { session_id, lease } => registry
+            .install_takeover(session_id, lease)
+            .map(|()| HostResponse::Acknowledged)
+            .map_err(|error| error.to_string()),
+        HostRequest::TakeoverWrite {
+            session_id,
+            lease_id,
+            revision,
+            bytes,
+        } => registry
+            .write_takeover(session_id, lease_id, revision, &bytes)
+            .map(|()| HostResponse::Acknowledged)
+            .map_err(|error| error.to_string()),
+        HostRequest::ReclaimTakeoverAndWrite {
+            session_id,
+            lease_id,
+            revision,
+            bytes,
+        } => registry
+            .reclaim_takeover_and_write(session_id, lease_id, revision, &bytes)
+            .map(|()| HostResponse::Acknowledged)
+            .map_err(|error| error.to_string()),
+        HostRequest::ReleaseTakeover {
+            session_id,
+            lease_id,
+            revision,
+        } => registry
+            .release_takeover(session_id, lease_id, revision)
             .map(|()| HostResponse::Acknowledged)
             .map_err(|error| error.to_string()),
         HostRequest::Resize { session_id, size } => registry
@@ -437,6 +466,7 @@ fn terminal_host_status(
         running_sessions: registry.running_session_count()?,
         retained_sessions: registry.len()?,
         resources: Some(swarm_terminal::sample_current_process()),
+        takeover_relay: true,
     })
 }
 

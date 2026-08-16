@@ -413,6 +413,7 @@ mod tests {
             running_sessions: 0,
             retained_sessions: 0,
             resources: None,
+            takeover_relay: false,
         })
         .unwrap_err();
         assert!(matches!(error, CliError::ProtocolMismatch { .. }));
@@ -428,6 +429,7 @@ mod tests {
             running_sessions: 1,
             retained_sessions: 2,
             resources: None,
+            takeover_relay: true,
         })
         .unwrap();
         assert!(!output.contains('\n'));

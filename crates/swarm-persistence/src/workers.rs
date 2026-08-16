@@ -678,7 +678,39 @@ impl TaskStore {
             )
             .optional()?
             .is_some();
-        Ok(!engaged)
+        let takeover = connection.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM worker_profiles p
+                 JOIN local_federation_steward_takeover_leases lease
+                   ON lease.target_hive_id = p.hive_id
+                 WHERE p.id = ?1 AND p.role = 'queen'
+                   AND lease.state IN ('requested','active') AND lease.expires_at > ?2
+             )",
+            params![worker_id.to_string(), now],
+            |row| row.get::<_, bool>(0),
+        )?;
+        Ok(!engaged && !takeover)
+    }
+
+    /// Returns the currently bound Queen session, if Queen is running.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when persistence contains an invalid session identity.
+    pub fn active_queen_session_id(&self) -> Result<Option<WorkerSessionId>, TaskStoreError> {
+        self.connection()?
+            .query_row(
+                "SELECT s.session_id FROM worker_profiles p
+                 JOIN worker_sessions s ON s.worker_id = p.id AND s.ended_at IS NULL
+                 WHERE p.role = 'queen' AND p.archived_at IS NULL LIMIT 1",
+                [],
+                |row| {
+                    WorkerSessionId::from_str(&row.get::<_, String>(0)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)
+                },
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     /// Releases a session binding after its process exits or is stopped.

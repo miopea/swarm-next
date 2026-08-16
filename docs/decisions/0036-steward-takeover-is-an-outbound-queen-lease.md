@@ -5,6 +5,12 @@
 Accepted for staged implementation. The capability remains unavailable until
 the control lease, relay, owner reclaim, and visible audit ship together.
 
+Implementation checkpoint (2026-08-16): the internal two-phase lease store and
+terminal-host authority primitive are implemented and tested. No operator or
+federation route exposes them yet. Outbound relay, restart reconciliation,
+automation recovery, audit presentation, and desktop/mobile control remain the
+release gate.
+
 ## Context
 
 A Steward may need to step into a managed Hive when its operator is unavailable

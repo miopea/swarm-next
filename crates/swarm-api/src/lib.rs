@@ -6182,6 +6182,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "invalid_steward_assist",
             error.to_string(),
         ),
+        TaskStoreError::InvalidFederationStewardTakeover => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_steward_takeover",
+            error.to_string(),
+        ),
         TaskStoreError::StewardActionDenied => ApiError::new(
             StatusCode::FORBIDDEN,
             "steward_action_denied",
@@ -6195,6 +6200,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::FederationStewardAssistQueueFull => ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
             "steward_assist_queue_full",
+            error.to_string(),
+        ),
+        TaskStoreError::FederationStewardTakeoverQueueFull => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "steward_takeover_queue_full",
             error.to_string(),
         ),
         TaskStoreError::StewardshipNotFound => ApiError::new(

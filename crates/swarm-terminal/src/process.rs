@@ -7,11 +7,12 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
-use swarm_domain::WorkerSessionId;
+use swarm_domain::{FederationStewardTakeoverLeaseId, WorkerSessionId};
 use thiserror::Error;
 use tokio::sync::watch;
 use tracing::warn;
@@ -19,6 +20,7 @@ use tracing::warn;
 use crate::{
     CanonicalTerminalState, HistoryAppendOutcome, HistoryCursor, HistoryDiagnostics, HistoryError,
     HistoryPage, HistorySessionSummary, HistoryStore, JournalLimits, ProviderCommand, Resume,
+    TerminalTakeoverLease,
 };
 
 pub const MAX_TERMINAL_ROWS: u16 = 200;
@@ -84,6 +86,10 @@ pub enum SessionRegistryError {
     WorkspaceUnavailable(PathBuf),
     #[error("terminal session was not found")]
     SessionNotFound,
+    #[error("terminal takeover authority conflicts with the active lease")]
+    TakeoverConflict,
+    #[error("terminal takeover authority is missing, stale, or expired")]
+    TakeoverDenied,
     #[error("terminal operation failed: {0}")]
     Terminal(String),
     #[error(transparent)]
@@ -396,6 +402,7 @@ impl Drop for ProcessTerminalSession {
 #[derive(Debug)]
 pub struct SessionRegistry {
     sessions: Mutex<HashMap<WorkerSessionId, Arc<ProcessTerminalSession>>>,
+    takeovers: Mutex<HashMap<WorkerSessionId, TerminalTakeoverLease>>,
     limits: JournalLimits,
     max_sessions: usize,
     allowed_roots: Vec<PathBuf>,
@@ -437,6 +444,7 @@ impl SessionRegistry {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             sessions: Mutex::new(HashMap::new()),
+            takeovers: Mutex::new(HashMap::new()),
             limits,
             max_sessions,
             allowed_roots,
@@ -530,7 +538,129 @@ impl SessionRegistry {
         let session = lock(&self.sessions)?
             .remove(&id)
             .ok_or(SessionRegistryError::SessionNotFound)?;
+        lock(&self.takeovers)?.remove(&id);
         session.stop()
+    }
+
+    /// Installs or idempotently confirms one exact, unexpired takeover lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown session, expired lease, or conflicting
+    /// authority. A later revision of the same lease may replace an older one.
+    pub fn install_takeover(
+        &self,
+        session_id: WorkerSessionId,
+        lease: TerminalTakeoverLease,
+    ) -> Result<(), SessionRegistryError> {
+        if lease.revision == 0 || lease.expires_at <= unix_timestamp() {
+            return Err(SessionRegistryError::TakeoverDenied);
+        }
+        self.get(session_id)?;
+        let mut takeovers = lock(&self.takeovers)?;
+        if let Some(current) = takeovers.get(&session_id).copied()
+            && current.expires_at > unix_timestamp()
+            && (current.lease_id != lease.lease_id || current.revision > lease.revision)
+        {
+            return Err(SessionRegistryError::TakeoverConflict);
+        }
+        takeovers.insert(session_id, lease);
+        Ok(())
+    }
+
+    /// Writes only when the exact active takeover authority is installed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for stale, conflicting, expired, or missing authority.
+    pub fn write_takeover(
+        &self,
+        session_id: WorkerSessionId,
+        lease_id: FederationStewardTakeoverLeaseId,
+        revision: u64,
+        bytes: &[u8],
+    ) -> Result<(), SessionRegistryError> {
+        self.require_takeover(session_id, lease_id, revision)?;
+        self.get(session_id)?.write_input(bytes)
+    }
+
+    /// Atomically removes exact remote authority before accepting local input.
+    /// Local reclaim therefore wins even if Keeper has not yet observed it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for stale authority or terminal write failure.
+    pub fn reclaim_takeover_and_write(
+        &self,
+        session_id: WorkerSessionId,
+        lease_id: FederationStewardTakeoverLeaseId,
+        revision: u64,
+        bytes: &[u8],
+    ) -> Result<(), SessionRegistryError> {
+        self.require_takeover(session_id, lease_id, revision)?;
+        lock(&self.takeovers)?.remove(&session_id);
+        self.get(session_id)?.write_input(bytes)
+    }
+
+    /// Releases exact takeover authority without writing terminal input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for stale or missing authority.
+    pub fn release_takeover(
+        &self,
+        session_id: WorkerSessionId,
+        lease_id: FederationStewardTakeoverLeaseId,
+        revision: u64,
+    ) -> Result<(), SessionRegistryError> {
+        self.require_takeover(session_id, lease_id, revision)?;
+        lock(&self.takeovers)?.remove(&session_id);
+        Ok(())
+    }
+
+    /// Writes ordinary local or automation input only when remote takeover is
+    /// absent or expired. Reclaim must use the explicit atomic operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error while an unexpired takeover owns the session.
+    pub fn write_local(
+        &self,
+        session_id: WorkerSessionId,
+        bytes: &[u8],
+    ) -> Result<(), SessionRegistryError> {
+        let now = unix_timestamp();
+        let mut takeovers = lock(&self.takeovers)?;
+        if takeovers
+            .get(&session_id)
+            .is_some_and(|takeover| takeover.expires_at > now)
+        {
+            return Err(SessionRegistryError::TakeoverDenied);
+        }
+        takeovers.remove(&session_id);
+        drop(takeovers);
+        self.get(session_id)?.write_input(bytes)
+    }
+
+    fn require_takeover(
+        &self,
+        session_id: WorkerSessionId,
+        lease_id: FederationStewardTakeoverLeaseId,
+        revision: u64,
+    ) -> Result<TerminalTakeoverLease, SessionRegistryError> {
+        let now = unix_timestamp();
+        let mut takeovers = lock(&self.takeovers)?;
+        let Some(lease) = takeovers.get(&session_id).copied() else {
+            return Err(SessionRegistryError::TakeoverDenied);
+        };
+        if lease.expires_at <= now {
+            takeovers.remove(&session_id);
+            return Err(SessionRegistryError::TakeoverDenied);
+        }
+        if lease.lease_id != lease_id || lease.revision != revision {
+            return Err(SessionRegistryError::TakeoverDenied);
+        }
+        Ok(lease)
     }
 
     /// Returns the current bounded session count.
@@ -673,6 +803,14 @@ impl SessionRegistry {
     }
 }
 
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+        })
+}
+
 fn running_sessions(
     sessions: &HashMap<WorkerSessionId, Arc<ProcessTerminalSession>>,
 ) -> Result<usize, SessionRegistryError> {
@@ -739,6 +877,51 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn takeover_authority_is_exact_bounded_and_local_reclaim_wins() {
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry =
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace]).expect("registry");
+        let session = registry
+            .spawn(
+                &shell_command(
+                    "read first; printf 'remote:%s\\n' \"$first\"; read second; printf 'local:%s\\n' \"$second\"",
+                ),
+                TerminalSize::default(),
+            )
+            .expect("session");
+        let lease_id = FederationStewardTakeoverLeaseId::new();
+        let lease = TerminalTakeoverLease {
+            lease_id,
+            revision: 2,
+            expires_at: unix_timestamp() + 300,
+        };
+        registry
+            .install_takeover(session.id(), lease)
+            .expect("install");
+        assert!(matches!(
+            registry.write_local(session.id(), b"unsafe-local\n"),
+            Err(SessionRegistryError::TakeoverDenied)
+        ));
+        assert!(matches!(
+            registry.write_takeover(session.id(), lease_id, 1, b"stale\n"),
+            Err(SessionRegistryError::TakeoverDenied)
+        ));
+        registry
+            .write_takeover(session.id(), lease_id, 2, b"bounded\n")
+            .expect("remote write");
+        assert!(output_until(&session, "remote:bounded").contains("remote:bounded"));
+
+        registry
+            .reclaim_takeover_and_write(session.id(), lease_id, 2, b"returned\n")
+            .expect("local reclaim");
+        assert!(output_until(&session, "local:returned").contains("local:returned"));
+        assert!(matches!(
+            registry.write_takeover(session.id(), lease_id, 2, b"too-late\n"),
+            Err(SessionRegistryError::TakeoverDenied)
+        ));
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use swarm_domain::WorkerSessionId;
+use swarm_domain::{FederationStewardTakeoverLeaseId, WorkerSessionId};
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -16,7 +16,7 @@ use crate::{
     HistoryPage, HistorySessionSummary, ProcessResourceSample, Resume, TerminalSize,
 };
 
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 8;
 pub const MAX_REQUEST_BYTES: u64 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -68,6 +68,27 @@ pub enum HostRequest {
         session_id: WorkerSessionId,
         bytes: Vec<u8>,
     },
+    InstallTakeover {
+        session_id: WorkerSessionId,
+        lease: TerminalTakeoverLease,
+    },
+    TakeoverWrite {
+        session_id: WorkerSessionId,
+        lease_id: FederationStewardTakeoverLeaseId,
+        revision: u64,
+        bytes: Vec<u8>,
+    },
+    ReclaimTakeoverAndWrite {
+        session_id: WorkerSessionId,
+        lease_id: FederationStewardTakeoverLeaseId,
+        revision: u64,
+        bytes: Vec<u8>,
+    },
+    ReleaseTakeover {
+        session_id: WorkerSessionId,
+        lease_id: FederationStewardTakeoverLeaseId,
+        revision: u64,
+    },
     Resize {
         session_id: WorkerSessionId,
         size: TerminalSize,
@@ -85,6 +106,13 @@ pub struct HostSessionSummary {
     pub resources: Option<ProcessResourceSample>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TerminalTakeoverLease {
+    pub lease_id: FederationStewardTakeoverLeaseId,
+    pub revision: u64,
+    pub expires_at: i64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalHostStatus {
     pub protocol_version: u16,
@@ -96,6 +124,8 @@ pub struct TerminalHostStatus {
     pub retained_sessions: usize,
     #[serde(default)]
     pub resources: Option<ProcessResourceSample>,
+    #[serde(default)]
+    pub takeover_relay: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -206,11 +236,12 @@ mod tests {
     #[test]
     fn older_host_status_without_resources_remains_compatible() {
         let status: TerminalHostStatus = serde_json::from_str(
-            r#"{"protocol_version":7,"host_version":"0.1.0","draining":false,"running_sessions":1,"retained_sessions":1}"#,
+            r#"{"protocol_version":8,"host_version":"0.1.0","draining":false,"running_sessions":1,"retained_sessions":1}"#,
         )
         .unwrap();
         assert_eq!(status.protocol_version, PROTOCOL_VERSION);
         assert_eq!(status.host_build_id, None);
         assert_eq!(status.resources, None);
+        assert!(!status.takeover_relay);
     }
 }

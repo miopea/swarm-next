@@ -12,9 +12,13 @@ use swarm_domain::{
     FederationStewardAssistCommand, FederationStewardAssistCommandId, FederationStewardAssistInbox,
     FederationStewardAssistLocalState, FederationStewardAssistOutboxEntry,
     FederationStewardAssistReceipt, FederationStewardAssistRequestId, FederationStewardAssistState,
-    FederationStewardTaskAuditEntry, FederationStewardTaskCommand, FederationStewardTaskCommandId,
-    FederationStewardTaskOutboxEntry, FederationStewardTaskReceipt, FederationStewardshipSnapshot,
-    FederationSyncCondition, FederationSyncHealth, FederationTaskCommand, FederationTaskCommandId,
+    FederationStewardTakeoverCommand, FederationStewardTakeoverCommandId,
+    FederationStewardTakeoverInbox, FederationStewardTakeoverLeaseId,
+    FederationStewardTakeoverLocalState, FederationStewardTakeoverOutboxEntry,
+    FederationStewardTakeoverReceipt, FederationStewardTaskAuditEntry,
+    FederationStewardTaskCommand, FederationStewardTaskCommandId, FederationStewardTaskOutboxEntry,
+    FederationStewardTaskReceipt, FederationStewardshipSnapshot, FederationSyncCondition,
+    FederationSyncHealth, FederationTaskCommand, FederationTaskCommandId,
     FederationTaskCommandReceipt, FederationTaskOutboxEntry, FederationTaskOutboxStatus,
     FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard, HiveId, JiraConnectionState,
     JiraProjectBindingId, LocalApiaryContext, LocalApiaryRole, LocalApiaryTaskExecution,
@@ -360,6 +364,178 @@ impl ApiaryService {
     ) -> Result<FederationStewardAssistLocalState, ApplicationError> {
         self.store
             .federation_steward_assist_local_state()
+            .map_err(Into::into)
+    }
+
+    /// Applies one authenticated, retry-stable takeover transition on Keeper.
+    ///
+    /// # Errors
+    /// Returns authentication, authorization, validation, conflict, or persistence errors.
+    pub fn apply_federation_steward_takeover_command(
+        &self,
+        node_credential: &str,
+        command: &FederationStewardTakeoverCommand,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverReceipt, ApplicationError> {
+        self.store
+            .apply_federation_steward_takeover_command(node_credential, command, now)
+            .map_err(Into::into)
+    }
+
+    /// Reads only takeover leases involving the authenticated Member Hive.
+    ///
+    /// # Errors
+    /// Returns authentication or persistence errors.
+    pub fn federation_steward_takeover_inbox(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverInbox, ApplicationError> {
+        self.store
+            .federation_steward_takeover_inbox(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Journals a reasoned takeover request before network I/O.
+    ///
+    /// # Errors
+    /// Returns scope, protocol, role, queue-bound, or persistence errors.
+    pub fn queue_federation_steward_takeover(
+        &self,
+        target_hive_id: HiveId,
+        reason: &str,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverOutboxEntry, ApplicationError> {
+        self.store
+            .queue_federation_steward_takeover(target_hive_id, reason, now)
+            .map_err(Into::into)
+    }
+
+    /// Journals target acknowledgement after exact local host installation.
+    ///
+    /// # Errors
+    /// Returns projection, revision, queue-bound, or persistence errors.
+    pub fn queue_federation_steward_takeover_acknowledgement(
+        &self,
+        lease_id: FederationStewardTakeoverLeaseId,
+        expected_revision: u64,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverOutboxEntry, ApplicationError> {
+        self.store
+            .queue_federation_steward_takeover_acknowledgement(lease_id, expected_revision, now)
+            .map_err(Into::into)
+    }
+
+    /// Journals immediate local reclaim before contacting Keeper.
+    ///
+    /// # Errors
+    /// Returns projection, revision, queue-bound, or persistence errors.
+    pub fn queue_federation_steward_takeover_reclaim(
+        &self,
+        lease_id: FederationStewardTakeoverLeaseId,
+        expected_revision: u64,
+        reason: &str,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverOutboxEntry, ApplicationError> {
+        self.store
+            .queue_federation_steward_takeover_reclaim(lease_id, expected_revision, reason, now)
+            .map_err(Into::into)
+    }
+
+    /// Journals an active lease renewal after authenticated Steward input.
+    ///
+    /// # Errors
+    /// Returns projection, revision, queue-bound, or persistence errors.
+    pub fn queue_federation_steward_takeover_renewal(
+        &self,
+        lease_id: FederationStewardTakeoverLeaseId,
+        expected_revision: u64,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverOutboxEntry, ApplicationError> {
+        self.store
+            .queue_federation_steward_takeover_renewal(lease_id, expected_revision, now)
+            .map_err(Into::into)
+    }
+
+    /// Journals source release of an active lease.
+    ///
+    /// # Errors
+    /// Returns projection, revision, queue-bound, or persistence errors.
+    pub fn queue_federation_steward_takeover_release(
+        &self,
+        lease_id: FederationStewardTakeoverLeaseId,
+        expected_revision: u64,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverOutboxEntry, ApplicationError> {
+        self.store
+            .queue_federation_steward_takeover_release(lease_id, expected_revision, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns the bounded takeover command delivery batch.
+    ///
+    /// # Errors
+    /// Returns invalid-bound or persistence errors.
+    pub fn pending_federation_steward_takeovers(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<FederationStewardTakeoverOutboxEntry>, ApplicationError> {
+        self.store
+            .pending_federation_steward_takeovers(limit)
+            .map_err(Into::into)
+    }
+
+    /// Records one takeover delivery attempt.
+    ///
+    /// # Errors
+    /// Returns state or persistence errors.
+    pub fn record_federation_steward_takeover_attempt(
+        &self,
+        command_id: FederationStewardTakeoverCommandId,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .record_federation_steward_takeover_attempt(command_id, now)
+            .map_err(Into::into)
+    }
+
+    /// Applies one exact Keeper receipt to the local outbox.
+    ///
+    /// # Errors
+    /// Returns state, validation, or persistence errors.
+    pub fn apply_federation_steward_takeover_receipt(
+        &self,
+        receipt: &FederationStewardTakeoverReceipt,
+        now: i64,
+    ) -> Result<FederationStewardTakeoverOutboxEntry, ApplicationError> {
+        self.store
+            .apply_federation_steward_takeover_receipt(receipt, now)
+            .map_err(Into::into)
+    }
+
+    /// Replaces the local public takeover projection.
+    ///
+    /// # Errors
+    /// Returns role, validation, or persistence errors.
+    pub fn apply_federation_steward_takeover_inbox(
+        &self,
+        inbox: &FederationStewardTakeoverInbox,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .apply_federation_steward_takeover_inbox(inbox, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns local takeover lease and outbox evidence.
+    ///
+    /// # Errors
+    /// Returns corrupt-record or persistence errors.
+    pub fn federation_steward_takeover_local_state(
+        &self,
+    ) -> Result<FederationStewardTakeoverLocalState, ApplicationError> {
+        self.store
+            .federation_steward_takeover_local_state()
             .map_err(Into::into)
     }
 
