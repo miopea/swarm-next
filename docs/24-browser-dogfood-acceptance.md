@@ -1429,3 +1429,21 @@ the independently updated terminal host through the API to worker settings:
   Apiary, email, deployment, and other external effects. The API quality gate
   passed warnings-denied Clippy and all 149 API binary and library tests. Live
   automatic review remains off until the operator chooses a bounded real task.
+- Main commits `f7ffc4ee` and `76009441`, deployed as host-compatible release
+  `0.1.0-f607df2c6d41`, bind same-port development reload to the exact product
+  source revision instead of trusting whichever checkout happens to be
+  configured. The package records source revision `76009441739d`; the API
+  rejects missing, older, or unrelated source and ignores stale legacy reload
+  markers. The System surface separately identifies the compatibility package
+  and the active product revision, so an operator no longer mistakes a package
+  commit for the source being dogfooded. The complete gate passed 426 Rust
+  tests, warnings-denied Clippy, formatting, all 259 frontend tests, strict
+  TypeScript, the production build, and the full Linux package lifecycle. Live
+  System and Queen settings rendered at 1,440 by 900 and Android-size 412 by
+  915 with zero horizontal overflow and no alerts. The active revision showed
+  `7600944`, Queen remained **Automatic off / Manual review only**, and no
+  external-effect path was enabled. API release activation preserved terminal
+  holder PID `2966127`, Claude provider PID `97543`, Queen provider PID
+  `2966160`, and worker-engine build `f8abd293`. Database `quick_check` remained
+  `ok`, the viewport override was reset, and the temporary proof tab was
+  closed.
