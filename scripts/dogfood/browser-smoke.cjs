@@ -82,6 +82,10 @@ async function checkMemberSurface(browser, surface) {
     id: "visual-claim", apiary_id: "visual-apiary", project_id: "10001", issue_id: "20001", issue_key: "WWD-101", home_node_id: "private-node", home_hive_id: "visual-member-hive", home_operator_id: "visual-member-operator", state: "confirmed", reserved_at: 1, reservation_expires_at: 2, confirmed_at: 2, released_at: null, project_key: "WWD", project_name: "Website Development", home_hive_name: "Clover Hive", home_operator_display_name: "Cora",
   }]));
   await page.route("**/api/v1/apiary/sync-health", (route) => fulfill(route, { condition: "current", last_attempt_at: 1_786_780_000, last_success_at: 1_786_780_000, consecutive_failures: 0, next_attempt_at: null }));
+  await page.route("**/api/v1/apiary/my-stewardship", (route) => fulfill(route, {
+    schema_version: 1, protocol_version: 1, apiary_id: "visual-apiary", member_node_id: "visual-member-node", member_operator_id: "visual-member-operator", generated_at: 1_786_780_000,
+    stewardship: { id: "visual-stewardship", apiary_id: "visual-apiary", steward_operator_id: "visual-member-operator", managed_hive_ids: ["visual-member-hive"], capabilities: ["observe", "assist", "takeover"] },
+  }));
   await page.route("**/api/v1/apiary/catalog-readiness", (route) => fulfill(route, {
     acknowledgement: { apiary_id: "visual-apiary", policy_revision: 1, promoted_project_catalog_digest: "private-digest", project_count: 2, snapshot_issued_at: 1, snapshot_expires_at: 2, acknowledged_at: 1 },
     jira_connection: "ready",
@@ -110,6 +114,8 @@ async function checkMemberSurface(browser, surface) {
     await page.getByText("Meadow Hive", { exact: true }).first().waitFor();
     await page.getByRole("list", { name: "Member promoted Jira projects" }).waitFor();
     await page.getByRole("list", { name: "Member shared work ownership" }).waitFor();
+    await page.getByRole("heading", { name: "Trusted support for 1 Hive" }).waitFor();
+    await page.getByText("Observe, Assist, Take over", { exact: true }).waitFor();
     if (await page.getByText("private-node", { exact: true }).count() || await page.getByText("private-digest", { exact: true }).count()) {
       throw new Error(`${surface.name}/member-apiary: private federation material was rendered`);
     }

@@ -258,6 +258,14 @@ never requires an inbound route to a member machine. This is
 separate from Jira-backed issue synchronization, where every Hive talks to
 Jira directly using its own operator identity.
 
+Steward authority travels in a separate credential-bound snapshot after the
+project catalog is accepted. Keeper returns only the authenticated operator's
+current scope. The Member replaces that projection atomically; an empty scope
+explicitly revokes prior authority. Invalid identity, protocol, or shape halts
+reconciliation for operator attention, so a rolling-version mismatch cannot
+leave stale authority active. No Jira issue, worker, repository, terminal,
+task, credential, or provider-session content enters this snapshot.
+
 Member changes to Swarm-generated Apiary tasks use a durable outbound command
 queue. Every command has a unique identity, the last observed task revision,
 and one bounded claim or lifecycle transition. The Keeper persists the exact
@@ -301,7 +309,9 @@ a task.
 
 A Steward uses the same personal Queen. The UI separates **My Hive** from
 **My Stewardship**, and the Queen receives a visible Steward treatment plus
-deterministic tools restricted to the granted scope.
+deterministic tools restricted to the granted scope. The synchronized scope is
+visible before those tools are enabled; presentation alone never authorizes a
+remote action.
 
 Keeper receives structured milestones, blockers, capacity, policy exceptions,
 and requested help. Routine terminal output and ordinary Queen conversations do

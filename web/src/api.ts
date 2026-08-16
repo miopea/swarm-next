@@ -248,6 +248,15 @@ export type Stewardship = {
   managed_hive_ids: string[];
   capabilities: StewardCapability[];
 };
+export type FederationStewardshipSnapshot = {
+  schema_version: number;
+  protocol_version: number;
+  apiary_id: string;
+  member_node_id: string;
+  member_operator_id: string;
+  stewardship: Stewardship | null;
+  generated_at: number;
+};
 export type ApiarySharedWorkClaim = {
   id: string;
   apiary_id: string;
@@ -755,6 +764,13 @@ export async function fetchFederationCatalogReadiness(
 ): Promise<FederationCatalogReadiness> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/catalog-readiness");
   return response.json() as Promise<FederationCatalogReadiness>;
+}
+
+export async function fetchMyFederationStewardship(
+  operatorToken: string,
+): Promise<FederationStewardshipSnapshot | null> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/my-stewardship");
+  return response.json() as Promise<FederationStewardshipSnapshot | null>;
 }
 
 export async function fetchHiveConnectionCard(

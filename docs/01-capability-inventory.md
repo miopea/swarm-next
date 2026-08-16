@@ -84,9 +84,12 @@ Decision meanings:
 
 Stewardship checkpoint: Keeper can atomically create, replace, list, and
 audit-preservingly revoke an explicit grant over selected Member Hives and
-capabilities. The responsive Keeper UI exposes only public member identity and
-states that remote delivery still depends on federation synchronization.
-Enforcement of Steward-scoped remote actions remains staged work.
+capabilities. Each Member now polls a separate credential-bound snapshot of
+only her own authority, atomically replaces its local projection, and treats an
+empty snapshot as explicit revocation. The responsive Keeper and Member UIs
+expose only public member identity; **My Stewardship** is visually distinct and
+does not imply that staged remote commands already exist. Enforcement of
+Steward-scoped remote actions remains staged work.
 
 Keeper control-room checkpoint: a federated Keeper receives a first-class,
 read-only Apiary surface outside Settings. It summarizes registered membership,
@@ -98,7 +101,8 @@ Member control-room checkpoint: a joined Hive receives the same first-class
 Apiary navigation without being shown Keeper administration. Its read-only
 surface identifies the Keeper, local Hive and operator, catalog convergence,
 per-project readiness, synchronization health, blockers, and only shared work
-whose durable home is this Hive. Browser acceptance uses route-local public
+whose durable home is this Hive. A synchronized Steward additionally sees only
+her own managed Hives and granted capability names. Browser acceptance uses route-local public
 fixture data so desktop and Android layouts can be proved without changing the
 dogfood Keeper, Jira, membership, or federation credentials.
 

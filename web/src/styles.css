@@ -261,6 +261,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-hive-list small, .keeper-work-list small, .keeper-steward-list small { color: var(--muted); font-size: .7rem; }
 .keeper-role-badge { padding: 3px 7px; border-radius: 999px; color: var(--good); background: var(--good-soft); font-size: .6rem; font-weight: 700; text-transform: uppercase; }
 .keeper-role-badge.keeper { color: var(--blocked); background: var(--blocked-soft); }
+.keeper-role-badge.steward { color: var(--accent-strong); background: var(--accent-soft); }
+.member-stewardship-panel { grid-column: 1 / -1; border-color: var(--accent-line); background: linear-gradient(135deg, var(--panel), var(--accent-soft)); }
 .keeper-work-list li, .keeper-steward-list li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; padding: 11px 0; border-top: 1px solid var(--line); }
 .keeper-work-list li > span:last-child { text-align: right; }
 .member-task-owner { align-content: center; justify-items: end; }

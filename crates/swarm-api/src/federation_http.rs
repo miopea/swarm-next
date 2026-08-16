@@ -6,7 +6,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use swarm_domain::{
     ApiaryJoinLinkId, ApiaryJoinLinkPoll, FederationCatalogSnapshot, FederationClaimId,
     FederationJoinAcceptance, FederationJoinSubmission, FederationSharedClaim,
-    FederationTaskCommand, FederationTaskCommandReceipt, FederationTaskPage, HiveConnectionCard,
+    FederationStewardshipSnapshot, FederationTaskCommand, FederationTaskCommandReceipt,
+    FederationTaskPage, HiveConnectionCard,
 };
 use thiserror::Error;
 
@@ -135,6 +136,23 @@ impl FederationHttpClient {
         self.send_json::<(), _>(
             Method::GET,
             "api/v1/federation/catalog",
+            Some(node_credential),
+            None,
+        )
+        .await
+    }
+
+    /// Fetches the authenticated Member operator's bounded Steward scope.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, response-bound, or protocol failures.
+    pub async fn stewardship(
+        &self,
+        node_credential: &str,
+    ) -> Result<FederationStewardshipSnapshot, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::GET,
+            "api/v1/federation/stewardship",
             Some(node_credential),
             None,
         )
@@ -524,6 +542,33 @@ mod tests {
                 .unwrap(),
             receipt
         );
+    }
+
+    #[tokio::test]
+    async fn stewardship_transport_is_authenticated_and_bounded_to_its_endpoint() {
+        let snapshot = FederationStewardshipSnapshot {
+            schema_version: 1,
+            protocol_version: 1,
+            apiary_id: ApiaryId::new(),
+            member_node_id: FederationNodeId::new(),
+            member_operator_id: OperatorId::new(),
+            stewardship: None,
+            generated_at: 1_000,
+        };
+        let expected = snapshot.clone();
+        let app = Router::new().route(
+            "/swarm/api/v1/federation/stewardship",
+            get(move |headers: axum::http::HeaderMap| {
+                let expected = expected.clone();
+                async move {
+                    assert_eq!(headers[header::AUTHORIZATION], "Bearer member-secret");
+                    Json(expected)
+                }
+            }),
+        );
+        let address = spawn_server(app).await;
+        let client = FederationHttpClient::new(&format!("http://{address}/swarm")).unwrap();
+        assert_eq!(client.stewardship("member-secret").await.unwrap(), snapshot);
     }
 
     #[tokio::test]

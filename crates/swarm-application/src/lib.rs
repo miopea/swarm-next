@@ -7,9 +7,10 @@ use swarm_domain::{
     FederationCatalogReadiness, FederationCatalogSnapshot, FederationClaimId,
     FederationJoinAcceptance, FederationJoinInvitation, FederationJoinReadiness,
     FederationJoinSubmission, FederationMemberConnection, FederationSharedClaim,
-    FederationSyncCondition, FederationSyncHealth, FederationTaskCommand, FederationTaskCommandId,
-    FederationTaskCommandReceipt, FederationTaskOutboxEntry, FederationTaskOutboxStatus,
-    FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard, HiveId, JiraConnectionState,
+    FederationStewardshipSnapshot, FederationSyncCondition, FederationSyncHealth,
+    FederationTaskCommand, FederationTaskCommandId, FederationTaskCommandReceipt,
+    FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
+    FederationTaskSyncStatus, HiveConnectionCard, HiveId, JiraConnectionState,
     JiraProjectBindingId, LocalApiaryContext, LocalApiaryRole, OperatorId, OperatorPresence,
     PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
     SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, Task, TaskActivityActor,
@@ -87,6 +88,46 @@ impl ApiaryService {
     ) -> Result<FederationCatalogSnapshot, ApplicationError> {
         self.store
             .signed_federation_catalog(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns only the authenticated Member operator's current Steward scope.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials, non-Keepers, malformed grants, and unavailable persistence.
+    pub fn federation_stewardship(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<FederationStewardshipSnapshot, ApplicationError> {
+        self.store
+            .federation_stewardship_snapshot(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Replaces the Member's local Keeper-confirmed Steward projection.
+    ///
+    /// # Errors
+    /// Rejects foreign, malformed, or incompatible snapshots and unavailable persistence.
+    pub fn apply_federation_stewardship(
+        &self,
+        snapshot: &FederationStewardshipSnapshot,
+        now: i64,
+    ) -> Result<(), ApplicationError> {
+        self.store
+            .apply_federation_stewardship_snapshot(snapshot, now)
+            .map_err(Into::into)
+    }
+
+    /// Returns the last Keeper-confirmed local Steward projection.
+    ///
+    /// # Errors
+    /// Returns an error when the projection is corrupt or unavailable.
+    pub fn local_federation_stewardship(
+        &self,
+    ) -> Result<Option<FederationStewardshipSnapshot>, ApplicationError> {
+        self.store
+            .local_federation_stewardship_snapshot()
             .map_err(Into::into)
     }
 

@@ -23,6 +23,7 @@ mod email;
 mod events;
 mod federation;
 mod federation_jira_claims;
+mod federation_stewardships;
 mod federation_tasks;
 pub use federation_tasks::MAX_FEDERATION_TASK_COMMAND_BATCH;
 mod feedback;
@@ -70,7 +71,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 51;
+const CURRENT_SCHEMA_VERSION: i64 = 52;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1544,6 +1545,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 51 {
         migrate_managed_worker_roles(transaction)?;
+    }
+    if schema_version < 52 {
+        federation_stewardships::migrate_federation_stewardship_projection(transaction)?;
     }
     Ok(())
 }

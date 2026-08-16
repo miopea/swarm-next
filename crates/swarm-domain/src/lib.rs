@@ -1491,6 +1491,22 @@ pub struct Stewardship {
     pub capabilities: Vec<StewardCapability>,
 }
 
+pub const FEDERATION_STEWARDSHIP_SCHEMA_VERSION: u16 = 1;
+
+/// One bounded Keeper response describing only the authenticated Member
+/// operator's current Steward delegation. Worker, repository, terminal, Jira,
+/// credential, and task content are deliberately absent.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardshipSnapshot {
+    pub schema_version: u16,
+    pub protocol_version: u16,
+    pub apiary_id: ApiaryId,
+    pub member_node_id: FederationNodeId,
+    pub member_operator_id: OperatorId,
+    pub stewardship: Option<Stewardship>,
+    pub generated_at: i64,
+}
+
 impl Stewardship {
     #[must_use]
     pub fn allows(&self, hive_id: HiveId, capability: StewardCapability) -> bool {

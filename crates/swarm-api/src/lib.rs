@@ -63,13 +63,13 @@ use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinLink,
     ApiaryJoinLinkId, ApiaryJoinReadiness, ApiaryKeeperLink, ApiaryTask, ApiaryTaskId,
     DecisionRequestId, FederationCatalogSnapshot, FederationClaimId, FederationJoinSubmission,
-    FederationSharedClaim, FederationSyncCondition, FederationTaskCommand,
-    FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
-    FederationTaskSyncStatus, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
-    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext, LocalApiaryRole,
-    OperatorId, ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId,
-    TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile,
-    WorkerSessionId,
+    FederationSharedClaim, FederationStewardshipSnapshot, FederationSyncCondition,
+    FederationTaskCommand, FederationTaskOutboxEntry, FederationTaskOutboxStatus,
+    FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard, HiveId, HiveIdentity,
+    JiraConnectionState, JiraProjectBindingId, JiraProjectScope, JiraStatusMapping,
+    LocalApiaryContext, LocalApiaryRole, OperatorId, ProviderKind, SharedWorkBackend,
+    StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority, TaskState,
+    WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
@@ -584,26 +584,17 @@ impl AppState {
                 return;
             }
         };
-        let snapshot = match client.catalog(&connection.node_credential).await {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                record_federation_failure(
-                    &service,
-                    federation_sync_condition(error),
-                    now,
-                    self.control_room_notify.as_ref(),
-                );
-                return;
-            }
-        };
-        if let Err(error) = service.acknowledge_federation_catalog(&snapshot, now) {
-            tracing::warn!(%error, "Keeper returned an incompatible federation catalog");
-            record_federation_failure(
-                &service,
-                FederationSyncCondition::Incompatible,
-                now,
-                self.control_room_notify.as_ref(),
-            );
+        if let Err(condition) =
+            reconcile_federation_catalog(&service, &client, &connection.node_credential, now).await
+        {
+            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
+            return;
+        }
+        if let Err(condition) =
+            reconcile_federation_stewardship(&service, &client, &connection.node_credential, now)
+                .await
+        {
+            record_federation_failure(&service, condition, now, self.control_room_notify.as_ref());
             return;
         }
         if let Err(condition) =
@@ -1745,6 +1736,10 @@ fn api_router(state: AppState) -> Router {
             post(poll_federation_bootstrap),
         )
         .route("/api/v1/federation/catalog", get(federation_catalog))
+        .route(
+            "/api/v1/federation/stewardship",
+            get(federation_stewardship),
+        )
         .route("/api/v1/federation/tasks", get(federation_tasks))
         .route(
             "/api/v1/federation/tasks/commands",
@@ -1766,6 +1761,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/apiary/catalog-readiness",
             get(get_federation_catalog_readiness),
+        )
+        .route(
+            "/api/v1/apiary/my-stewardship",
+            get(get_local_federation_stewardship),
         )
         .route(
             "/api/v1/apiary/tasks",
@@ -2662,6 +2661,17 @@ async fn federation_catalog(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
 }
 
+async fn federation_stewardship(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let snapshot: FederationStewardshipSnapshot = apiary_service(&state)?
+        .federation_stewardship(credential, unix_timestamp())
+        .map_err(federation_catalog_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
+}
+
 async fn federation_tasks(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -2774,6 +2784,17 @@ async fn get_federation_catalog_readiness(
         .federation_catalog_readiness(jira.connection, unix_timestamp())
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(readiness)).into_response())
+}
+
+async fn get_local_federation_stewardship(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let snapshot = apiary_service(&state)?
+        .local_federation_stewardship()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(snapshot)).into_response())
 }
 
 async fn get_apiary_tasks(
@@ -4490,6 +4511,43 @@ async fn reconcile_federation_tasks(
         }
     }
     Ok(())
+}
+
+async fn reconcile_federation_catalog(
+    service: &ApiaryService,
+    client: &federation_http::FederationHttpClient,
+    node_credential: &str,
+    now: i64,
+) -> Result<(), FederationSyncCondition> {
+    let snapshot = client
+        .catalog(node_credential)
+        .await
+        .map_err(federation_sync_condition)?;
+    service
+        .acknowledge_federation_catalog(&snapshot, now)
+        .map(|_| ())
+        .map_err(|error| {
+            tracing::warn!(%error, "Keeper returned an incompatible federation catalog");
+            FederationSyncCondition::Incompatible
+        })
+}
+
+async fn reconcile_federation_stewardship(
+    service: &ApiaryService,
+    client: &federation_http::FederationHttpClient,
+    node_credential: &str,
+    now: i64,
+) -> Result<(), FederationSyncCondition> {
+    let snapshot = client
+        .stewardship(node_credential)
+        .await
+        .map_err(federation_sync_condition)?;
+    service
+        .apply_federation_stewardship(&snapshot, now)
+        .map_err(|error| {
+            tracing::warn!(%error, "Keeper returned an incompatible Steward scope");
+            FederationSyncCondition::Incompatible
+        })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -7026,6 +7084,7 @@ mod tests {
             app.clone(),
             invited_identity.operator.id,
             invited_identity.hive.id,
+            credential,
         )
         .await;
         assert_member_catalog_acknowledgement_endpoint(
@@ -7044,6 +7103,7 @@ mod tests {
         app: Router,
         steward_operator_id: OperatorId,
         managed_hive_id: HiveId,
+        credential: &str,
     ) {
         let unauthorized = app
             .clone()
@@ -7093,6 +7153,12 @@ mod tests {
             assert!(!serialized.contains(forbidden));
         }
 
+        let remote_json = remote_stewardship(app.clone(), credential).await;
+        assert_eq!(remote_json["stewardship"], created_json);
+        for forbidden in ["credential", "endpoint", "repository", "terminal", "jira"] {
+            assert!(!remote_json.to_string().contains(forbidden));
+        }
+
         let listed = authorized_get(app.clone(), "/api/v1/apiary/stewardships").await;
         assert_eq!(listed.status(), StatusCode::OK);
         assert_eq!(listed.headers()[header::CACHE_CONTROL], "no-store");
@@ -7116,8 +7182,28 @@ mod tests {
             .unwrap();
         assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
         assert_eq!(revoked.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            remote_stewardship(app.clone(), credential).await["stewardship"],
+            serde_json::Value::Null
+        );
         let listed = authorized_get(app, "/api/v1/apiary/stewardships").await;
         assert_eq!(response_json(listed).await, serde_json::json!([]));
+    }
+
+    async fn remote_stewardship(app: Router, credential: &str) -> serde_json::Value {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/federation/stewardship")
+                    .header(header::AUTHORIZATION, format!("Bearer {credential}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        response_json(response).await
     }
 
     fn assert_keeper_has_two_hives(keeper: &TaskStore) {

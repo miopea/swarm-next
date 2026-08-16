@@ -3606,7 +3606,7 @@ fn candidate_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiaryHiveCan
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::SharedWorkBackend;
+    use swarm_domain::{SharedWorkBackend, StewardCapability};
 
     #[test]
     fn connection_card_is_stable_signed_bounded_and_private() {
@@ -4758,6 +4758,66 @@ mod tests {
             )
             .unwrap();
         (keeper, member)
+    }
+
+    #[test]
+    fn member_stewardship_projection_syncs_and_revokes_exact_authority() {
+        let now = 79_000;
+        let (keeper, member) = joined_member(now);
+        let identity = member.local_hive_identity().unwrap();
+        let connection = member.federation_member_connection().unwrap();
+        let granted = keeper
+            .set_stewardship(
+                identity.operator.id,
+                &[identity.hive.id],
+                &[
+                    StewardCapability::Observe,
+                    StewardCapability::Assist,
+                    StewardCapability::Takeover,
+                ],
+                now + 10,
+            )
+            .unwrap();
+
+        let snapshot = keeper
+            .federation_stewardship_snapshot(&connection.node_credential, now + 11)
+            .unwrap();
+        assert_eq!(snapshot.member_operator_id, identity.operator.id);
+        assert_eq!(snapshot.stewardship.as_ref(), Some(&granted));
+        member
+            .apply_federation_stewardship_snapshot(&snapshot, now + 12)
+            .unwrap();
+        member
+            .apply_federation_stewardship_snapshot(&snapshot, now + 13)
+            .unwrap();
+        assert_eq!(
+            member.local_federation_stewardship_snapshot().unwrap(),
+            Some(snapshot.clone())
+        );
+
+        let mut foreign = snapshot.clone();
+        foreign.member_operator_id = keeper.local_hive_identity().unwrap().operator.id;
+        assert!(matches!(
+            member.apply_federation_stewardship_snapshot(&foreign, now + 14),
+            Err(TaskStoreError::InvalidStewardship)
+        ));
+
+        keeper.revoke_stewardship(granted.id, now + 15).unwrap();
+        let revoked = keeper
+            .federation_stewardship_snapshot(&connection.node_credential, now + 16)
+            .unwrap();
+        assert_eq!(revoked.stewardship, None);
+        member
+            .apply_federation_stewardship_snapshot(&revoked, now + 17)
+            .unwrap();
+        assert_eq!(
+            member
+                .local_federation_stewardship_snapshot()
+                .unwrap()
+                .unwrap()
+                .stewardship,
+            None
+        );
     }
 
     #[test]

@@ -21,6 +21,10 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 4, task_count: 1, last_applied_at: 100 }));
     if (url.endsWith("/task-outbox")) return Promise.resolve(ok([]));
     if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
+    if (url.endsWith("/my-stewardship")) return Promise.resolve(ok({
+      schema_version: 1, protocol_version: 1, apiary_id: "apiary-1", member_node_id: "node-2", member_operator_id: "operator-2", generated_at: 100,
+      stewardship: { id: "stewardship-1", apiary_id: "apiary-1", steward_operator_id: "operator-2", managed_hive_ids: ["hive-2"], capabilities: ["observe", "assist", "takeover"] },
+    }));
     if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({
       acknowledgement: { apiary_id: "apiary-1", policy_revision: 1, promoted_project_catalog_digest: "digest", project_count: 1, snapshot_issued_at: 1, snapshot_expires_at: 2, acknowledged_at: 1 },
       jira_connection: "ready",
@@ -39,6 +43,9 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
   expect(screen.getByRole("list", { name: "Member shared work ownership" })).toHaveTextContent("WWD-101Website DevelopmentOwnedCora");
   expect(screen.getByRole("list", { name: "Member Keeper tasks" })).toHaveTextContent("Prepare shared briefready · high · revision 1UnassignedClaim for this Hive");
   expect(screen.getByText("Keeper task cursor").parentElement).toHaveTextContent("4");
+  const stewardship = screen.getByRole("heading", { name: "Trusted support for 1 Hive" }).closest("article");
+  expect(stewardship).toHaveTextContent("Clover Hive");
+  expect(stewardship).toHaveTextContent("Observe, Assist, Take over");
   expect(document.body).not.toHaveTextContent("WWD-102");
   expect(document.body).not.toHaveTextContent("node-2");
   expect(document.body).not.toHaveTextContent("secret");
@@ -56,6 +63,7 @@ test("keeps local work usable when part of the Member rollup is unavailable", as
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 0, task_count: 0, last_applied_at: null }));
     if (url.endsWith("/task-outbox")) return Promise.resolve(ok([]));
     if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
+    if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
     if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "network_unavailable", projects: [], blockers: ["catalog_missing"] }));
     throw new Error(`Unexpected request: ${url}`);
   }));

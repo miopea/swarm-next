@@ -6,6 +6,7 @@ import {
   fetchApiarySharedWork,
   fetchApiaryTasks,
   fetchFederationCatalogReadiness,
+  fetchMyFederationStewardship,
   fetchFederationSyncHealth,
   fetchFederationTaskSyncStatus,
   fetchFederationTaskOutbox,
@@ -15,6 +16,7 @@ import {
   type ApiarySharedWorkClaim,
   type ApiaryTask,
   type FederationCatalogReadiness,
+  type FederationStewardshipSnapshot,
   type FederationSyncHealth,
   type FederationTaskSyncStatus,
   type FederationTaskOutboxEntry,
@@ -34,6 +36,7 @@ type MemberSnapshot = {
   catalog?: FederationCatalogReadiness;
   outbox: FederationTaskOutboxEntry[];
   outboxStatus?: FederationTaskOutboxStatus;
+  stewardship?: FederationStewardshipSnapshot | null;
 };
 
 const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [] };
@@ -44,7 +47,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
   const [state, setState] = useState<"loading" | "ready" | "partial">("loading");
   const refresh = useCallback(async () => {
     setState("loading");
-    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus] = await Promise.allSettled([
+    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship] = await Promise.allSettled([
       fetchApiaryMembers(operatorToken),
       fetchApiarySharedWork(operatorToken),
       fetchApiaryTasks(operatorToken),
@@ -53,6 +56,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
       fetchFederationCatalogReadiness(operatorToken),
       fetchFederationTaskOutbox(operatorToken),
       fetchFederationTaskOutboxStatus(operatorToken),
+      fetchMyFederationStewardship(operatorToken),
     ]);
     setSnapshot((current) => ({
       members: members.status === "fulfilled" ? members.value : current.members,
@@ -63,8 +67,9 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
       catalog: catalog.status === "fulfilled" ? catalog.value : current.catalog,
       outbox: outbox.status === "fulfilled" ? outbox.value : current.outbox,
       outboxStatus: outboxStatus.status === "fulfilled" ? outboxStatus.value : current.outboxStatus,
+      stewardship: stewardship.status === "fulfilled" ? stewardship.value : current.stewardship,
     }));
-    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus].some((result) => result.status === "rejected") ? "partial" : "ready");
+    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship].some((result) => result.status === "rejected") ? "partial" : "ready");
   }, [operatorToken]);
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -77,6 +82,8 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
   const projectCount = snapshot.catalog?.projects.length ?? 0;
   const syncCondition = snapshot.sync?.condition ?? "idle";
   const [syncTitle, syncDetail] = federationSyncCopy[syncCondition];
+  const stewardship = snapshot.stewardship?.stewardship;
+  const managedHives = stewardship?.managed_hive_ids.map((hiveId) => snapshot.members.find((member) => member.hive_id === hiveId)?.hive_name ?? "Registered Hive") ?? [];
   const [actingTask, setActingTask] = useState<string>();
   const queuedTaskIds = useMemo(() => new Set(snapshot.outbox.filter((entry) => entry.state === "queued").map((entry) => entry.command.task_id)), [snapshot.outbox]);
   const act = useCallback(async (task: ApiaryTask, target?: ApiaryTask["state"]) => {
@@ -108,6 +115,14 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
         <div><dt>Pending changes</dt><dd>{snapshot.outboxStatus?.queued_count ?? 0}</dd></div>
       </dl>
       <div className="keeper-dashboard-grid" aria-busy={state === "loading"}>
+        {stewardship ? <article className="keeper-panel member-stewardship-panel">
+          <header><div><p className="eyebrow">My Stewardship</p><h4>Trusted support for {managedHives.length} Hive{managedHives.length === 1 ? "" : "s"}</h4></div><span className="keeper-role-badge steward">Steward</span></header>
+          <p className="member-sync-copy">Keeper has synchronized this authority to your Hive. Each remote action remains unavailable until its matching guarded command is enabled.</p>
+          <dl className="member-detail-list">
+            <div><dt>Hives in scope</dt><dd>{managedHives.join(", ")}</dd></div>
+            <div><dt>Capabilities</dt><dd>{stewardship.capabilities.map(stewardCapabilityLabel).join(", ")}</dd></div>
+          </dl>
+        </article> : null}
         <article className="keeper-panel member-coordination-panel">
           <header><div><p className="eyebrow">Coordination</p><h4>Your place in the Apiary</h4></div><small>One operator, one independent Hive</small></header>
           <dl className="member-detail-list">
@@ -157,4 +172,8 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
 function formatTimestamp(timestamp: number | null | undefined) {
   if (!timestamp) return "Not yet";
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp * 1000));
+}
+
+function stewardCapabilityLabel(capability: string) {
+  return ({ observe: "Observe", assign: "Assign", assist: "Assist", takeover: "Take over", manage_projects: "Manage projects", manage_members: "Manage members" } as Record<string, string>)[capability] ?? capability;
 }
