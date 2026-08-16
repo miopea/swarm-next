@@ -72,6 +72,12 @@ This is an evidence exercise, not a port checklist. It identifies recurring
 incidents, features that survived real use, solutions that were reverted, and
 historical constraints that no longer apply.
 
+The [final product contract audit](legacy/final-contract-audit.md) checks the
+surviving README promises against final implementation owners and executable
+tests. A legacy feature becomes a Next requirement only when the audit names
+the operator outcome and the evidence that held; breadth of documentation is
+not acceptance evidence.
+
 The first resulting implementation stream is a deterministic coordinator below
 Queen. Typed scheduling, reconciliation, bounded retry, lease expiry, and
 policy-complete health responses should not spend an LLM call. Queen remains

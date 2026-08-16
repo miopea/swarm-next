@@ -189,15 +189,20 @@ ownership, automated-input authority, revive loops, speculative preparation,
 mobile scrollback, and state classification. Their stable outcomes already map
 to Swarm Next invariants; none creates a port ticket by itself.
 
+The final product-contract pass now compares the README's operator promises
+with the final implementation owners and executable tests in
+`docs/legacy/final-contract-audit.md`. It separates held contracts from limited,
+partial, and contradicted claims and promotes ten outcomes into Swarm Next. In
+particular, it rejects equal-provider and offline-PWA implications that the
+final legacy tree itself did not support.
+
 ## Remaining history passes
 
 1. Expand validated regression chains beyond the six highest-risk operator
    journeys when a new dogfood gap needs historical evidence.
-2. Compare the final code contract and tests with README claims; documentation
-   alone is not proof a feature held.
-3. Sample the implementation at stable release boundaries rather than only the
+2. Sample the implementation at stable release boundaries rather than only the
    final tree.
-4. Feed each surviving outcome into the capability inventory and dogfood plan;
+3. Feed each surviving outcome into the capability inventory and dogfood plan;
    do not create port tickets directly from this atlas.
 
 ## Acceptance for the archaeology milestone

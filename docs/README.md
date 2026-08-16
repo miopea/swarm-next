@@ -30,6 +30,7 @@ Read and review these documents in order:
 26. [Browser dogfood acceptance](24-browser-dogfood-acceptance.md)
 27. [Component and engineering-principles audit](25-component-and-engineering-audit.md)
 28. [Legacy Swarm evolution atlas](26-legacy-evolution-atlas.md)
+29. [Legacy final product contract audit](legacy/final-contract-audit.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do
