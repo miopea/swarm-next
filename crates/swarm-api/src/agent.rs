@@ -208,6 +208,7 @@ impl ServerHandler for AgentMcp {
                 list_apiary_tasks_tool(),
                 create_apiary_task_tool(),
                 claim_apiary_task_tool(),
+                send_apiary_task_to_worker_tool(),
                 transition_apiary_task_tool(),
                 list_jira_projects_tool(),
                 preview_jira_project_tool(),
@@ -299,6 +300,25 @@ impl ServerHandler for AgentMcp {
                             .map_err(|_| ApplicationError::NotAuthorized)?;
                         ApiaryService::new(self.tasks.store().clone())
                             .queue_federation_task_claim(task_id, crate::unix_timestamp())
+                            .and_then(structured)
+                    })
+                } else {
+                    Err(ApplicationError::NotAuthorized)
+                }
+            }
+            "swarm_send_apiary_task_to_worker" => {
+                if self.principal.role == WorkerRole::Queen {
+                    parse::<AssignApiaryTaskInput>(arguments).and_then(|input| {
+                        let task_id = ApiaryTaskId::from_str(&input.task_id)
+                            .map_err(|_| ApplicationError::NotAuthorized)?;
+                        let worker_id = WorkerId::from_str(&input.worker_id)
+                            .map_err(|_| ApplicationError::NotAuthorized)?;
+                        ApiaryService::new(self.tasks.store().clone())
+                            .materialize_local_apiary_task_execution(
+                                task_id,
+                                worker_id,
+                                crate::unix_timestamp(),
+                            )
                             .and_then(structured)
                     })
                 } else {
@@ -640,6 +660,12 @@ struct ApiaryTaskInput {
 }
 
 #[derive(Deserialize)]
+struct AssignApiaryTaskInput {
+    task_id: String,
+    worker_id: String,
+}
+
+#[derive(Deserialize)]
 struct TransitionApiaryTaskInput {
     task_id: String,
     state: TaskState,
@@ -829,6 +855,23 @@ fn claim_apiary_task_tool() -> Tool {
             "type": "object",
             "properties": { "task_id": { "type": "string", "format": "uuid" } },
             "required": ["task_id"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn send_apiary_task_to_worker_tool() -> Tool {
+    tool(
+        "swarm_send_apiary_task_to_worker",
+        "Member Queen only: materialize Apiary work already owned by this Hive as one durable local task and assign it to one private worker returned by swarm_list_workers. Exact retries never duplicate work; Keeper never receives the worker or repository identity.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "worker_id": { "type": "string", "format": "uuid" }
+            },
+            "required": ["task_id", "worker_id"],
             "additionalProperties": false
         }),
         false,
@@ -1162,6 +1205,7 @@ mod tests {
         assert!(queen_names.contains(&"swarm_list_apiary_hives"));
         assert!(queen_names.contains(&"swarm_create_apiary_task"));
         assert!(queen_names.contains(&"swarm_claim_apiary_task"));
+        assert!(queen_names.contains(&"swarm_send_apiary_task_to_worker"));
         assert!(queen_names.contains(&"swarm_transition_apiary_task"));
         assert!(queen_names.contains(&"swarm_list_jira_projects"));
         assert!(queen_names.contains(&"swarm_preview_jira_project"));
@@ -1176,6 +1220,7 @@ mod tests {
         assert!(!worker_names.contains(&"swarm_list_apiary_hives"));
         assert!(!worker_names.contains(&"swarm_create_apiary_task"));
         assert!(!worker_names.contains(&"swarm_claim_apiary_task"));
+        assert!(!worker_names.contains(&"swarm_send_apiary_task_to_worker"));
         assert!(!worker_names.contains(&"swarm_transition_apiary_task"));
         assert_eq!(
             worker_names,

@@ -10,12 +10,14 @@ import {
   fetchApiaryMembers,
   fetchApiarySharedWork,
   fetchApiaryTasks,
+  fetchLocalApiaryTaskExecutions,
   fetchFederationCatalogReadiness,
   fetchMyFederationStewardship,
   fetchFederationSyncHealth,
   fetchFederationTaskSyncStatus,
   fetchFederationTaskOutbox,
   fetchFederationTaskOutboxStatus,
+  materializeLocalApiaryTaskExecution,
   offerApiaryClaimHandoff,
   transitionApiaryTask,
   type ApiaryMember,
@@ -30,11 +32,19 @@ import {
   type FederationTaskOutboxEntry,
   type FederationTaskOutboxStatus,
   type HiveIdentity,
+  type LocalApiaryTaskExecution,
 } from "../api";
+import type { Worker } from "../api/workers";
 import BeeMascot from "../brand/BeeMascot";
 import { catalogBlockerLabel, federationSyncCopy } from "./presentation";
 
-type Props = { identity: HiveIdentity; operatorToken: string; onManage: () => void };
+type Props = {
+  identity: HiveIdentity;
+  operatorToken: string;
+  workers: Worker[];
+  onManage: () => void;
+  onOpenTask: (taskId: string) => void;
+};
 type MemberSnapshot = {
   members: ApiaryMember[];
   sharedWork: ApiarySharedWorkClaim[];
@@ -47,17 +57,18 @@ type MemberSnapshot = {
   stewardship?: FederationStewardshipSnapshot | null;
   handoffs: FederationClaimHandoff[];
   handoffTargets: FederationHandoffTarget[];
+  executions: LocalApiaryTaskExecution[];
 };
 
-const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], handoffs: [], handoffTargets: [] };
+const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], handoffs: [], handoffTargets: [], executions: [] };
 
-export default function MemberControlRoom({ identity, operatorToken, onManage }: Props) {
+export default function MemberControlRoom({ identity, operatorToken, workers, onManage, onOpenTask }: Props) {
   const context = identity.apiary_context;
   const [snapshot, setSnapshot] = useState<MemberSnapshot>(emptySnapshot);
   const [state, setState] = useState<"loading" | "ready" | "partial">("loading");
   const refresh = useCallback(async () => {
     setState("loading");
-    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, handoffs, handoffTargets] = await Promise.allSettled([
+    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, handoffs, handoffTargets, executions] = await Promise.allSettled([
       fetchApiaryMembers(operatorToken),
       fetchApiarySharedWork(operatorToken),
       fetchApiaryTasks(operatorToken),
@@ -69,6 +80,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
       fetchMyFederationStewardship(operatorToken),
       fetchApiaryClaimHandoffs(operatorToken),
       fetchApiaryHandoffTargets(operatorToken),
+      fetchLocalApiaryTaskExecutions(operatorToken),
     ]);
     setSnapshot((current) => ({
       members: members.status === "fulfilled" ? members.value : current.members,
@@ -82,8 +94,9 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
       stewardship: stewardship.status === "fulfilled" ? stewardship.value : current.stewardship,
       handoffs: handoffs.status === "fulfilled" && Array.isArray(handoffs.value) ? handoffs.value : current.handoffs,
       handoffTargets: handoffTargets.status === "fulfilled" && Array.isArray(handoffTargets.value) ? handoffTargets.value : current.handoffTargets,
+      executions: executions.status === "fulfilled" && Array.isArray(executions.value) ? executions.value : current.executions,
     }));
-    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, handoffs, handoffTargets].some((result) => result.status === "rejected") ? "partial" : "ready");
+    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, handoffs, handoffTargets, executions].some((result) => result.status === "rejected") ? "partial" : "ready");
   }, [operatorToken]);
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -104,8 +117,12 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
   const stewardship = snapshot.stewardship?.stewardship;
   const managedHives = stewardship?.managed_hive_ids.map((hiveId) => snapshot.members.find((member) => member.hive_id === hiveId)?.hive_name ?? "Registered Hive") ?? [];
   const [actingTask, setActingTask] = useState<string>();
+  const [workerChoices, setWorkerChoices] = useState<Record<string, string>>({});
   const [actingHandoff, setActingHandoff] = useState<string>();
   const queuedTaskIds = useMemo(() => new Set(snapshot.outbox.filter((entry) => entry.state === "queued").map((entry) => entry.command.task_id)), [snapshot.outbox]);
+  const executionByTask = useMemo(() => new Map(snapshot.executions.map((execution) => [execution.apiary_task_id, execution])), [snapshot.executions]);
+  const workerById = useMemo(() => new Map(workers.map((worker) => [worker.id, worker])), [workers]);
+  const privateWorkers = useMemo(() => workers.filter((worker) => worker.role !== "queen"), [workers]);
   const act = useCallback(async (task: ApiaryTask, target?: ApiaryTask["state"]) => {
     setActingTask(task.id);
     try {
@@ -114,6 +131,16 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
       await refresh();
     } finally { setActingTask(undefined); }
   }, [operatorToken, refresh]);
+  const sendToWorker = useCallback(async (task: ApiaryTask) => {
+    const workerId = workerChoices[task.id];
+    if (!workerId) return;
+    setActingTask(task.id);
+    try {
+      const execution = await materializeLocalApiaryTaskExecution(operatorToken, task.id, workerId);
+      await refresh();
+      onOpenTask(execution.local_task_id);
+    } finally { setActingTask(undefined); }
+  }, [onOpenTask, operatorToken, refresh, workerChoices]);
   const transitionHandoff = useCallback(async (handoff: FederationClaimHandoff, action: "accept" | "decline" | "cancel") => {
     setActingHandoff(handoff.id);
     try {
@@ -185,14 +212,37 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
           </dl>
           {snapshot.catalog?.blockers.length ? <ul className="member-blocker-list" aria-label="Shared work blockers">{snapshot.catalog.blockers.map((blocker) => <li key={blocker}>{catalogBlockerLabel(blocker)}</li>)}</ul> : <p className="member-ready-copy">Shared catalog prerequisites are ready.</p>}
         </article>
-        <article className="keeper-panel">
+        <article className="keeper-panel member-task-panel">
           <header><div><p className="eyebrow">Swarm tasks</p><h4>Polled from Keeper</h4></div><small>Keeper is canonical for this source</small></header>
           {(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0) > 0 ? <p className="member-command-attention" role="status">{(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0)} change{(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0) === 1 ? "" : "s"} need review after Keeper reconciliation.</p> : null}
           {snapshot.tasks.length ? <ul className="keeper-work-list member-task-list" aria-label="Member Keeper tasks">{snapshot.tasks.map((task) => {
             const mine = task.home_hive_id === identity.hive.id;
             const queued = queuedTaskIds.has(task.id);
+            const execution = executionByTask.get(task.id);
             const next = task.state === "ready" ? "active" : task.state === "active" ? "review" : task.state === "review" ? "completed" : undefined;
-            return <li key={task.id}><span><strong>{task.title}</strong><small>{task.state} · {task.priority} · revision {task.revision}</small></span><span className="member-task-owner"><strong>{mine ? "This Hive" : task.home_hive_id ? "Another Hive" : "Unassigned"}</strong>{queued ? <small>Queued for Keeper</small> : !task.home_hive_id ? <button className="secondary-button" type="button" disabled={actingTask === task.id} onClick={() => void act(task)}>Claim for this Hive</button> : mine && next ? <button className="secondary-button" type="button" disabled={actingTask === task.id} onClick={() => void act(task, next)}>Move to {next}</button> : null}</span></li>;
+            return <li key={task.id}>
+              <span><strong>{task.title}</strong><small>{task.state} · {task.priority} · revision {task.revision}</small></span>
+              <span className="member-task-owner">
+                <strong>{mine ? "This Hive" : task.home_hive_id ? "Another Hive" : "Unassigned"}</strong>
+                {queued ? <small>Queued for Keeper</small> : !task.home_hive_id ? (
+                  <button className="secondary-button" type="button" disabled={actingTask === task.id} onClick={() => void act(task)}>Claim for this Hive</button>
+                ) : execution ? <>
+                  <small>{workerById.get(execution.worker_id)?.name ?? "Private worker"} · {execution.state}</small>
+                  <span className="member-task-actions">
+                    <button className="secondary-button" type="button" onClick={() => onOpenTask(execution.local_task_id)}>Open task</button>
+                    {mine && next ? <button className="secondary-button" type="button" disabled={actingTask === task.id} onClick={() => void act(task, next)}>Move shared work to {next}</button> : null}
+                  </span>
+                </> : mine ? (
+                  <span className="member-task-worker-route">
+                    <select aria-label={`Worker for ${task.title}`} value={workerChoices[task.id] ?? ""} onChange={(event) => setWorkerChoices((current) => ({ ...current, [task.id]: event.target.value }))}>
+                      <option value="">Choose private worker</option>
+                      {privateWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {worker.attention_state}</option>)}
+                    </select>
+                    <button className="primary-action" type="button" disabled={actingTask === task.id || !workerChoices[task.id]} onClick={() => void sendToWorker(task)}>{actingTask === task.id ? "Sending…" : "Send to worker"}</button>
+                  </span>
+                ) : null}
+              </span>
+            </li>;
           })}</ul> : <p className="keeper-empty">No Swarm-generated Apiary tasks have been received.</p>}
         </article>
         <article className="keeper-panel">

@@ -251,6 +251,21 @@ async function checkMemberSurface(browser, surface) {
     ],
     blockers: ["project_access_not_ready"],
   }));
+  await page.route("**/api/v1/workers", (route) => fulfill(route, [{
+    id: "visual-worker", hive_id: "visual-member-hive", name: "Clover Worker", role: "worker",
+    provider: "claude_code", workspace: "/projects/clover", autostart: false, position: 1,
+    active_session_id: null, created_at: 1, updated_at: 1, running: false, attention_state: "sleeping",
+  }]));
+  await page.route("**/api/v1/apiary/tasks", (route) => fulfill(route, [{
+    id: "visual-apiary-task", apiary_id: "visual-apiary", source: "swarm",
+    title: "Prepare the shared release", description: "Verify the bounded Member handoff.",
+    priority: "high", state: "ready", home_node_id: "visual-member-node",
+    home_hive_id: "visual-member-hive", revision: 2, created_at: 1, updated_at: 2,
+  }]));
+  await page.route("**/api/v1/apiary/tasks/local-executions", (route) => fulfill(route, []));
+  await page.route("**/api/v1/apiary/task-sync-status", (route) => fulfill(route, { cursor: 2, task_count: 1, last_applied_at: 1_786_780_000 }));
+  await page.route("**/api/v1/apiary/task-outbox", (route) => fulfill(route, []));
+  await page.route("**/api/v1/apiary/task-outbox-status", (route) => fulfill(route, { queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
 
   try {
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
@@ -272,6 +287,13 @@ async function checkMemberSurface(browser, surface) {
     await page.getByRole("list", { name: "Member shared work ownership" }).waitFor();
     await page.getByRole("heading", { name: "Trusted support for 1 Hive" }).waitFor();
     await page.getByText("Observe, Assist, Take over", { exact: true }).waitFor();
+    const routedTask = page.getByRole("list", { name: "Member Keeper tasks" });
+    await routedTask.getByText("Prepare the shared release", { exact: true }).waitFor();
+    const workerPicker = routedTask.getByRole("combobox", { name: "Worker for Prepare the shared release" });
+    await workerPicker.selectOption("visual-worker");
+    await routedTask.getByRole("button", { name: "Send to worker" }).waitFor();
+    await routedTask.scrollIntoViewIfNeeded();
+    await routedTask.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-member-worker-route.png`) });
     const handoffList = page.getByRole("list", { name: "Active Jira work handoffs" });
     await page.getByRole("heading", { name: "Another Hive needs your help" }).waitFor();
     await handoffList.getByText("WWD-202", { exact: true }).waitFor();

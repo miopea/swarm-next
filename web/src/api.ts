@@ -330,6 +330,13 @@ export type ApiaryTask = {
   created_at: number;
   updated_at: number;
 };
+export type LocalApiaryTaskExecution = {
+  apiary_task_id: string;
+  local_task_id: string;
+  worker_id: string;
+  state: TaskState;
+  created_at: number;
+};
 export type FederationTaskSyncStatus = {
   cursor: number;
   task_count: number;
@@ -807,6 +814,30 @@ export async function createApiaryTask(
     body: JSON.stringify(input),
   });
   return response.json() as Promise<ApiaryTask>;
+}
+
+export async function fetchLocalApiaryTaskExecutions(
+  operatorToken: string,
+): Promise<LocalApiaryTaskExecution[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/tasks/local-executions");
+  return response.json() as Promise<LocalApiaryTaskExecution[]>;
+}
+
+export async function materializeLocalApiaryTaskExecution(
+  operatorToken: string,
+  taskId: string,
+  workerId: string,
+): Promise<LocalApiaryTaskExecution> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/tasks/${encodeURIComponent(taskId)}/local-execution`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ worker_id: workerId }),
+    },
+  );
+  return response.json() as Promise<LocalApiaryTaskExecution>;
 }
 
 export async function fetchFederationTaskSyncStatus(

@@ -269,7 +269,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-work-list li > span:last-child { text-align: right; }
 .member-task-owner { align-content: center; justify-items: end; }
 .member-task-owner .secondary-button { margin-top: 4px; padding: 6px 10px; font-size: .76rem; }
+.member-task-worker-route { display: grid; grid-template-columns: minmax(170px, 1fr) auto; gap: 7px; margin-top: 5px; }
+.member-task-worker-route select { min-width: 0; }
+.member-task-worker-route .primary-action { padding: 7px 10px; white-space: nowrap; }
+.member-task-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .member-command-attention { margin: 0 0 8px; padding: 9px 11px; border: 1px solid var(--honey-line); border-radius: var(--radius-sm); background: var(--honey-wash); color: var(--ink); }
+.member-task-panel { grid-column: 1 / -1; }
 .member-handoff-panel { grid-column: 1 / -1; border-color: var(--honey-line); background: linear-gradient(135deg, var(--panel), var(--honey-wash)); }
 .member-handoff-list { display: grid; margin: 0; padding: 0; list-style: none; }
 .member-handoff-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 12px 0; border-top: 1px solid var(--line); }
@@ -1090,6 +1095,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .keeper-work-list li, .keeper-steward-list li { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .keeper-work-list li > span:last-child, .keeper-steward-list li > span:last-child { text-align: left; }
   .member-task-owner { justify-items: start; }
+  .member-task-worker-route { width: 100%; grid-template-columns: minmax(0, 1fr); }
+  .member-task-worker-route .primary-action { width: 100%; }
+  .member-task-actions { justify-content: flex-start; }
   .task-board { padding: 16px; }
   .task-compose { padding: 16px; }
   .task-compose-header { align-items: stretch; flex-direction: column; gap: 13px; }

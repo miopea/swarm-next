@@ -13,10 +13,11 @@ use swarm_domain::{
     FederationTaskCommand, FederationTaskCommandId, FederationTaskCommandReceipt,
     FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
     FederationTaskSyncStatus, HiveConnectionCard, HiveId, JiraConnectionState,
-    JiraProjectBindingId, LocalApiaryContext, LocalApiaryRole, OperatorId, OperatorPresence,
-    PresenceDeviceClass, PresenceDeviceId, PresenceMode, PresenceObservationState,
-    SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, Task, TaskActivityActor,
-    TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId,
+    JiraProjectBindingId, LocalApiaryContext, LocalApiaryRole, LocalApiaryTaskExecution,
+    OperatorId, OperatorPresence, PresenceDeviceClass, PresenceDeviceId, PresenceMode,
+    PresenceObservationState, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId,
+    Task, TaskActivityActor, TaskId, TaskPriority, TaskState, WorkerId, WorkerProfile, WorkerRole,
+    WorkerSessionId,
 };
 use swarm_persistence::{NewDecisionRequest, TaskStore, TaskStoreError};
 use thiserror::Error;
@@ -187,6 +188,35 @@ impl ApiaryService {
     /// Returns an error for invalid membership or unavailable state.
     pub fn visible_apiary_tasks(&self) -> Result<Vec<ApiaryTask>, ApplicationError> {
         self.store.list_visible_apiary_tasks().map_err(Into::into)
+    }
+
+    /// Creates or returns the private local execution task for one owned
+    /// Keeper-canonical work item.
+    ///
+    /// # Errors
+    /// Rejects non-Members, foreign/completed work, invalid private workers,
+    /// or unavailable persistence.
+    pub fn materialize_local_apiary_task_execution(
+        &self,
+        apiary_task_id: swarm_domain::ApiaryTaskId,
+        worker_id: WorkerId,
+        now: i64,
+    ) -> Result<LocalApiaryTaskExecution, ApplicationError> {
+        self.store
+            .materialize_local_apiary_task_execution(apiary_task_id, worker_id, now)
+            .map_err(Into::into)
+    }
+
+    /// Lists this Hive's private Apiary-to-local task bridges.
+    ///
+    /// # Errors
+    /// Returns an error for corrupt or unavailable local state.
+    pub fn local_apiary_task_executions(
+        &self,
+    ) -> Result<Vec<LocalApiaryTaskExecution>, ApplicationError> {
+        self.store
+            .list_local_apiary_task_executions()
+            .map_err(Into::into)
     }
 
     /// Creates one Swarm-generated Apiary task on the Keeper.

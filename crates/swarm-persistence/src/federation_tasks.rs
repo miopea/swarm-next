@@ -7,13 +7,15 @@ use swarm_domain::{
     FederationTaskCommand, FederationTaskCommandId, FederationTaskCommandKind,
     FederationTaskCommandOutcome, FederationTaskCommandReceipt, FederationTaskOutboxEntry,
     FederationTaskOutboxState, FederationTaskOutboxStatus, FederationTaskPage,
-    FederationTaskSyncStatus, HiveId, LocalApiaryContext, LocalApiaryRole, TaskPriority, TaskState,
+    FederationTaskSyncStatus, HiveId, LocalApiaryContext, LocalApiaryRole,
+    LocalApiaryTaskExecution, TaskActivityActorKind, TaskId, TaskPriority, TaskState, WorkerId,
 };
 
 use crate::{
-    MAX_TASK_DESCRIPTION_BYTES, MAX_TASK_TITLE_BYTES, TaskStore, TaskStoreError,
+    ControlRoomEventKind, MAX_TASK_DESCRIPTION_BYTES, MAX_TASK_TITLE_BYTES, TaskStore,
+    TaskStoreError,
     federation::{authenticate_member_credential, decode_node_credential},
-    parse_domain_id,
+    insert_control_room_event, parse_domain_id,
 };
 
 const MAX_FEDERATION_TASK_PAGE: usize = 100;
@@ -376,6 +378,171 @@ impl TaskStore {
         )?;
         statement
             .query_map([apiary.id.to_string()], apiary_task_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Materializes one Keeper-canonical task as private executable work in
+    /// the owning Member Hive and assigns it to one local non-Queen worker.
+    /// Exact retries return the original bridge and never duplicate work.
+    ///
+    /// # Errors
+    /// Rejects non-Members, work owned by another Hive, completed work,
+    /// unknown/private-Queen workers, invalid time, or unavailable storage.
+    #[allow(clippy::too_many_lines)] // Validation, task creation, assignment, and the durable bridge must commit atomically.
+    pub fn materialize_local_apiary_task_execution(
+        &self,
+        apiary_task_id: ApiaryTaskId,
+        worker_id: WorkerId,
+        now: i64,
+    ) -> Result<LocalApiaryTaskExecution, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let identity = self.local_hive_identity()?;
+        let LocalApiaryContext::Federated { local_role, .. } = self.local_apiary_context()? else {
+            return Err(TaskStoreError::InvalidFederationTask);
+        };
+        if local_role != LocalApiaryRole::Member {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        if let Some(existing) = local_apiary_task_execution(&transaction, apiary_task_id)? {
+            transaction.commit()?;
+            return Ok(existing);
+        }
+        let snapshot_json = transaction
+            .query_row(
+                "SELECT snapshot_json FROM local_apiary_tasks WHERE task_id = ?1",
+                [apiary_task_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::InvalidFederationTask)?;
+        let shared: ApiaryTask = serde_json::from_str(&snapshot_json)
+            .map_err(|_| TaskStoreError::InvalidFederationTask)?;
+        if shared.home_hive_id != Some(identity.hive.id) || shared.state == TaskState::Completed {
+            return Err(TaskStoreError::InvalidFederationTask);
+        }
+        let (workspace, active_session): (String, Option<String>) = transaction
+            .query_row(
+                "SELECT profile.workspace, session.session_id
+                 FROM worker_profiles profile
+                 LEFT JOIN worker_sessions session
+                   ON session.worker_id = profile.id AND session.ended_at IS NULL
+                 WHERE profile.id = ?1 AND profile.hive_id = ?2
+                   AND profile.role != 'queen' AND profile.archived_at IS NULL",
+                params![worker_id.to_string(), identity.hive.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::WorkerNotFound)?;
+        let local_task_id = TaskId::new();
+        transaction.execute(
+            "INSERT INTO tasks
+                (id, hive_id, title, description, priority, workspace, state,
+                 assigned_worker_id, position, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ready', ?7,
+                     COALESCE((SELECT MAX(position) + 1 FROM tasks WHERE hive_id = ?2), 0),
+                     ?8, ?8)",
+            params![
+                local_task_id.to_string(),
+                identity.hive.id.to_string(),
+                shared.title,
+                shared.description,
+                shared.priority.to_string(),
+                workspace,
+                worker_id.to_string(),
+                now,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity
+                (task_id, kind, to_state, actor_kind, actor_id, occurred_at)
+             VALUES (?1, 'created', 'ready', ?2, NULL, ?3)",
+            params![
+                local_task_id.to_string(),
+                TaskActivityActorKind::System.to_string(),
+                now,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity
+                (task_id, kind, actor_kind, actor_id, occurred_at)
+             VALUES (?1, 'assigned', ?2, NULL, ?3)",
+            params![
+                local_task_id.to_string(),
+                TaskActivityActorKind::System.to_string(),
+                now,
+            ],
+        )?;
+        if let Some(session_id) = active_session {
+            let queued: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
+                [],
+                |row| row.get(0),
+            )?;
+            if queued >= 256 {
+                return Err(TaskStoreError::TaskDispatchQueueFull);
+            }
+            let assignment_id = uuid::Uuid::now_v7().to_string();
+            transaction.execute(
+                "INSERT INTO task_assignments (id, task_id, worker_session_id, assigned_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![assignment_id, local_task_id.to_string(), session_id, now],
+            )?;
+            transaction.execute(
+                "INSERT INTO task_dispatches
+                    (assignment_id, task_id, worker_id, state, updated_at)
+                 VALUES (?1, ?2, ?3, 'queued', ?4)",
+                params![
+                    assignment_id,
+                    local_task_id.to_string(),
+                    worker_id.to_string(),
+                    now,
+                ],
+            )?;
+        }
+        transaction.execute(
+            "INSERT INTO local_apiary_task_executions
+                (apiary_task_id, local_task_id, worker_id, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                apiary_task_id.to_string(),
+                local_task_id.to_string(),
+                worker_id.to_string(),
+                now,
+            ],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        Ok(LocalApiaryTaskExecution {
+            apiary_task_id,
+            local_task_id,
+            worker_id,
+            state: TaskState::Ready,
+            created_at: now,
+        })
+    }
+
+    /// Lists only the private execution bridges stored by this Hive.
+    ///
+    /// # Errors
+    /// Returns an error when local state is corrupt or unavailable.
+    pub fn list_local_apiary_task_executions(
+        &self,
+    ) -> Result<Vec<LocalApiaryTaskExecution>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT execution.apiary_task_id, execution.local_task_id,
+                    execution.worker_id, task.state, execution.created_at
+             FROM local_apiary_task_executions execution
+             JOIN tasks task ON task.id = execution.local_task_id
+             ORDER BY execution.created_at DESC, execution.apiary_task_id",
+        )?;
+        statement
+            .query_map([], local_apiary_task_execution_from_row)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -1027,6 +1194,37 @@ fn apiary_task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiaryTask>
     })
 }
 
+fn local_apiary_task_execution(
+    transaction: &rusqlite::Transaction<'_>,
+    apiary_task_id: ApiaryTaskId,
+) -> Result<Option<LocalApiaryTaskExecution>, TaskStoreError> {
+    transaction
+        .query_row(
+            "SELECT execution.apiary_task_id, execution.local_task_id,
+                    execution.worker_id, task.state, execution.created_at
+             FROM local_apiary_task_executions execution
+             JOIN tasks task ON task.id = execution.local_task_id
+             WHERE execution.apiary_task_id = ?1",
+            [apiary_task_id.to_string()],
+            local_apiary_task_execution_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
+fn local_apiary_task_execution_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<LocalApiaryTaskExecution> {
+    Ok(LocalApiaryTaskExecution {
+        apiary_task_id: parse_domain_id(&row.get::<_, String>(0)?)?,
+        local_task_id: parse_domain_id(&row.get::<_, String>(1)?)?,
+        worker_id: parse_domain_id(&row.get::<_, String>(2)?)?,
+        state: TaskState::from_str(&row.get::<_, String>(3)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        created_at: row.get(4)?,
+    })
+}
+
 pub(super) fn migrate_federation_tasks(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -1118,11 +1316,28 @@ pub(super) fn migrate_federation_task_commands(
     )
 }
 
+pub(super) fn migrate_local_apiary_task_executions(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS local_apiary_task_executions (
+             apiary_task_id TEXT PRIMARY KEY,
+             local_task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+             worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+             created_at INTEGER NOT NULL CHECK (created_at >= 0)
+         );
+         CREATE INDEX IF NOT EXISTS local_apiary_task_executions_by_worker
+             ON local_apiary_task_executions(worker_id, created_at DESC);
+         PRAGMA user_version = 56;",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use swarm_domain::{
-        FederationJoinAcceptance, FederationJoinReadiness, JiraConnectionState, SharedWorkBackend,
+        FederationJoinAcceptance, FederationJoinReadiness, JiraConnectionState, ProviderKind,
+        SharedWorkBackend,
     };
 
     fn joined_member(now: i64) -> (TaskStore, TaskStore, FederationJoinAcceptance) {
@@ -1189,6 +1404,7 @@ mod tests {
             "local_apiary_task_sync",
             "apiary_task_commands",
             "local_apiary_task_commands",
+            "local_apiary_task_executions",
         ] {
             let exists = connection
                 .query_row(
@@ -1309,6 +1525,57 @@ mod tests {
             ),
             Err(TaskStoreError::InvalidFederationTask)
         ));
+    }
+
+    #[test]
+    fn member_materializes_owned_keeper_work_once_for_one_private_worker() {
+        let now = 175_000;
+        let (keeper, member, acceptance) = joined_member(now);
+        let worker = member
+            .create_worker(
+                "Clover",
+                ProviderKind::ClaudeCode,
+                "/projects/clover",
+                false,
+                1,
+            )
+            .expect("worker");
+        let shared = keeper
+            .create_apiary_task_for_hive(
+                "Prepare the shared release",
+                "Verify the Member-owned outcome.",
+                TaskPriority::High,
+                Some(acceptance.receipt.payload.member_hive_id),
+                now + 10,
+            )
+            .expect("routed task");
+        let page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, now + 11)
+            .expect("page");
+        member
+            .apply_federation_task_page(&page, now + 11)
+            .expect("projection");
+
+        let first = member
+            .materialize_local_apiary_task_execution(shared.id, worker.id, now + 12)
+            .expect("execution");
+        let retry = member
+            .materialize_local_apiary_task_execution(shared.id, WorkerId::new(), now + 13)
+            .expect("idempotent retry");
+        assert_eq!(retry, first);
+        assert_eq!(first.worker_id, worker.id);
+        assert_eq!(first.state, TaskState::Ready);
+
+        let tasks = member.list_tasks().expect("local tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, first.local_task_id);
+        assert_eq!(tasks[0].title, "Prepare the shared release");
+        assert_eq!(tasks[0].workspace, "/projects/clover");
+        assert_eq!(tasks[0].assigned_worker_id, Some(worker.id));
+        assert_eq!(
+            member.list_local_apiary_task_executions().expect("links"),
+            vec![first]
+        );
     }
 
     #[test]

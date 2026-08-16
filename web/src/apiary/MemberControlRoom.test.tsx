@@ -24,6 +24,7 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 4, task_count: 1, last_applied_at: 100 }));
     if (url.endsWith("/task-outbox")) return Promise.resolve(ok([]));
     if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
+    if (url.endsWith("/local-executions")) return Promise.resolve(ok([]));
     if (url.endsWith("/my-stewardship")) return Promise.resolve(ok({
       schema_version: 1, protocol_version: 1, apiary_id: "apiary-1", member_node_id: "node-2", member_operator_id: "operator-2", generated_at: 100,
       stewardship: { id: "stewardship-1", apiary_id: "apiary-1", steward_operator_id: "operator-2", managed_hive_ids: ["hive-2"], capabilities: ["observe", "assist", "takeover"] },
@@ -37,7 +38,7 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
     throw new Error(`Unexpected request: ${url}`);
   }));
   const onManage = vi.fn();
-  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" onManage={onManage} />);
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={[]} onManage={onManage} onOpenTask={() => undefined} />);
 
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
   expect(screen.getByLabelText("Member Apiary summary")).toHaveTextContent("KeeperMeadow HiveCatalogVerifiedProjects ready1/1My Jira claims1Keeper tasks1");
@@ -72,13 +73,40 @@ test("keeps local work usable when part of the Member rollup is unavailable", as
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 0, task_count: 0, last_applied_at: null }));
     if (url.endsWith("/task-outbox")) return Promise.resolve(ok([]));
     if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
+    if (url.endsWith("/local-executions")) return Promise.resolve(ok([]));
     if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
     if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "network_unavailable", projects: [], blockers: ["catalog_missing"] }));
     throw new Error(`Unexpected request: ${url}`);
   }));
-  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" onManage={() => undefined} />);
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={[]} onManage={() => undefined} onOpenTask={() => undefined} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("Local workers and owned work are unchanged");
   expect(screen.getByRole("list", { name: "Shared work blockers" })).toHaveTextContent("Keeper catalog has not arrived");
+});
+
+test("sends Keeper-routed work to one private worker and opens the local task", async () => {
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/tasks/task-1/local-execution")) {
+      expect(init).toMatchObject({ method: "POST", body: JSON.stringify({ worker_id: "worker-1" }) });
+      return Promise.resolve(ok({ apiary_task_id: "task-1", local_task_id: "local-1", worker_id: "worker-1", state: "ready", created_at: 2 }));
+    }
+    if (url.endsWith("/members")) return Promise.resolve(ok([]));
+    if (url.endsWith("/shared-work") || url.endsWith("/handoffs") || url.endsWith("/handoff-targets") || url.endsWith("/task-outbox") || url.endsWith("/local-executions")) return Promise.resolve(ok([]));
+    if (url.endsWith("/tasks")) return Promise.resolve(ok([{ id: "task-1", apiary_id: "apiary-1", source: "swarm", title: "Prepare shared release", description: "", priority: "high", state: "ready", home_node_id: "node-2", home_hive_id: "hive-2", revision: 1, created_at: 1, updated_at: 1 }]));
+    if (url.endsWith("/sync-health")) return Promise.resolve(ok({ condition: "current", last_attempt_at: 1, last_success_at: 1, consecutive_failures: 0, next_attempt_at: null }));
+    if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 1, task_count: 1, last_applied_at: 1 }));
+    if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
+    if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
+    if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: [] }));
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+  const onOpenTask = vi.fn();
+  const workers = [{ id: "worker-1", hive_id: "hive-2", name: "Clover", role: "worker" as const, provider: "claude_code" as const, workspace: "/projects/clover", autostart: false, position: 1, active_session_id: null, created_at: 1, updated_at: 1, running: false, attention_state: "sleeping" as const }];
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={workers} onManage={() => undefined} onOpenTask={onOpenTask} />);
+
+  fireEvent.change(await screen.findByRole("combobox", { name: "Worker for Prepare shared release" }), { target: { value: "worker-1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send to worker" }));
+  await waitFor(() => expect(onOpenTask).toHaveBeenCalledWith("local-1"));
 });
 
 function memberIdentity() { return { operator: { id: "operator-2", display_name: "Cora" }, hive: { id: "hive-2", name: "Clover Hive", operator_id: "operator-2", apiary_id: "apiary-1" }, apiary_context: { mode: "federated" as const, apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const }, local_role: "member" as const } }; }

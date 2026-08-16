@@ -69,9 +69,9 @@ use swarm_domain::{
     FederationSyncCondition, FederationTaskCommand, FederationTaskOutboxEntry,
     FederationTaskOutboxStatus, FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard,
     HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope,
-    JiraStatusMapping, LocalApiaryContext, LocalApiaryRole, OperatorId, ProviderKind,
-    SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId, TaskPriority,
-    TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    JiraStatusMapping, LocalApiaryContext, LocalApiaryRole, LocalApiaryTaskExecution, OperatorId,
+    ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId,
+    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
@@ -1423,6 +1423,11 @@ struct TransitionApiaryTaskRequest {
     target_state: TaskState,
 }
 
+#[derive(Debug, Deserialize)]
+struct MaterializeApiaryTaskRequest {
+    worker_id: WorkerId,
+}
+
 #[derive(Debug, Serialize)]
 struct FederationClaimRollupView {
     #[serde(flatten)]
@@ -1875,6 +1880,14 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/apiary/tasks/{task_id}/transition",
             post(queue_federation_task_transition),
+        )
+        .route(
+            "/api/v1/apiary/tasks/local-executions",
+            get(get_local_apiary_task_executions),
+        )
+        .route(
+            "/api/v1/apiary/tasks/{task_id}/local-execution",
+            post(materialize_local_apiary_task_execution),
         )
         .route(
             "/api/v1/apiary/task-outbox",
@@ -3308,6 +3321,40 @@ async fn get_federation_task_sync_status(
         .federation_task_sync_status()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(status)).into_response())
+}
+
+async fn get_local_apiary_task_executions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let executions: Vec<LocalApiaryTaskExecution> = apiary_service(&state)?
+        .local_apiary_task_executions()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(executions)).into_response())
+}
+
+async fn materialize_local_apiary_task_execution(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<MaterializeApiaryTaskRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let execution = apiary_service(&state)?
+        .materialize_local_apiary_task_execution(
+            parse_apiary_task_id(&task_id)?,
+            request.worker_id,
+            unix_timestamp(),
+        )
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(execution),
+    )
+        .into_response())
 }
 
 fn parse_apiary_task_id(value: &str) -> Result<ApiaryTaskId, ApiError> {

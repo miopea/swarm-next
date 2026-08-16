@@ -484,6 +484,18 @@ pub struct ApiaryTask {
     pub updated_at: i64,
 }
 
+/// The private execution bridge for one Keeper-canonical task in its home
+/// Hive. This record never leaves the home Hive: Keeper can see ownership by
+/// Hive, but not the selected worker, repository, terminal, or provider.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LocalApiaryTaskExecution {
+    pub apiary_task_id: ApiaryTaskId,
+    pub local_task_id: TaskId,
+    pub worker_id: WorkerId,
+    pub state: TaskState,
+    pub created_at: i64,
+}
+
 /// One ordered Keeper event. Carrying the complete bounded task snapshot makes
 /// member retries idempotent and permits deterministic projection repair.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

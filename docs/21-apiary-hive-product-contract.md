@@ -300,6 +300,17 @@ terminals, or provider sessions, and ordinary workers receive no Apiary-level
 tools. This keeps unattended coordination inside the existing federation and
 conflict rules rather than creating a privileged side channel.
 
+After routed work reaches its home Member Hive, that Hive's Queen may select
+one reviewed local repository worker and materialize one durable private task.
+The bridge is idempotent: retries reuse the same local task and worker rather
+than duplicating work or silently reassigning it. The local task owns the
+worker, repository path, provider conversation, dispatch, and evidence; none of
+those fields enter Keeper's task or federation feed. Keeper continues to see
+only the public home Hive and canonical shared lifecycle. Ordered lifecycle
+mirroring remains a separate durable-outbox capability because local worker
+progress may advance while Keeper is offline and must never be collapsed into
+best-effort writes.
+
 A sole Keeper Hive may explicitly collapse an Apiary after automatic safety
 validation. Native tasks become local while preserving identity and history;
 Jira-backed Apiary projects become Hive-owned bindings. Outstanding invitations,

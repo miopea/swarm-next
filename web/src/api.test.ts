@@ -2,12 +2,52 @@ import { expect, test, vi } from "vitest";
 
 import {
   assignTask,
+  fetchLocalApiaryTaskExecutions,
   fetchFederationJoinInvitations,
+  materializeLocalApiaryTaskExecution,
   recoverTransientRuntime,
   renameApiary,
   renameHive,
   RuntimeRequestError,
 } from "./api";
+
+test("materializes Keeper work for one private worker through the bounded Apiary API", async () => {
+  const execution = {
+    apiary_task_id: "apiary-task-1",
+    local_task_id: "local-task-1",
+    worker_id: "worker-1",
+    state: "ready" as const,
+    created_at: 10,
+  };
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify([execution]), {
+      status: 200, headers: { "content-type": "application/json" },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify(execution), {
+      status: 201, headers: { "content-type": "application/json" },
+    }));
+  vi.stubGlobal("fetch", fetch);
+
+  await expect(fetchLocalApiaryTaskExecutions("operator")).resolves.toEqual([execution]);
+  await expect(materializeLocalApiaryTaskExecution(
+    "operator", "apiary-task-1", "worker-1",
+  )).resolves.toEqual(execution);
+
+  expect(fetch).toHaveBeenNthCalledWith(
+    1,
+    "/api/v1/apiary/tasks/local-executions",
+    expect.objectContaining({ headers: expect.any(Headers) }),
+  );
+  expect(fetch).toHaveBeenNthCalledWith(
+    2,
+    "/api/v1/apiary/tasks/apiary-task-1/local-execution",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ worker_id: "worker-1" }),
+    }),
+  );
+  vi.unstubAllGlobals();
+});
 
 test("renames public Hive and Apiary labels through bounded private commands", async () => {
   const hive = {

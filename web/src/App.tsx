@@ -980,7 +980,17 @@ export function App() {
         ) : surface === "apiary" && keeper && hiveIdentity ? (
           <KeeperControlRoom identity={hiveIdentity} operatorToken={operatorToken} onManage={openApiarySettings} />
         ) : surface === "apiary" && federated && hiveIdentity ? (
-          <MemberControlRoom identity={hiveIdentity} operatorToken={operatorToken} onManage={openApiarySettings} />
+          <MemberControlRoom
+            identity={hiveIdentity}
+            operatorToken={operatorToken}
+            workers={workers}
+            onManage={openApiarySettings}
+            onOpenTask={(taskId) => {
+              setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 }));
+              void refreshControlRoom();
+              setSurface("tasks");
+            }}
+          />
         ) : surface === "settings" ? (
           <SettingsWorkspace
             busy={busy}

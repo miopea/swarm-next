@@ -212,6 +212,7 @@ test("gives a Member Hive a first-class Apiary membership surface", async () => 
     if (url.endsWith("/apiary/shared-work")) return Promise.resolve(ok([]));
     if (url.endsWith("/apiary/sync-health")) return Promise.resolve(ok({ condition: "idle", last_attempt_at: null, last_success_at: null, consecutive_failures: 0, next_attempt_at: null }));
     if (url.endsWith("/apiary/tasks")) return Promise.resolve(ok([]));
+    if (url.endsWith("/apiary/tasks/local-executions")) return Promise.resolve(ok([]));
     if (url.endsWith("/apiary/task-sync-status")) return Promise.resolve(ok({ cursor: 0, task_count: 0, last_applied_at: null }));
     if (url.endsWith("/apiary/task-outbox")) return Promise.resolve(ok([]));
     if (url.endsWith("/apiary/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
