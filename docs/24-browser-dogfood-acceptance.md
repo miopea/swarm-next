@@ -1183,3 +1183,23 @@ the independently updated terminal host through the API to worker settings:
   `quick_check=ok`. API PID advanced to `3855825`; terminal-host PID `2966127`
   remained unchanged. No Jira or live Apiary mutation occurred, and every proof
   browser closed after the run.
+- Release `0.1.0-dev-ddab444c3e7a` makes the linked local task the sole worker
+  lifecycle authority while preserving Keeper's canonical shared record. Each
+  local transition atomically updates a durable desired shared state. Member
+  reconciliation stages only the next legal command, waits until its applied
+  revision returns in Keeper's task feed, and then advances again. Focused proof
+  moved a local task from Ready through Active to Review while Keeper lagged;
+  only Active was queued first, exact preparation retries produced no duplicate,
+  Review waited for revision 2, and both records converged at revision 3. Direct
+  shared transitions fail closed after materialization, conflicts stop the chain,
+  and private worker or repository data still never enters Keeper. The full gate
+  passed 380 Rust tests, warnings-denied Clippy, formatting, all 234 frontend
+  tests, strict TypeScript, the production build, and the dogfood harness.
+  Desktop and Android-size proof rendered both “Send to worker” and “Keeper
+  ready · syncing to active” states with zero horizontal overflow. Every primary,
+  Keeper, Member, and personal-Hive surface passed live, and authentication
+  survived complete browser restarts. The package created a verified
+  1,171,456-byte pre-update backup and migrated the database to schema 57 with
+  `quick_check=ok`. API PID advanced to `3867547`; terminal-host PID `2966127`
+  remained unchanged. No Jira or live Apiary mutation occurred, and every proof
+  browser closed after the run.
