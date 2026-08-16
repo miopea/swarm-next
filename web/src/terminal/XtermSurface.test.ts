@@ -73,7 +73,10 @@ vi.mock("@xterm/xterm", () => ({
 
 import { XtermSurface } from "./XtermSurface";
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 test("uses the complete botanical ANSI palette", () => {
   document.documentElement.dataset.theme = "dark";
@@ -179,6 +182,41 @@ test("turns a one-finger vertical drag into terminal scrollback", () => {
   element.dispatchEvent(move);
 
   expect(move.defaultPrevented).toBe(true);
+  expect(xterm.scrollLines).toHaveBeenCalledOnce();
+  expect(xterm.scrollLines).toHaveBeenCalledWith(3);
+  surface.dispose();
+});
+
+test("uses the Android primary pointer path without handing the drag back to xterm", () => {
+  vi.stubGlobal("PointerEvent", class extends Event {});
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const element = document.createElement("div");
+  const xtermChild = document.createElement("div");
+  const downstreamMove = vi.fn();
+  element.append(xtermChild);
+  xtermChild.addEventListener("pointermove", downstreamMove);
+  Object.defineProperties(element, {
+    clientHeight: { configurable: true, value: 408 },
+    setPointerCapture: { configurable: true, value: vi.fn() },
+    hasPointerCapture: { configurable: true, value: vi.fn(() => true) },
+    releasePointerCapture: { configurable: true, value: vi.fn() },
+  });
+  const surface = new XtermSurface();
+  surface.open(element);
+  xterm.scrollLines.mockClear();
+
+  xtermChild.dispatchEvent(pointerEvent("pointerdown", { pointerId: 12, pointerType: "touch", isPrimary: true, clientY: 300 }));
+  const move = pointerEvent("pointermove", { pointerId: 12, pointerType: "touch", isPrimary: true, clientY: 249 });
+  xtermChild.dispatchEvent(move);
+
+  expect(move.defaultPrevented).toBe(true);
+  expect(downstreamMove).not.toHaveBeenCalled();
   expect(xterm.scrollLines).toHaveBeenCalledOnce();
   expect(xterm.scrollLines).toHaveBeenCalledWith(3);
   surface.dispose();
@@ -427,6 +465,20 @@ function touchEvent(
   Object.defineProperties(event, {
     touches: { value: type === "touchend" || type === "touchcancel" ? Object.assign([], { item: () => null }) : touchList },
     changedTouches: { value: touchList },
+  });
+  return event;
+}
+
+function pointerEvent(
+  type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
+  init: Pick<PointerEvent, "pointerId" | "pointerType" | "isPrimary" | "clientY">,
+): PointerEvent {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as PointerEvent;
+  Object.defineProperties(event, {
+    pointerId: { value: init.pointerId },
+    pointerType: { value: init.pointerType },
+    isPrimary: { value: init.isPrimary },
+    clientY: { value: init.clientY },
   });
   return event;
 }

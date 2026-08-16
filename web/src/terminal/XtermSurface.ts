@@ -19,6 +19,7 @@ export class XtermSurface implements TerminalSurface {
   #resizeObserver: ResizeObserver | undefined;
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
   #element: HTMLElement | undefined;
+  #pointerIdentifier: number | undefined;
   #touchIdentifier: number | undefined;
   #touchLastY = 0;
   #touchDistanceY = 0;
@@ -46,13 +47,20 @@ export class XtermSurface implements TerminalSurface {
   open(element: HTMLElement): void {
     this.#element = element;
     this.#terminal.open(element);
-    // xterm owns descendants below this mount and may stop bubbling touch
-    // events while handling selection/focus. Capture the gesture at the mount
-    // boundary so a real finger drag reaches Swarm before xterm consumes it.
-    element.addEventListener("touchstart", this.#handleTouchStart, { passive: true, capture: true });
-    element.addEventListener("touchmove", this.#handleTouchMove, { passive: false, capture: true });
-    element.addEventListener("touchend", this.#handleTouchEnd, { passive: true, capture: true });
-    element.addEventListener("touchcancel", this.#handleTouchEnd, { passive: true, capture: true });
+    // Android Chromium reports terminal drags through PointerEvent. Capture
+    // that primary path at the mount boundary and retain TouchEvent only for
+    // older WebKit. Registering both would apply the same physical drag twice.
+    if (typeof PointerEvent === "function") {
+      element.addEventListener("pointerdown", this.#handlePointerStart, { passive: true, capture: true });
+      element.addEventListener("pointermove", this.#handlePointerMove, { passive: false, capture: true });
+      element.addEventListener("pointerup", this.#handlePointerEnd, { passive: true, capture: true });
+      element.addEventListener("pointercancel", this.#handlePointerEnd, { passive: true, capture: true });
+    } else {
+      element.addEventListener("touchstart", this.#handleTouchStart, { passive: true, capture: true });
+      element.addEventListener("touchmove", this.#handleTouchMove, { passive: false, capture: true });
+      element.addEventListener("touchend", this.#handleTouchEnd, { passive: true, capture: true });
+      element.addEventListener("touchcancel", this.#handleTouchEnd, { passive: true, capture: true });
+    }
     this.#resizeObserver = new ResizeObserver(() => this.#scheduleFit());
     this.#resizeObserver.observe(element);
   }
@@ -135,6 +143,10 @@ export class XtermSurface implements TerminalSurface {
     this.#cancelScheduledFit();
     this.#themeObserver?.disconnect();
     this.#resizeObserver?.disconnect();
+    this.#element?.removeEventListener("pointerdown", this.#handlePointerStart, true);
+    this.#element?.removeEventListener("pointermove", this.#handlePointerMove, true);
+    this.#element?.removeEventListener("pointerup", this.#handlePointerEnd, true);
+    this.#element?.removeEventListener("pointercancel", this.#handlePointerEnd, true);
     this.#element?.removeEventListener("touchstart", this.#handleTouchStart, true);
     this.#element?.removeEventListener("touchmove", this.#handleTouchMove, true);
     this.#element?.removeEventListener("touchend", this.#handleTouchEnd, true);
@@ -142,6 +154,33 @@ export class XtermSurface implements TerminalSurface {
     this.#resetTouchGesture();
     this.#terminal.dispose();
   }
+
+  readonly #handlePointerStart = (event: PointerEvent): void => {
+    if (this.#disposed || event.pointerType !== "touch" || !event.isPrimary) return;
+    this.#pointerIdentifier = event.pointerId;
+    this.#beginTouchGesture(event.clientY);
+    try {
+      this.#element?.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is an enhancement. The capture-phase listener still
+      // follows the gesture if an embedded browser declines the request.
+    }
+  };
+
+  readonly #handlePointerMove = (event: PointerEvent): void => {
+    if (event.pointerId !== this.#pointerIdentifier || event.pointerType !== "touch") return;
+    this.#continueTouchGesture(event.clientY, event);
+  };
+
+  readonly #handlePointerEnd = (event: PointerEvent): void => {
+    if (event.pointerId !== this.#pointerIdentifier) return;
+    try {
+      if (this.#element?.hasPointerCapture(event.pointerId)) this.#element.releasePointerCapture(event.pointerId);
+    } catch {
+      // The browser can release capture itself before pointercancel arrives.
+    }
+    this.#resetTouchGesture();
+  };
 
   readonly #handleTouchStart = (event: TouchEvent): void => {
     if (this.#disposed || event.touches.length !== 1) {
@@ -151,9 +190,7 @@ export class XtermSurface implements TerminalSurface {
     const touch = event.touches.item(0);
     if (!touch) return;
     this.#touchIdentifier = touch.identifier;
-    this.#touchLastY = touch.clientY;
-    this.#touchDistanceY = 0;
-    this.#touchRemainderY = 0;
+    this.#beginTouchGesture(touch.clientY);
   };
 
   readonly #handleTouchMove = (event: TouchEvent): void => {
@@ -166,21 +203,7 @@ export class XtermSurface implements TerminalSurface {
       this.#resetTouchGesture();
       return;
     }
-    const deltaY = this.#touchLastY - touch.clientY;
-    this.#touchLastY = touch.clientY;
-    this.#touchDistanceY += Math.abs(deltaY);
-    this.#touchRemainderY += deltaY;
-    if (this.#touchDistanceY < TOUCH_DRAG_THRESHOLD_PX) return;
-
-    event.preventDefault();
-    const lineHeight = this.#terminalLineHeight();
-    const lines = this.#touchRemainderY < 0
-      ? Math.ceil(this.#touchRemainderY / lineHeight)
-      : Math.floor(this.#touchRemainderY / lineHeight);
-    if (lines === 0) return;
-    this.#terminal.scrollLines(lines);
-    this.#touchRemainderY -= lines * lineHeight;
-    this.#publishBufferMetrics();
+    this.#continueTouchGesture(touch.clientY, event);
   };
 
   readonly #handleTouchEnd = (event: TouchEvent): void => {
@@ -189,6 +212,33 @@ export class XtermSurface implements TerminalSurface {
     if (ended) this.#resetTouchGesture();
   };
 
+  #beginTouchGesture(clientY: number): void {
+    this.#touchLastY = clientY;
+    this.#touchDistanceY = 0;
+    this.#touchRemainderY = 0;
+  }
+
+  #continueTouchGesture(clientY: number, event: TouchEvent | PointerEvent): void {
+    const deltaY = this.#touchLastY - clientY;
+    this.#touchLastY = clientY;
+    this.#touchDistanceY += Math.abs(deltaY);
+    this.#touchRemainderY += deltaY;
+    if (this.#touchDistanceY < TOUCH_DRAG_THRESHOLD_PX) return;
+
+    event.preventDefault();
+    // xterm includes a document-level touch gesture recognizer. Do not let it
+    // reinterpret a drag that Swarm has already translated into scrollback.
+    event.stopPropagation();
+    const lineHeight = this.#terminalLineHeight();
+    const lines = this.#touchRemainderY < 0
+      ? Math.ceil(this.#touchRemainderY / lineHeight)
+      : Math.floor(this.#touchRemainderY / lineHeight);
+    if (lines === 0) return;
+    this.#terminal.scrollLines(lines);
+    this.#touchRemainderY -= lines * lineHeight;
+    this.#publishBufferMetrics();
+  }
+
   #terminalLineHeight(): number {
     const height = this.#element?.clientHeight ?? 0;
     if (height > 0 && this.#terminal.rows > 0) return height / this.#terminal.rows;
@@ -196,6 +246,7 @@ export class XtermSurface implements TerminalSurface {
   }
 
   #resetTouchGesture(): void {
+    this.#pointerIdentifier = undefined;
     this.#touchIdentifier = undefined;
     this.#touchLastY = 0;
     this.#touchDistanceY = 0;
