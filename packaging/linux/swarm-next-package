@@ -22,6 +22,9 @@ rollback_host_release=
 restore_rollback=
 restore_auth=
 restore_incoming=
+update_rollback=
+update_auth=
+update_incoming=
 dev_config="$config_root/swarm-next-dev.env"
 dev_reload_started=
 dev_status_path=
@@ -36,6 +39,8 @@ on_exit() {
   trap - EXIT
   [ -z "$restore_auth" ] || rm -f "$restore_auth"
   [ -z "$restore_incoming" ] || rm -f "$restore_incoming"
+  [ -z "$update_auth" ] || rm -f "$update_auth"
+  [ -z "$update_incoming" ] || rm -f "$update_incoming"
   if [ -n "$restore_rollback" ] && [ -f "$restore_rollback" ]; then
     run_systemctl stop swarm-next-api.service >/dev/null 2>&1 || true
     cp "$restore_rollback" "$state_root/swarm-next.sqlite3" >/dev/null 2>&1 || true
@@ -47,10 +52,12 @@ on_exit() {
     activate_link "$rollback_release" >/dev/null 2>&1 || true
     activate_host_link "$rollback_host_release" >/dev/null 2>&1 || true
     install_units "$rollback_release" >/dev/null 2>&1 || true
+    restore_update_database >/dev/null 2>&1 || true
     run_systemctl enable --now swarm-next.target >/dev/null 2>&1 || true
   elif [ -n "$rollback_release" ] && [ -d "$rollback_release" ]; then
     activate_link "$rollback_release" >/dev/null 2>&1 || true
     install_units "$rollback_release" >/dev/null 2>&1 || true
+    restore_update_database >/dev/null 2>&1 || true
     run_systemctl restart swarm-next-api.service >/dev/null 2>&1 || true
   fi
   if [ -n "$drain_release" ]; then
@@ -66,6 +73,50 @@ on_exit() {
   fi
   [ -z "$dev_build_root" ] || clear_managed_directory "$dev_build_root"
   exit "$result"
+}
+
+prune_update_backups() {
+  backup_root="$state_root/backups"
+  [ -d "$backup_root" ] || return 0
+  count=0
+  for candidate in $(find "$backup_root" -maxdepth 1 -type f -name 'pre-update-*.sqlite3' -printf '%T@ %p\n' | sort -nr | sed 's/^[^ ]* //'); do
+    count=$((count + 1))
+    [ "$count" -le 10 ] && continue
+    case "$candidate" in "$backup_root"/pre-update-*.sqlite3) rm -f -- "$candidate";; *) die "backup cleanup path escapes managed state";; esac
+  done
+}
+
+create_update_backup() {
+  current_release=$1
+  database="$state_root/swarm-next.sqlite3"
+  [ -f "$database" ] || return 0
+  mkdir -p "$state_root/backups"
+  chmod 0700 "$state_root/backups"
+  update_incoming="$state_root/.update-backup-$$.sqlite3"
+  update_auth="$state_root/.update-auth-$$"
+  token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm-next.env")
+  umask 077
+  printf 'header = "Authorization: Bearer %s"\n' "$token" > "$update_auth"
+  "$curl_bin" --fail --silent --show-error --config "$update_auth" --output "$update_incoming" "${health_url%/health}/api/v1/backups/database" || die "could not create the pre-update database backup"
+  rm -f "$update_auth"
+  update_auth=
+  "$current_release/bin/swarmctl" verify-database "$update_incoming" >/dev/null || die "pre-update database backup failed verification"
+  update_rollback="$state_root/backups/pre-update-$version.sqlite3"
+  chmod 0600 "$update_incoming"
+  mv -f "$update_incoming" "$update_rollback"
+  update_incoming=
+  prune_update_backups
+}
+
+restore_update_database() {
+  [ -n "$update_rollback" ] || return 0
+  [ -f "$update_rollback" ] || die "pre-update rollback backup is missing"
+  database="$state_root/swarm-next.sqlite3"
+  run_systemctl stop swarm-next-api.service
+  cp "$update_rollback" "$database"
+  chmod 0600 "$database"
+  rm -f "$database-wal" "$database-shm"
+  update_rollback=
 }
 
 clear_managed_directory() {
@@ -347,6 +398,7 @@ install_or_update() {
     host_protocol=$(cat "$host_release/PROTOCOL")
     [ "$host_protocol" = "$protocol" ] || die "protocol change requires an explicit compatibility migration"
   fi
+  [ -z "$old_release" ] || create_update_backup "$old_release"
   previous_release=$(release_from_link "$install_root/previous")
   [ -z "$previous_release" ] || publish_assets "$previous_release"
   [ -z "$old_release" ] || publish_assets "$old_release"
@@ -375,6 +427,7 @@ install_or_update() {
     && run_systemctl enable --now swarm-next-host-reconcile.path swarm-next-host-reconcile.timer \
     && run_systemctl restart swarm-next-api.service && wait_for_health; then
     rollback_release=
+    update_rollback=
     prune_superseded_releases
     printf 'Swarm Next API %s is healthy at %s; terminal host %s was preserved\n' \
       "$version" "$health_url" "$(basename "$host_release")"
@@ -382,6 +435,7 @@ install_or_update() {
   fi
   activate_link "$old_release"
   install_units "$old_release"
+  restore_update_database
   run_systemctl restart swarm-next-api.service
   if wait_for_health; then
     rollback_release=
@@ -467,6 +521,8 @@ migrate_protocol() {
   case "$running" in *[!0-9]*|"") die "terminal host returned invalid status";; esac
   [ "$running" -eq 0 ] || die "protocol migration deferred; $running sessions remain"
 
+  create_update_backup "$old_release"
+
   previous_release=$(release_from_link "$install_root/previous")
   [ -z "$previous_release" ] || publish_assets "$previous_release"
   publish_assets "$old_release"
@@ -483,6 +539,7 @@ migrate_protocol() {
     drain_release=
     rollback_release=
     rollback_host_release=
+    update_rollback=
     prune_superseded_releases
     printf 'Swarm Next protocol migrated to %s and is healthy at %s\n' "$version" "$health_url"
     return

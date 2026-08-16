@@ -55,6 +55,12 @@ the socket there but does not declare `RuntimeDirectory`; otherwise an API-only
 restart can make systemd remove the live host socket from beneath its owner.
 
 An update verifies its checksums and protocol before changing any active link.
+When a Hive database already exists, the package first downloads a consistent
+authenticated online backup from the running API, verifies it with the current
+release, and retains it under the managed state directory. The newest ten
+pre-update backups are kept. A failed API or protocol activation restores that
+exact database snapshot before reviving the previous release, so a successful
+forward migration cannot strand an otherwise valid rollback on a newer schema.
 For an exact protocol match it publishes retained browser assets, switches
 `current`, and restarts only the API. The terminal-host process, socket, PTYs,
 and `host-current` link remain untouched. A failed API health check restores
@@ -99,6 +105,8 @@ explicit future operation.
 - Both SIGINT and SIGTERM cause graceful socket-owning process shutdown.
 - An isolated lifecycle smoke proves install, update, explicit rollback,
   automatic rollback after failed health, and uninstall with data retention.
+- The lifecycle smoke proves compatible and protocol updates create verified
+  pre-update backups and restore them after simulated post-migration failures.
 - The lifecycle smoke performs update and rollback with a simulated active
   session and asserts that neither stops nor restarts the terminal host.
 - Host reconciliation refuses a live session and succeeds after it exits.

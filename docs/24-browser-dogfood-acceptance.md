@@ -1104,3 +1104,10 @@ the independently updated terminal host through the API to worker settings:
   the new release with zero horizontal overflow. API PID advanced to `3768640`;
   terminal-host PID `2966127` remained unchanged, preserving active workers.
   Every proof tab closed immediately after the run.
+- The following package checkpoint removes operator memory from migration
+  safety. Every API or protocol update now creates and verifies a consistent
+  online Hive database backup before switching releases, keeps the newest ten,
+  and restores the exact pre-update database if activation fails after a schema
+  change. The isolated package lifecycle proves both compatible-API and full
+  protocol failure paths restore database contents while leaving active worker
+  handling unchanged.

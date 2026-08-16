@@ -33,11 +33,13 @@ for argument in "$@"; do
   previous=$argument
 done
 if [ -n "$output" ]; then
-  printf 'rollback-database\n' > "$output"
+  cp "$SWARM_STATE_ROOT/swarm-next.sqlite3" "$output"
   exit 0
 fi
 version=$(cat "$SWARM_INSTALL_ROOT/current/VERSION")
 printf '%s\n' "$version" >> "$HOME/curl.log"
+[ "$version" != "3.0.0" ] || printf 'database-v3\n' > "$SWARM_STATE_ROOT/swarm-next.sqlite3"
+[ "$version" != "6.0.0" ] || printf 'database-v6\n' > "$SWARM_STATE_ROOT/swarm-next.sqlite3"
 [ "$version" != "3.0.0" ] && [ "$version" != "6.0.0" ]
 EOF
 chmod +x "$SWARM_SYSTEMCTL_BIN" "$SWARM_CURL_BIN"
@@ -177,6 +179,15 @@ fi
 
 # Compatible API/browser updates preserve an active sidecar and its sessions.
 printf '1\n' > "$HOME/running-sessions"
+printf 'database-v1\n' > "$SWARM_STATE_ROOT/swarm-next.sqlite3"
+mkdir -p "$SWARM_STATE_ROOT/backups"
+old_backup=1
+while [ "$old_backup" -le 11 ]; do
+  old_path="$SWARM_STATE_ROOT/backups/pre-update-old-$old_backup.sqlite3"
+  printf 'old-%s\n' "$old_backup" > "$old_path"
+  touch -d "@$old_backup" "$old_path"
+  old_backup=$((old_backup + 1))
+done
 : > "$HOME/systemctl.log"
 : > "$HOME/swarmctl.log"
 "$package" update "$test_root/bundle-2.0.0"
@@ -195,6 +206,9 @@ fi
 [ -f "$SWARM_INSTALL_ROOT/assets/app-1.0.0.js" ]
 [ -f "$SWARM_INSTALL_ROOT/assets/app-2.0.0.js" ]
 [ "$(find "$SWARM_INSTALL_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ]
+[ "$(cat "$SWARM_STATE_ROOT/backups/pre-update-2.0.0.sqlite3")" = "database-v1" ]
+[ "$(find "$SWARM_STATE_ROOT/backups" -maxdepth 1 -type f -name 'pre-update-*.sqlite3' | wc -l)" -eq 10 ]
+[ ! -e "$SWARM_STATE_ROOT/backups/pre-update-old-1.sqlite3" ]
 
 # API rollback is also sidecar-safe while a worker is active.
 : > "$HOME/systemctl.log"
@@ -236,12 +250,15 @@ fi
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
 
 # A failed API health check restores only the previous API/browser pointer.
+printf 'database-v2\n' > "$SWARM_STATE_ROOT/swarm-next.sqlite3"
 if "$package" update "$test_root/bundle-3.0.0"; then
   echo "unhealthy update unexpectedly succeeded" >&2
   exit 1
 fi
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
+[ "$(cat "$SWARM_STATE_ROOT/swarm-next.sqlite3")" = "database-v2" ]
+[ "$(cat "$SWARM_STATE_ROOT/backups/pre-update-3.0.0.sqlite3")" = "database-v2" ]
 [ "$(tail -n 2 "$HOME/curl.log" | tr '\n' ' ')" = "3.0.0 2.0.0 " ]
 
 # Explicit protocol migration refuses active workers, then atomically switches
@@ -264,12 +281,15 @@ grep -q '^--user stop swarm-next.target$' "$HOME/systemctl.log"
 grep -q '^--user enable --now swarm-next.target$' "$HOME/systemctl.log"
 
 # A failed protocol migration restores both independently pinned pointers.
+printf 'database-v4\n' > "$SWARM_STATE_ROOT/swarm-next.sqlite3"
 if "$package" migrate-protocol "$test_root/bundle-6.0.0"; then
   echo "unhealthy protocol migration unexpectedly succeeded" >&2
   exit 1
 fi
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "4.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "4.0.0" ]
+[ "$(cat "$SWARM_STATE_ROOT/swarm-next.sqlite3")" = "database-v4" ]
+[ "$(cat "$SWARM_STATE_ROOT/backups/pre-update-6.0.0.sqlite3")" = "database-v4" ]
 
 # Database restore verifies input, creates a rollback snapshot, restarts only
 # the API, and preserves the terminal host and repository root.
