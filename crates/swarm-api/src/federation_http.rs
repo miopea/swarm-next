@@ -6,9 +6,10 @@ use serde::{Serialize, de::DeserializeOwned};
 use swarm_domain::{
     ApiaryJoinLinkId, ApiaryJoinLinkPoll, FederationCatalogSnapshot, FederationClaimHandoff,
     FederationClaimHandoffId, FederationClaimId, FederationDepartureReadiness,
-    FederationDepartureReceipt, FederationJoinAcceptance, FederationJoinSubmission,
-    FederationNodeId, FederationSharedClaim, FederationStewardshipSnapshot, FederationTaskCommand,
-    FederationTaskCommandReceipt, FederationTaskPage, HiveConnectionCard,
+    FederationDepartureReceipt, FederationHandoffTarget, FederationJoinAcceptance,
+    FederationJoinSubmission, FederationNodeId, FederationSharedClaim,
+    FederationStewardshipSnapshot, FederationTaskCommand, FederationTaskCommandReceipt,
+    FederationTaskPage, HiveConnectionCard,
 };
 use thiserror::Error;
 
@@ -344,6 +345,23 @@ impl FederationHttpClient {
         .await
     }
 
+    /// Reads the other active Hives that can receive a handoff.
+    ///
+    /// # Errors
+    /// Returns typed transport, authentication, response, or protocol errors.
+    pub async fn handoff_targets(
+        &self,
+        node_credential: &str,
+    ) -> Result<Vec<FederationHandoffTarget>, FederationHttpError> {
+        self.send_json::<(), _>(
+            Method::GET,
+            "api/v1/federation/handoff-targets",
+            Some(node_credential),
+            None,
+        )
+        .await
+    }
+
     async fn transition_claim_handoff(
         &self,
         node_credential: &str,
@@ -655,9 +673,17 @@ mod tests {
     #[tokio::test]
     async fn handoff_transport_preserves_target_identity_and_member_auth() {
         let handoff = sample_handoff();
+        let target = FederationHandoffTarget {
+            node_id: handoff.target_node_id,
+            hive_id: handoff.target_hive_id,
+            hive_name: "Fern Hive".into(),
+            operator_id: handoff.target_operator_id,
+            operator_display_name: "Faye".into(),
+        };
         let offered = handoff.clone();
         let listed = handoff.clone();
         let accepted = handoff.clone();
+        let listed_target = target.clone();
         let app = Router::new()
             .route(
                 "/swarm/api/v1/federation/claims/{claim_id}/handoffs",
@@ -698,6 +724,16 @@ mod tests {
                         }
                     },
                 ),
+            )
+            .route(
+                "/swarm/api/v1/federation/handoff-targets",
+                get(move |headers: axum::http::HeaderMap| {
+                    let target = listed_target.clone();
+                    async move {
+                        assert_eq!(headers[header::AUTHORIZATION], "Bearer source-secret");
+                        Json(vec![target])
+                    }
+                }),
             );
         let address = spawn_server(app).await;
         let client = FederationHttpClient::new(&format!("http://{address}/swarm")).unwrap();
@@ -716,6 +752,10 @@ mod tests {
         assert_eq!(
             client.claim_handoffs("target-secret").await.unwrap(),
             vec![handoff.clone()]
+        );
+        assert_eq!(
+            client.handoff_targets("source-secret").await.unwrap(),
+            vec![target]
         );
         assert_eq!(
             client

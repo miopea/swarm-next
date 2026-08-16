@@ -381,6 +381,20 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Lists public destination identities for a member-initiated handoff.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials or unavailable persistence.
+    pub fn federation_handoff_targets(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<Vec<swarm_domain::FederationHandoffTarget>, ApplicationError> {
+        self.store
+            .list_federation_handoff_targets(node_credential, now)
+            .map_err(Into::into)
+    }
+
     /// Offers a confirmed shared claim to another active Hive.
     ///
     /// # Errors
@@ -409,6 +423,19 @@ impl ApiaryService {
     ) -> Result<Vec<FederationClaimHandoff>, ApplicationError> {
         self.store
             .list_federation_claim_handoffs(node_credential, now)
+            .map_err(Into::into)
+    }
+
+    /// Lists the Keeper's bounded Apiary-wide handoff rollup.
+    ///
+    /// # Errors
+    /// Rejects personal or Member Hives and unavailable persistence.
+    pub fn all_federation_claim_handoffs(
+        &self,
+        now: i64,
+    ) -> Result<Vec<FederationClaimHandoff>, ApplicationError> {
+        self.store
+            .list_all_federation_claim_handoffs(now)
             .map_err(Into::into)
     }
 

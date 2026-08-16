@@ -1395,6 +1395,18 @@ pub struct ApiaryMemberSummary {
     pub is_local: bool,
 }
 
+/// Public destination identity available to an authenticated Apiary member
+/// when she offers confirmed shared work to another Hive. Credentials and
+/// private Hive state are deliberately absent.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationHandoffTarget {
+    pub node_id: FederationNodeId,
+    pub hive_id: HiveId,
+    pub hive_name: String,
+    pub operator_id: OperatorId,
+    pub operator_display_name: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiaryInvitationState {

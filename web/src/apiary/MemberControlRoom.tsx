@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  acceptApiaryClaimHandoff,
+  cancelApiaryClaimHandoff,
   claimApiaryTask,
+  declineApiaryClaimHandoff,
+  fetchApiaryClaimHandoffs,
+  fetchApiaryHandoffTargets,
   fetchApiaryMembers,
   fetchApiarySharedWork,
   fetchApiaryTasks,
@@ -11,11 +16,14 @@ import {
   fetchFederationTaskSyncStatus,
   fetchFederationTaskOutbox,
   fetchFederationTaskOutboxStatus,
+  offerApiaryClaimHandoff,
   transitionApiaryTask,
   type ApiaryMember,
   type ApiarySharedWorkClaim,
   type ApiaryTask,
   type FederationCatalogReadiness,
+  type FederationClaimHandoff,
+  type FederationHandoffTarget,
   type FederationStewardshipSnapshot,
   type FederationSyncHealth,
   type FederationTaskSyncStatus,
@@ -37,9 +45,11 @@ type MemberSnapshot = {
   outbox: FederationTaskOutboxEntry[];
   outboxStatus?: FederationTaskOutboxStatus;
   stewardship?: FederationStewardshipSnapshot | null;
+  handoffs: FederationClaimHandoff[];
+  handoffTargets: FederationHandoffTarget[];
 };
 
-const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [] };
+const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], handoffs: [], handoffTargets: [] };
 
 export default function MemberControlRoom({ identity, operatorToken, onManage }: Props) {
   const context = identity.apiary_context;
@@ -47,7 +57,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
   const [state, setState] = useState<"loading" | "ready" | "partial">("loading");
   const refresh = useCallback(async () => {
     setState("loading");
-    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship] = await Promise.allSettled([
+    const [members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, handoffs, handoffTargets] = await Promise.allSettled([
       fetchApiaryMembers(operatorToken),
       fetchApiarySharedWork(operatorToken),
       fetchApiaryTasks(operatorToken),
@@ -57,6 +67,8 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
       fetchFederationTaskOutbox(operatorToken),
       fetchFederationTaskOutboxStatus(operatorToken),
       fetchMyFederationStewardship(operatorToken),
+      fetchApiaryClaimHandoffs(operatorToken),
+      fetchApiaryHandoffTargets(operatorToken),
     ]);
     setSnapshot((current) => ({
       members: members.status === "fulfilled" ? members.value : current.members,
@@ -68,8 +80,10 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
       outbox: outbox.status === "fulfilled" ? outbox.value : current.outbox,
       outboxStatus: outboxStatus.status === "fulfilled" ? outboxStatus.value : current.outboxStatus,
       stewardship: stewardship.status === "fulfilled" ? stewardship.value : current.stewardship,
+      handoffs: handoffs.status === "fulfilled" && Array.isArray(handoffs.value) ? handoffs.value : current.handoffs,
+      handoffTargets: handoffTargets.status === "fulfilled" && Array.isArray(handoffTargets.value) ? handoffTargets.value : current.handoffTargets,
     }));
-    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship].some((result) => result.status === "rejected") ? "partial" : "ready");
+    setState([members, sharedWork, tasks, sync, taskSync, catalog, outbox, outboxStatus, stewardship, handoffs, handoffTargets].some((result) => result.status === "rejected") ? "partial" : "ready");
   }, [operatorToken]);
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -78,6 +92,11 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
     () => snapshot.sharedWork.filter((claim) => claim.home_hive_id === identity.hive.id),
     [identity.hive.id, snapshot.sharedWork],
   );
+  const activeHandoffs = useMemo(() => snapshot.handoffs.filter((handoff) => handoff.state === "offered" || handoff.state === "accepted"), [snapshot.handoffs]);
+  const incomingHandoffs = useMemo(() => activeHandoffs.filter((handoff) => handoff.target_hive_id === identity.hive.id), [activeHandoffs, identity.hive.id]);
+  const outgoingHandoffs = useMemo(() => activeHandoffs.filter((handoff) => handoff.source_hive_id === identity.hive.id), [activeHandoffs, identity.hive.id]);
+  const activeHandoffByClaim = useMemo(() => new Map(activeHandoffs.map((handoff) => [handoff.claim_id, handoff])), [activeHandoffs]);
+  const hiveName = useMemo(() => new Map(snapshot.members.map((member) => [member.hive_id, member.hive_name])), [snapshot.members]);
   const readyProjects = snapshot.catalog?.projects.filter((project) => project.binding_id && project.access_verified && project.workflow_mapped).length ?? 0;
   const projectCount = snapshot.catalog?.projects.length ?? 0;
   const syncCondition = snapshot.sync?.condition ?? "idle";
@@ -85,6 +104,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
   const stewardship = snapshot.stewardship?.stewardship;
   const managedHives = stewardship?.managed_hive_ids.map((hiveId) => snapshot.members.find((member) => member.hive_id === hiveId)?.hive_name ?? "Registered Hive") ?? [];
   const [actingTask, setActingTask] = useState<string>();
+  const [actingHandoff, setActingHandoff] = useState<string>();
   const queuedTaskIds = useMemo(() => new Set(snapshot.outbox.filter((entry) => entry.state === "queued").map((entry) => entry.command.task_id)), [snapshot.outbox]);
   const act = useCallback(async (task: ApiaryTask, target?: ApiaryTask["state"]) => {
     setActingTask(task.id);
@@ -93,6 +113,15 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
       else await claimApiaryTask(operatorToken, task.id);
       await refresh();
     } finally { setActingTask(undefined); }
+  }, [operatorToken, refresh]);
+  const transitionHandoff = useCallback(async (handoff: FederationClaimHandoff, action: "accept" | "decline" | "cancel") => {
+    setActingHandoff(handoff.id);
+    try {
+      if (action === "accept") await acceptApiaryClaimHandoff(operatorToken, handoff.id);
+      else if (action === "decline") await declineApiaryClaimHandoff(operatorToken, handoff.id);
+      else await cancelApiaryClaimHandoff(operatorToken, handoff.id);
+      await refresh();
+    } finally { setActingHandoff(undefined); }
   }, [operatorToken, refresh]);
 
   if (context?.mode !== "federated" || context.local_role !== "member") return null;
@@ -115,6 +144,19 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
         <div><dt>Pending changes</dt><dd>{snapshot.outboxStatus?.queued_count ?? 0}</dd></div>
       </dl>
       <div className="keeper-dashboard-grid" aria-busy={state === "loading"}>
+        {(incomingHandoffs.length > 0 || outgoingHandoffs.length > 0) ? <article className="keeper-panel member-handoff-panel">
+          <header><div><p className="eyebrow">Work handoffs</p><h4>{incomingHandoffs.length ? "Another Hive needs your help" : "Waiting on another Hive"}</h4></div><small>Jira ownership changes only after acceptance</small></header>
+          <ul className="member-handoff-list" aria-label="Active Jira work handoffs">
+            {incomingHandoffs.map((handoff) => <li key={handoff.id}>
+              <span><strong>{handoff.issue_key}</strong><small>From {hiveName.get(handoff.source_hive_id) ?? "another Hive"}{handoff.reason ? ` · ${handoff.reason}` : ""}</small></span>
+              {handoff.state === "offered" ? <span className="member-handoff-actions"><button className="secondary-button" disabled={actingHandoff === handoff.id} onClick={() => void transitionHandoff(handoff, "decline")}>Decline</button><button className="primary-action" disabled={actingHandoff === handoff.id} onClick={() => void transitionHandoff(handoff, "accept")}>{actingHandoff === handoff.id ? "Accepting…" : "Accept work"}</button></span> : <span className="member-handoff-progress"><strong>Accepted</strong><small>Assigning to you in Jira, then adding it to this Hive</small></span>}
+            </li>)}
+            {outgoingHandoffs.map((handoff) => <li key={handoff.id}>
+              <span><strong>{handoff.issue_key}</strong><small>Offered to {hiveName.get(handoff.target_hive_id) ?? "another Hive"}{handoff.reason ? ` · ${handoff.reason}` : ""}</small></span>
+              {handoff.state === "offered" ? <button className="secondary-button" disabled={actingHandoff === handoff.id} onClick={() => void transitionHandoff(handoff, "cancel")}>Cancel offer</button> : <span className="member-handoff-progress"><strong>Accepted</strong><small>You remain responsible until Jira confirms the transfer</small></span>}
+            </li>)}
+          </ul>
+        </article> : null}
         {stewardship ? <article className="keeper-panel member-stewardship-panel">
           <header><div><p className="eyebrow">My Stewardship</p><h4>Trusted support for {managedHives.length} Hive{managedHives.length === 1 ? "" : "s"}</h4></div><span className="keeper-role-badge steward">Steward</span></header>
           <p className="member-sync-copy">Keeper has synchronized this authority to your Hive. Each remote action remains unavailable until its matching guarded command is enabled.</p>
@@ -162,11 +204,25 @@ export default function MemberControlRoom({ identity, operatorToken, onManage }:
         </article>
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Shared work</p><h4>Owned by this Hive</h4></div><small>Reservations and confirmed homes only</small></header>
-          {localClaims.length ? <ul className="keeper-work-list" aria-label="Member shared work ownership">{localClaims.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_name}</small></span><span><strong>{claim.state === "confirmed" ? "Owned" : "Reserved"}</strong><small>{claim.home_operator_display_name}</small></span></li>)}</ul> : <p className="keeper-empty">This Hive does not currently own shared Apiary work.</p>}
+          {localClaims.length ? <ul className="keeper-work-list member-claim-list" aria-label="Member shared work ownership">{localClaims.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_name}</small></span><span><strong>{claim.state === "confirmed" ? "Owned" : "Reserved"}</strong><small>{claim.home_operator_display_name}</small></span>{claim.state === "confirmed" ? <ClaimHandoffControl claim={claim} existing={activeHandoffByClaim.get(claim.id)} targets={snapshot.handoffTargets} busy={Boolean(actingHandoff)} onOffer={async (target, reason) => { setActingHandoff(claim.id); try { await offerApiaryClaimHandoff(operatorToken, claim.id, target, reason); await refresh(); } finally { setActingHandoff(undefined); } }} /> : null}</li>)}</ul> : <p className="keeper-empty">This Hive does not currently own shared Apiary work.</p>}
         </article>
       </div>
     </section>
   );
+}
+
+function ClaimHandoffControl({ claim, existing, targets, busy, onOffer }: { claim: ApiarySharedWorkClaim; existing?: FederationClaimHandoff; targets: FederationHandoffTarget[]; busy: boolean; onOffer: (target: string, reason: string) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [target, setTarget] = useState("");
+  const [reason, setReason] = useState("");
+  if (existing) return <span className="member-claim-handoff-state">Handoff {existing.state}</span>;
+  if (!targets.length) return null;
+  if (!open) return <button className="secondary-button" type="button" onClick={() => setOpen(true)}>Offer to another Hive</button>;
+  return <form className="member-claim-handoff-form" onSubmit={(event) => { event.preventDefault(); if (target) void onOffer(target, reason); }}>
+    <label><span>Receiving Hive</span><select required value={target} onChange={(event) => setTarget(event.target.value)}><option value="">Choose a Hive</option>{targets.map((candidate) => <option key={candidate.node_id} value={candidate.node_id}>{candidate.hive_name} · {candidate.operator_display_name}</option>)}</select></label>
+    <label><span>Why hand this off? <small>optional</small></span><input value={reason} maxLength={500} placeholder={`Context for ${claim.issue_key}`} onChange={(event) => setReason(event.target.value)} /></label>
+    <span className="member-handoff-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => setOpen(false)}>Keep here</button><button className="primary-action" type="submit" disabled={busy || !target}>{busy ? "Offering…" : "Send offer"}</button></span>
+  </form>;
 }
 
 function formatTimestamp(timestamp: number | null | undefined) {

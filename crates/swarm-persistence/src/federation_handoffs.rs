@@ -1,7 +1,7 @@
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     FederationClaimHandoff, FederationClaimHandoffId, FederationClaimHandoffState,
-    FederationClaimId, FederationClaimState, FederationNodeId,
+    FederationClaimId, FederationClaimState, FederationHandoffTarget, FederationNodeId,
 };
 
 use crate::federation::{
@@ -14,6 +14,96 @@ const MAX_HANDOFF_REASON_BYTES: usize = 500;
 const MAX_VISIBLE_HANDOFFS: i64 = 100;
 
 impl TaskStore {
+    /// Lists the Keeper's bounded Apiary-wide handoff rollup. This is
+    /// coordination state only; issue content remains in Jira.
+    ///
+    /// # Errors
+    /// Rejects personal or Member Hives, invalid time, corrupt state, or
+    /// unavailable persistence.
+    pub fn list_all_federation_claim_handoffs(
+        &self,
+        now: i64,
+    ) -> Result<Vec<FederationClaimHandoff>, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationHandoff);
+        }
+        let identity = self.local_hive_identity()?;
+        let swarm_domain::LocalApiaryContext::Federated { apiary, local_role } =
+            self.local_apiary_context()?
+        else {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        };
+        if local_role != swarm_domain::LocalApiaryRole::Keeper
+            || identity.operator.id != apiary.keeper_operator_id
+        {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT id, apiary_id, claim_id, project_id, issue_id, issue_key,
+                    source_node_id, source_hive_id, source_operator_id,
+                    target_node_id, target_hive_id, target_operator_id,
+                    state, reason, offered_at, accepted_at, completed_at, closed_at
+             FROM apiary_federation_claim_handoffs
+             WHERE apiary_id = ?1
+             ORDER BY CASE state WHEN 'offered' THEN 0 WHEN 'accepted' THEN 1 ELSE 2 END,
+                      offered_at DESC
+             LIMIT ?2",
+        )?;
+        statement
+            .query_map(
+                params![apiary.id.to_string(), MAX_VISIBLE_HANDOFFS],
+                handoff_from_row,
+            )?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Lists the other active Hives that can receive a confirmed claim from
+    /// the authenticated member. This returns public identity only.
+    ///
+    /// # Errors
+    /// Rejects invalid credentials, corrupt membership state, or unavailable
+    /// persistence.
+    pub fn list_federation_handoff_targets(
+        &self,
+        node_credential: &str,
+        now: i64,
+    ) -> Result<Vec<FederationHandoffTarget>, TaskStoreError> {
+        if now < 0 {
+            return Err(TaskStoreError::InvalidFederationHandoff);
+        }
+        let identity = self.local_hive_identity()?;
+        let credential = decode_node_credential(node_credential)?;
+        let connection = self.connection()?;
+        let member = authenticate_member_credential(&connection, &identity, &credential, now)?;
+        let mut statement = connection.prepare(
+            "SELECT m.member_node_id, m.member_hive_id, h.name,
+                    m.member_operator_id, o.display_name
+             FROM apiary_federation_memberships m
+             JOIN hives h ON h.id = m.member_hive_id
+             JOIN operators o ON o.id = m.member_operator_id
+             WHERE m.apiary_id = ?1 AND m.state = 'active'
+               AND m.credential_expires_at > ?2 AND m.member_node_id <> ?3
+             ORDER BY lower(h.name), h.id",
+        )?;
+        statement
+            .query_map(
+                params![member.apiary.to_string(), now, member.node.to_string()],
+                |row| {
+                    Ok(FederationHandoffTarget {
+                        node_id: parse_domain_id(&row.get::<_, String>(0)?)?,
+                        hive_id: parse_domain_id(&row.get::<_, String>(1)?)?,
+                        hive_name: row.get(2)?,
+                        operator_id: parse_domain_id(&row.get::<_, String>(3)?)?,
+                        operator_display_name: row.get(4)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     /// Offers a confirmed claim to another active member. The source remains
     /// authoritative until the target confirms its Jira assignment succeeded.
     ///

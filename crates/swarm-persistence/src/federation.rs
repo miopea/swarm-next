@@ -5431,6 +5431,12 @@ mod tests {
         let second_member = TaskStore::in_memory().unwrap();
         let first = register_remote_member(&keeper, &first_member, now);
         let second = register_remote_member(&keeper, &second_member, now + 10);
+        let targets = keeper
+            .list_federation_handoff_targets(&first.node_credential, now + 20)
+            .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].node_id, second.receipt.payload.member_node_id);
+        assert_eq!(targets[0].hive_id, second.receipt.payload.member_hive_id);
         keeper
             .promote_apiary_jira_project(
                 apiary.id,

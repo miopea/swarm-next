@@ -276,6 +276,33 @@ export type ApiarySharedWorkClaim = {
   home_hive_name: string;
   home_operator_display_name: string;
 };
+export type FederationHandoffTarget = {
+  node_id: string;
+  hive_id: string;
+  hive_name: string;
+  operator_id: string;
+  operator_display_name: string;
+};
+export type FederationClaimHandoff = {
+  id: string;
+  apiary_id: string;
+  claim_id: string;
+  project_id: string;
+  issue_id: string;
+  issue_key: string;
+  source_node_id: string;
+  source_hive_id: string;
+  source_operator_id: string;
+  target_node_id: string;
+  target_hive_id: string;
+  target_operator_id: string;
+  state: "offered" | "accepted" | "completed" | "declined" | "cancelled";
+  reason: string | null;
+  offered_at: number;
+  accepted_at: number | null;
+  completed_at: number | null;
+  closed_at: number | null;
+};
 export type FederationSyncCondition =
   | "idle"
   | "current"
@@ -717,6 +744,45 @@ export async function fetchApiarySharedWork(
 ): Promise<ApiarySharedWorkClaim[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/shared-work");
   return response.json() as Promise<ApiarySharedWorkClaim[]>;
+}
+
+export async function fetchApiaryHandoffTargets(operatorToken: string): Promise<FederationHandoffTarget[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/handoff-targets");
+  return response.json() as Promise<FederationHandoffTarget[]>;
+}
+
+export async function fetchApiaryClaimHandoffs(operatorToken: string): Promise<FederationClaimHandoff[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/handoffs");
+  return response.json() as Promise<FederationClaimHandoff[]>;
+}
+
+export async function offerApiaryClaimHandoff(
+  operatorToken: string,
+  claimId: string,
+  targetNodeId: string,
+  reason: string,
+): Promise<FederationClaimHandoff> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/claims/${encodeURIComponent(claimId)}/handoffs`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ target_node_id: targetNodeId, reason: reason.trim() || null }),
+  });
+  return response.json() as Promise<FederationClaimHandoff>;
+}
+
+export async function acceptApiaryClaimHandoff(operatorToken: string, handoffId: string): Promise<FederationClaimHandoff> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/handoffs/${encodeURIComponent(handoffId)}/acceptance`, { method: "POST" });
+  return response.json() as Promise<FederationClaimHandoff>;
+}
+
+export async function declineApiaryClaimHandoff(operatorToken: string, handoffId: string): Promise<FederationClaimHandoff> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/handoffs/${encodeURIComponent(handoffId)}/decline`, { method: "POST" });
+  return response.json() as Promise<FederationClaimHandoff>;
+}
+
+export async function cancelApiaryClaimHandoff(operatorToken: string, handoffId: string): Promise<FederationClaimHandoff> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/apiary/handoffs/${encodeURIComponent(handoffId)}`, { method: "DELETE" });
+  return response.json() as Promise<FederationClaimHandoff>;
 }
 
 export async function fetchFederationSyncHealth(

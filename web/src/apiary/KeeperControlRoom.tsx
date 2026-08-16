@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
-  createApiaryTask, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryTasks,
-  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type HiveIdentity, type Stewardship, type TaskPriority,
+  createApiaryTask, fetchApiaryClaimHandoffs, fetchApiaryJiraProjects, fetchApiaryMembers, fetchApiarySharedWork, fetchApiaryStewardships, fetchApiaryTasks,
+  type ApiaryJiraProject, type ApiaryMember, type ApiarySharedWorkClaim, type ApiaryTask, type FederationClaimHandoff, type HiveIdentity, type Stewardship, type TaskPriority,
 } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 
 type Props = { identity: HiveIdentity; operatorToken: string; onManage: () => void };
-type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[] };
-const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [] };
+type KeeperSnapshot = { members: ApiaryMember[]; projects: ApiaryJiraProject[]; sharedWork: ApiarySharedWorkClaim[]; tasks: ApiaryTask[]; stewardships: Stewardship[]; handoffs: FederationClaimHandoff[] };
+const emptySnapshot: KeeperSnapshot = { members: [], projects: [], sharedWork: [], tasks: [], stewardships: [], handoffs: [] };
 
 export default function KeeperControlRoom({ identity, operatorToken, onManage }: Props) {
   const context = identity.apiary_context;
@@ -23,11 +23,12 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
   const refresh = useCallback(async () => {
     setState("loading");
     try {
-      const [members, projects, sharedWork, tasks, stewardships] = await Promise.all([
+      const [members, projects, sharedWork, tasks, stewardships, handoffs] = await Promise.all([
         fetchApiaryMembers(operatorToken), fetchApiaryJiraProjects(operatorToken),
         fetchApiarySharedWork(operatorToken), fetchApiaryTasks(operatorToken), fetchApiaryStewardships(operatorToken),
+        fetchApiaryClaimHandoffs(operatorToken),
       ]);
-      setSnapshot({ members, projects, sharedWork, tasks, stewardships });
+      setSnapshot({ members, projects, sharedWork, tasks, stewardships, handoffs: Array.isArray(handoffs) ? handoffs : [] });
       setState("ready");
     } catch { setState("error"); }
   }, [operatorToken]);
@@ -56,6 +57,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
   const members = useMemo(() => [...snapshot.members].sort((left, right) => Number(right.is_local) - Number(left.is_local) || left.hive_name.localeCompare(right.hive_name)), [snapshot.members]);
   const memberByOperator = useMemo(() => new Map(members.map((member) => [member.operator_id, member])), [members]);
   const memberByHive = useMemo(() => new Map(members.map((member) => [member.hive_id, member])), [members]);
+  const activeHandoffs = useMemo(() => snapshot.handoffs.filter((handoff) => handoff.state === "offered" || handoff.state === "accepted"), [snapshot.handoffs]);
   if (context?.mode !== "federated" || context.local_role !== "keeper") return null;
 
   return (
@@ -69,7 +71,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
       {state === "error" ? <div className="keeper-load-state" role="alert"><span>Apiary status could not be refreshed.</span><button type="button" onClick={() => void refresh()}>Try again</button></div> : null}
       <dl className="keeper-summary" aria-label="Apiary summary">
         <div><dt>Registered Hives</dt><dd>{members.length}</dd></div><div><dt>Promoted Jira projects</dt><dd>{snapshot.projects.length}</dd></div>
-        <div><dt>Active Jira claims</dt><dd>{snapshot.sharedWork.length}</dd></div><div><dt>Swarm tasks</dt><dd>{snapshot.tasks.length}</dd></div><div><dt>Steward scopes</dt><dd>{snapshot.stewardships.length}</dd></div>
+        <div><dt>Active Jira claims</dt><dd>{snapshot.sharedWork.length}</dd></div><div><dt>Work handoffs</dt><dd>{activeHandoffs.length}</dd></div><div><dt>Swarm tasks</dt><dd>{snapshot.tasks.length}</dd></div><div><dt>Steward scopes</dt><dd>{snapshot.stewardships.length}</dd></div>
       </dl>
       <div className="keeper-dashboard-grid" aria-busy={state === "loading"}>
         <article className="keeper-panel">
@@ -88,6 +90,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
           {snapshot.tasks.length ? <ul className="keeper-work-list" aria-label="Keeper Swarm tasks">{snapshot.tasks.map((task) => <li key={task.id}><span><strong>{task.title}</strong><small>Swarm · {task.state}</small></span><span><strong>{task.home_hive_id ? "Assigned" : "Unassigned"}</strong><small>Revision {task.revision}</small></span></li>)}</ul> : <p className="keeper-empty">No Swarm-generated Apiary tasks are waiting.</p>}
           <header><div><p className="eyebrow">Jira ownership</p><h4>Current claims</h4></div><small>Issue data stays in Jira</small></header>
           {snapshot.sharedWork.length ? <ul className="keeper-work-list" aria-label="Keeper shared work ownership">{snapshot.sharedWork.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_key} · {claim.state === "confirmed" ? "Owned" : "Reserved"}</small></span><span><strong>{claim.home_hive_name}</strong><small>{claim.home_operator_display_name}</small></span></li>)}</ul> : <p className="keeper-empty">No shared Jira work is currently claimed by an Apiary Hive.</p>}
+          {activeHandoffs.length ? <><header className="keeper-handoff-heading"><div><p className="eyebrow">Transfers</p><h4>Active Hive handoffs</h4></div><small>Source remains responsible until Jira confirms the new assignee</small></header><ul className="keeper-work-list" aria-label="Keeper active Jira handoffs">{activeHandoffs.map((handoff) => <li key={handoff.id}><span><strong>{handoff.issue_key}</strong><small>{handoff.state === "offered" ? "Awaiting acceptance" : "Changing Jira owner"}</small></span><span><strong>{memberByHive.get(handoff.source_hive_id)?.hive_name ?? "Source Hive"} → {memberByHive.get(handoff.target_hive_id)?.hive_name ?? "Receiving Hive"}</strong><small>{handoff.reason ?? "No handoff note"}</small></span></li>)}</ul></> : null}
         </article>
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Shared catalog</p><h4>Promoted Jira projects</h4></div><small>Available to every joined Hive</small></header>

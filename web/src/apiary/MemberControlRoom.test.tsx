@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import MemberControlRoom from "./MemberControlRoom";
@@ -16,6 +16,9 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
       { id: "claim-1", apiary_id: "apiary-1", project_id: "10001", issue_id: "20001", issue_key: "WWD-101", home_node_id: "node-2", home_hive_id: "hive-2", home_operator_id: "operator-2", state: "confirmed", reserved_at: 1, reservation_expires_at: 2, confirmed_at: 2, released_at: null, project_key: "WWD", project_name: "Website Development", home_hive_name: "Clover Hive", home_operator_display_name: "Cora" },
       { id: "claim-2", apiary_id: "apiary-1", project_id: "10001", issue_id: "20002", issue_key: "WWD-102", home_node_id: "node-3", home_hive_id: "hive-3", home_operator_id: "operator-3", state: "confirmed", reserved_at: 1, reservation_expires_at: 2, confirmed_at: 2, released_at: null, project_key: "WWD", project_name: "Website Development", home_hive_name: "Fern Hive", home_operator_display_name: "Faye" },
     ]));
+    if (url.endsWith("/handoffs")) return Promise.resolve(ok([]));
+    if (url.endsWith("/handoff-targets")) return Promise.resolve(ok([{ node_id: "node-3", hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye" }]));
+    if (url.includes("/claims/claim-1/handoffs")) return Promise.resolve(ok({ id: "handoff-1", claim_id: "claim-1", state: "offered" }));
     if (url.endsWith("/tasks")) return Promise.resolve(ok([{ id: "task-1", apiary_id: "apiary-1", source: "swarm", title: "Prepare shared brief", description: "", priority: "high", state: "ready", home_node_id: null, home_hive_id: null, revision: 1, created_at: 1, updated_at: 1 }]));
     if (url.endsWith("/sync-health")) return Promise.resolve(ok({ condition: "current", last_attempt_at: 100, last_success_at: 100, consecutive_failures: 0, next_attempt_at: null }));
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 4, task_count: 1, last_applied_at: 100 }));
@@ -49,6 +52,10 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
   expect(document.body).not.toHaveTextContent("WWD-102");
   expect(document.body).not.toHaveTextContent("node-2");
   expect(document.body).not.toHaveTextContent("secret");
+  fireEvent.click(screen.getByRole("button", { name: "Offer to another Hive" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Receiving Hive" }), { target: { value: "node-3" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send offer" }));
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/claims/claim-1/handoffs"), expect.objectContaining({ method: "POST" })));
   fireEvent.click(screen.getByRole("button", { name: "Manage membership" }));
   expect(onManage).toHaveBeenCalledOnce();
 });
@@ -58,6 +65,8 @@ test("keeps local work usable when part of the Member rollup is unavailable", as
     const url = String(input);
     if (url.endsWith("/members")) return Promise.resolve(ok([]));
     if (url.endsWith("/shared-work")) return Promise.resolve(ok([]));
+    if (url.endsWith("/handoffs")) return Promise.resolve(ok([]));
+    if (url.endsWith("/handoff-targets")) return Promise.resolve(ok([]));
     if (url.endsWith("/tasks")) return Promise.resolve(ok([]));
     if (url.endsWith("/sync-health")) return Promise.reject(new Error("offline"));
     if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 0, task_count: 0, last_applied_at: null }));

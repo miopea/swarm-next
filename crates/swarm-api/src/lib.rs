@@ -62,8 +62,9 @@ use swarm_application::{
 use swarm_domain::{
     Apiary, ApiaryInvitation, ApiaryInvitationBundle, ApiaryInvitationId, ApiaryJoinLink,
     ApiaryJoinLinkId, ApiaryJoinReadiness, ApiaryKeeperLink, ApiaryTask, ApiaryTaskId,
-    DecisionRequestId, FederationCatalogSnapshot, FederationClaimHandoffId, FederationClaimId,
-    FederationDepartureReadiness, FederationDepartureReceipt, FederationJoinSubmission,
+    DecisionRequestId, FederationCatalogSnapshot, FederationClaimHandoff, FederationClaimHandoffId,
+    FederationClaimId, FederationDepartureReadiness, FederationDepartureReceipt,
+    FederationHandoffTarget, FederationJoinSubmission, FederationMemberConnection,
     FederationNodeId, FederationSharedClaim, FederationStewardshipSnapshot,
     FederationSyncCondition, FederationTaskCommand, FederationTaskOutboxEntry,
     FederationTaskOutboxStatus, FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard,
@@ -1706,6 +1707,27 @@ fn api_router(state: AppState) -> Router {
             delete(revoke_apiary_stewardship),
         )
         .route("/api/v1/apiary/shared-work", get(apiary_shared_work))
+        .route(
+            "/api/v1/apiary/handoff-targets",
+            get(apiary_handoff_targets),
+        )
+        .route("/api/v1/apiary/handoffs", get(apiary_claim_handoffs))
+        .route(
+            "/api/v1/apiary/claims/{claim_id}/handoffs",
+            post(apiary_offer_claim_handoff),
+        )
+        .route(
+            "/api/v1/apiary/handoffs/{handoff_id}",
+            delete(apiary_cancel_claim_handoff),
+        )
+        .route(
+            "/api/v1/apiary/handoffs/{handoff_id}/acceptance",
+            post(apiary_accept_claim_handoff),
+        )
+        .route(
+            "/api/v1/apiary/handoffs/{handoff_id}/decline",
+            post(apiary_decline_claim_handoff),
+        )
         .route("/api/v1/apiary/sync-health", get(apiary_sync_health))
         .route(
             "/api/v1/apiary/connection-card",
@@ -1803,6 +1825,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/federation/handoffs",
             get(list_federation_claim_handoffs),
+        )
+        .route(
+            "/api/v1/federation/handoff-targets",
+            get(list_federation_handoff_targets),
         )
         .route(
             "/api/v1/federation/handoffs/{handoff_id}",
@@ -2314,6 +2340,159 @@ async fn apiary_shared_work(
         })
         .collect::<Vec<_>>();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(rollup)).into_response())
+}
+
+fn member_federation_transport(
+    state: &AppState,
+) -> Result<
+    (
+        FederationMemberConnection,
+        federation_http::FederationHttpClient,
+    ),
+    ApiError,
+> {
+    let connection = apiary_service(state)?
+        .federation_member_connection()
+        .map_err(application_error)?;
+    let client = federation_http::FederationHttpClient::new(&connection.keeper_endpoint)
+        .map_err(federation_http_error)?;
+    Ok((connection, client))
+}
+
+async fn apiary_handoff_targets(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let (connection, client) = member_federation_transport(&state)?;
+    let targets: Vec<FederationHandoffTarget> = client
+        .handoff_targets(&connection.node_credential)
+        .await
+        .map_err(federation_http_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(targets)).into_response())
+}
+
+async fn apiary_claim_handoffs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let handoffs: Vec<FederationClaimHandoff> = match task_store(&state)?
+        .local_apiary_context()
+        .map_err(|error| task_store_error(&error))?
+    {
+        LocalApiaryContext::Federated {
+            local_role: LocalApiaryRole::Keeper,
+            ..
+        } => apiary_service(&state)?
+            .all_federation_claim_handoffs(unix_timestamp())
+            .map_err(application_error)?,
+        LocalApiaryContext::Federated {
+            local_role: LocalApiaryRole::Member,
+            ..
+        } => {
+            let (connection, client) = member_federation_transport(&state)?;
+            client
+                .claim_handoffs(&connection.node_credential)
+                .await
+                .map_err(federation_http_error)?
+        }
+        LocalApiaryContext::Personal => {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "apiary_required",
+                "join or create an Apiary before reading handoffs",
+            ));
+        }
+    };
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(handoffs)).into_response())
+}
+
+async fn apiary_offer_claim_handoff(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(claim_id): Path<String>,
+    Json(request): Json<OfferFederationClaimHandoffRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let (connection, client) = member_federation_transport(&state)?;
+    let handoff = client
+        .offer_claim_handoff(
+            &connection.node_credential,
+            parse_federation_claim_id(&claim_id)?,
+            request.target_node_id,
+            request.reason.as_deref(),
+        )
+        .await
+        .map_err(federation_http_error)?;
+    Ok((
+        StatusCode::CREATED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(handoff),
+    )
+        .into_response())
+}
+
+async fn apiary_accept_claim_handoff(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(handoff_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let (connection, client) = member_federation_transport(&state)?;
+    let handoff = client
+        .accept_claim_handoff(
+            &connection.node_credential,
+            parse_federation_handoff_id(&handoff_id)?,
+        )
+        .await
+        .map_err(federation_http_error)?;
+    task_store(&state)?
+        .journal_accepted_federation_handoff(&handoff, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    let reconcile_state = Arc::clone(&state);
+    tokio::spawn(async move { reconcile_state.reconcile_federation().await });
+    Ok((
+        StatusCode::ACCEPTED,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(handoff),
+    )
+        .into_response())
+}
+
+async fn apiary_decline_claim_handoff(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(handoff_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let (connection, client) = member_federation_transport(&state)?;
+    let handoff = client
+        .decline_claim_handoff(
+            &connection.node_credential,
+            parse_federation_handoff_id(&handoff_id)?,
+        )
+        .await
+        .map_err(federation_http_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(handoff)).into_response())
+}
+
+async fn apiary_cancel_claim_handoff(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(handoff_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let (connection, client) = member_federation_transport(&state)?;
+    let handoff = client
+        .cancel_claim_handoff(
+            &connection.node_credential,
+            parse_federation_handoff_id(&handoff_id)?,
+        )
+        .await
+        .map_err(federation_http_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(handoff)).into_response())
 }
 
 async fn apiary_sync_health(
@@ -2982,6 +3161,17 @@ async fn list_federation_claim_handoffs(
         .federation_claim_handoffs(credential, unix_timestamp())
         .map_err(federation_claim_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(handoffs)).into_response())
+}
+
+async fn list_federation_handoff_targets(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let credential = federation_node_credential(&headers)?;
+    let targets = apiary_service(&state)?
+        .federation_handoff_targets(credential, unix_timestamp())
+        .map_err(federation_claim_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(targets)).into_response())
 }
 
 macro_rules! handoff_transition_handler {
@@ -8670,6 +8860,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(join.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn apiary_handoff_commands_never_expose_member_credentials_or_bypass_operator_authentication()
+    {
+        let claim_id = FederationClaimId::new();
+        let handoff_id = FederationClaimHandoffId::new();
+        let target_node_id = FederationNodeId::new();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(TaskStore::in_memory().unwrap()),
+        );
+        let requests = [
+            Request::builder()
+                .uri("/api/v1/apiary/handoff-targets")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .uri("/api/v1/apiary/handoffs")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apiary/claims/{claim_id}/handoffs"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"target_node_id":"{target_node_id}"}}"#
+                )))
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/apiary/handoffs/{handoff_id}/acceptance"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/apiary/handoffs/{handoff_id}/decline"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/apiary/handoffs/{handoff_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        ];
+
+        for request in requests {
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
     }
 
     #[tokio::test]

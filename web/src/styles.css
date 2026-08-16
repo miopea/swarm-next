@@ -245,6 +245,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-panel > header > small { max-width: 190px; color: var(--quiet); font-size: .67rem; line-height: 1.4; text-align: right; }
 .keeper-task-header > div { min-width: 0; }
 .keeper-task-header > div > small { display: block; margin-top: 4px; color: var(--quiet); font-size: .67rem; line-height: 1.4; }
+.keeper-handoff-heading { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line); }
 .keeper-task-form { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(110px, .35fr); gap: 11px; margin: 0 0 14px; padding: 13px; border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: var(--accent-soft); }
 .keeper-task-form label { display: grid; align-content: start; gap: 5px; min-width: 0; color: var(--muted); font-size: .7rem; }
 .keeper-task-form label > span { font-weight: 650; }
@@ -269,6 +270,21 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .member-task-owner { align-content: center; justify-items: end; }
 .member-task-owner .secondary-button { margin-top: 4px; padding: 6px 10px; font-size: .76rem; }
 .member-command-attention { margin: 0 0 8px; padding: 9px 11px; border: 1px solid var(--honey-line); border-radius: var(--radius-sm); background: var(--honey-wash); color: var(--ink); }
+.member-handoff-panel { grid-column: 1 / -1; border-color: var(--honey-line); background: linear-gradient(135deg, var(--panel), var(--honey-wash)); }
+.member-handoff-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.member-handoff-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 12px 0; border-top: 1px solid var(--line); }
+.member-handoff-list li > span:first-child, .member-handoff-progress { display: grid; min-width: 0; gap: 3px; }
+.member-handoff-list small, .member-handoff-progress small { color: var(--muted); font-size: .7rem; line-height: 1.4; }
+.member-handoff-progress { max-width: 310px; text-align: right; }
+.member-handoff-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.member-claim-list li { grid-template-columns: minmax(120px, .7fr) minmax(100px, .4fr) auto; align-items: center; }
+.member-claim-list li > span:last-of-type { text-align: left; }
+.member-claim-handoff-state { color: var(--muted); font-size: .72rem; text-transform: capitalize; }
+.member-claim-handoff-form { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(190px, .7fr) minmax(220px, 1fr) auto; align-items: end; gap: 10px; padding: 11px; border: 1px solid var(--honey-line); border-radius: var(--radius-sm); background: var(--honey-wash); }
+.member-claim-handoff-form label { display: grid; min-width: 0; gap: 5px; color: var(--muted); font-size: .68rem; }
+.member-claim-handoff-form label > span { font-weight: 650; }
+.member-claim-handoff-form label small { color: var(--quiet); font-weight: 400; }
+.member-claim-handoff-form select, .member-claim-handoff-form input { width: 100%; min-width: 0; }
 .keeper-project-list li { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
 .keeper-project-list strong { color: var(--accent-strong); }
 .keeper-steward-list li > span:last-child { color: var(--muted); font-size: .74rem; line-height: 1.4; text-align: right; }
@@ -957,6 +973,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 }
 @media (max-width: 900px) {
   .keeper-dashboard-grid { grid-template-columns: minmax(0, 1fr); }
+  .member-claim-handoff-form { grid-template-columns: minmax(0, 1fr); }
+  .member-claim-handoff-form .member-handoff-actions { justify-content: stretch; }
+  .member-claim-handoff-form .member-handoff-actions button { flex: 1; }
   .task-grid { grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 12px; }
   .task-card { display: flex; min-height: 190px; flex-direction: column; padding: 17px; border-top: 3px solid color-mix(in srgb, var(--state, var(--line-strong)) 70%, var(--line)); border-left-width: 1px; }
   .task-metadata-panel { width: 100%; align-self: auto; padding: 10px; border: 0; border-radius: var(--radius-sm); background: var(--surface-soft); }
@@ -1028,6 +1047,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .operator-presence-chip { width: 34px; justify-content: center; padding: 0; }
   .operator-presence-chip > span:last-child { display: none; }
   .keeper-control-room { padding: 12px; }
+  .member-handoff-list li, .member-claim-list li { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+  .member-handoff-actions { justify-content: stretch; }
+  .member-handoff-actions button { flex: 1; }
+  .member-handoff-progress { max-width: none; text-align: left; }
   .keeper-hero { grid-template-columns: max-content minmax(0, 1fr); padding: 14px; gap: 11px; }
   .keeper-hero-mark { width: 48px; height: 48px; }
   .keeper-hero-mark .bee-mascot { width: 53px; height: 53px; }
