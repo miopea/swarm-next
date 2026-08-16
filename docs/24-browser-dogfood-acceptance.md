@@ -973,3 +973,19 @@ the independently updated terminal host through the API to worker settings:
   cache. Live read-only MCP discovery against the preserved Queen credential
   returned list, create, claim, and transition. API PID advanced to `3544183`;
   terminal-host PID remained `2966127`, preserving the active Queen session.
+- Releases `0.1.0-3ed84cd821f0` and `0.1.0-6ff646bfa62b` add durable worker
+  management for daily dogfooding. Sleeping workers can change their default
+  coding provider, keep an operator-reviewed Queen-routing description, and be
+  archived without deleting repositories or retained history. Removal refuses
+  Queen, running workers, and workers with open assignments. A private local
+  draft reads only bounded top-level README and project metadata files; it
+  never calls a provider and remains unsaved until the operator reviews and
+  saves it. The Queen roster tool includes the reviewed description, with an
+  explicit MCP contract test preventing that routing context from being
+  dropped. The full implementation gate passed 347 Rust tests,
+  warnings-denied Clippy, 220 frontend tests, strict TypeScript, and the
+  production build. Live proof exercised the draft on the sleeping disposable
+  Codex worker and cancelled without changing the profile. Responsive image
+  capture was not recorded because the in-app Chromium target closed during
+  capture; all proof tabs were closed immediately. API PID advanced to
+  `3583500`; terminal-host PID remained `2966127`, preserving Queen.
