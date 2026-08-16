@@ -18,6 +18,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<TaskPriority>("normal");
+  const [targetHiveId, setTargetHiveId] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string>();
   const refresh = useCallback(async () => {
@@ -41,10 +42,11 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
     setCreating(true);
     setCreateError(undefined);
     try {
-      await createApiaryTask(operatorToken, { title: normalizedTitle, description: description.trim(), priority });
+      await createApiaryTask(operatorToken, { title: normalizedTitle, description: description.trim(), priority, home_hive_id: targetHiveId || undefined });
       setTitle("");
       setDescription("");
       setPriority("normal");
+      setTargetHiveId("");
       setComposeOpen(false);
       await refresh();
     } catch {
@@ -52,7 +54,7 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
     } finally {
       setCreating(false);
     }
-  }, [description, operatorToken, priority, refresh, title]);
+  }, [description, operatorToken, priority, refresh, targetHiveId, title]);
 
   const members = useMemo(() => [...snapshot.members].sort((left, right) => Number(right.is_local) - Number(left.is_local) || left.hive_name.localeCompare(right.hive_name)), [snapshot.members]);
   const memberByOperator = useMemo(() => new Map(members.map((member) => [member.operator_id, member])), [members]);
@@ -84,10 +86,11 @@ export default function KeeperControlRoom({ identity, operatorToken, onManage }:
             <label className="keeper-task-title"><span>Outcome</span><input value={title} maxLength={240} required autoFocus placeholder="What should be true when this is done?" onChange={(event) => setTitle(event.target.value)} /></label>
             <label className="keeper-task-description"><span>Context <small>optional</small></span><textarea value={description} maxLength={10000} rows={3} placeholder="Why this matters, constraints, or what done looks like" onChange={(event) => setDescription(event.target.value)} /></label>
             <label><span>Priority</span><select value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
-            <div className="keeper-task-submit"><p>Created as unassigned shared work. A Member Hive can claim it without exposing private workers or repositories.</p><button type="submit" disabled={creating || !title.trim()}>{creating ? "Creating…" : "Create for Apiary"}</button></div>
+            <label><span>Route to Hive <small>optional</small></span><select value={targetHiveId} onChange={(event) => setTargetHiveId(event.target.value)}><option value="">Unassigned · any Member may claim</option>{members.filter((member) => member.role === "member").map((member) => <option key={member.hive_id} value={member.hive_id}>{member.hive_name} · {member.operator_display_name}</option>)}</select></label>
+            <div className="keeper-task-submit"><p>{targetHiveId ? "The selected Hive owns this work. Her Queen chooses the private worker and repository." : "Created as unassigned shared work. A Member Hive can claim it without exposing private workers or repositories."}</p><button type="submit" disabled={creating || !title.trim()}>{creating ? "Creating…" : targetHiveId ? "Route to Hive" : "Create for Apiary"}</button></div>
             {createError ? <p className="form-error" role="alert">{createError}</p> : null}
           </form> : null}
-          {snapshot.tasks.length ? <ul className="keeper-work-list" aria-label="Keeper Swarm tasks">{snapshot.tasks.map((task) => <li key={task.id}><span><strong>{task.title}</strong><small>Swarm · {task.state}</small></span><span><strong>{task.home_hive_id ? "Assigned" : "Unassigned"}</strong><small>Revision {task.revision}</small></span></li>)}</ul> : <p className="keeper-empty">No Swarm-generated Apiary tasks are waiting.</p>}
+          {snapshot.tasks.length ? <ul className="keeper-work-list" aria-label="Keeper Swarm tasks">{snapshot.tasks.map((task) => <li key={task.id}><span><strong>{task.title}</strong><small>Swarm · {task.state}</small></span><span><strong>{task.home_hive_id ? memberByHive.get(task.home_hive_id)?.hive_name ?? "Assigned Hive" : "Unassigned"}</strong><small>{task.home_hive_id ? "Routed by Keeper" : "Available to claim"} · revision {task.revision}</small></span></li>)}</ul> : <p className="keeper-empty">No Swarm-generated Apiary tasks are waiting.</p>}
           <header><div><p className="eyebrow">Jira ownership</p><h4>Current claims</h4></div><small>Issue data stays in Jira</small></header>
           {snapshot.sharedWork.length ? <ul className="keeper-work-list" aria-label="Keeper shared work ownership">{snapshot.sharedWork.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_key} · {claim.state === "confirmed" ? "Owned" : "Reserved"}</small></span><span><strong>{claim.home_hive_name}</strong><small>{claim.home_operator_display_name}</small></span></li>)}</ul> : <p className="keeper-empty">No shared Jira work is currently claimed by an Apiary Hive.</p>}
           {activeHandoffs.length ? <><header className="keeper-handoff-heading"><div><p className="eyebrow">Transfers</p><h4>Active Hive handoffs</h4></div><small>Source remains responsible until Jira confirms the new assignee</small></header><ul className="keeper-work-list" aria-label="Keeper active Jira handoffs">{activeHandoffs.map((handoff) => <li key={handoff.id}><span><strong>{handoff.issue_key}</strong><small>{handoff.state === "offered" ? "Awaiting acceptance" : "Changing Jira owner"}</small></span><span><strong>{memberByHive.get(handoff.source_hive_id)?.hive_name ?? "Source Hive"} → {memberByHive.get(handoff.target_hive_id)?.hive_name ?? "Receiving Hive"}</strong><small>{handoff.reason ?? "No handoff note"}</small></span></li>)}</ul></> : null}

@@ -1414,6 +1414,8 @@ struct CreateApiaryTaskRequest {
     description: String,
     #[serde(default)]
     priority: TaskPriority,
+    #[serde(default)]
+    home_hive_id: Option<HiveId>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3280,10 +3282,11 @@ async fn create_apiary_task(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let task = apiary_service(&state)?
-        .create_apiary_task(
+        .create_apiary_task_for_hive(
             &request.title,
             &request.description,
             request.priority,
+            request.home_hive_id,
             unix_timestamp(),
         )
         .map_err(application_error)?;
@@ -8863,8 +8866,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apiary_handoff_commands_never_expose_member_credentials_or_bypass_operator_authentication()
-    {
+    async fn apiary_handoff_commands_require_auth_and_hide_credentials() {
         let claim_id = FederationClaimId::new();
         let handoff_id = FederationClaimHandoffId::new();
         let target_node_id = FederationNodeId::new();
@@ -8892,16 +8894,12 @@ mod tests {
                 .unwrap(),
             Request::builder()
                 .method("POST")
-                .uri(format!(
-                    "/api/v1/apiary/handoffs/{handoff_id}/acceptance"
-                ))
+                .uri(format!("/api/v1/apiary/handoffs/{handoff_id}/acceptance"))
                 .body(Body::empty())
                 .unwrap(),
             Request::builder()
                 .method("POST")
-                .uri(format!(
-                    "/api/v1/apiary/handoffs/{handoff_id}/decline"
-                ))
+                .uri(format!("/api/v1/apiary/handoffs/{handoff_id}/decline"))
                 .body(Body::empty())
                 .unwrap(),
             Request::builder()

@@ -3,11 +3,11 @@ use std::str::FromStr;
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     ApiaryId, ApiaryTask, ApiaryTaskEvent, ApiaryTaskId, ApiaryTaskSource,
-    FEDERATION_PROTOCOL_VERSION, FEDERATION_TASK_FEED_SCHEMA_VERSION, FederationTaskCommand,
-    FederationTaskCommandId, FederationTaskCommandKind, FederationTaskCommandOutcome,
-    FederationTaskCommandReceipt, FederationTaskOutboxEntry, FederationTaskOutboxState,
-    FederationTaskOutboxStatus, FederationTaskPage, FederationTaskSyncStatus, LocalApiaryContext,
-    LocalApiaryRole, TaskPriority, TaskState,
+    FEDERATION_PROTOCOL_VERSION, FEDERATION_TASK_FEED_SCHEMA_VERSION, FederationNodeId,
+    FederationTaskCommand, FederationTaskCommandId, FederationTaskCommandKind,
+    FederationTaskCommandOutcome, FederationTaskCommandReceipt, FederationTaskOutboxEntry,
+    FederationTaskOutboxState, FederationTaskOutboxStatus, FederationTaskPage,
+    FederationTaskSyncStatus, HiveId, LocalApiaryContext, LocalApiaryRole, TaskPriority, TaskState,
 };
 
 use crate::{
@@ -35,6 +35,24 @@ impl TaskStore {
         priority: TaskPriority,
         now: i64,
     ) -> Result<ApiaryTask, TaskStoreError> {
+        self.create_apiary_task_for_hive(title, description, priority, None, now)
+    }
+
+    /// Creates one Keeper-canonical Swarm task, optionally routing its durable
+    /// home to one active Member Hive. The Keeper never selects a private
+    /// worker, repository, terminal, or provider session.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown or departed target Hives, invalid content,
+    /// capacity exhaustion, and persistence failures.
+    pub fn create_apiary_task_for_hive(
+        &self,
+        title: &str,
+        description: &str,
+        priority: TaskPriority,
+        home_hive_id: Option<HiveId>,
+        now: i64,
+    ) -> Result<ApiaryTask, TaskStoreError> {
         let title = title.trim();
         if title.is_empty()
             || title.len() > MAX_TASK_TITLE_BYTES
@@ -53,6 +71,22 @@ impl TaskStore {
         {
             return Err(TaskStoreError::ApiaryKeeperRequired);
         }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let home_node_id = home_hive_id
+            .map(|hive_id| {
+                let raw_node_id = transaction
+                    .query_row(
+                        "SELECT member_node_id FROM apiary_federation_memberships
+                         WHERE apiary_id = ?1 AND member_hive_id = ?2 AND state = 'active'",
+                        params![apiary.id.to_string(), hive_id.to_string()],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .ok_or(TaskStoreError::InvalidFederationTask)?;
+                parse_domain_id::<FederationNodeId>(&raw_node_id).map_err(TaskStoreError::from)
+            })
+            .transpose()?;
         let task = ApiaryTask {
             id: ApiaryTaskId::new(),
             apiary_id: apiary.id,
@@ -61,14 +95,12 @@ impl TaskStore {
             description: description.to_owned(),
             priority,
             state: TaskState::Ready,
-            home_node_id: None,
-            home_hive_id: None,
+            home_node_id,
+            home_hive_id,
             revision: 1,
             created_at: now,
             updated_at: now,
         };
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
         let count = transaction.query_row(
             "SELECT COUNT(*) FROM apiary_tasks WHERE apiary_id = ?1",
             [apiary.id.to_string()],
@@ -81,7 +113,7 @@ impl TaskStore {
             "INSERT INTO apiary_tasks
                 (id, apiary_id, source, title, description, priority, state,
                  home_node_id, home_hive_id, revision, created_at, updated_at)
-             VALUES (?1, ?2, 'swarm', ?3, ?4, ?5, ?6, NULL, NULL, 1, ?7, ?7)",
+             VALUES (?1, ?2, 'swarm', ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9)",
             params![
                 task.id.to_string(),
                 task.apiary_id.to_string(),
@@ -89,6 +121,8 @@ impl TaskStore {
                 task.description,
                 task.priority.to_string(),
                 task.state.to_string(),
+                task.home_node_id.map(|id| id.to_string()),
+                task.home_hive_id.map(|id| id.to_string()),
                 now,
             ],
         )?;
@@ -1230,6 +1264,51 @@ mod tests {
             member.federation_task_outbox_status().unwrap().queued_count,
             0
         );
+    }
+
+    #[test]
+    fn keeper_routes_shared_work_to_one_active_member_hive_without_private_worker_data() {
+        let now = 150_000;
+        let (keeper, member, acceptance) = joined_member(now);
+        let target_hive = acceptance.receipt.payload.member_hive_id;
+        let target_node = acceptance.receipt.payload.member_node_id;
+        let task = keeper
+            .create_apiary_task_for_hive(
+                "Prepare the Member release",
+                "The receiving Queen decides which private worker should handle it.",
+                TaskPriority::High,
+                Some(target_hive),
+                now + 10,
+            )
+            .expect("routed task");
+        assert_eq!(task.home_hive_id, Some(target_hive));
+        assert_eq!(task.home_node_id, Some(target_node));
+
+        let page = keeper
+            .federation_task_page(&acceptance.node_credential, 0, now + 11)
+            .expect("page");
+        member
+            .apply_federation_task_page(&page, now + 11)
+            .expect("projection");
+        let projected = member.list_local_apiary_tasks().expect("tasks");
+        assert_eq!(projected[0].home_hive_id, Some(target_hive));
+        assert_eq!(projected[0].title, "Prepare the Member release");
+        assert!(
+            member
+                .queue_federation_task_transition(projected[0].id, TaskState::Active, now + 12)
+                .is_ok()
+        );
+
+        assert!(matches!(
+            keeper.create_apiary_task_for_hive(
+                "Unknown destination",
+                "",
+                TaskPriority::Normal,
+                Some(HiveId::new()),
+                now + 13,
+            ),
+            Err(TaskStoreError::InvalidFederationTask)
+        ));
     }
 
     #[test]

@@ -31,8 +31,8 @@ use swarm_application::{
     AgentPrincipal, ApiaryService, ApplicationError, DecisionRequestInput, TaskService,
 };
 use swarm_domain::{
-    ApiaryTaskId, DecisionRequestKind, DecisionUrgency, JiraProjectBindingId, TaskId, TaskPriority,
-    TaskState, WorkerId, WorkerRole,
+    ApiaryTaskId, DecisionRequestKind, DecisionUrgency, HiveId, JiraProjectBindingId, TaskId,
+    TaskPriority, TaskState, WorkerId, WorkerRole,
 };
 use swarm_persistence::{
     JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, TaskStore, TaskStoreError,
@@ -204,6 +204,7 @@ impl ServerHandler for AgentMcp {
                 list_workers_tool(),
                 create_task_tool(),
                 assign_task_tool(),
+                list_apiary_hives_tool(),
                 list_apiary_tasks_tool(),
                 create_apiary_task_tool(),
                 claim_apiary_task_tool(),
@@ -265,14 +266,24 @@ impl ServerHandler for AgentMcp {
                     Err(ApplicationError::NotAuthorized)
                 }
             }
+            "swarm_list_apiary_hives" => {
+                if self.principal.role == WorkerRole::Queen {
+                    ApiaryService::new(self.tasks.store().clone())
+                        .members()
+                        .and_then(|hives| structured(json!({ "hives": hives })))
+                } else {
+                    Err(ApplicationError::NotAuthorized)
+                }
+            }
             "swarm_create_apiary_task" => {
                 if self.principal.role == WorkerRole::Queen {
                     parse::<CreateApiaryTaskInput>(arguments).and_then(|input| {
                         ApiaryService::new(self.tasks.store().clone())
-                            .create_apiary_task(
+                            .create_apiary_task_for_hive(
                                 &input.title,
                                 &input.description,
                                 input.priority,
+                                input.home_hive_id,
                                 crate::unix_timestamp(),
                             )
                             .and_then(structured)
@@ -619,6 +630,8 @@ struct CreateApiaryTaskInput {
     description: String,
     #[serde(default)]
     priority: TaskPriority,
+    #[serde(default)]
+    home_hive_id: Option<HiveId>,
 }
 
 #[derive(Deserialize)]
@@ -780,16 +793,26 @@ fn list_apiary_tasks_tool() -> Tool {
     )
 }
 
+fn list_apiary_hives_tool() -> Tool {
+    tool(
+        "swarm_list_apiary_hives",
+        "Queen only: list public Apiary Hive and operator identities before routing shared work. Never exposes remote workers, repositories, terminals, credentials, or provider sessions.",
+        &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        true,
+    )
+}
+
 fn create_apiary_task_tool() -> Tool {
     tool(
         "swarm_create_apiary_task",
-        "Keeper Queen only: create unassigned Swarm-generated Apiary work for Member Hives to claim. Never target a remote Hive's private worker or repository.",
+        "Keeper Queen only: create Swarm-generated Apiary work, either unassigned or routed to one active Member Hive. Route only to a Hive returned by swarm_list_apiary_hives; never target a remote private worker or repository.",
         &json!({
             "type": "object",
             "properties": {
                 "title": { "type": "string", "minLength": 1, "maxLength": 240 },
                 "description": { "type": "string", "maxLength": 10000, "default": "" },
-                "priority": { "type": "string", "enum": ["low", "normal", "high", "urgent"], "default": "normal" }
+                "priority": { "type": "string", "enum": ["low", "normal", "high", "urgent"], "default": "normal" },
+                "home_hive_id": { "type": "string", "format": "uuid", "description": "Optional active Member Hive ID. Omit to leave the task available for any Member Hive to claim." }
             },
             "required": ["title"],
             "additionalProperties": false
@@ -1136,6 +1159,7 @@ mod tests {
         assert!(queen_names.contains(&"swarm_create_task"));
         assert!(queen_names.contains(&"swarm_assign_task"));
         assert!(queen_names.contains(&"swarm_list_apiary_tasks"));
+        assert!(queen_names.contains(&"swarm_list_apiary_hives"));
         assert!(queen_names.contains(&"swarm_create_apiary_task"));
         assert!(queen_names.contains(&"swarm_claim_apiary_task"));
         assert!(queen_names.contains(&"swarm_transition_apiary_task"));
@@ -1149,6 +1173,7 @@ mod tests {
         assert!(!worker_names.contains(&"swarm_sync_jira_project"));
         assert!(!worker_names.contains(&"swarm_refresh_jira_project"));
         assert!(!worker_names.contains(&"swarm_list_apiary_tasks"));
+        assert!(!worker_names.contains(&"swarm_list_apiary_hives"));
         assert!(!worker_names.contains(&"swarm_create_apiary_task"));
         assert!(!worker_names.contains(&"swarm_claim_apiary_task"));
         assert!(!worker_names.contains(&"swarm_transition_apiary_task"));
@@ -1275,6 +1300,46 @@ mod tests {
             .unwrap();
         let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
         let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let hives = response_json(
+            handle(
+                bridge.clone(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_apiary_hives", "arguments": {} }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(hives["result"]["isError"], false);
+        assert_eq!(
+            hives["result"]["structuredContent"]["hives"][0]["role"],
+            "keeper"
+        );
+        assert!(!hives.to_string().contains(&worker_id.to_string()));
+
+        let invalid_route = response_json(
+            handle(
+                bridge.clone(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_create_apiary_task",
+                        "arguments": {
+                            "title": "Do not leak a private worker boundary",
+                            "home_hive_id": worker_id
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(invalid_route["result"]["isError"], true);
+        assert!(store.list_visible_apiary_tasks().unwrap().is_empty());
+
         let arguments = json!({
             "name": "swarm_create_apiary_task",
             "arguments": {

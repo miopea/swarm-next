@@ -799,7 +799,7 @@ export async function fetchApiaryTasks(operatorToken: string): Promise<ApiaryTas
 
 export async function createApiaryTask(
   operatorToken: string,
-  input: { title: string; description: string; priority: TaskPriority },
+  input: { title: string; description: string; priority: TaskPriority; home_hive_id?: string | null },
 ): Promise<ApiaryTask> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/tasks", {
     method: "POST",

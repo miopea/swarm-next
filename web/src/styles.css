@@ -246,7 +246,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-task-header > div { min-width: 0; }
 .keeper-task-header > div > small { display: block; margin-top: 4px; color: var(--quiet); font-size: .67rem; line-height: 1.4; }
 .keeper-handoff-heading { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line); }
-.keeper-task-form { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(110px, .35fr); gap: 11px; margin: 0 0 14px; padding: 13px; border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: var(--accent-soft); }
+.keeper-task-form { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(110px, .35fr) minmax(190px, .7fr); gap: 11px; margin: 0 0 14px; padding: 13px; border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: var(--accent-soft); }
 .keeper-task-form label { display: grid; align-content: start; gap: 5px; min-width: 0; color: var(--muted); font-size: .7rem; }
 .keeper-task-form label > span { font-weight: 650; }
 .keeper-task-form label small { color: var(--quiet); font-weight: 400; }

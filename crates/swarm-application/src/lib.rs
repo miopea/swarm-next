@@ -205,6 +205,25 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Creates one Keeper-canonical Swarm task and optionally routes it to an
+    /// active Member Hive without selecting any of that Hive's private workers.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, unknown target Hives, invalid content, capacity
+    /// exhaustion, and persistence failures.
+    pub fn create_apiary_task_for_hive(
+        &self,
+        title: &str,
+        description: &str,
+        priority: TaskPriority,
+        home_hive_id: Option<swarm_domain::HiveId>,
+        now: i64,
+    ) -> Result<ApiaryTask, ApplicationError> {
+        self.store
+            .create_apiary_task_for_hive(title, description, priority, home_hive_id, now)
+            .map_err(Into::into)
+    }
+
     /// Applies one authenticated idempotent Member command on Keeper.
     ///
     /// # Errors

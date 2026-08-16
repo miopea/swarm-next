@@ -33,11 +33,13 @@ async function main() {
     ...(browserExecutable ? { executablePath: browserExecutable } : {}),
   });
   const results = [];
+  const keeperRoutingResults = [];
   const memberResults = [];
   const personalHiveResults = [];
   try {
     if (!memberOnly) for (const surface of surfaces) results.push(await checkSurface(browser, surface));
     for (const surface of surfaces) {
+      keeperRoutingResults.push(await checkKeeperRoutingSurface(browser, surface));
       memberResults.push(await checkMemberSurface(browser, surface));
       personalHiveResults.push(await checkPersonalHiveSurface(browser, surface));
     }
@@ -45,12 +47,13 @@ async function main() {
     await browser.close();
   }
   const browserRestartPersistence = memberOnly ? [] : await verifyBrowserRestartPersistence();
-  const report = { baseUrl, results, memberResults, personalHiveResults, browserRestartPersistence };
+  const report = { baseUrl, results, keeperRoutingResults, memberResults, personalHiveResults, browserRestartPersistence };
   const output = compactOutput ? {
     baseUrl,
     surfaces: results.map(({ surface, status, surfaces, accessibleControlCount, apiaryGuideSteps }) => ({
       surface, status, surfaces, accessibleControlCount, apiaryGuideSteps,
     })),
+    keeperRoutingSurfaces: keeperRoutingResults,
     memberSurfaces: memberResults,
     personalHiveSurfaces: personalHiveResults,
     browserRestartPersistence,
@@ -58,6 +61,64 @@ async function main() {
   const serialized = `${JSON.stringify(output, null, 2)}\n`;
   if (resultPath) await fs.writeFile(resultPath, serialized, "utf8");
   process.stdout.write(serialized);
+}
+
+async function checkKeeperRoutingSurface(browser, surface) {
+  const context = await browser.newContext({
+    viewport: surface.viewport,
+    isMobile: surface.mobile,
+    hasTouch: surface.mobile,
+    ...(surface.mobile ? { userAgent: "Mozilla/5.0 (Linux; Android 15; Swarm Dogfood) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36" } : {}),
+  });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+  page.on("pageerror", (error) => errors.push(error.message));
+  const fulfill = (route, payload) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+  await page.route("**/api/v1/hive", (route) => fulfill(route, {
+    operator: { id: "visual-keeper-operator", display_name: "Bea" },
+    hive: { id: "visual-keeper-hive", name: "Meadow Hive", operator_id: "visual-keeper-operator", apiary_id: "visual-apiary" },
+    apiary_context: { mode: "federated", apiary: { id: "visual-apiary", name: "Grand Garden", keeper_operator_id: "visual-keeper-operator", shared_work_backend: "jira" }, local_role: "keeper" },
+  }));
+  await page.route("**/api/v1/apiary/members", (route) => fulfill(route, [
+    { hive_id: "visual-keeper-hive", hive_name: "Meadow Hive", operator_id: "visual-keeper-operator", operator_display_name: "Bea", role: "keeper", is_local: true },
+    { hive_id: "visual-member-hive", hive_name: "Clover Hive", operator_id: "visual-member-operator", operator_display_name: "Cora", role: "member", is_local: false },
+  ]));
+  await page.route("**/api/v1/apiary/jira-projects", (route) => fulfill(route, []));
+  await page.route("**/api/v1/apiary/shared-work", (route) => fulfill(route, []));
+  await page.route("**/api/v1/apiary/tasks", (route) => fulfill(route, []));
+  await page.route("**/api/v1/apiary/stewardships", (route) => fulfill(route, []));
+  await page.route("**/api/v1/apiary/handoffs", (route) => fulfill(route, []));
+
+  try {
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    const tokenInput = page.getByLabel("Operator token");
+    if (await tokenInput.isVisible().catch(() => false)) {
+      await tokenInput.fill(operatorToken);
+      await page.getByRole("button", { name: "Unlock Swarm" }).click();
+    }
+    await page.getByRole("button", { name: /Workers/ }).waitFor();
+    errors.length = 0;
+    await page.getByRole("button", { name: "Apiary", exact: true }).click();
+    await page.getByRole("heading", { name: "Grand Garden" }).waitFor();
+    await page.getByRole("button", { name: "Create shared task" }).click();
+    const form = page.getByRole("form", { name: "Create shared Apiary task" });
+    await form.waitFor();
+    await form.getByLabel(/Route to Hive/).selectOption("visual-member-hive");
+    await form.getByText("The selected Hive owns this work. Her Queen chooses the private worker and repository.").waitFor();
+    if (await form.getByLabel(/worker/i).count()) throw new Error(`${surface.name}/keeper-routing: private worker selector rendered`);
+    const dimensions = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
+    if (dimensions.scrollWidth > dimensions.clientWidth + 1) {
+      throw new Error(`${surface.name}/keeper-routing: horizontal overflow ${dimensions.scrollWidth}px > ${dimensions.clientWidth}px`);
+    }
+    const accessibleControlCount = await verifyAccessibleControls(page, `${surface.name}/keeper-routing`);
+    await form.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-keeper-routing.png`), fullPage: true });
+    if (errors.length) throw new Error(`${surface.name}/keeper-routing: browser errors: ${errors.join(" | ")}`);
+    return { surface: surface.name, ...dimensions, accessibleControlCount, destination: "Clover Hive", status: "passed" };
+  } finally {
+    await context.close();
+  }
 }
 
 async function checkPersonalHiveSurface(browser, surface) {
