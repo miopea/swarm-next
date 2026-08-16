@@ -12,6 +12,7 @@ const outputRoot = process.env.SWARM_BROWSER_EVIDENCE || path.resolve("dist", "b
 const compactOutput = process.env.SWARM_BROWSER_COMPACT === "1";
 const resultPath = process.env.SWARM_BROWSER_RESULT;
 const memberOnly = process.env.SWARM_BROWSER_MEMBER_ONLY === "1";
+const skipIntake = process.env.SWARM_BROWSER_SKIP_INTAKE === "1";
 
 if (!operatorToken) {
   throw new Error("SWARM_OPERATOR_TOKEN is required");
@@ -292,6 +293,7 @@ async function checkSurface(browser, surface) {
         if (surface.mobile) {
           await page.getByRole("heading", { name: "Active work" }).waitFor();
         }
+        if (!skipIntake) {
         await page.getByRole("button", { name: "Choose Jira work" }).click();
         const jiraSource = page.getByRole("region", { name: "Choose unassigned work from Jira" });
         await jiraSource.waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
@@ -389,6 +391,7 @@ async function checkSurface(browser, surface) {
           }
           await page.getByRole("button", { name: "Close email" }).click();
         }
+        }
         const completedTasks = page.locator("details.completed-tasks");
         if (await completedTasks.count()) {
           await completedTasks.locator("summary").click();
@@ -485,6 +488,39 @@ async function checkSurface(browser, surface) {
     }
     await page.screenshot({ path: path.join(outputRoot, `${surface.name}-settings-scout.png`), fullPage: true });
     await scoutEditor.getByRole("button", { name: "Cancel" }).click();
+    const sleepingWorkerRow = configuredWorkers.filter({ hasText: "Sleeping" }).filter({ hasNotText: "Scout" }).first();
+    await sleepingWorkerRow.waitFor();
+    const sleepingWorkerName = (await sleepingWorkerRow.locator("strong").first().innerText()).trim();
+    await sleepingWorkerRow.getByRole("button", { name: "Edit" }).click();
+    const sleepingWorkerEditor = page.getByRole("form", { name: `Edit ${sleepingWorkerName}` });
+    await sleepingWorkerEditor.waitFor();
+    if (!await sleepingWorkerEditor.getByText("Repository", { exact: true }).isVisible()
+      || !await sleepingWorkerEditor.getByLabel("Queen routing description").isVisible()
+      || !await sleepingWorkerEditor.getByLabel("Default coding provider").isVisible()
+      || !await sleepingWorkerEditor.getByRole("button", { name: /Refresh local draft|Draft locally/ }).isVisible()
+      || !await sleepingWorkerEditor.getByRole("button", { name: "Improve with Claude" }).isVisible()
+      || !await sleepingWorkerEditor.getByRole("button", { name: "Remove worker" }).isVisible()) {
+      throw new Error(`${surface.name}: sleeping-worker maintenance controls are incomplete`);
+    }
+    await sleepingWorkerEditor.getByRole("button", { name: "Remove worker" }).click();
+    if (!await sleepingWorkerEditor.getByText(`Remove ${sleepingWorkerName} from this Hive?`, { exact: true }).isVisible()
+      || !await sleepingWorkerEditor.getByRole("button", { name: "Confirm removal" }).isVisible()
+      || !await sleepingWorkerEditor.getByRole("button", { name: "Keep worker" }).isVisible()) {
+      throw new Error(`${surface.name}: worker removal is not guarded by a deliberate confirmation`);
+    }
+    const sleepingWorkerEditorOverflow = await sleepingWorkerEditor.evaluate((editor) => ({
+      scrollWidth: editor.scrollWidth,
+      clientWidth: editor.clientWidth,
+      overflowingControls: [...editor.querySelectorAll("input, textarea, select, button")]
+        .filter((control) => control.scrollWidth > control.clientWidth + 1).length,
+    }));
+    if (sleepingWorkerEditorOverflow.scrollWidth > sleepingWorkerEditorOverflow.clientWidth + 1 || sleepingWorkerEditorOverflow.overflowingControls > 0) {
+      throw new Error(`${surface.name}: sleeping-worker editor overflows its layout`);
+    }
+    await sleepingWorkerEditor.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-settings-worker-maintenance.png`), fullPage: true });
+    await sleepingWorkerEditor.getByRole("button", { name: "Keep worker" }).click();
+    await sleepingWorkerEditor.getByRole("button", { name: "Cancel" }).click();
     if (await page.getByRole("button", { name: /Settings 3/ }).count()) {
       throw new Error(`${surface.name}: Settings exposes a false pending-item count`);
     }
