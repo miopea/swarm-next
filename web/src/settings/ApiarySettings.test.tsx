@@ -59,6 +59,31 @@ test("restores a pending Keeper capability after the browser is reopened", async
   expect(pending).toHaveTextContent("Waiting for Keeper approval");
 });
 
+test("explains and dismisses a Keeper-cancelled invitation", async () => {
+  let removed = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/keeper-links/link-1" && init?.method === "DELETE") {
+      removed = true;
+      return new Response(null, { status: 204 });
+    }
+    if (url === "/api/v1/apiary/keeper-links") return ok(removed ? [] : [keeperLink("revoked")]);
+    if (url === "/api/v1/apiary/join-invitations") return ok([]);
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  const pending = await screen.findByRole("list", { name: "Pending Keeper invitations" });
+  expect(pending).toHaveTextContent("Cancelled by Keeper");
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  expect(screen.getByRole("group", { name: "Confirm saved invitation removal" })).toHaveTextContent("Remove linkKeep waiting");
+  fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent("cancelled or expired invitation was removed");
+  expect(screen.queryByRole("list", { name: "Pending Keeper invitations" })).not.toBeInTheDocument();
+});
+
 test("renames the local Hive without changing its durable identity", async () => {
   const onHiveIdentityChange = vi.fn();
   const renamed = personalIdentity();
@@ -585,7 +610,7 @@ function memberIdentity(): HiveIdentity {
   };
 }
 
-function keeperLink(state: "contacting" | "awaiting_approval") {
+function keeperLink(state: "contacting" | "awaiting_approval" | "revoked") {
   return {
     link_id: "link-1",
     keeper_endpoint: "https://keeper.example.test",

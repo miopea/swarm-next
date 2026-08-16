@@ -865,6 +865,17 @@ export async function pollApiaryKeeperLink(
   return response.json() as Promise<ApiaryKeeperLinkPoll>;
 }
 
+export async function removeApiaryKeeperLink(
+  operatorToken: string,
+  linkId: string,
+): Promise<void> {
+  await authenticatedFetch(
+    operatorToken,
+    `/api/v1/apiary/keeper-links/${encodeURIComponent(linkId)}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function pinApiaryHiveCandidate(
   operatorToken: string,
   card: HiveConnectionCard,

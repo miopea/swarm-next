@@ -77,7 +77,15 @@ async function checkPersonalHiveSurface(browser, surface) {
     hive: { id: "visual-personal-hive", name: "Clover Hive", operator_id: "visual-personal-operator", apiary_id: null },
     apiary_context: { mode: "personal" },
   }));
-  await page.route("**/api/v1/apiary/keeper-links", (route) => fulfill(route, []));
+  await page.route("**/api/v1/apiary/keeper-links", (route) => fulfill(route, [{
+    link_id: "visual-cancelled-link",
+    keeper_endpoint: "https://keeper.example.test",
+    apiary_name: "Wildflower Garden",
+    state: "revoked",
+    created_at: 1_786_780_000,
+    updated_at: 1_786_780_100,
+    expires_at: 1_786_866_400,
+  }]));
   await page.route("**/api/v1/apiary/join-invitations", (route) => fulfill(route, []));
 
   try {
@@ -98,12 +106,20 @@ async function checkPersonalHiveSurface(browser, surface) {
     }
     await page.getByLabel("Keeper invitation link").waitFor();
     await page.getByRole("button", { name: "Connect to Keeper" }).waitFor();
+    const cancelledLink = page.getByRole("list", { name: "Pending Keeper invitations" });
+    await cancelledLink.getByText("Cancelled by Keeper", { exact: true }).waitFor();
+    await cancelledLink.getByRole("button", { name: "Dismiss" }).click();
+    const removalGuard = cancelledLink.getByRole("group", { name: "Confirm saved invitation removal" });
+    await removalGuard.waitFor();
+    await removalGuard.getByRole("button", { name: "Remove link" }).waitFor();
+    await removalGuard.getByRole("button", { name: "Keep waiting" }).waitFor();
     const dimensions = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
     if (dimensions.scrollWidth > dimensions.clientWidth + 1) {
       throw new Error(`${surface.name}/personal-apiary: horizontal overflow ${dimensions.scrollWidth}px > ${dimensions.clientWidth}px`);
     }
     const accessibleControlCount = await verifyAccessibleControls(page, `${surface.name}/personal-apiary`);
-    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-personal-join.png`), fullPage: true });
+    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-personal-cancelled.png`), fullPage: true });
+    await removalGuard.getByRole("button", { name: "Keep waiting" }).click();
     if (errors.length) throw new Error(`${surface.name}/personal-apiary: browser errors: ${errors.join(" | ")}`);
     return { surface: surface.name, ...dimensions, accessibleControlCount, status: "passed" };
   } finally {

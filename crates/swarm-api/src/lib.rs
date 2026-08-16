@@ -1711,6 +1711,10 @@ fn api_router(state: AppState) -> Router {
             get(apiary_keeper_links).post(save_apiary_keeper_link),
         )
         .route(
+            "/api/v1/apiary/keeper-links/{link_id}",
+            delete(remove_apiary_keeper_link),
+        )
+        .route(
             "/api/v1/apiary/keeper-links/{link_id}/poll",
             post(poll_apiary_keeper_link),
         )
@@ -2435,6 +2439,22 @@ async fn poll_apiary_keeper_link(
     )
     .await?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(view)).into_response())
+}
+
+async fn remove_apiary_keeper_link(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(link_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    apiary_service(&state)?
+        .remove_keeper_link(parse_apiary_join_link_id(&link_id)?)
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(header::CACHE_CONTROL, "no-store")],
+    )
+        .into_response())
 }
 
 async fn poll_saved_apiary_keeper_link(
@@ -6430,6 +6450,42 @@ mod tests {
 
         keeper_server.abort();
         let _ = keeper_server.await;
+    }
+
+    #[tokio::test]
+    async fn personal_hive_can_dismiss_a_saved_keeper_link() {
+        let store = TaskStore::in_memory().unwrap();
+        let link_id = ApiaryJoinLinkId::new();
+        store
+            .save_local_apiary_keeper_link(
+                link_id,
+                "https://keeper.example.test",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                unix_timestamp(),
+            )
+            .unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+
+        let removed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/apiary/keeper-links/{link_id}"))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+        let links = authorized_get(app, "/api/v1/apiary/keeper-links").await;
+        assert_eq!(response_json(links).await, serde_json::json!([]));
     }
 
     #[tokio::test]

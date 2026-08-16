@@ -6,6 +6,7 @@ import {
   fetchFederationJoinInvitations,
   importFederationJoinInvitation,
   pollApiaryKeeperLink,
+  removeApiaryKeeperLink,
   joinFederationApiary,
   saveApiaryKeeperLink,
   type ApiaryInvitationBundle,
@@ -35,6 +36,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   const [keeperLink, setKeeperLink] = useState("");
   const [invitationLink, setInvitationLink] = useState("");
   const [working, setWorking] = useState(false);
+  const [confirmingDismissal, setConfirmingDismissal] = useState<string>();
 
   useEffect(() => {
     let cancelled = false;
@@ -53,12 +55,13 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     if (keeperLinks.length === 0) return;
     let cancelled = false;
     const poll = async () => {
-      for (const link of keeperLinks) {
+      let refreshed = false;
+      for (const link of keeperLinks.filter((candidate) => !isResolvedKeeperLink(candidate.state))) {
         try {
           const result = await pollApiaryKeeperLink(operatorToken, link.link_id);
           if (cancelled) return;
+          refreshed = true;
           if (result.invitation_received) {
-            setKeeperLinks(await fetchApiaryKeeperLinks(operatorToken));
             setJoinInvitations(await fetchFederationJoinInvitations(operatorToken));
             onMessage(`Invitation from ${result.link.apiary_name} received. Review its policy and Jira readiness below.`);
           }
@@ -66,6 +69,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
           // Pending links remain durable. Temporary Keeper outages are expected.
         }
       }
+      if (refreshed && !cancelled) setKeeperLinks(await fetchApiaryKeeperLinks(operatorToken));
     };
     const timer = window.setInterval(() => void poll(), 5_000);
     return () => { cancelled = true; window.clearInterval(timer); };
@@ -95,6 +99,23 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
       }
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : "The Keeper invitation link could not be used.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function dismissKeeperLink(link: ApiaryKeeperLink) {
+    setWorking(true);
+    clearFeedback();
+    try {
+      await removeApiaryKeeperLink(operatorToken, link.link_id);
+      setConfirmingDismissal(undefined);
+      setKeeperLinks(await fetchApiaryKeeperLinks(operatorToken));
+      onMessage(isResolvedKeeperLink(link.state)
+        ? "The cancelled or expired invitation was removed from this Hive."
+        : "This Hive stopped waiting for that Keeper invitation. The private link must be pasted again to reconnect.");
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : "That saved Keeper invitation could not be removed.");
     } finally {
       setWorking(false);
     }
@@ -188,7 +209,15 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
       </div>
       {keeperLinks.length > 0 ? (
         <ul className="apiary-link-status" aria-label="Pending Keeper invitations">
-          {keeperLinks.map((link) => <li key={link.link_id}><span><strong>{link.apiary_name ?? "Keeper invitation"}</strong><small>{link.keeper_endpoint}</small></span><span className={`apiary-link-state state-${link.state}`}>{link.state === "awaiting_approval" ? "Waiting for Keeper approval" : "Contacting Keeper"}</span></li>)}
+          {keeperLinks.map((link) => <li key={link.link_id}>
+            <span><strong>{link.apiary_name ?? "Keeper invitation"}</strong><small>{link.keeper_endpoint}</small></span>
+            <span className="apiary-link-actions">
+              <span className={`apiary-link-state state-${link.state}`}>{keeperLinkStateLabel(link.state)}</span>
+              {confirmingDismissal === link.link_id
+                ? <span className="apiary-cancel-confirm" role="group" aria-label="Confirm saved invitation removal"><button className="danger-button" disabled={working} onClick={() => void dismissKeeperLink(link)}>Remove link</button><button className="secondary-button" disabled={working} onClick={() => setConfirmingDismissal(undefined)}>Keep waiting</button></span>
+                : <button className="danger-link" disabled={working} onClick={() => setConfirmingDismissal(link.link_id)}>{isResolvedKeeperLink(link.state) ? "Dismiss" : "Stop waiting"}</button>}
+            </span>
+          </li>)}
         </ul>
       ) : null}
       <div className="apiary-join-card">
@@ -212,6 +241,21 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
       </div>
     </div>
   );
+}
+
+function isResolvedKeeperLink(state: ApiaryKeeperLink["state"]): boolean {
+  return state === "revoked" || state === "expired" || state === "invitation_issued";
+}
+
+function keeperLinkStateLabel(state: ApiaryKeeperLink["state"]): string {
+  switch (state) {
+    case "open": return "Introducing this Hive";
+    case "awaiting_approval": return "Waiting for Keeper approval";
+    case "approved": return "Approved · retrieving invitation";
+    case "invitation_issued": return "Invitation received";
+    case "revoked": return "Cancelled by Keeper";
+    case "expired": return "Invitation expired";
+  }
 }
 
 function InvitationPreview({ bundle, working, onCancel, onTrust }: { bundle: ApiaryInvitationBundle; working: boolean; onCancel: () => void; onTrust: () => void }) {
