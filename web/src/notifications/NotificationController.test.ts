@@ -55,19 +55,51 @@ test("explicit enable registers the push-only worker and persists a browser subs
 test("startup refreshes an existing push worker without requesting permission again", async () => {
   const update = vi.fn().mockResolvedValue(undefined);
   const subscription = {
+    unsubscribe: vi.fn(),
     toJSON: () => ({ endpoint: "https://fcm.googleapis.com/push/existing", keys: { p256dh: "key", auth: "auth" } }),
   } as unknown as PushSubscription;
-  const registration = { update, pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) } };
+  const registration = { update, pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription), subscribe: vi.fn() } };
   Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(registration), register: vi.fn() } });
   const fetchMock = vi.fn()
     .mockResolvedValueOnce(ok(settings))
+    .mockResolvedValueOnce(ok({ registered: true }))
     .mockResolvedValueOnce(ok({ ...settings, subscription_count: 1 }));
   vi.stubGlobal("fetch", fetchMock);
 
   await new NotificationController().start("token", vi.fn(), vi.fn());
 
   expect(update).toHaveBeenCalledOnce();
+  expect(subscription.unsubscribe).not.toHaveBeenCalled();
   expect(Notification.requestPermission).not.toHaveBeenCalled();
+});
+
+test("startup rotates a browser subscription that the push service made the API remove", async () => {
+  const unsubscribe = vi.fn().mockResolvedValue(true);
+  const stale = {
+    unsubscribe,
+    toJSON: () => ({ endpoint: "https://fcm.googleapis.com/push/stale", keys: { p256dh: "old", auth: "old" } }),
+  } as unknown as PushSubscription;
+  const replacement = {
+    toJSON: () => ({ endpoint: "https://fcm.googleapis.com/push/fresh", keys: { p256dh: "new", auth: "new" } }),
+  } as unknown as PushSubscription;
+  const subscribe = vi.fn().mockResolvedValue(replacement);
+  const registration = { update: vi.fn(), pushManager: { getSubscription: vi.fn().mockResolvedValue(stale), subscribe } };
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(registration), register: vi.fn() } });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(ok(settings))
+    .mockResolvedValueOnce(ok({ registered: false }))
+    .mockResolvedValueOnce(ok({ ...settings, subscription_count: 1 }));
+  vi.stubGlobal("fetch", fetchMock);
+  const states: string[] = [];
+
+  await new NotificationController().start("token", vi.fn(), (state) => states.push(state));
+
+  expect(unsubscribe).toHaveBeenCalledOnce();
+  expect(subscribe).toHaveBeenCalledWith(expect.objectContaining({ userVisibleOnly: true }));
+  expect(JSON.parse(String(vi.mocked(fetchMock).mock.calls.at(-1)?.[1]?.body))).toMatchObject({
+    endpoint: "https://fcm.googleapis.com/push/fresh",
+  });
+  expect(states.at(-1)).toBe("enabled");
 });
 
 test("startup repairs a missing subscription when this device was intentionally enabled", async () => {
@@ -99,7 +131,11 @@ test("disable removes delivery but keeps the service worker available for repair
   const unregister = vi.fn();
   const registration = { update: vi.fn(), unregister, pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) } };
   Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue(registration), register: vi.fn() } });
-  vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(ok({ ...settings, subscription_count: 0 }))));
+  vi.stubGlobal("fetch", vi.fn()
+    .mockResolvedValueOnce(ok(settings))
+    .mockResolvedValueOnce(ok({ registered: true }))
+    .mockResolvedValueOnce(ok({ ...settings, subscription_count: 1 }))
+    .mockResolvedValueOnce(ok({ ...settings, subscription_count: 0 })));
   const controller = new NotificationController();
   await controller.start("token", vi.fn(), vi.fn());
 

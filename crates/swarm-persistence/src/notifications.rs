@@ -104,6 +104,32 @@ impl TaskStore {
         notification_settings_from_connection(&connection)
     }
 
+    /// Reports whether the local operator still owns one device registration.
+    ///
+    /// The endpoint and key material never leave persistence. Clients use this
+    /// bit to replace browser subscriptions that a push service has declared
+    /// gone instead of repeatedly saving the same dead endpoint.
+    ///
+    /// # Errors
+    /// Returns persistence or local-identity failures.
+    pub fn has_notification_subscription(
+        &self,
+        device_id: PresenceDeviceId,
+    ) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        let operator_id = local_operator_id(&connection)?;
+        connection
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM notification_subscriptions
+                     WHERE device_id = ?1 AND operator_id = ?2
+                 )",
+                params![device_id.to_string(), operator_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
     /// Changes notification policy and queues newly eligible pending decisions.
     ///
     /// # Errors
@@ -784,7 +810,24 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(store.notification_settings().unwrap().subscription_count, 0);
+        assert!(!store.has_notification_subscription(device).unwrap());
         assert!(store.claim_notification_deliveries(12).unwrap().is_empty());
+    }
+
+    #[test]
+    fn device_registration_status_never_exposes_subscription_material() {
+        let store = TaskStore::in_memory().unwrap();
+        let registered = PresenceDeviceId::new();
+        let absent = PresenceDeviceId::new();
+        store
+            .save_notification_subscription(
+                &subscription(registered, "https://fcm.googleapis.com/fcm/send/status"),
+                10,
+            )
+            .unwrap();
+
+        assert!(store.has_notification_subscription(registered).unwrap());
+        assert!(!store.has_notification_subscription(absent).unwrap());
     }
 
     #[test]

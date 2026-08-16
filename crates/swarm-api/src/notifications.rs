@@ -248,6 +248,11 @@ struct NotificationSubscriptionKeys {
     auth: String,
 }
 
+#[derive(Debug, Serialize)]
+pub(super) struct NotificationSubscriptionStatus {
+    registered: bool,
+}
+
 pub(super) async fn notification_settings(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -318,6 +323,22 @@ pub(super) async fn save_notification_subscription(
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     notification_settings_response(&state, settings)
+}
+
+pub(super) async fn notification_subscription_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(device_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let registered = task_store(&state)?
+        .has_notification_subscription(parse_notification_device_id(&device_id)?)
+        .map_err(|error| task_store_error(&error))?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(NotificationSubscriptionStatus { registered }),
+    )
+        .into_response())
 }
 
 pub(super) async fn remove_notification_subscription(

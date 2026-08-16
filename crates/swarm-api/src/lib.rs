@@ -82,7 +82,11 @@ use swarm_domain::{
     TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
-use swarm_domain::{ControlRoomEventKind, PresenceDeviceId, TaskActivityActor};
+use swarm_domain::{
+    ControlRoomEventKind, PresenceDeviceClass, PresenceDeviceId, TaskActivityActor,
+};
+#[cfg(test)]
+use swarm_persistence::PushSubscriptionInput;
 use swarm_persistence::{
     CoordinatorStatus, DecisionDeliveryFailure, DecisionDispatch, FederationHandoffIntentPhase,
     FederationJiraClaimPhase, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionFailure,
@@ -2294,7 +2298,8 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/notifications/subscriptions/{device_id}",
-            put(notifications::save_notification_subscription)
+            get(notifications::notification_subscription_status)
+                .put(notifications::save_notification_subscription)
                 .delete(notifications::remove_notification_subscription),
         )
         .route(
@@ -11042,6 +11047,7 @@ mod tests {
     #[tokio::test]
     async fn notification_routes_are_private_bounded_and_reject_arbitrary_endpoints() {
         let store = TaskStore::in_memory().unwrap();
+        let status_store = store.clone();
         let state = AppState::default()
             .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
             .with_task_store(store)
@@ -11068,6 +11074,41 @@ mod tests {
         assert_eq!(settings["policy"], "important_only");
         assert_eq!(settings["subscription_count"], 0);
         assert!(settings["vapid_public_key"].as_str().unwrap().len() > 40);
+
+        let registered_device = PresenceDeviceId::new();
+        status_store
+            .save_notification_subscription(
+                &PushSubscriptionInput {
+                    device_id: registered_device,
+                    device_class: PresenceDeviceClass::Mobile,
+                    endpoint: "https://fcm.googleapis.com/fcm/send/status".into(),
+                    p256dh: vec![7; 65],
+                    auth: vec![9; 16],
+                },
+                10,
+            )
+            .unwrap();
+        let registered = response_json(
+            authorized_get(
+                app.clone(),
+                &format!("/api/v1/notifications/subscriptions/{registered_device}"),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(registered["registered"], true);
+        let absent = response_json(
+            authorized_get(
+                app.clone(),
+                &format!(
+                    "/api/v1/notifications/subscriptions/{}",
+                    PresenceDeviceId::new()
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(absent["registered"], false);
 
         let malicious = app
             .oneshot(

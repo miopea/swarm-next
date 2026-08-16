@@ -1449,6 +1449,17 @@ export async function fetchQueenAutomationStatus(
   return response.json() as Promise<QueenAutomationStatus>;
 }
 
+export async function fetchNotificationSubscriptionStatus(
+  operatorToken: string,
+  deviceId: string,
+): Promise<{ registered: boolean }> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/notifications/subscriptions/${encodeURIComponent(deviceId)}`,
+  );
+  return response.json() as Promise<{ registered: boolean }>;
+}
+
 export async function fetchCoordinatorStatus(operatorToken: string): Promise<CoordinatorStatus> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/orchestration/coordinator");
   return response.json() as Promise<CoordinatorStatus>;

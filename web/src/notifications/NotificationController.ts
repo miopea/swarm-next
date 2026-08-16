@@ -1,5 +1,6 @@
 import {
   fetchNotificationSettings,
+  fetchNotificationSubscriptionStatus,
   recoverTransientRuntime,
   removeNotificationSubscription,
   saveNotificationSubscription,
@@ -46,8 +47,21 @@ export class NotificationController {
           // An existing push subscription remains usable while temporarily offline.
         }
       }
-      const subscription = await registration?.pushManager.getSubscription();
+      let subscription = await registration?.pushManager.getSubscription();
       if (subscription) {
+        const deviceId = presenceDeviceId();
+        const status = await recoverTransientRuntime(() =>
+          fetchNotificationSubscriptionStatus(operatorToken, deviceId));
+        if (!status.registered && registration) {
+          // The push service rejected this endpoint and the API removed it.
+          // Chromium can retain that same dead subscription indefinitely, so
+          // explicitly rotate it before registering this device again.
+          await subscription.unsubscribe();
+          subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: decodeUrlSafeBase64(settings.vapid_public_key),
+          });
+        }
         await this.#save(subscription);
         if (generation === this.#generation) {
           rememberEnabledIntent(true);
