@@ -1002,3 +1002,17 @@ the independently updated terminal host through the API to worker settings:
   advanced to `3587600`; terminal-host PID remained `2966127`, preserving the
   active Queen session. Every headless browser and context closed after the
   run.
+- Release `0.1.0-dev-b605731430d5` promotes the exact legacy Project Root into
+  managed Scout without replacing her durable identity, and adds an optional
+  bounded, tool-free Claude review of the local routing-description packet.
+  Test commit `3460c77` extends the live acceptance contract to require Scout
+  directly after Queen, prevent managed rename/removal/reordering, expose the
+  sleeping provider and description controls, and explain exactly where a
+  receiving personal Hive pastes a Keeper invitation link. All 221 frontend
+  tests and strict TypeScript passed. The live dogfood gate passed every
+  primary and mocked Member surface at 1,440 by 900 and 412 by 915 with zero
+  horizontal overflow, 340 and 308 accessible controls, both Apiary transport
+  explanations, and authentication preserved across complete browser
+  restarts. API PID `3641269` remained healthy; terminal-host PID `2966127`
+  remained unchanged with the active Queen session preserved. Every proof
+  browser and context closed after the run.
