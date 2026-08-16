@@ -1,4 +1,5 @@
 const HANDOFF_PREFIX = "swarm-next-apiary";
+const stagedHandoffs = new Map<ApiaryHandoffKind, string>();
 
 export type ApiaryHandoffKind = "connection" | "invitation" | "keeper";
 
@@ -39,4 +40,46 @@ export function readApiaryHandoffLink<T>(value: string, expectedKind: ApiaryHand
   } catch {
     throw new Error("That Swarm Apiary link is damaged or incomplete.");
   }
+}
+
+export function currentApiaryHandoffLink(kind: ApiaryHandoffKind, location = window.location): string | undefined {
+  const prefix = `#${HANDOFF_PREFIX}-${kind}=`;
+  return location.hash.startsWith(prefix) ? location.href : undefined;
+}
+
+export function retargetApiaryHandoffLink(value: string, destination: string, kind: ApiaryHandoffKind): string {
+  readApiaryHandoffLink(value, kind);
+  let target: URL;
+  try {
+    target = new URL(destination.trim());
+  } catch {
+    throw new Error("Enter the complete address of your personal Hive.");
+  }
+  const localHttp = target.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname);
+  if ((target.protocol !== "https:" && !localHttp) || target.username || target.password) {
+    throw new Error("Use an HTTPS personal Hive address, or localhost for local development.");
+  }
+  target.pathname = "/";
+  target.search = "";
+  target.hash = new URL(value).hash;
+  return target.toString();
+}
+
+export function stageApiaryHandoff(kind: ApiaryHandoffKind, link: string): void {
+  readApiaryHandoffLink(link, kind);
+  stagedHandoffs.set(kind, link);
+}
+
+export function peekStagedApiaryHandoff(kind: ApiaryHandoffKind): string | undefined {
+  return stagedHandoffs.get(kind);
+}
+
+export function clearStagedApiaryHandoff(kind: ApiaryHandoffKind): void {
+  stagedHandoffs.delete(kind);
+}
+
+export function takeStagedApiaryHandoff(kind: ApiaryHandoffKind): string | undefined {
+  const link = stagedHandoffs.get(kind);
+  stagedHandoffs.delete(kind);
+  return link;
 }

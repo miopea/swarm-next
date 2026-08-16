@@ -311,6 +311,22 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .unlock-symbol .bee-mascot { width: 76px; height: 76px; }
 .unlock-panel h3 { margin: 0; font-size: 1.5rem; letter-spacing: -.025em; }
 .unlock-panel p:not(.eyebrow) { margin-bottom: 8px; color: var(--muted); font-size: .9rem; line-height: 1.6; }
+.apiary-handoff-page { min-height: 100dvh; display: grid; place-items: center; padding: 28px; background: radial-gradient(circle at 20% 15%, var(--accent-soft), transparent 38%), var(--surface); }
+.apiary-handoff-card { display: grid; width: min(720px, 100%); gap: 14px; padding: clamp(24px, 5vw, 44px); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: var(--shadow); }
+.apiary-handoff-bee { width: 68px; height: 68px; display: grid; place-items: center; margin-bottom: 2px; border: 1px solid var(--accent-line); border-radius: 22px; background: var(--accent-soft); }
+.apiary-handoff-bee .bee-mascot { width: 72px; height: 72px; }
+.apiary-handoff-card h1 { margin: 0; font-size: clamp(1.55rem, 4vw, 2.2rem); letter-spacing: -.035em; }
+.apiary-handoff-lead, .apiary-handoff-safety { margin: 0; color: var(--muted); line-height: 1.6; }
+.apiary-handoff-target { display: grid; gap: 6px; margin-top: 5px; padding: 15px; border: 1px solid var(--accent-line); border-radius: var(--radius-md); background: var(--accent-soft); }
+.apiary-handoff-target label { color: var(--text); font-size: .82rem; font-weight: 700; }
+.apiary-handoff-target > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.apiary-handoff-target input { min-width: 0; }
+.apiary-handoff-target small, .apiary-handoff-current small { color: var(--muted); font-size: .72rem; line-height: 1.45; }
+.apiary-handoff-current { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.apiary-handoff-current > span { display: grid; gap: 3px; }
+.apiary-handoff-current button { flex: 0 0 auto; }
+.apiary-handoff-copy { justify-self: start; color: var(--link); border: 0; background: transparent; padding-inline: 0; text-decoration: underline; text-underline-offset: 3px; }
+.apiary-handoff-safety { padding-top: 5px; font-size: .78rem; }
 .app-crash-recovery { display: grid; width: min(520px, calc(100% - 32px)); min-height: 100%; margin: auto; align-content: center; justify-items: start; color: var(--text); }
 .app-crash-recovery .bee-mascot { width: 82px; height: 82px; margin-bottom: 14px; }
 .app-crash-recovery h1 { margin-bottom: 10px; font-size: clamp(1.45rem, 5vw, 2rem); }
@@ -1107,6 +1123,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-step-action button { width: 100%; }
   .apiary-link-entry, .apiary-generated-link { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .apiary-link-entry button, .apiary-generated-link button { width: 100%; }
+  .apiary-handoff-page { place-items: start stretch; padding: 0; }
+  .apiary-handoff-card { min-height: 100dvh; align-content: start; border: 0; border-radius: 0; padding: 24px 18px max(28px, env(safe-area-inset-bottom)); box-shadow: none; }
+  .apiary-handoff-target > div { grid-template-columns: minmax(0, 1fr); }
+  .apiary-handoff-target button { width: 100%; }
+  .apiary-handoff-current { align-items: stretch; flex-direction: column; }
+  .apiary-handoff-current button { width: 100%; }
   .apiary-card-drop { align-items: stretch; flex-direction: column; }
   .apiary-invitation-preview { grid-template-columns: minmax(0, 1fr); }
   .apiary-invitation-preview > p, .apiary-invitation-preview .settings-actions { grid-column: 1; }

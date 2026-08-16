@@ -93,11 +93,18 @@ secret are revalidated by the private application command. The secret and
 complete envelope remain private to the Hive database; browser reads expose
 only a sanitized pending-join summary and public project identities.
 Import does not join, accept policy, share work, or grant terminal access.
-The normal operator experience will wrap this exact protocol in a short-lived
-Keeper invitation link and QR code. The invited Hive initiates the connection,
-presents its signed public identity, becomes the exact bound candidate, and
-then previews and accepts the resulting invitation. Connection-card and bundle
-files remain an advanced manual fallback rather than the primary workflow.
+The normal operator experience wraps this exact protocol in a short-lived
+Keeper invitation link. Opening it presents a content-free handoff page: the
+recipient can name her personal Hive URL or confirm that she is already there,
+then Swarm transfers the unchanged secret-bearing fragment in browser memory,
+clears it from history, opens Settings -> Apiary, and prefills the connection
+control. No relay receives the capability, and no membership change occurs
+until the personal Hive introduces its signed identity. Manual paste and
+connection-card or bundle files remain fallback paths rather than the primary
+workflow. A QR code may later carry the same link without changing this trust
+boundary. The invited Hive initiates the connection, presents its signed public
+identity, becomes the exact bound candidate, and then previews and accepts the
+resulting invitation.
 Keeper's reachable HTTPS URL may be public or available through a trusted
 LAN/VPN/mesh, but cannot be `localhost` for a multi-machine Apiary. Member Hives
 need no inbound public address because federation connections originate from

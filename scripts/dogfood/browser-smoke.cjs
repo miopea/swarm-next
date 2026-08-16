@@ -150,7 +150,17 @@ async function checkPersonalHiveSurface(browser, surface) {
   await page.route("**/api/v1/apiary/join-invitations", (route) => fulfill(route, []));
 
   try {
-    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    const privateCapability = Buffer.from(JSON.stringify({
+      link_id: "visual-private-link",
+      keeper_endpoint: "https://keeper.example.test",
+      secret: "visual-one-time-secret",
+    })).toString("base64url");
+    const invitationLink = `${baseUrl.replace(/\/$/, "")}/#swarm-next-apiary-keeper=${privateCapability}`;
+    await page.goto(invitationLink, { waitUntil: "domcontentloaded" });
+    await page.getByRole("heading", { name: "Open this in your personal Hive" }).waitFor();
+    await page.getByText(/never sent to a handoff service/i).waitFor();
+    await page.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-invitation-handoff.png`), fullPage: true });
+    await page.getByRole("button", { name: "Use this Hive" }).click();
     const tokenInput = page.getByLabel("Operator token");
     if (await tokenInput.isVisible().catch(() => false)) {
       await tokenInput.fill(operatorToken);
@@ -162,10 +172,14 @@ async function checkPersonalHiveSurface(browser, surface) {
     await page.getByRole("button", { name: "Apiary", exact: true }).click();
     const joinGuide = page.getByRole("list", { name: "How this Hive joins an Apiary" });
     await joinGuide.waitFor();
-    for (const step of ["Paste her private link", "Wait for her approval", "Review and join"]) {
+    for (const step of ["Hand the link to this Hive", "Wait for her approval", "Review and join"]) {
       await joinGuide.getByText(step, { exact: true }).waitFor();
     }
-    await page.getByLabel("Keeper invitation link").waitFor();
+    const keeperInvitation = page.getByLabel("Keeper invitation link");
+    await keeperInvitation.waitFor();
+    if (await keeperInvitation.inputValue() !== invitationLink) {
+      throw new Error(`${surface.name}/personal-apiary: invitation handoff did not prefill this Hive`);
+    }
     await page.getByRole("button", { name: "Connect to Keeper" }).waitFor();
     const cancelledLink = page.getByRole("list", { name: "Pending Keeper invitations" });
     await cancelledLink.getByText("Cancelled by Keeper", { exact: true }).waitFor();

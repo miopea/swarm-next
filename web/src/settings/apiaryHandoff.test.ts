@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 
-import { createApiaryHandoffLink, readApiaryHandoffLink } from "./apiaryHandoff";
+import {
+  createApiaryHandoffLink, currentApiaryHandoffLink, readApiaryHandoffLink,
+  retargetApiaryHandoffLink, stageApiaryHandoff, takeStagedApiaryHandoff,
+} from "./apiaryHandoff";
 
 describe("Apiary handoff links", () => {
   test("round trips Unicode content without exposing it outside the URL fragment", () => {
@@ -29,5 +32,25 @@ describe("Apiary handoff links", () => {
     expect(link).toMatch(/^https:\/\/keeper\.example\.test\/#swarm-next-apiary-keeper=/);
     expect(link).not.toContain("private-capability");
     expect(readApiaryHandoffLink(link, "keeper")).toEqual(capability);
+  });
+
+  test("retargets a private fragment to an HTTPS personal Hive without sending it in a path or query", () => {
+    const link = createApiaryHandoffLink("keeper", { secret: "private-capability" }, "https://keeper.example.test");
+    const retargeted = retargetApiaryHandoffLink(link, "https://clover.example.test/settings?old=true", "keeper");
+
+    expect(retargeted).toMatch(/^https:\/\/clover\.example\.test\/#swarm-next-apiary-keeper=/);
+    expect(new URL(retargeted).pathname).toBe("/");
+    expect(new URL(retargeted).search).toBe("");
+    expect(retargeted).not.toContain("private-capability");
+    expect(() => retargetApiaryHandoffLink(link, "http://remote.example.test", "keeper")).toThrow(/HTTPS personal Hive/i);
+  });
+
+  test("recognizes and stages a current handoff only in memory", () => {
+    const link = createApiaryHandoffLink("keeper", { secret: "one-time" }, "https://keeper.example.test");
+    const location = new URL(link) as unknown as Location;
+    expect(currentApiaryHandoffLink("keeper", location)).toBe(link);
+    stageApiaryHandoff("keeper", link);
+    expect(takeStagedApiaryHandoff("keeper")).toBe(link);
+    expect(takeStagedApiaryHandoff("keeper")).toBeUndefined();
   });
 });

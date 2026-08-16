@@ -112,7 +112,7 @@ export function App() {
   const [feedbackRevision, setFeedbackRevision] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
   const [showMobileWorkers, setShowMobileWorkers] = useState(false);
-  const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") ? "settings" : readSavedSurface());
+  const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
   const [taskQuery, setTaskQuery] = useState("");

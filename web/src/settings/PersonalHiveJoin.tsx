@@ -14,7 +14,9 @@ import {
   type ApiaryKeeperLink,
   type FederationJoinInvitationOverview,
 } from "../api";
-import { readApiaryHandoffLink } from "./apiaryHandoff";
+import {
+  clearStagedApiaryHandoff, peekStagedApiaryHandoff, readApiaryHandoffLink,
+} from "./apiaryHandoff";
 import {
   ApiaryExchangeStep,
   ApiaryFileFallback,
@@ -33,7 +35,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   const [keeperLinks, setKeeperLinks] = useState<ApiaryKeeperLink[]>([]);
   const [joinInvitations, setJoinInvitations] = useState<FederationJoinInvitationOverview[]>([]);
   const [invitationPreview, setInvitationPreview] = useState<ApiaryInvitationBundle>();
-  const [keeperLink, setKeeperLink] = useState("");
+  const [keeperLink, setKeeperLink] = useState(() => peekStagedApiaryHandoff("keeper") ?? "");
   const [invitationLink, setInvitationLink] = useState("");
   const [working, setWorking] = useState(false);
   const [confirmingDismissal, setConfirmingDismissal] = useState<string>();
@@ -89,6 +91,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
         throw new Error("That link is not a Keeper invitation.");
       }
       const result = await saveApiaryKeeperLink(operatorToken, capability);
+      clearStagedApiaryHandoff("keeper");
       setKeeperLink("");
       setKeeperLinks(await fetchApiaryKeeperLinks(operatorToken));
       if (result.invitation_received) {
@@ -195,9 +198,9 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   return (
     <div className="personal-hive-join">
       <div className="apiary-exchange-intro">
-        <span><strong>Join a Keeper&apos;s Apiary</strong><small>The private link is handed to this personal Hive; opening it does not join through the Keeper&apos;s browser.</small></span>
+        <span><strong>Join a Keeper&apos;s Apiary</strong><small>The private link is handed to this personal Hive. Opening it now guides you here without joining through the Keeper&apos;s browser.</small></span>
         <ol className="apiary-exchange-guide" aria-label="How this Hive joins an Apiary">
-          <ApiaryExchangeStep number="1" title="Paste her private link" detail="Copy the complete link the Keeper sent and paste it below in this Hive." />
+          <ApiaryExchangeStep number="1" title="Hand the link to this Hive" detail="Open the private link and choose this personal Hive, or paste the complete link below." />
           <ApiaryExchangeStep number="2" title="Wait for her approval" detail="This Hive introduces only its signed identity and keeps polling outward." />
           <ApiaryExchangeStep number="3" title="Review and join" detail="After approval, check policy and Jira readiness before joining explicitly." />
         </ol>

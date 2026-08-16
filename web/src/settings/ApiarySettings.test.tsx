@@ -3,7 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import type { HiveIdentity } from "../api";
 import ApiarySettings from "./ApiarySettings";
-import { createApiaryHandoffLink } from "./apiaryHandoff";
+import { clearStagedApiaryHandoff, createApiaryHandoffLink, stageApiaryHandoff } from "./apiaryHandoff";
 
 test("connects outward to a Keeper without requiring an inbound member URL", async () => {
   const capability = {
@@ -29,7 +29,7 @@ test("connects outward to a Keeper without requiring an inbound member URL", asy
 
   render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
   const joinGuide = screen.getByRole("list", { name: "How this Hive joins an Apiary" });
-  expect(joinGuide).toHaveTextContent("Paste her private link");
+  expect(joinGuide).toHaveTextContent("Hand the link to this Hive");
   expect(joinGuide).toHaveTextContent("Wait for her approval");
   expect(joinGuide).toHaveTextContent("Review and join");
   fireEvent.change(screen.getByLabelText("Keeper invitation link"), {
@@ -41,6 +41,23 @@ test("connects outward to a Keeper without requiring an inbound member URL", asy
   expect(screen.getByRole("list", { name: "Pending Keeper invitations" })).toHaveTextContent("Waiting for Keeper approval");
   expect(screen.getByRole("note")).toHaveTextContent("This Hive continues polling Jira directly as you");
   expect(screen.getByRole("note")).toHaveTextContent("polls the Keeper for shared Apiary tasks");
+});
+
+test("prefills a Keeper link handed off from the public invitation landing without browser storage", async () => {
+  const capability = { link_id: "link-2", keeper_endpoint: "https://keeper.example.test", secret: "one-use" };
+  const link = createApiaryHandoffLink("keeper", capability, capability.keeper_endpoint);
+  stageApiaryHandoff("keeper", link);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/keeper-links" || url === "/api/v1/apiary/join-invitations") return ok([]);
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  expect(await screen.findByLabelText("Keeper invitation link")).toHaveValue(link);
+  expect(window.sessionStorage.length).toBe(0);
+  expect(window.localStorage.getItem("swarm-next-apiary-keeper")).toBeNull();
 });
 
 test("restores a pending Keeper capability after the browser is reopened", async () => {
@@ -111,6 +128,7 @@ test("renames the local Hive without changing its durable identity", async () =>
 
 afterEach(() => {
   cleanup();
+  clearStagedApiaryHandoff("keeper");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -177,8 +195,7 @@ test("Keeper creates one private invitation link for an outbound member connecti
   expect(await screen.findByRole("status")).toHaveTextContent("Invitation link copied");
   expect(writeText).toHaveBeenCalledWith(expect.stringMatching(/^https:\/\/keeper\.example\.test\/#swarm-next-apiary-keeper=/));
   expect(screen.getByRole("group", { name: "Created Apiary link" })).toHaveTextContent(/private handoff link/i);
-  expect(screen.getByRole("group", { name: "Created Apiary link" })).toHaveTextContent(/In her personal Hive.*Settings.*Apiary.*Join a Keeper's Apiary/i);
-  expect(screen.getAllByText(/In her personal Hive/)).toHaveLength(2);
+  expect(screen.getByRole("group", { name: "Created Apiary link" })).toHaveTextContent(/guides her to her personal Hive.*Settings.*Apiary.*Join a Keeper's Apiary/i);
   expect(screen.getByRole("note")).toHaveTextContent("Each Hive polls Jira directly");
   expect(screen.getByRole("note")).toHaveTextContent("Member Hives poll this Keeper");
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

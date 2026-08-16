@@ -25,7 +25,7 @@ export function ApiaryGeneratedLink({ link, onCopy }: { link: string; onCopy: (l
     <div className="apiary-generated-link" role="group" aria-label="Created Apiary link">
       <label htmlFor={id}><span>Private handoff link</span><input id={id} readOnly value={link} onFocus={(event) => event.currentTarget.select()} /></label>
       <button className="secondary-button" onClick={() => void onCopy(link)}>Copy again</button>
-      <small>Send it privately. In her personal Hive, she opens Settings -&gt; Apiary -&gt; Join a Keeper&apos;s Apiary, pastes the complete link, and connects. The link expires and can be consumed by only one Hive.</small>
+      <small>Send it privately. Opening the link guides her to her personal Hive, then prefills Settings -&gt; Apiary -&gt; Join a Keeper&apos;s Apiary. Manual paste remains available. The link expires and can be consumed by only one Hive.</small>
     </div>
   );
 }
