@@ -384,6 +384,8 @@ pub(super) struct WorkerDescriptionDraft {
     source: &'static str,
 }
 
+const SCOUT_ROUTING_DESCRIPTION: &str = "Scout owns deliberate cross-repository discovery and preparation across the projects root. Route work here when Queen needs repository mapping, coordinated changes spanning more than one repository, or worktree setup before repository workers receive their own scoped tasks. Ordinary repository work stays with that repository's worker.";
+
 pub(super) async fn draft_worker_description(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -394,7 +396,15 @@ pub(super) async fn draft_worker_description(
     let profile = task_store(&state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
-    let description = repository_description_draft(Path::new(&profile.workspace)).await?;
+    let is_scout = task_store(&state)?
+        .scout_worker_id()
+        .map_err(|error| task_store_error(&error))?
+        == Some(profile.id);
+    let description = if is_scout {
+        SCOUT_ROUTING_DESCRIPTION.to_owned()
+    } else {
+        repository_description_draft(Path::new(&profile.workspace)).await?
+    };
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(WorkerDescriptionDraft {
@@ -425,7 +435,11 @@ pub(super) async fn improve_worker_description(
     let profile = task_store(&state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
-    let context = repository_description_context(Path::new(&profile.workspace)).await?;
+    let is_scout = task_store(&state)?
+        .scout_worker_id()
+        .map_err(|error| task_store_error(&error))?
+        == Some(profile.id);
+    let context = repository_description_context(Path::new(&profile.workspace), is_scout).await?;
     let description = super::worker_description_ai::improve_description(&context)
         .await
         .map_err(|error| description_ai_error(&error))?;
@@ -512,12 +526,19 @@ async fn repository_description_draft(workspace: &Path) -> Result<String, ApiErr
     })
 }
 
-async fn repository_description_context(workspace: &Path) -> Result<String, ApiError> {
+async fn repository_description_context(
+    workspace: &Path,
+    is_scout: bool,
+) -> Result<String, ApiError> {
     let repository_name = workspace
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("Repository");
-    let local_draft = repository_description_draft(workspace).await?;
+    let local_draft = if is_scout {
+        SCOUT_ROUTING_DESCRIPTION.to_owned()
+    } else {
+        repository_description_draft(workspace).await?
+    };
     let package_json = read_description_source(workspace, "package.json").await;
     let cargo_toml = read_description_source(workspace, "Cargo.toml").await;
     let pyproject = read_description_source(workspace, "pyproject.toml").await;
@@ -551,6 +572,9 @@ async fn repository_description_context(workspace: &Path) -> Result<String, ApiE
         format!("Repository name: {repository_name}"),
         format!("Local deterministic draft: {local_draft}"),
     ];
+    if is_scout {
+        sections.push("Swarm role: Scout is the protected projects-root worker for deliberate cross-repository discovery, worktree preparation, and coordinated work that Queen later divides among repository workers.".to_owned());
+    }
     if let Some(description) = package_description {
         sections.push(format!("Package description: {description}"));
     }
@@ -768,7 +792,7 @@ mod description_tests {
         .await
         .unwrap();
 
-        let context = repository_description_context(directory.path())
+        let context = repository_description_context(directory.path(), false)
             .await
             .unwrap();
         assert!(context.contains("Coordinates garden work"));
@@ -776,5 +800,18 @@ mod description_tests {
         assert!(!context.contains("do-not-send"));
         assert!(!context.contains("SECRET SECOND PARAGRAPH"));
         assert!(context.len() < super::super::worker_description_ai::MAX_CONTEXT_BYTES);
+    }
+
+    #[tokio::test]
+    async fn scout_context_preserves_cross_repository_routing_role() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = repository_description_context(directory.path(), true)
+            .await
+            .unwrap();
+
+        assert!(context.contains("Swarm role: Scout"));
+        assert!(context.contains("cross-repository"));
+        assert!(context.contains(SCOUT_ROUTING_DESCRIPTION));
+        assert!(!context.contains("Cross-repository coordination stays with Queen or Scout"));
     }
 }

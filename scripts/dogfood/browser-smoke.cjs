@@ -671,7 +671,7 @@ async function checkSurface(browser, surface) {
     }
     if (!await scoutEditor.getByLabel("Default coding provider").isVisible()
       || !await scoutEditor.getByRole("button", { name: /Refresh local draft|Draft locally/ }).isVisible()
-      || !await scoutEditor.getByRole("button", { name: "Improve with Claude" }).isVisible()) {
+      || !await scoutEditor.getByRole("button", { name: "Generate with Claude" }).isVisible()) {
       throw new Error(`${surface.name}: Scout provider or bounded description controls are unavailable`);
     }
     if (await scoutEditor.getByRole("button", { name: /Remove worker|Move Scout/ }).count()) {
@@ -698,14 +698,14 @@ async function checkSurface(browser, surface) {
       || !await sleepingWorkerEditor.getByLabel("Queen routing description").isVisible()
       || !await sleepingWorkerEditor.getByLabel("Default coding provider").isVisible()
       || !await sleepingWorkerEditor.getByRole("button", { name: /Refresh local draft|Draft locally/ }).isVisible()
-      || !await sleepingWorkerEditor.getByRole("button", { name: "Improve with Claude" }).isVisible()
+      || !await sleepingWorkerEditor.getByRole("button", { name: "Generate with Claude" }).isVisible()
       || !await sleepingWorkerEditor.getByRole("button", { name: "Remove worker" }).isVisible()) {
       throw new Error(`${surface.name}: sleeping-worker maintenance controls are incomplete`);
     }
     await sleepingWorkerEditor.getByRole("button", { name: /Refresh local draft|Draft locally/ }).click();
     await sleepingWorkerEditor.getByText("Local draft ready", { exact: true }).waitFor();
     if (!await sleepingWorkerEditor.getByText(/Nothing has been saved yet/).isVisible()
-      || !await sleepingWorkerEditor.getByRole("button", { name: "Save worker changes" }).isVisible()
+      || !await sleepingWorkerEditor.getByRole("button", { name: "Save description to worker" }).isVisible()
       || !await sleepingWorkerEditor.getByLabel("Queen routing description").evaluate((field) => field.classList.contains("worker-description-generated"))) {
       throw new Error(`${surface.name}: generated worker-description review is not clearly presented as an unsaved draft`);
     }

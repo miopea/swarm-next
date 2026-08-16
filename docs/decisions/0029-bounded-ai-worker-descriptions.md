@@ -13,7 +13,7 @@ outcome requires.
 ## Decision
 
 Swarm keeps the existing deterministic local draft and adds an explicit
-**Improve with Claude** action. Swarm itself constructs the only model input:
+**Generate with Claude** action. Swarm itself constructs the only model input:
 repository name, deterministic draft, manifest description, and the first
 usable README paragraph. It never sends source files, credentials, tasks,
 terminal output, provider conversations, or arbitrary repository contents.

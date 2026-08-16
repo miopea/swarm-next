@@ -54,7 +54,7 @@ test("configures and reorders durable workers with progressive path completion",
   fireEvent.change(within(editForm).getByLabelText("Worker name"), { target: { value: "Marigold" } });
   fireEvent.change(within(editForm).getByLabelText("Queen routing description"), { target: { value: "Owns budgets and bills." } });
   fireEvent.click(within(editForm).getByLabelText("Keep this worker active automatically"));
-  fireEvent.click(within(editForm).getByRole("button", { name: "Save worker changes" }));
+  fireEvent.click(within(editForm).getByRole("button", { name: "Save description to worker" }));
   expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", "Owns budgets and bills.", "claude_code", true);
 });
 
@@ -179,15 +179,15 @@ test("drafts private repository context into an editable unsaved description", a
   fireEvent.click(screen.getByRole("button", { name: "Draft locally" }));
   expect(await screen.findByDisplayValue("BudgetBug owns personal budget planning and bill tracking.")).toBeInTheDocument();
   expect(onDraftDescription).toHaveBeenCalledWith(budget.id);
-  fireEvent.click(screen.getByRole("button", { name: "Improve with Claude" }));
+  fireEvent.click(screen.getByRole("button", { name: "Generate with Claude" }));
   expect(await screen.findByDisplayValue("BudgetBug owns household budgeting, bills, and financial planning.")).toBeInTheDocument();
   expect(onImproveDescription).toHaveBeenCalledWith(budget.id);
-  expect(screen.getByRole("status")).toHaveTextContent("Claude draft ready");
-  expect(screen.getByRole("status")).toHaveTextContent("Nothing has been saved yet");
-  expect(screen.getByRole("button", { name: "Regenerate with Claude" })).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("Claude draft generated — save to apply it");
+  expect(screen.getByRole("status")).toHaveTextContent("Queen cannot use this draft until it is saved");
+  expect(screen.getByRole("button", { name: "Generate again with Claude" })).toBeInTheDocument();
   expect(onUpdate).not.toHaveBeenCalled();
   expect(screen.getByText(/one tool-free turn \(up to \$0.10\)/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Save worker changes" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save description to worker" }));
   expect(onUpdate).toHaveBeenCalledWith(
     budget.id,
     budget.name,
@@ -214,7 +214,7 @@ test("shows the real Claude improvement failure instead of appearing inert", asy
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  fireEvent.click(screen.getByRole("button", { name: "Improve with Claude" }));
+  fireEvent.click(screen.getByRole("button", { name: "Generate with Claude" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Runtime request returned 503: Claude Code is not available");
 });
 
