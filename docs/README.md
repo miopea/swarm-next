@@ -79,3 +79,4 @@ Current decision records:
 - [ADR 0040: Resource-pressure admission for automatic worker starts](decisions/0040-resource-pressure-admission-for-automatic-starts.md)
 - [ADR 0041: Deterministic exited-worker owned-work attention](decisions/0041-deterministic-exited-worker-owned-work-attention.md)
 - [ADR 0042: Serialized resource-aware worker wakes](decisions/0042-serialized-resource-aware-worker-wakes.md)
+- [ADR 0043: Loaded worker before Active work](decisions/0043-loaded-worker-before-active.md)

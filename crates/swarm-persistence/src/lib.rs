@@ -1098,6 +1098,25 @@ impl TaskStore {
         self.transition_task_inner(id, target, note, None, actor)
     }
 
+    /// Applies a transition only while the task remains bound to one live worker session.
+    ///
+    /// This is the guarded coordination path for Queen: a stale session or a
+    /// concurrent worker exit fails before lifecycle state changes.
+    ///
+    /// # Errors
+    /// Returns `WorkerSessionNotActive` for a stale assignment and otherwise
+    /// propagates lifecycle, note, capacity, or persistence failures.
+    pub fn transition_assigned_task_with_note_as(
+        &self,
+        id: TaskId,
+        target: TaskState,
+        note: &str,
+        session_id: WorkerSessionId,
+        actor: &TaskActivityActor,
+    ) -> Result<Task, TaskStoreError> {
+        self.transition_task_inner(id, target, note, Some(session_id), actor)
+    }
+
     /// Applies an assigned worker transition and queues Blocked or Review for Queen atomically.
     ///
     /// # Errors

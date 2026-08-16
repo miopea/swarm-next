@@ -920,7 +920,7 @@ fn create_task_tool() -> Tool {
 fn assign_task_tool() -> Tool {
     tool(
         "swarm_assign_task",
-        "Queen only: assign a durable task to a worker's currently active session. Choose a worker whose workspace owns the task's repository.",
+        "Queen only: assign durable work to the stable worker whose workspace owns the task's repository. Sleeping workers are valid: assignment queues a guarded wake, and Queen must observe the live session before moving work to Active.",
         &json!({
             "type": "object",
             "properties": {
@@ -1080,7 +1080,7 @@ fn refresh_jira_project_tool() -> Tool {
 fn transition_task_tool() -> Tool {
     tool(
         "swarm_transition_task",
-        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Include a concise Blocked reason or Review handoff note; Queen receives it when not operator-engaged.",
+        "Move a task through its explicit lifecycle. Workers may report only Active, Blocked, or Review for their own assignment. Queen must wake an assigned sleeping worker and observe its live session before moving Ready or Blocked work to Active. Include a concise Blocked reason or Review handoff note; Queen receives it when not operator-engaged.",
         &json!({
             "type": "object",
             "properties": {
@@ -1410,6 +1410,70 @@ mod tests {
 
         let denied = response_json(handle(bridge, request(&worker_token)).await).await;
         assert!(denied["result"]["isError"].as_bool().unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn queen_agent_cannot_activate_work_before_the_assigned_worker_is_loaded() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let task = store
+            .create_task("Wake before Active", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+
+        let assigned = response_json(
+            handle(
+                bridge.clone(),
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_assign_task",
+                        "arguments": {
+                            "task_id": task.id.to_string(),
+                            "worker_id": worker_id.to_string()
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(assigned["result"]["isError"], false);
+
+        let start = |bridge: AgentBridge| {
+            handle(
+                bridge,
+                mcp_request(
+                    Some(&queen_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_transition_task",
+                        "arguments": {
+                            "task_id": task.id.to_string(),
+                            "state": "active",
+                            "note": "Worker is ready"
+                        }
+                    }),
+                ),
+            )
+        };
+        let premature = response_json(start(bridge.clone()).await).await;
+        assert_eq!(premature["result"]["isError"], true);
+        assert!(
+            premature["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("active session")
+        );
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Ready);
+
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        let active = response_json(start(bridge).await).await;
+        assert_eq!(active["result"]["isError"], false);
+        assert_eq!(active["result"]["structuredContent"]["state"], "active");
     }
 
     #[tokio::test]

@@ -307,6 +307,7 @@ test("makes Queen automation observable, opt-in, and manually runnable", async (
   expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("3" + "2 stale · 1 exited");
   expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("waiting for memory pressure to settle");
   expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("starts one worker at a time");
+  expect(screen.getByLabelText("Deterministic coordinator status")).toHaveTextContent("before Active work begins");
 
   fireEvent.click(toggle);
   expect(await screen.findByRole("checkbox", { name: "Automatic on" })).toBeChecked();

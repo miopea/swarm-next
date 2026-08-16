@@ -180,6 +180,11 @@ until the next pass samples the newly changed process tree. This preserves the
 legacy pressure-management outcome without recreating fleet-wide start bursts,
 suspension, or timer tuning.
 
+Queen's lifecycle authority is ordered behind that wake. Ready and Blocked
+work cannot become Active through MCP until the assigned worker has a live,
+transaction-validated session. This closes the same-turn assign-then-start race
+without imposing local-worker semantics on Jira's externally canonical state.
+
 ## Complete commit ledger
 
 The repeatable ledger pass now covers all 1,431 reachable commits. It records

@@ -2083,6 +2083,25 @@ impl TaskService {
                 .transition_worker_task(task_id, target, note, session_id)
                 .map_err(Into::into);
         }
+        if target == TaskState::Active {
+            let task = self.store.get_task(task_id)?;
+            let session_id = task
+                .assigned_session_id
+                .ok_or(ApplicationError::WorkerNotRunning)?;
+            return self
+                .store
+                .transition_assigned_task_with_note_as(
+                    task_id,
+                    target,
+                    note,
+                    session_id,
+                    &TaskActivityActor::worker(principal.worker_id),
+                )
+                .map_err(|error| match error {
+                    TaskStoreError::WorkerSessionNotActive => ApplicationError::WorkerNotRunning,
+                    error => ApplicationError::Store(error),
+                });
+        }
         self.store
             .transition_task_with_note_as(
                 task_id,
@@ -2531,6 +2550,59 @@ mod tests {
             service.transition_task(worker_principal, task.id, TaskState::Completed, ""),
             Err(ApplicationError::NotAuthorized)
         ));
+    }
+
+    #[test]
+    fn queen_must_wake_the_assigned_worker_before_starting_or_resuming_work() {
+        let (service, queen, worker) = setup();
+        let queen_principal = AgentPrincipal::from(&queen);
+        let task = service
+            .create_task(
+                queen_principal,
+                "Wake before work",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        service
+            .transition_task(queen_principal, task.id, TaskState::Ready, "")
+            .unwrap();
+        service
+            .assign_task(queen_principal, task.id, worker.id)
+            .unwrap();
+
+        assert!(matches!(
+            service.transition_task(queen_principal, task.id, TaskState::Active, "Starting"),
+            Err(ApplicationError::WorkerNotRunning)
+        ));
+        assert_eq!(
+            service.store().get_task(task.id).unwrap().state,
+            TaskState::Ready
+        );
+
+        let session_id = WorkerSessionId::new();
+        service
+            .store()
+            .bind_worker_session(worker.id, session_id)
+            .unwrap();
+        let active = service
+            .transition_task(queen_principal, task.id, TaskState::Active, "Worker loaded")
+            .unwrap();
+        assert_eq!(active.state, TaskState::Active);
+
+        service
+            .transition_task(queen_principal, task.id, TaskState::Blocked, "Waiting")
+            .unwrap();
+        service.store().release_worker_session(session_id).unwrap();
+        assert!(matches!(
+            service.transition_task(queen_principal, task.id, TaskState::Active, "Resume"),
+            Err(ApplicationError::WorkerNotRunning)
+        ));
+        assert_eq!(
+            service.store().get_task(task.id).unwrap().state,
+            TaskState::Blocked
+        );
     }
 
     #[test]
