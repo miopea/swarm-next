@@ -5,6 +5,7 @@ import {
   draftWorkerDescription,
   fetchWorkers,
   fetchWorkspaces,
+  improveWorkerDescription,
   removeWorker,
   reorderWorkers,
   startWorker,
@@ -42,6 +43,7 @@ test("owns worker discovery, configuration, ordering, and lifecycle commands", a
     worker,
     null,
     { description: "Clover owns the test fixture.", source: "repository_metadata" },
+    { description: "Clover owns garden coordination and seasonal planning.", source: "claude_review" },
   ];
   const fetch = vi.fn().mockImplementation(() => {
     const body = responses.shift();
@@ -67,6 +69,10 @@ test("owns worker discovery, configuration, ordering, and lifecycle commands", a
   await expect(draftWorkerDescription("operator", "worker/one")).resolves.toEqual({
     description: "Clover owns the test fixture.",
     source: "repository_metadata",
+  });
+  await expect(improveWorkerDescription("operator", "worker/one")).resolves.toEqual({
+    description: "Clover owns garden coordination and seasonal planning.",
+    source: "claude_review",
   });
 
   expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/workers", expect.objectContaining({
@@ -97,6 +103,9 @@ test("owns worker discovery, configuration, ordering, and lifecycle commands", a
     method: "DELETE",
   }));
   expect(fetch).toHaveBeenNthCalledWith(9, "/api/v1/workers/worker%2Fone/description-draft", expect.objectContaining({
+    method: "POST",
+  }));
+  expect(fetch).toHaveBeenNthCalledWith(10, "/api/v1/workers/worker%2Fone/description-improvement", expect.objectContaining({
     method: "POST",
   }));
 });

@@ -25,6 +25,7 @@ mod terminal_attach;
 mod terminal_control;
 mod terminal_host;
 mod terminal_socket;
+mod worker_description_ai;
 mod worker_runtime;
 mod workers;
 
@@ -100,6 +101,7 @@ const MAX_TERMINAL_WEBSOCKETS: usize = 32;
 const RESOURCE_ADVISORY_BYTES: u64 = 256 * 1024 * 1024;
 const RESOURCE_CRITICAL_BYTES: u64 = 512 * 1024 * 1024;
 const WORKER_RECOVERY_STABILITY_SECONDS: i64 = 5 * 60;
+const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -111,6 +113,7 @@ pub struct AppState {
     task_store: Option<TaskStore>,
     agent_bridge: Option<agent::AgentBridge>,
     worker_lifecycle: Arc<Mutex<()>>,
+    worker_description_improvement_limit: Arc<Semaphore>,
     development_reload: Arc<Mutex<()>>,
     coordination_delivery: Arc<Mutex<()>>,
     jira_delivery: Arc<Mutex<()>>,
@@ -161,6 +164,9 @@ impl AppState {
             task_store: None,
             agent_bridge: None,
             worker_lifecycle: Arc::new(Mutex::new(())),
+            worker_description_improvement_limit: Arc::new(Semaphore::new(
+                MAX_WORKER_DESCRIPTION_IMPROVEMENTS,
+            )),
             development_reload: Arc::new(Mutex::new(())),
             coordination_delivery: Arc::new(Mutex::new(())),
             jira_delivery: Arc::new(Mutex::new(())),
@@ -1997,6 +2003,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/workers/{worker_id}/description-draft",
             post(workers::draft_worker_description),
+        )
+        .route(
+            "/api/v1/workers/{worker_id}/description-improvement",
+            post(workers::improve_worker_description),
         )
         .route("/api/v1/workspaces", get(workers::list_workspaces))
         .route(

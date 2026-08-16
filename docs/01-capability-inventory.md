@@ -25,7 +25,7 @@ Decision meanings:
 | Task history and audit | Keep | Implemented as bounded, durable per-task events plus a quiet operator Activity view with task search and progress, assignment, and change filters. It excludes terminal output and transport noise. |
 | Direct terminal input | Keep | Essential, with explicit input ownership and stale-session protection. |
 | Groups and bulk worker actions | Investigate | Likely useful, but validate actual use and whether workspace selection replaces groups. |
-| Worker memory/context notes | Investigate | Preserve only if distinct from provider memory and project instructions. |
+| Worker routing descriptions | Redesign | Implemented as operator-reviewed Hive metadata for Queen routing, distinct from provider memory and project instructions. Swarm can draft locally from bounded README/manifest metadata or optionally improve that packet with one tool-free, non-persistent, budget-capped Claude turn; neither path saves without operator review. |
 
 ## Automation and orchestration
 

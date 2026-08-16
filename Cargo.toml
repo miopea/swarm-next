@@ -34,7 +34,7 @@ serde_json = "1"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "stream"] }
 subtle = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "set-header", "trace"] }
 tracing = "0.1"

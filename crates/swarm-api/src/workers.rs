@@ -405,6 +405,50 @@ pub(super) async fn draft_worker_description(
         .into_response())
 }
 
+pub(super) async fn improve_worker_description(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(worker_id): AxumPath<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let _permit = state
+        .worker_description_improvement_limit
+        .try_acquire()
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "description_improvement_busy",
+                "Another repository description is already being improved; try again when it finishes",
+            )
+        })?;
+    let worker_id = parse_worker_id(&worker_id)?;
+    let profile = task_store(&state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    let context = repository_description_context(Path::new(&profile.workspace)).await?;
+    let description = super::worker_description_ai::improve_description(&context)
+        .await
+        .map_err(|error| description_ai_error(&error))?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(WorkerDescriptionDraft {
+            description,
+            source: "claude_review",
+        }),
+    )
+        .into_response())
+}
+
+fn description_ai_error(error: &super::worker_description_ai::DescriptionAiError) -> ApiError {
+    use super::worker_description_ai::DescriptionAiError;
+    let status = match error {
+        DescriptionAiError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        DescriptionAiError::TimedOut => StatusCode::GATEWAY_TIMEOUT,
+        DescriptionAiError::InvalidResponse | DescriptionAiError::Failed => StatusCode::BAD_GATEWAY,
+    };
+    ApiError::new(status, "description_improvement_failed", error.to_string())
+}
+
 const MAX_DESCRIPTION_SOURCE_BYTES: u64 = 64 * 1024;
 
 async fn repository_description_draft(workspace: &Path) -> Result<String, ApiError> {
@@ -468,6 +512,57 @@ async fn repository_description_draft(workspace: &Path) -> Result<String, ApiErr
     })
 }
 
+async fn repository_description_context(workspace: &Path) -> Result<String, ApiError> {
+    let repository_name = workspace
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Repository");
+    let local_draft = repository_description_draft(workspace).await?;
+    let package_json = read_description_source(workspace, "package.json").await;
+    let cargo_toml = read_description_source(workspace, "Cargo.toml").await;
+    let pyproject = read_description_source(workspace, "pyproject.toml").await;
+    let readme = read_first_available(
+        workspace,
+        &[
+            "README.md",
+            "README.MD",
+            "readme.md",
+            "README.txt",
+            "README",
+        ],
+    )
+    .await;
+    let package_description = package_json
+        .as_deref()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+        .and_then(|value| {
+            value
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .and_then(|value| clean_summary(&value));
+    let manifest_description = cargo_toml
+        .as_deref()
+        .and_then(manifest_description)
+        .or_else(|| pyproject.as_deref().and_then(manifest_description));
+    let readme_excerpt = readme.as_deref().and_then(readme_summary);
+    let mut sections = vec![
+        format!("Repository name: {repository_name}"),
+        format!("Local deterministic draft: {local_draft}"),
+    ];
+    if let Some(description) = package_description {
+        sections.push(format!("Package description: {description}"));
+    }
+    if let Some(description) = manifest_description {
+        sections.push(format!("Manifest description: {description}"));
+    }
+    if let Some(excerpt) = readme_excerpt {
+        sections.push(format!("README excerpt: {excerpt}"));
+    }
+    Ok(sections.join("\n"))
+}
+
 async fn read_first_available(workspace: &Path, names: &[&str]) -> Option<String> {
     for name in names {
         if let Some(content) = read_description_source(workspace, name).await {
@@ -524,7 +619,7 @@ fn readme_summary(content: &str) -> Option<String> {
     clean_summary(&paragraph.join(" "))
 }
 
-fn clean_summary(value: &str) -> Option<String> {
+pub(super) fn clean_summary(value: &str) -> Option<String> {
     let normalized = value
         .replace(['\r', '\n', '\t'], " ")
         .split_whitespace()
@@ -655,5 +750,31 @@ mod description_tests {
         assert!(draft.contains("coordinates durable worker sessions for software teams"));
         assert!(!draft.contains("badge.svg"));
         assert!(!draft.contains("Do not include this"));
+    }
+
+    #[tokio::test]
+    async fn claude_context_contains_only_bounded_metadata_not_manifest_scripts() {
+        let directory = tempfile::tempdir().unwrap();
+        tokio::fs::write(
+            directory.path().join("package.json"),
+            r#"{"name":"clover","description":"Coordinates garden work.","scripts":{"private":"do-not-send"}}"#,
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            directory.path().join("README.md"),
+            "# Clover\n\nA friendly garden coordination tool.\n\nSECRET SECOND PARAGRAPH",
+        )
+        .await
+        .unwrap();
+
+        let context = repository_description_context(directory.path())
+            .await
+            .unwrap();
+        assert!(context.contains("Coordinates garden work"));
+        assert!(context.contains("friendly garden coordination tool"));
+        assert!(!context.contains("do-not-send"));
+        assert!(!context.contains("SECRET SECOND PARAGRAPH"));
+        assert!(context.len() < super::super::worker_description_ai::MAX_CONTEXT_BYTES);
     }
 }

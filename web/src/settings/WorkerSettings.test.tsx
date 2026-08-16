@@ -159,6 +159,8 @@ test("desktop drag ordering keeps accessible arrow controls as a fallback", () =
 
 test("drafts private repository context into an editable unsaved description", async () => {
   const onDraftDescription = vi.fn().mockResolvedValue("BudgetBug owns personal budget planning and bill tracking.");
+  const onImproveDescription = vi.fn().mockResolvedValue("BudgetBug owns household budgeting, bills, and financial planning.");
+  const onUpdate = vi.fn();
   render(
     <WorkerSettings
       workers={[queen, budget]}
@@ -166,17 +168,22 @@ test("drafts private repository context into an editable unsaved description", a
       busy={false}
       providers={{ claude_code: true, codex: true }}
       onCreate={vi.fn()}
-      onUpdate={vi.fn()}
+      onUpdate={onUpdate}
       onRemove={vi.fn()}
       onDraftDescription={onDraftDescription}
+      onImproveDescription={onImproveDescription}
       onReorder={vi.fn()}
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  fireEvent.click(screen.getByRole("button", { name: "Draft from repository" }));
+  fireEvent.click(screen.getByRole("button", { name: "Draft locally" }));
   expect(await screen.findByDisplayValue("BudgetBug owns personal budget planning and bill tracking.")).toBeInTheDocument();
   expect(onDraftDescription).toHaveBeenCalledWith(budget.id);
-  expect(screen.getByText(/local README and project metadata only/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Improve with Claude" }));
+  expect(await screen.findByDisplayValue("BudgetBug owns household budgeting, bills, and financial planning.")).toBeInTheDocument();
+  expect(onImproveDescription).toHaveBeenCalledWith(budget.id);
+  expect(onUpdate).not.toHaveBeenCalled();
+  expect(screen.getByText(/one tool-free turn \(up to \$0.10\)/)).toBeInTheDocument();
 });
 
 test("pins managed Scout after Queen while keeping provider and routing settings editable", () => {

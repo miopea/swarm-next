@@ -31,6 +31,7 @@ export {
   draftWorkerDescription,
   fetchWorkers,
   fetchWorkspaces,
+  improveWorkerDescription,
   removeWorker,
   reorderWorkers,
   startWorker,

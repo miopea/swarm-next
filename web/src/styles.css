@@ -615,6 +615,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .worker-description-heading { align-items: center; display: flex; gap: 10px; justify-content: space-between; }
 .worker-description-heading .secondary-button { min-height: 30px; padding: 4px 8px; }
 .worker-provider-field small { color: var(--text-muted); font-weight: 400; line-height: 1.35; }
+.worker-description-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .worker-preference-form > small { grid-column: 1 / -1; }
 .worker-autostart { display: flex; align-items: center; gap: 7px; font-size: .8rem; }
 .worker-autostart input { width: 18px; height: 18px; margin: 0; }

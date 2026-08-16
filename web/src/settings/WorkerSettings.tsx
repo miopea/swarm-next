@@ -14,10 +14,11 @@ type Props = {
   onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean) => Promise<void>;
   onRemove: (workerId: string) => Promise<void>;
   onDraftDescription: (workerId: string) => Promise<string>;
+  onImproveDescription?: (workerId: string) => Promise<string>;
   onReorder: (workerIds: string[]) => Promise<void>;
 };
 
-export default function WorkerSettings({ workers, workspaces, busy, providers, onCreate, onUpdate, onRemove, onDraftDescription, onReorder }: Props) {
+export default function WorkerSettings({ workers, workspaces, busy, providers, onCreate, onUpdate, onRemove, onDraftDescription, onImproveDescription, onReorder }: Props) {
   const scout = workers.find((worker) => worker.system_role === "scout");
   const roster = workers.filter((worker) => worker.role !== "queen" && worker.system_role !== "scout");
   const available = workspaces.filter((workspace) => !workspace.configured_worker_id);
@@ -102,6 +103,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             onUpdate={onUpdate}
             onRemove={onRemove}
             onDraftDescription={onDraftDescription}
+            onImproveDescription={onImproveDescription}
             providers={providers}
             onDragStart={() => undefined}
             onDragEnd={() => undefined}
@@ -124,6 +126,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             onUpdate={onUpdate}
             onRemove={onRemove}
             onDraftDescription={onDraftDescription}
+            onImproveDescription={onImproveDescription}
             providers={providers}
             onDragStart={() => workerReorder.start(worker.id)}
             onDragEnd={workerReorder.end}
@@ -218,6 +221,7 @@ type WorkerPreferenceRowProps = {
   onUpdate: Props["onUpdate"];
   onRemove: Props["onRemove"];
   onDraftDescription: Props["onDraftDescription"];
+  onImproveDescription: Props["onImproveDescription"];
   providers: ProviderCapabilities;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -226,7 +230,7 @@ type WorkerPreferenceRowProps = {
   onDrop: (event: DragEvent) => void;
 };
 
-function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dropTarget, onMove, onUpdate, onRemove, onDraftDescription, providers, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
+function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dropTarget, onMove, onUpdate, onRemove, onDraftDescription, onImproveDescription, providers, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(worker.name);
   const [description, setDescription] = useState(worker.description ?? "");
@@ -235,6 +239,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dro
   const [confirmingRemoval, setConfirmingRemoval] = useState(false);
   const [draftingDescription, setDraftingDescription] = useState(false);
   const [draftError, setDraftError] = useState("");
+  const [improvingDescription, setImprovingDescription] = useState(false);
   const attention = workerAttention(worker);
 
   async function save(event: FormEvent) {
@@ -269,6 +274,19 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dro
     }
   }
 
+  async function improveDescription() {
+    if (!onImproveDescription) return;
+    setImprovingDescription(true);
+    setDraftError("");
+    try {
+      setDescription(await onImproveDescription(worker.id));
+    } catch {
+      setDraftError("Claude could not improve this description. The current editable draft is unchanged.");
+    } finally {
+      setImprovingDescription(false);
+    }
+  }
+
   return (
     <div
       className={`configured-worker${dragging ? " configured-worker-dragging" : ""}${dropTarget ? " drop-target-before" : ""}`}
@@ -286,7 +304,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dro
           <label><span>Worker name</span><input value={name} disabled={managed} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus /></label>
           {managed && <small className="privacy-note">Scout is pinned after Queen and keeps ordinary worker authority for deliberate cross-repository work.</small>}
           <small className="worker-repository-path"><span>Repository</span><code>{worker.workspace}</code></small>
-          <div className="worker-description-field"><span className="worker-description-heading"><label htmlFor={`worker-description-${worker.id}`}>Queen routing description</label><button type="button" className="secondary-button" disabled={busy || draftingDescription} onClick={() => void draftDescription()}>{draftingDescription ? "Reading repository…" : description ? "Refresh from repository" : "Draft from repository"}</button></span><textarea id={`worker-description-${worker.id}`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" /><small>The draft reads local README and project metadata only. Review it before saving.</small>{draftError && <small className="field-error" role="alert">{draftError}</small>}</div>
+          <div className="worker-description-field"><span className="worker-description-heading"><label htmlFor={`worker-description-${worker.id}`}>Queen routing description</label><span className="worker-description-actions"><button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void draftDescription()}>{draftingDescription ? "Reading repository…" : description ? "Refresh local draft" : "Draft locally"}</button>{onImproveDescription && <button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void improveDescription()}>{improvingDescription ? "Claude is reviewing…" : "Improve with Claude"}</button>}</span></span><textarea id={`worker-description-${worker.id}`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" /><small>Local drafting reads bounded README and manifest metadata. Improve with Claude sends only that metadata in one tool-free turn (up to $0.10). Nothing is saved until you choose Save.</small>{draftError && <small className="field-error" role="alert">{draftError}</small>}</div>
           <div className="worker-provider-field"><label htmlFor={`worker-provider-${worker.id}`}>Default coding provider</label><select id={`worker-provider-${worker.id}`} value={provider} disabled={worker.running} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
             <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · unavailable"}</option>
