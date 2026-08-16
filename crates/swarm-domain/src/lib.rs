@@ -745,6 +745,22 @@ pub struct FederationStewardTaskReceipt {
     pub processed_at: i64,
 }
 
+/// Keeper-visible, bounded audit evidence for one Steward task command. It
+/// contains only public Apiary identity and Keeper-owned shared-work metadata.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FederationStewardTaskAuditEntry {
+    pub command_id: FederationStewardTaskCommandId,
+    pub member_hive_id: HiveId,
+    pub member_operator_id: OperatorId,
+    pub target_hive_id: HiveId,
+    pub stewardship_id: Option<StewardshipId>,
+    pub task_id: Option<ApiaryTaskId>,
+    pub title: String,
+    pub priority: TaskPriority,
+    pub outcome: FederationStewardTaskOutcome,
+    pub processed_at: i64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FederationStewardTaskOutboxState {

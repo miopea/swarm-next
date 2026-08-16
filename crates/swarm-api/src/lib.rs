@@ -65,14 +65,15 @@ use swarm_domain::{
     DecisionRequestId, FederationCatalogSnapshot, FederationClaimHandoff, FederationClaimHandoffId,
     FederationClaimId, FederationDepartureReadiness, FederationDepartureReceipt,
     FederationHandoffTarget, FederationJoinSubmission, FederationMemberConnection,
-    FederationNodeId, FederationSharedClaim, FederationStewardTaskCommand,
-    FederationStewardTaskOutboxEntry, FederationStewardTaskReceipt, FederationStewardshipSnapshot,
-    FederationSyncCondition, FederationTaskCommand, FederationTaskOutboxEntry,
-    FederationTaskOutboxStatus, FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard,
-    HiveId, HiveIdentity, JiraConnectionState, JiraProjectBindingId, JiraProjectScope,
-    JiraStatusMapping, LocalApiaryContext, LocalApiaryRole, LocalApiaryTaskExecution, OperatorId,
-    ProviderKind, SharedWorkBackend, StewardCapability, Stewardship, StewardshipId, TaskId,
-    TaskPriority, TaskState, WorkerAttentionState, WorkerId, WorkerProfile, WorkerSessionId,
+    FederationNodeId, FederationSharedClaim, FederationStewardTaskAuditEntry,
+    FederationStewardTaskCommand, FederationStewardTaskOutboxEntry, FederationStewardTaskReceipt,
+    FederationStewardshipSnapshot, FederationSyncCondition, FederationTaskCommand,
+    FederationTaskOutboxEntry, FederationTaskOutboxStatus, FederationTaskPage,
+    FederationTaskSyncStatus, HiveConnectionCard, HiveId, HiveIdentity, JiraConnectionState,
+    JiraProjectBindingId, JiraProjectScope, JiraStatusMapping, LocalApiaryContext, LocalApiaryRole,
+    LocalApiaryTaskExecution, OperatorId, ProviderKind, SharedWorkBackend, StewardCapability,
+    Stewardship, StewardshipId, TaskId, TaskPriority, TaskState, WorkerAttentionState, WorkerId,
+    WorkerProfile, WorkerSessionId,
 };
 #[cfg(test)]
 use swarm_domain::{ControlRoomEventKind, PresenceDeviceId};
@@ -1725,6 +1726,10 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/apiary/members", get(apiary_members))
         .route("/api/v1/apiary/stewardships", get(apiary_stewardships))
         .route(
+            "/api/v1/apiary/steward-task-audit",
+            get(apiary_steward_task_audit),
+        )
+        .route(
             "/api/v1/apiary/stewardships/by-operator/{operator_id}",
             put(set_apiary_stewardship),
         )
@@ -2289,6 +2294,17 @@ async fn apiary_stewardships(
         .stewardships()
         .map_err(application_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(stewardships)).into_response())
+}
+
+async fn apiary_steward_task_audit(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let audit: Vec<FederationStewardTaskAuditEntry> = apiary_service(&state)?
+        .federation_steward_task_audit(100)
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(audit)).into_response())
 }
 
 async fn set_apiary_stewardship(
@@ -8430,6 +8446,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response_json(exact_retry).await, routed_json);
+
+        let audit = authorized_get(app.clone(), "/api/v1/apiary/steward-task-audit").await;
+        assert_eq!(audit.status(), StatusCode::OK);
+        assert_eq!(audit.headers()[header::CACHE_CONTROL], "no-store");
+        let audit_json = response_json(audit).await;
+        assert_eq!(audit_json.as_array().map(Vec::len), Some(1));
+        assert_eq!(audit_json[0]["command_id"], steward_command_id.to_string());
+        assert_eq!(
+            audit_json[0]["member_operator_id"],
+            steward_operator_id.to_string()
+        );
+        assert_eq!(audit_json[0]["target_hive_id"], managed_hive_id.to_string());
+        assert_eq!(audit_json[0]["title"], "Coordinate a managed Hive outcome");
+        assert!(!audit_json.to_string().contains("worker"));
+        assert!(!audit_json.to_string().contains("repository"));
 
         let listed = authorized_get(app.clone(), "/api/v1/apiary/stewardships").await;
         assert_eq!(listed.status(), StatusCode::OK);

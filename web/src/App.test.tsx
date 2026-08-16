@@ -163,7 +163,7 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
     if (url === "/api/v1/runtime/resources") return Promise.resolve(ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 268435456, critical_bytes: 536870912 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" } }));
     if (url === "/api/v1/terminal/history/diagnostics") return Promise.resolve(ok({ type: "history_diagnostics", diagnostics: null }));
     if (url.endsWith("/apiary/members")) return Promise.resolve(ok([{ hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true }]));
-    if (url.endsWith("/apiary/jira-projects") || url.endsWith("/apiary/shared-work") || url.endsWith("/apiary/stewardships")) return Promise.resolve(ok([]));
+    if (url.endsWith("/apiary/jira-projects") || url.endsWith("/apiary/shared-work") || url.endsWith("/apiary/stewardships") || url.endsWith("/apiary/steward-task-audit")) return Promise.resolve(ok([]));
     if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
     if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
     if (url.includes("/api/v1/providers")) return Promise.resolve(ok({ claude_code: true, codex: false }));

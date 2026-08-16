@@ -273,6 +273,18 @@ export type FederationStewardTaskReceipt = {
   task: ApiaryTask | null;
   processed_at: number;
 };
+export type FederationStewardTaskAuditEntry = {
+  command_id: string;
+  member_hive_id: string;
+  member_operator_id: string;
+  target_hive_id: string;
+  stewardship_id: string | null;
+  task_id: string | null;
+  title: string;
+  priority: TaskPriority;
+  outcome: "applied" | "rejected";
+  processed_at: number;
+};
 export type FederationStewardTaskOutboxEntry = {
   command: FederationStewardTaskCommand;
   state: "queued" | "applied" | "rejected";
@@ -738,6 +750,13 @@ export async function fetchApiaryMembers(operatorToken: string): Promise<ApiaryM
 export async function fetchApiaryStewardships(operatorToken: string): Promise<Stewardship[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/stewardships");
   return response.json() as Promise<Stewardship[]>;
+}
+
+export async function fetchApiaryStewardTaskAudit(
+  operatorToken: string,
+): Promise<FederationStewardTaskAuditEntry[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/apiary/steward-task-audit");
+  return response.json() as Promise<FederationStewardTaskAuditEntry[]>;
 }
 
 export async function setApiaryStewardship(

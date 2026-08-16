@@ -307,6 +307,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-project-list li { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
 .keeper-project-list strong { color: var(--accent-strong); }
 .keeper-steward-list li > span:last-child { color: var(--muted); font-size: .74rem; line-height: 1.4; text-align: right; }
+.keeper-steward-audit-heading { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.keeper-steward-audit-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.keeper-steward-audit-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+.keeper-steward-audit-list li > span:first-child { display: grid; min-width: 0; gap: 3px; }
+.keeper-steward-audit-list strong, .keeper-steward-audit-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.keeper-steward-audit-list small { color: var(--muted); font-size: .7rem; }
 .keeper-empty { margin: 0; padding: 17px 0 4px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .keeper-load-state { display: flex; max-width: 1500px; align-items: center; justify-content: space-between; gap: 12px; margin: 0 auto 16px; padding: 11px 14px; border: 1px solid var(--bad); border-radius: var(--radius-sm); background: var(--bad-soft); }
 .member-summary dd { overflow: hidden; font-size: 1rem; text-overflow: ellipsis; white-space: nowrap; }
@@ -1113,6 +1119,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .keeper-hive-list .keeper-role-badge { grid-column: 2; justify-self: start; }
   .keeper-work-list li, .keeper-steward-list li { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .keeper-work-list li > span:last-child, .keeper-steward-list li > span:last-child { text-align: left; }
+  .keeper-steward-audit-list li { grid-template-columns: minmax(0, 1fr) auto; }
   .member-task-owner { justify-items: start; }
   .member-task-worker-route { width: 100%; grid-template-columns: minmax(0, 1fr); }
   .member-task-worker-route .primary-action { width: 100%; }

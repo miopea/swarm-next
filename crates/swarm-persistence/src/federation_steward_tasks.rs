@@ -2,9 +2,10 @@ use std::str::FromStr;
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    FederationStewardTaskCommand, FederationStewardTaskCommandId, FederationStewardTaskOutboxEntry,
+    ApiaryTaskId, FederationStewardTaskAuditEntry, FederationStewardTaskCommand,
+    FederationStewardTaskCommandId, FederationStewardTaskOutboxEntry,
     FederationStewardTaskOutboxState, FederationStewardTaskOutcome, FederationStewardTaskReceipt,
-    HiveId, LocalApiaryContext, LocalApiaryRole, StewardCapability, StewardshipId,
+    HiveId, LocalApiaryContext, LocalApiaryRole, OperatorId, StewardCapability, StewardshipId,
 };
 
 use super::{
@@ -370,6 +371,76 @@ impl TaskStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
+
+    /// Returns recent Keeper-side Steward task audit evidence. The result is
+    /// bounded and contains no remote worker, repository, terminal, or provider
+    /// identity.
+    ///
+    /// # Errors
+    /// Rejects non-Keepers, invalid bounds, corrupt audit rows, and persistence
+    /// failures.
+    pub fn list_federation_steward_task_audit(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<FederationStewardTaskAuditEntry>, TaskStoreError> {
+        if limit == 0 || limit > 100 {
+            return Err(TaskStoreError::InvalidFederationStewardTask);
+        }
+        let identity = self.local_hive_identity()?;
+        let LocalApiaryContext::Federated { apiary, local_role } = self.local_apiary_context()?
+        else {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        };
+        if local_role != LocalApiaryRole::Keeper
+            || apiary.keeper_operator_id != identity.operator.id
+        {
+            return Err(TaskStoreError::ApiaryKeeperRequired);
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT command_id, member_hive_id, member_operator_id, target_hive_id,
+                    stewardship_id, task_id, command_json, outcome, processed_at
+             FROM apiary_steward_task_commands
+             WHERE apiary_id = ?1
+             ORDER BY processed_at DESC, command_id DESC LIMIT ?2",
+        )?;
+        let limit =
+            i64::try_from(limit).map_err(|_| TaskStoreError::InvalidFederationStewardTask)?;
+        statement
+            .query_map(params![apiary.id.to_string(), limit], |row| {
+                let command: FederationStewardTaskCommand =
+                    serde_json::from_str(&row.get::<_, String>(6)?).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?;
+                Ok(FederationStewardTaskAuditEntry {
+                    command_id: parse_domain_id::<FederationStewardTaskCommandId>(
+                        &row.get::<_, String>(0)?,
+                    )?,
+                    member_hive_id: parse_domain_id::<HiveId>(&row.get::<_, String>(1)?)?,
+                    member_operator_id: parse_domain_id::<OperatorId>(&row.get::<_, String>(2)?)?,
+                    target_hive_id: parse_domain_id::<HiveId>(&row.get::<_, String>(3)?)?,
+                    stewardship_id: row
+                        .get::<_, Option<String>>(4)?
+                        .map(|value| parse_domain_id::<StewardshipId>(&value))
+                        .transpose()?,
+                    task_id: row
+                        .get::<_, Option<String>>(5)?
+                        .map(|value| parse_domain_id::<ApiaryTaskId>(&value))
+                        .transpose()?,
+                    title: command.title,
+                    priority: command.priority,
+                    outcome: FederationStewardTaskOutcome::from_str(&row.get::<_, String>(7)?)
+                        .map_err(|()| rusqlite::Error::InvalidQuery)?,
+                    processed_at: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
 }
 
 fn validate_command(
@@ -600,6 +671,15 @@ mod tests {
             .expect("audit count");
         assert_eq!(task_count, 1);
         assert_eq!(audit_count, 1);
+        drop(connection);
+        let audit = keeper
+            .list_federation_steward_task_audit(20)
+            .expect("audit list");
+        assert_eq!(audit.len(), 1);
+        assert_eq!(audit[0].member_hive_id, steward_identity.hive.id);
+        assert_eq!(audit[0].target_hive_id, target_hive_id);
+        assert_eq!(audit[0].title, "Investigate the shared failure");
+        assert_eq!(audit[0].task_id, receipt.task.map(|task| task.id));
     }
 
     #[test]
@@ -659,5 +739,12 @@ mod tests {
             .expect("audit outcome");
         assert_eq!(task_count, 0);
         assert_eq!(outcome, "rejected");
+        drop(connection);
+        let audit = keeper
+            .list_federation_steward_task_audit(20)
+            .expect("audit list");
+        assert_eq!(audit.len(), 1);
+        assert_eq!(audit[0].outcome, FederationStewardTaskOutcome::Rejected);
+        assert!(audit[0].task_id.is_none());
     }
 }

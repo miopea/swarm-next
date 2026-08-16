@@ -111,6 +111,10 @@ whose durable home is this Hive. A synchronized Steward additionally sees only
 her own managed Hives and granted capability names. With **Assign**, she can
 route an outcome through Keeper and see queued or rejected delivery state
 without seeing remote workers, repositories, terminals, or credentials.
+Keeper sees bounded recent accepted and declined Steward routing, and an
+accepted shared task names its public routing Steward. This audit view still
+contains no remote worker, repository, terminal, provider session, or node
+credential.
 Browser acceptance uses route-local public fixture data so desktop and Android
 layouts can be proved without changing the dogfood Keeper, Jira, membership,
 or federation credentials.

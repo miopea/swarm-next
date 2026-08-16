@@ -9,9 +9,9 @@ use swarm_domain::{
     FederationDepartureReadiness, FederationDepartureReceipt, FederationJoinAcceptance,
     FederationJoinInvitation, FederationJoinReadiness, FederationJoinSubmission,
     FederationMemberConnection, FederationNodeId, FederationSharedClaim,
-    FederationStewardTaskCommand, FederationStewardTaskCommandId, FederationStewardTaskOutboxEntry,
-    FederationStewardTaskReceipt, FederationStewardshipSnapshot, FederationSyncCondition,
-    FederationSyncHealth, FederationTaskCommand, FederationTaskCommandId,
+    FederationStewardTaskAuditEntry, FederationStewardTaskCommand, FederationStewardTaskCommandId,
+    FederationStewardTaskOutboxEntry, FederationStewardTaskReceipt, FederationStewardshipSnapshot,
+    FederationSyncCondition, FederationSyncHealth, FederationTaskCommand, FederationTaskCommandId,
     FederationTaskCommandReceipt, FederationTaskOutboxEntry, FederationTaskOutboxStatus,
     FederationTaskPage, FederationTaskSyncStatus, HiveConnectionCard, HiveId, JiraConnectionState,
     JiraProjectBindingId, LocalApiaryContext, LocalApiaryRole, LocalApiaryTaskExecution,
@@ -217,6 +217,20 @@ impl ApiaryService {
     ) -> Result<Vec<FederationStewardTaskOutboxEntry>, ApplicationError> {
         self.store
             .list_federation_steward_task_outbox()
+            .map_err(Into::into)
+    }
+
+    /// Returns recent Keeper-side audit evidence for guarded Steward task
+    /// routing.
+    ///
+    /// # Errors
+    /// Returns role, bound, corrupt-record, or persistence errors.
+    pub fn federation_steward_task_audit(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<FederationStewardTaskAuditEntry>, ApplicationError> {
+        self.store
+            .list_federation_steward_task_audit(limit)
             .map_err(Into::into)
     }
 
