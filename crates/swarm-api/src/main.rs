@@ -196,7 +196,7 @@ fn scout_workspace_from_roots(roots: &[PathBuf]) -> PathBuf {
         || {
             let first = roots.first().cloned().unwrap_or_else(|| PathBuf::from("."));
             if roots.len() == 1 {
-                return first.parent().map_or(first.clone(), PathBuf::from);
+                return first;
             }
             first
                 .ancestors()
@@ -404,5 +404,29 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     if let Err(error) = tokio::signal::ctrl_c().await {
         tracing::error!(%error, "failed to install interrupt signal");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scout_owns_the_single_configured_projects_root() {
+        assert_eq!(
+            scout_workspace_from_roots(&[PathBuf::from("/home/operator/projects")]),
+            PathBuf::from("/home/operator/projects")
+        );
+    }
+
+    #[test]
+    fn scout_uses_the_common_parent_for_multiple_repository_roots() {
+        assert_eq!(
+            scout_workspace_from_roots(&[
+                PathBuf::from("/home/operator/projects/personal"),
+                PathBuf::from("/home/operator/projects/work"),
+            ]),
+            PathBuf::from("/home/operator/projects")
+        );
     }
 }
