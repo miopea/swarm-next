@@ -12,13 +12,14 @@ test("explains a failed build without implying that workers or the current app s
     version: "0.1.0-dev-123456789abc-20260815040000-10",
     state: "failed",
     reload_available: true,
+    deployed_source_revision: "76543210fedc",
     source_revision: "abcdef012345",
     source_dirty: false,
   }} />);
 
   const status = screen.getByLabelText("App and API status");
   expect(status).toHaveTextContent("Development build failed");
-  expect(status).toHaveTextContent("Revision 1234567 is still serving this page");
+  expect(status).toHaveTextContent("Revision 7654321 is still serving this page");
   expect(status).toHaveTextContent("Workers were never restarted or interrupted");
   fireEvent.click(screen.getByRole("button", { name: "Retry development build" }));
   fireEvent.click(screen.getByRole("button", { name: "Build and reload" }));
@@ -31,12 +32,13 @@ test("names both revisions while a safe app reload is available", () => {
     version: "0.1.0-dev-123456789abc-20260815040000-10",
     state: "idle",
     reload_available: true,
+    deployed_source_revision: "76543210fedc",
     source_revision: "abcdef012345",
     source_dirty: false,
   }} />);
 
   expect(screen.getByLabelText("App and API status")).toHaveTextContent(
-    "Revision 1234567 is active. Build and switch the browser and API to working-copy revision abcdef0.",
+    "Revision 7654321 is active. Build and switch the browser and API to working-copy revision abcdef0.",
   );
 });
 
@@ -46,13 +48,14 @@ test("explains that the running build matches the polled working copy", () => {
     version: "0.1.0-dev-123456789abc-20260815040000-10",
     state: "ready",
     reload_available: false,
+    deployed_source_revision: "abcdef012345",
     source_revision: "abcdef012345",
     source_dirty: false,
   }} />);
 
   const status = screen.getByLabelText("App and API status");
   expect(status).toHaveTextContent("Running build matches the working copy");
-  expect(status).toHaveTextContent("Active revision 1234567 matches the product code in this checkout");
+  expect(status).toHaveTextContent("Active revision abcdef0 matches the product code in this checkout");
   expect(status).toHaveTextContent("Swarm checks the working copy every 15 seconds");
   expect(status).toHaveTextContent("without restarting Claude, Codex, or the worker engine");
 });
@@ -63,13 +66,14 @@ test("blocks an older or unrelated development checkout", () => {
     version: "0.1.0-123456789abc",
     state: "source_mismatch",
     reload_available: false,
+    deployed_source_revision: "76543210fedc",
     source_revision: "abcdef012345",
     source_dirty: false,
   }} />);
 
   const status = screen.getByLabelText("App and API status");
   expect(status).toHaveTextContent("Development checkout needs to catch up");
-  expect(status).toHaveTextContent("Revision 1234567 is active");
+  expect(status).toHaveTextContent("Revision 7654321 is active");
   expect(status).toHaveTextContent("working-copy revision abcdef0 does not contain that deployed source");
   expect(screen.queryByRole("button", { name: /reload|build/i })).not.toBeInTheDocument();
 });

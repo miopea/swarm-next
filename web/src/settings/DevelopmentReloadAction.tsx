@@ -9,8 +9,8 @@ type Props = {
 export default function DevelopmentReloadAction({ busy, runtime, onReload }: Props) {
   const [confirming, setConfirming] = useState(false);
   if (!runtime?.enabled) return null;
-  const runningRevision = deployedRevision(runtime.version);
-  const workingRevision = shortRevision(runtime.source_revision);
+  const runningRevision = shortRevision(runtime.deployed_source_revision) ?? deployedRevision(runtime.version);
+  const workingRevision = shortRevision(runtime.source_revision) ?? "the working copy";
   if (runtime.state === "source_mismatch") return (
     <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="alert">
       <header><div><span className="runtime-component-name">App and API</span><strong>Development checkout needs to catch up</strong></div><span className="runtime-status-badge restart">Reload blocked</span></header>
@@ -62,6 +62,6 @@ function deployedRevision(version: string) {
   return version.match(/-(?:dev-)?([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7) ?? "the current build";
 }
 
-function shortRevision(revision: string | null) {
-  return revision?.slice(0, 7) || "the working copy";
+function shortRevision(revision?: string | null) {
+  return revision?.slice(0, 7);
 }

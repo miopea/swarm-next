@@ -207,6 +207,7 @@ export type DevelopmentRuntime = {
   version: string;
   state: "disabled" | "idle" | "requested" | "building" | "failed" | "ready" | "source_mismatch";
   reload_available: boolean;
+  deployed_source_revision?: string | null;
   source_revision: string | null;
   source_dirty: boolean;
 };

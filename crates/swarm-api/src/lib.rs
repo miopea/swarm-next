@@ -31,8 +31,9 @@ mod workers;
 
 #[cfg(test)]
 use runtime::{
-    ResourcePressure, deployed_source_revision, development_reload_state_for_source,
-    development_source_status_for, git_output, resource_response,
+    ResourcePressure, build_source_revision, deployed_source_revision,
+    development_reload_state_for_source, development_source_status_for, git_output,
+    resource_response,
 };
 #[cfg(test)]
 use std::process::Command;
@@ -7021,6 +7022,10 @@ mod tests {
         let status = response_json(status).await;
         assert_eq!(status["enabled"], true);
         assert_eq!(status["version"], build_version());
+        assert_eq!(
+            status["deployed_source_revision"].as_str(),
+            build_source_revision().as_deref()
+        );
         assert_eq!(status["reload_available"], false);
 
         let requested = app

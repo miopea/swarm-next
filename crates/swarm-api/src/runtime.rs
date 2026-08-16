@@ -47,6 +47,7 @@ struct DevelopmentRuntimeResponse {
     version: &'static str,
     state: &'static str,
     reload_available: bool,
+    deployed_source_revision: Option<String>,
     source_revision: Option<String>,
     source_dirty: bool,
 }
@@ -181,6 +182,7 @@ pub(super) async fn development(
             reload_available: source
                 .as_ref()
                 .is_some_and(|status| status.reload_available),
+            deployed_source_revision: build_source_revision(),
             source_revision: source.as_ref().map(|status| status.revision.clone()),
             source_dirty: source.is_some_and(|status| status.dirty),
         }),
