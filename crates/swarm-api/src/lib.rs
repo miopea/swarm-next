@@ -4977,6 +4977,12 @@ async fn reconcile_federation_tasks(
     node_credential: &str,
     now: i64,
 ) -> Result<(), FederationSyncCondition> {
+    service
+        .prepare_local_apiary_task_lifecycle_commands(now)
+        .map_err(|error| {
+            tracing::warn!(%error, "local Apiary task lifecycle could not be staged");
+            FederationSyncCondition::Incompatible
+        })?;
     let commands = service
         .pending_federation_task_commands(swarm_persistence::MAX_FEDERATION_TASK_COMMAND_BATCH)
         .map_err(|error| {

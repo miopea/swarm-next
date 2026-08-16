@@ -261,9 +261,17 @@ async function checkMemberSurface(browser, surface) {
     title: "Prepare the shared release", description: "Verify the bounded Member handoff.",
     priority: "high", state: "ready", home_node_id: "visual-member-node",
     home_hive_id: "visual-member-hive", revision: 2, created_at: 1, updated_at: 2,
+  }, {
+    id: "visual-linked-task", apiary_id: "visual-apiary", source: "swarm",
+    title: "Publish the coordinated outcome", description: "Local worker progress is ahead of Keeper.",
+    priority: "normal", state: "ready", home_node_id: "visual-member-node",
+    home_hive_id: "visual-member-hive", revision: 1, created_at: 2, updated_at: 2,
   }]));
-  await page.route("**/api/v1/apiary/tasks/local-executions", (route) => fulfill(route, []));
-  await page.route("**/api/v1/apiary/task-sync-status", (route) => fulfill(route, { cursor: 2, task_count: 1, last_applied_at: 1_786_780_000 }));
+  await page.route("**/api/v1/apiary/tasks/local-executions", (route) => fulfill(route, [{
+    apiary_task_id: "visual-linked-task", local_task_id: "visual-local-task",
+    worker_id: "visual-worker", state: "active", created_at: 3,
+  }]));
+  await page.route("**/api/v1/apiary/task-sync-status", (route) => fulfill(route, { cursor: 2, task_count: 2, last_applied_at: 1_786_780_000 }));
   await page.route("**/api/v1/apiary/task-outbox", (route) => fulfill(route, []));
   await page.route("**/api/v1/apiary/task-outbox-status", (route) => fulfill(route, { queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
 
@@ -292,6 +300,8 @@ async function checkMemberSurface(browser, surface) {
     const workerPicker = routedTask.getByRole("combobox", { name: "Worker for Prepare the shared release" });
     await workerPicker.selectOption("visual-worker");
     await routedTask.getByRole("button", { name: "Send to worker" }).waitFor();
+    await routedTask.getByText("Keeper ready · syncing to active", { exact: true }).waitFor();
+    await routedTask.getByRole("button", { name: "Open task" }).waitFor();
     await routedTask.scrollIntoViewIfNeeded();
     await routedTask.screenshot({ path: path.join(outputRoot, `${surface.name}-apiary-member-worker-route.png`) });
     const handoffList = page.getByRole("list", { name: "Active Jira work handoffs" });

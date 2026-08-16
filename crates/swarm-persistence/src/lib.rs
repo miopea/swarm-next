@@ -77,7 +77,7 @@ const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 56;
+const CURRENT_SCHEMA_VERSION: i64 = 57;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1161,6 +1161,7 @@ impl TaskStore {
             "UPDATE tasks SET state = ?2, updated_at = unixepoch() WHERE id = ?1",
             params![id.to_string(), target.to_string()],
         )?;
+        federation_tasks::record_local_apiary_task_lifecycle_intent(&transaction, id, target)?;
         transaction.execute(
             "INSERT INTO task_activity (
                  task_id, kind, from_state, to_state, note, actor_kind, actor_id
@@ -1574,6 +1575,9 @@ fn migrate_recent_schema(
     }
     if schema_version < 56 {
         federation_tasks::migrate_local_apiary_task_executions(transaction)?;
+    }
+    if schema_version < 57 {
+        federation_tasks::migrate_local_apiary_task_lifecycle_intents(transaction)?;
     }
     Ok(())
 }

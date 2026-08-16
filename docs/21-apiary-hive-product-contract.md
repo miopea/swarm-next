@@ -306,10 +306,13 @@ The bridge is idempotent: retries reuse the same local task and worker rather
 than duplicating work or silently reassigning it. The local task owns the
 worker, repository path, provider conversation, dispatch, and evidence; none of
 those fields enter Keeper's task or federation feed. Keeper continues to see
-only the public home Hive and canonical shared lifecycle. Ordered lifecycle
-mirroring remains a separate durable-outbox capability because local worker
-progress may advance while Keeper is offline and must never be collapsed into
-best-effort writes.
+only the public home Hive and canonical shared lifecycle. Local worker progress
+records one durable desired shared state in the same transaction as each local
+transition. Reconciliation stages only the next legal Keeper command, waits for
+its receipt to appear in the canonical Member projection, and then advances
+again. A worker may therefore reach Review or Completed while Keeper is offline
+without skipping intermediate states, duplicating commands, or cascading stale
+revisions. Conflict and rejection records stop the chain for operator review.
 
 A sole Keeper Hive may explicitly collapse an Apiary after automatic safety
 validation. Native tasks become local while preserving identity and history;

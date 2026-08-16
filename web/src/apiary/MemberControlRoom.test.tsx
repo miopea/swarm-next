@@ -109,5 +109,26 @@ test("sends Keeper-routed work to one private worker and opens the local task", 
   await waitFor(() => expect(onOpenTask).toHaveBeenCalledWith("local-1"));
 });
 
+test("shows linked worker progress as ordered Keeper synchronization", async () => {
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/members") || url.endsWith("/shared-work") || url.endsWith("/handoffs") || url.endsWith("/handoff-targets") || url.endsWith("/task-outbox")) return Promise.resolve(ok([]));
+    if (url.endsWith("/local-executions")) return Promise.resolve(ok([{ apiary_task_id: "task-1", local_task_id: "local-1", worker_id: "worker-1", state: "active", created_at: 2 }]));
+    if (url.endsWith("/tasks")) return Promise.resolve(ok([{ id: "task-1", apiary_id: "apiary-1", source: "swarm", title: "Prepare shared release", description: "", priority: "high", state: "ready", home_node_id: "node-2", home_hive_id: "hive-2", revision: 1, created_at: 1, updated_at: 1 }]));
+    if (url.endsWith("/sync-health")) return Promise.resolve(ok({ condition: "current", last_attempt_at: 1, last_success_at: 1, consecutive_failures: 0, next_attempt_at: null }));
+    if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 1, task_count: 1, last_applied_at: 1 }));
+    if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 1, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
+    if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
+    if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: [] }));
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+  const workers = [{ id: "worker-1", hive_id: "hive-2", name: "Clover", role: "worker" as const, provider: "claude_code" as const, workspace: "/projects/clover", autostart: false, position: 1, active_session_id: null, created_at: 1, updated_at: 1, running: true, attention_state: "buzzing" as const }];
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={workers} onManage={() => undefined} onOpenTask={() => undefined} />);
+
+  expect(await screen.findByText("Keeper ready · syncing to active")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Open task" })).toBeInTheDocument();
+  expect(screen.queryByText(/Move shared work/)).not.toBeInTheDocument();
+});
+
 function memberIdentity() { return { operator: { id: "operator-2", display_name: "Cora" }, hive: { id: "hive-2", name: "Clover Hive", operator_id: "operator-2", apiary_id: "apiary-1" }, apiary_context: { mode: "federated" as const, apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" as const }, local_role: "member" as const } }; }
 function ok(payload: unknown) { return { ok: true, status: 200, json: async () => payload }; }

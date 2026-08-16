@@ -311,6 +311,19 @@ impl ApiaryService {
             .map_err(Into::into)
     }
 
+    /// Stages the next legal Keeper transition for each locally linked task.
+    ///
+    /// # Errors
+    /// Rejects invalid Member state, corrupt projections, capacity, or storage.
+    pub fn prepare_local_apiary_task_lifecycle_commands(
+        &self,
+        now: i64,
+    ) -> Result<usize, ApplicationError> {
+        self.store
+            .prepare_local_apiary_task_lifecycle_commands(now)
+            .map_err(Into::into)
+    }
+
     /// Durably records one transport attempt before network I/O.
     ///
     /// # Errors

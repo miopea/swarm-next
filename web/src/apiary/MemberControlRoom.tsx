@@ -19,7 +19,6 @@ import {
   fetchFederationTaskOutboxStatus,
   materializeLocalApiaryTaskExecution,
   offerApiaryClaimHandoff,
-  transitionApiaryTask,
   type ApiaryMember,
   type ApiarySharedWorkClaim,
   type ApiaryTask,
@@ -123,11 +122,10 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
   const executionByTask = useMemo(() => new Map(snapshot.executions.map((execution) => [execution.apiary_task_id, execution])), [snapshot.executions]);
   const workerById = useMemo(() => new Map(workers.map((worker) => [worker.id, worker])), [workers]);
   const privateWorkers = useMemo(() => workers.filter((worker) => worker.role !== "queen"), [workers]);
-  const act = useCallback(async (task: ApiaryTask, target?: ApiaryTask["state"]) => {
+  const act = useCallback(async (task: ApiaryTask) => {
     setActingTask(task.id);
     try {
-      if (target) await transitionApiaryTask(operatorToken, task.id, target);
-      else await claimApiaryTask(operatorToken, task.id);
+      await claimApiaryTask(operatorToken, task.id);
       await refresh();
     } finally { setActingTask(undefined); }
   }, [operatorToken, refresh]);
@@ -219,7 +217,6 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
             const mine = task.home_hive_id === identity.hive.id;
             const queued = queuedTaskIds.has(task.id);
             const execution = executionByTask.get(task.id);
-            const next = task.state === "ready" ? "active" : task.state === "active" ? "review" : task.state === "review" ? "completed" : undefined;
             return <li key={task.id}>
               <span><strong>{task.title}</strong><small>{task.state} · {task.priority} · revision {task.revision}</small></span>
               <span className="member-task-owner">
@@ -228,9 +225,9 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
                   <button className="secondary-button" type="button" disabled={actingTask === task.id} onClick={() => void act(task)}>Claim for this Hive</button>
                 ) : execution ? <>
                   <small>{workerById.get(execution.worker_id)?.name ?? "Private worker"} · {execution.state}</small>
+                  <small>{task.state === execution.state ? "Keeper is current" : `Keeper ${task.state} · syncing to ${execution.state}`}</small>
                   <span className="member-task-actions">
                     <button className="secondary-button" type="button" onClick={() => onOpenTask(execution.local_task_id)}>Open task</button>
-                    {mine && next ? <button className="secondary-button" type="button" disabled={actingTask === task.id} onClick={() => void act(task, next)}>Move shared work to {next}</button> : null}
                   </span>
                 </> : mine ? (
                   <span className="member-task-worker-route">

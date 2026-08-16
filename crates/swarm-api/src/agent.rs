@@ -881,7 +881,7 @@ fn send_apiary_task_to_worker_tool() -> Tool {
 fn transition_apiary_task_tool() -> Tool {
     tool(
         "swarm_transition_apiary_task",
-        "Member Queen only: queue the next valid lifecycle transition for Apiary work owned by this Hive. Keeper remains canonical and stale revisions become visible conflicts.",
+        "Member Queen only: queue the next valid lifecycle transition for Apiary work owned by this Hive before it is sent to a private worker. After materialization, transition the linked local task; Swarm mirrors that worker lifecycle to Keeper in order. Keeper remains canonical and stale revisions become visible conflicts.",
         &json!({
             "type": "object",
             "properties": {
