@@ -101,7 +101,10 @@ or credential data. **Assist** now provides a separate durable request/response
 loop: the Steward offers bounded help, Keeper rechecks scope, the target Hive
 polls it outward, and its operator accepts or declines without any terminal
 injection or engagement interruption. The Steward sees the resulting status on
-her next poll. Takeover, member, and project actions remain staged until each
+her next poll. Takeover is now specified as an outbound-only, two-phase,
+exclusive lease over the target Hive's Queen; it remains unavailable until the
+lease, live relay, owner reclaim, automation pause, audit, and responsive
+visibility ship together. Member and project actions remain staged until each
 receives its own bounded command and conflict rules.
 
 Keeper control-room checkpoint: a federated Keeper receives a first-class,

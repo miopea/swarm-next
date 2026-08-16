@@ -351,6 +351,15 @@ reason, is immediately visible, replaces the exclusive lease, pauses competing
 automation, and is audited. Keeper grants Steward takeover capability once per
 scope; an in-scope takeover does not require another approval.
 
+Takeover applies to the target Hive's always-active Queen, not its private
+worker roster. Both Member Hives connect outward to Keeper; the target must
+acknowledge installation of the exclusive local Queen lease before Keeper
+relays any bounded live terminal frames. Keeper persists the reasoned lease and
+audit but never terminal frames or a cross-Hive transcript. The target operator
+can reclaim Queen immediately, and expiry, disconnect, revocation, departure,
+or protocol mismatch fails closed. The lease, relay, reclaim, automation pause,
+audit, and visible desktop/mobile treatment ship as one safety unit.
+
 Observe is limited to structured state Keeper already owns. A synchronized
 Steward sees, for each managed Hive, only counts of Keeper-canonical Swarm work
 by lifecycle, active Jira home-Hive ownership, and the latest shared-work
