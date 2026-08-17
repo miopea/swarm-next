@@ -13090,7 +13090,7 @@ mod tests {
         else {
             panic!("fresh terminal read must return a snapshot");
         };
-        assert_eq!((snapshot.rows, snapshot.columns), (24, 80));
+        assert_eq!((snapshot.rows, snapshot.columns), (35, 110));
 
         websocket
             .send(ClientMessage::Text(

@@ -32,11 +32,13 @@ voice composition, slash commands, and D-pad controls.
 - Selecting a new worker therefore clears `With you` from the old worker but
   does not apply it to the new worker until the operator supplies input.
 - Terminal geometry authority is tracked separately on the live worker
-  session. It remains with the device that most recently supplied input after
-  the attention lease expires or is explicitly released, so returning to that
-  worker can refit its PTY without falsely restoring `With you`. Input from a
-  different device atomically transfers both the attention lease and geometry
-  authority. A passive viewer never takes either authority merely by attaching.
+  session. A freshly started worker lets its first identified viewer establish
+  geometry without creating an attention lease. Authority then remains with
+  the device that most recently supplied input after the attention lease
+  expires or is explicitly released, so returning to that worker can refit its
+  PTY without falsely restoring `With you`. Input from a different device
+  atomically transfers both the attention lease and geometry authority. Later
+  passive viewers never take either authority merely by attaching.
 - The roster derives explicit Sleeping, Buzzing, With you, and Blocked states.
 
 Provider waiting-for-input will create the same lease only when a trustworthy

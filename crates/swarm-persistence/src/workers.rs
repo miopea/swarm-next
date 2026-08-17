@@ -686,6 +686,33 @@ impl TaskStore {
             .map_err(TaskStoreError::from)
     }
 
+    /// Claims geometry authority for a live session when no device owns it yet,
+    /// or confirms that the requesting device already owns it.
+    ///
+    /// A freshly started always-active worker has no operator input history. Its
+    /// first identified viewer must therefore be allowed to fit the PTY to the
+    /// available viewport. Once claimed, passive viewers cannot take geometry
+    /// authority away; a later operator input still transfers it explicitly.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn claim_unowned_worker_geometry(
+        &self,
+        session_id: WorkerSessionId,
+        owner_device_id: PresenceDeviceId,
+    ) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        let owner_device_id = owner_device_id.to_string();
+        let claimed = connection.execute(
+            "UPDATE worker_sessions
+             SET geometry_owner_device_id = ?2
+             WHERE session_id = ?1 AND ended_at IS NULL
+               AND (geometry_owner_device_id IS NULL OR geometry_owner_device_id = ?2)",
+            params![session_id.to_string(), owner_device_id],
+        )? == 1;
+        Ok(claimed)
+    }
+
     /// Returns whether coordination may inject into a worker at this instant.
     ///
     /// # Errors
@@ -1512,6 +1539,17 @@ mod tests {
 
         assert!(
             !store
+                .device_owns_worker_geometry(session, Some(desktop))
+                .unwrap()
+        );
+        assert!(
+            store
+                .claim_unowned_worker_geometry(session, desktop)
+                .unwrap()
+        );
+        assert!(!store.claim_unowned_worker_geometry(session, phone).unwrap());
+        assert!(
+            store
                 .device_owns_worker_geometry(session, Some(desktop))
                 .unwrap()
         );

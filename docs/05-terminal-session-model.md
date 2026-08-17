@@ -61,10 +61,11 @@ geometry part of the same synchronization boundary.
   ignored.
 - Hidden terminals never commit zero or intermediate dimensions.
 - A resize is sent only after a stable non-zero ResizeObserver measurement. The
-  shared PTY accepts it only from the device that most recently supplied
-  operator input, even after that device's attention lease expires. Passive
-  desktop and mobile viewers reflow locally without competing for provider
-  geometry; typing on another device transfers geometry authority atomically.
+  shared PTY accepts it from the first identified viewer when a freshly started
+  session has no geometry owner, then only from the device that most recently
+  supplied operator input, even after that device's attention lease expires.
+  Later passive desktop and mobile viewers reflow locally without competing for
+  provider geometry; typing on another device transfers authority atomically.
 - A changed resize advances the canonical sequence, invalidates byte-only
   cursors, and wakes every attachment with one canonical snapshot.
 - An identical resize is acknowledged as a no-op so renderer echoes cannot

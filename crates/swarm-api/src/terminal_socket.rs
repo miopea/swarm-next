@@ -378,8 +378,19 @@ async fn handle_input(
         match action {
             ClientTerminalAction::Resize(size) => {
                 requested_size = size;
+                let Some(owner_device_id) = owner_device_id else {
+                    let _ = send_control(
+                        &outbound,
+                        &ServerTerminalMessage::Error {
+                            code: "terminal_resize_authority_unavailable",
+                            message: "terminal resize requires an identified device".into(),
+                        },
+                    )
+                    .await;
+                    return;
+                };
                 let Ok(owns_geometry) =
-                    task_store.device_owns_worker_geometry(session_id, owner_device_id)
+                    task_store.claim_unowned_worker_geometry(session_id, owner_device_id)
                 else {
                     let _ = send_control(
                         &outbound,
