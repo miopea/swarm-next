@@ -1486,3 +1486,17 @@ the independently updated terminal host through the API to worker settings:
   terminal-holder PID `2966127` and worker-engine build `f8abd293` remained
   unchanged. Database `quick_check` remained `ok`; no Jira, task, worker, or
   Apiary mutation occurred, and the private proof tab was closed.
+- The live worker-description journey confirms commits `6d9a1148`, `7d229a85`,
+  `eab08838`, and `a1a27764` resolve the formerly inert **Improve with Claude**
+  experience. Against the sleeping Swarm Next worker, the bounded endpoint
+  completed one tool-free, non-persistent Claude turn in 5.31 seconds and
+  returned a concise routing description without saving it. The actual Settings
+  editor then showed **Claude is generating**, replaced the editable text,
+  changed the action to **Generate again with Claude**, and presented the
+  explicit **Claude draft generated — save to apply it** result with the warning
+  that Queen cannot use it before review. Choosing **Cancel** and reopening the
+  worker restored the original persisted description, proving generation is not
+  a hidden worker mutation. The existing component regressions cover success,
+  failure, progress, regenerate, and explicit-save paths. No worker profile,
+  provider session, task, Jira issue, or Apiary record changed, and the private
+  proof tab was closed.
