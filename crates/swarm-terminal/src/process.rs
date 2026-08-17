@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     io::{Read, Write},
     path::PathBuf,
     sync::{
@@ -20,7 +20,7 @@ use tracing::warn;
 use crate::{
     CanonicalTerminalState, HistoryAppendOutcome, HistoryCursor, HistoryDiagnostics, HistoryError,
     HistoryPage, HistorySessionSummary, HistoryStore, JournalLimits, ProviderCommand, Resume,
-    TerminalTakeoverLease,
+    TerminalTakeoverLease, TerminalWriteAuditEntry, TerminalWriteProvenance, TerminalWriteResult,
 };
 
 pub const MAX_TERMINAL_ROWS: u16 = 200;
@@ -28,6 +28,8 @@ pub const MAX_TERMINAL_COLUMNS: u16 = 320;
 pub const MAX_TERMINAL_CELLS: usize = 32_000;
 pub const MIN_TERMINAL_ROWS: u16 = 4;
 pub const MIN_TERMINAL_COLUMNS: u16 = 20;
+const MAX_WRITE_AUDIT_ENTRIES: usize = 10_000;
+const WRITE_AUDIT_RETENTION_SECONDS: i64 = 24 * 60 * 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TerminalSize {
@@ -407,6 +409,8 @@ pub struct SessionRegistry {
     max_sessions: usize,
     allowed_roots: Vec<PathBuf>,
     history: Option<Arc<HistoryStore>>,
+    write_audit: Mutex<VecDeque<TerminalWriteAuditEntry>>,
+    next_write_audit_sequence: Mutex<u64>,
     draining: AtomicBool,
 }
 
@@ -449,6 +453,8 @@ impl SessionRegistry {
             max_sessions,
             allowed_roots,
             history,
+            write_audit: Mutex::new(VecDeque::new()),
+            next_write_audit_sequence: Mutex::new(1),
             draining: AtomicBool::new(false),
         })
     }
@@ -580,8 +586,15 @@ impl SessionRegistry {
         revision: u64,
         bytes: &[u8],
     ) -> Result<(), SessionRegistryError> {
-        self.require_takeover(session_id, lease_id, revision)?;
-        self.get(session_id)?.write_input(bytes)
+        self.audit_write(
+            session_id,
+            TerminalWriteProvenance::steward(lease_id, bytes),
+            bytes,
+            || {
+                self.require_takeover(session_id, lease_id, revision)?;
+                self.get(session_id)?.write_input(bytes)
+            },
+        )
     }
 
     /// Atomically removes exact remote authority before accepting local input.
@@ -597,9 +610,16 @@ impl SessionRegistry {
         revision: u64,
         bytes: &[u8],
     ) -> Result<(), SessionRegistryError> {
-        self.require_takeover(session_id, lease_id, revision)?;
-        lock(&self.takeovers)?.remove(&session_id);
-        self.get(session_id)?.write_input(bytes)
+        self.audit_write(
+            session_id,
+            TerminalWriteProvenance::operator(None, bytes),
+            bytes,
+            || {
+                self.require_takeover(session_id, lease_id, revision)?;
+                lock(&self.takeovers)?.remove(&session_id);
+                self.get(session_id)?.write_input(bytes)
+            },
+        )
     }
 
     /// Releases exact takeover authority without writing terminal input.
@@ -628,18 +648,79 @@ impl SessionRegistry {
         &self,
         session_id: WorkerSessionId,
         bytes: &[u8],
+        provenance: TerminalWriteProvenance,
+    ) -> Result<(), SessionRegistryError> {
+        self.audit_write(session_id, provenance, bytes, || {
+            let now = unix_timestamp();
+            let mut takeovers = lock(&self.takeovers)?;
+            if takeovers
+                .get(&session_id)
+                .is_some_and(|takeover| takeover.expires_at > now)
+            {
+                return Err(SessionRegistryError::TakeoverDenied);
+            }
+            takeovers.remove(&session_id);
+            drop(takeovers);
+            self.get(session_id)?.write_input(bytes)
+        })
+    }
+
+    /// Returns the newest bounded, content-free terminal write records.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero or oversized page or a poisoned audit lock.
+    pub fn recent_write_audit(
+        &self,
+        limit: u16,
+    ) -> Result<Vec<TerminalWriteAuditEntry>, SessionRegistryError> {
+        if limit == 0 || limit > crate::MAX_WRITE_AUDIT_PAGE {
+            return Err(SessionRegistryError::Terminal(format!(
+                "terminal write audit limit must be between 1 and {}",
+                crate::MAX_WRITE_AUDIT_PAGE
+            )));
+        }
+        let now = unix_timestamp();
+        let mut audit = lock(&self.write_audit)?;
+        prune_write_audit(&mut audit, now);
+        Ok(audit
+            .iter()
+            .rev()
+            .take(usize::from(limit))
+            .cloned()
+            .collect())
+    }
+
+    fn audit_write(
+        &self,
+        session_id: WorkerSessionId,
+        provenance: TerminalWriteProvenance,
+        bytes: &[u8],
+        write: impl FnOnce() -> Result<(), SessionRegistryError>,
     ) -> Result<(), SessionRegistryError> {
         let now = unix_timestamp();
-        let mut takeovers = lock(&self.takeovers)?;
-        if takeovers
-            .get(&session_id)
-            .is_some_and(|takeover| takeover.expires_at > now)
-        {
-            return Err(SessionRegistryError::TakeoverDenied);
+        let mut audit = lock(&self.write_audit)?;
+        prune_write_audit(&mut audit, now);
+        let result = write();
+        let mut sequence = lock(&self.next_write_audit_sequence)?;
+        audit.push_back(TerminalWriteAuditEntry {
+            sequence: *sequence,
+            session_id,
+            actor: provenance.actor,
+            input_kind: provenance.input_kind,
+            byte_count: u32::try_from(bytes.len()).unwrap_or(u32::MAX),
+            result: if result.is_ok() {
+                TerminalWriteResult::Acknowledged
+            } else {
+                TerminalWriteResult::Rejected
+            },
+            occurred_at: now,
+        });
+        *sequence = sequence.saturating_add(1);
+        while audit.len() > MAX_WRITE_AUDIT_ENTRIES {
+            audit.pop_front();
         }
-        takeovers.remove(&session_id);
-        drop(takeovers);
-        self.get(session_id)?.write_input(bytes)
+        result
     }
 
     fn require_takeover(
@@ -811,6 +892,16 @@ fn unix_timestamp() -> i64 {
         })
 }
 
+fn prune_write_audit(audit: &mut VecDeque<TerminalWriteAuditEntry>, now: i64) {
+    let oldest = now.saturating_sub(WRITE_AUDIT_RETENTION_SECONDS);
+    while audit
+        .front()
+        .is_some_and(|entry| entry.occurred_at < oldest)
+    {
+        audit.pop_front();
+    }
+}
+
 fn running_sessions(
     sessions: &HashMap<WorkerSessionId, Arc<ProcessTerminalSession>>,
 ) -> Result<usize, SessionRegistryError> {
@@ -837,7 +928,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{HistoryLimits, HistoryRecord};
+    use crate::{HistoryLimits, HistoryRecord, TerminalWriteActor};
     use tempfile::TempDir;
 
     fn shell_command(script: &str) -> ProviderCommand {
@@ -902,7 +993,11 @@ mod tests {
             .install_takeover(session.id(), lease)
             .expect("install");
         assert!(matches!(
-            registry.write_local(session.id(), b"unsafe-local\n"),
+            registry.write_local(
+                session.id(),
+                b"unsafe-local\n",
+                TerminalWriteProvenance::operator(None, b"unsafe-local\n"),
+            ),
             Err(SessionRegistryError::TakeoverDenied)
         ));
         assert!(matches!(
@@ -922,6 +1017,22 @@ mod tests {
             registry.write_takeover(session.id(), lease_id, 2, b"too-late\n"),
             Err(SessionRegistryError::TakeoverDenied)
         ));
+        let audit = registry.recent_write_audit(10).unwrap();
+        assert_eq!(audit.len(), 5);
+        assert_eq!(audit[0].result, TerminalWriteResult::Rejected);
+        assert_eq!(audit[1].result, TerminalWriteResult::Acknowledged);
+        assert_eq!(audit[2].result, TerminalWriteResult::Acknowledged);
+        assert_eq!(audit[3].result, TerminalWriteResult::Rejected);
+        assert_eq!(audit[4].result, TerminalWriteResult::Rejected);
+        assert!(matches!(
+            audit[1].actor,
+            TerminalWriteActor::Operator { device_id: None }
+        ));
+        assert!(matches!(
+            audit[2].actor,
+            TerminalWriteActor::Steward { lease_id: recorded } if recorded == lease_id
+        ));
+        assert!(audit.iter().all(|entry| entry.byte_count > 0));
     }
 
     #[test]

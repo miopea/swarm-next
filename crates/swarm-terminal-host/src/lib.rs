@@ -396,9 +396,17 @@ fn dispatch_blocking(
                 "wait requests must use the asynchronous dispatcher",
             );
         }
-        HostRequest::Write { session_id, bytes } => registry
-            .write_local(session_id, &bytes)
+        HostRequest::Write {
+            session_id,
+            bytes,
+            provenance,
+        } => registry
+            .write_local(session_id, &bytes, provenance)
             .map(|()| HostResponse::Acknowledged)
+            .map_err(|error| error.to_string()),
+        HostRequest::WriteAudit { limit } => registry
+            .recent_write_audit(limit)
+            .map(|entries| HostResponse::WriteAudit { entries })
             .map_err(|error| error.to_string()),
         HostRequest::InstallTakeover { session_id, lease } => registry
             .install_takeover(session_id, lease)
@@ -494,6 +502,31 @@ mod tests {
 
     use super::*;
 
+    async fn assert_single_content_free_write_audit(
+        client: &HostClient,
+        session_id: WorkerSessionId,
+    ) {
+        let HostResponse::WriteAudit { entries } = client
+            .request(&HostRequest::WriteAudit { limit: 10 })
+            .await
+            .unwrap()
+        else {
+            panic!("expected terminal write audit");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].session_id, session_id);
+        assert_eq!(entries[0].byte_count, 14);
+        assert_eq!(
+            entries[0].result,
+            swarm_terminal::TerminalWriteResult::Acknowledged
+        );
+        assert!(
+            !serde_json::to_string(&entries)
+                .unwrap()
+                .contains("restart-proof")
+        );
+    }
+
     #[tokio::test]
     async fn client_reconnect_preserves_a_real_terminal_session() {
         let runtime = TempDir::new().unwrap();
@@ -537,6 +570,10 @@ mod tests {
             .request(&HostRequest::Write {
                 session_id: session.id(),
                 bytes: b"restart-proof\n".to_vec(),
+                provenance: swarm_terminal::TerminalWriteProvenance::operator(
+                    None,
+                    b"restart-proof\n",
+                ),
             })
             .await
             .unwrap();
@@ -570,6 +607,8 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+
+        assert_single_content_free_write_audit(&replacement_client, session.id()).await;
 
         replacement_client
             .request(&HostRequest::Stop {

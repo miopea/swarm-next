@@ -9,7 +9,7 @@ use swarm_domain::{PresenceDeviceId, WorkerSessionId};
 use swarm_persistence::TaskStore;
 use swarm_terminal::{
     HostClient, HostRequest, HostResponse, MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, Resume,
-    TerminalSize,
+    TerminalSize, TerminalWriteProvenance,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -420,7 +420,7 @@ async fn handle_input(
             Ok(Message::Close(_)) | Err(_) => return,
             Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_)) => continue,
         };
-        let action = match client_request(&message, session_id) {
+        let action = match client_request(&message, session_id, owner_device_id) {
             Ok(action) => action,
             Err(ClientMessageError {
                 code,
@@ -561,15 +561,20 @@ struct ClientMessageError {
 fn client_request(
     message: &str,
     session_id: WorkerSessionId,
+    owner_device_id: Option<PresenceDeviceId>,
 ) -> Result<ClientTerminalAction, ClientMessageError> {
     match serde_json::from_str::<ClientTerminalMessage>(message) {
-        Ok(ClientTerminalMessage::Input { text }) => Ok(ClientTerminalAction::Input {
-            engaged: !text.is_empty(),
-            request: HostRequest::Write {
-                session_id,
-                bytes: text.into_bytes(),
-            },
-        }),
+        Ok(ClientTerminalMessage::Input { text }) => {
+            let bytes = text.into_bytes();
+            Ok(ClientTerminalAction::Input {
+                engaged: !bytes.is_empty(),
+                request: HostRequest::Write {
+                    session_id,
+                    provenance: TerminalWriteProvenance::operator(owner_device_id, &bytes),
+                    bytes,
+                },
+            })
+        }
         Ok(ClientTerminalMessage::Resize {
             rows,
             columns,

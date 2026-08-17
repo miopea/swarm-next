@@ -4,14 +4,17 @@ use axum::{
     Json,
     extract::{Path, Query, State},
     http::HeaderMap,
+    response::Response,
 };
 use serde::Deserialize;
 use swarm_domain::ProviderConversationId;
-use swarm_terminal::{ClaudeConversationStart, HostRequest, HostResponse, TerminalSize};
+use swarm_terminal::{
+    ClaudeConversationStart, HostRequest, HostResponse, TerminalSize, TerminalWriteProvenance,
+};
 
 use crate::{
     ApiError, AppState, parse_session_id, require_valid_size, task_store_error,
-    terminal_host::{authorized_request, record_session_event},
+    terminal_host::{authorized_no_store_request, authorized_request, record_session_event},
 };
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +27,11 @@ pub(super) struct StartSessionRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct OutputQuery {
     after: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct WriteAuditQuery {
+    limit: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,12 +92,29 @@ pub(super) async fn write_input(
     Path(session_id): Path<String>,
     Json(request): Json<InputRequest>,
 ) -> Result<Json<HostResponse>, ApiError> {
+    let bytes = request.text.into_bytes();
     authorized_request(
         &state,
         &headers,
         HostRequest::Write {
             session_id: parse_session_id(&session_id)?,
-            bytes: request.text.into_bytes(),
+            provenance: TerminalWriteProvenance::operator(None, &bytes),
+            bytes,
+        },
+    )
+    .await
+}
+
+pub(super) async fn write_audit(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<WriteAuditQuery>,
+) -> Result<Response, ApiError> {
+    authorized_no_store_request(
+        &state,
+        &headers,
+        HostRequest::WriteAudit {
+            limit: query.limit.unwrap_or(100),
         },
     )
     .await

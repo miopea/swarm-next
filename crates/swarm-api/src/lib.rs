@@ -101,6 +101,7 @@ use swarm_terminal::{
 use swarm_terminal::{
     HostClient, HostRequest, HostResponse, JournalLimits, MAX_TERMINAL_CELLS, MAX_TERMINAL_COLUMNS,
     MAX_TERMINAL_ROWS, MIN_TERMINAL_COLUMNS, MIN_TERMINAL_ROWS, ProviderActivity, TerminalSize,
+    TerminalWriteProvenance,
 };
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore};
 #[cfg(test)]
@@ -1393,7 +1394,11 @@ async fn submit_terminal_message(
         _ => return Ok(TerminalSubmission::Uncertain),
     };
     let response = client
-        .request(&HostRequest::Write { session_id, bytes })
+        .request(&HostRequest::Write {
+            session_id,
+            bytes,
+            provenance: TerminalWriteProvenance::coordination(),
+        })
         .await?;
     match response {
         HostResponse::Acknowledged if submit => {}
@@ -1443,6 +1448,7 @@ async fn submit_terminal_message(
         .request(&HostRequest::Write {
             session_id,
             bytes: vec![b'\r'],
+            provenance: TerminalWriteProvenance::coordination(),
         })
         .await
     {
@@ -2560,6 +2566,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/terminal/history/sessions/{session_id}",
             get(session_history::read),
+        )
+        .route(
+            "/api/v1/terminal/write-audit",
+            get(terminal_control::write_audit),
         )
         .route(
             "/api/v1/terminal/sessions/{session_id}",
@@ -7146,6 +7156,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let unauthorized_audit = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/terminal/write-audit?limit=10")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized_audit.status(), StatusCode::UNAUTHORIZED);
 
         let status = authorized_get(app.clone(), "/api/v1/runtime/development").await;
         assert_eq!(status.status(), StatusCode::OK);
@@ -12044,6 +12066,7 @@ mod tests {
                 .request(&HostRequest::Write {
                     session_id: session.id(),
                     bytes: vec![b'\r'],
+                    provenance: TerminalWriteProvenance::operator(None, b"\r"),
                 })
                 .await
                 .unwrap(),
@@ -12540,6 +12563,10 @@ mod tests {
         );
         assert_eq!(json["diagnostics"]["retained_bytes"], 0);
         assert!(json.get("bytes").is_none());
+        let audit = authorized_get(app.clone(), "/api/v1/terminal/write-audit?limit=10").await;
+        assert_eq!(audit.status(), StatusCode::OK);
+        assert_eq!(audit.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response_json(audit).await["entries"], serde_json::json!([]));
         let status_response = authorized_get(app.clone(), "/api/v1/runtime/terminal-host").await;
         assert_eq!(status_response.headers()[header::CACHE_CONTROL], "no-store");
         let status = response_json(status_response).await;

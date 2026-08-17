@@ -14,8 +14,9 @@ pub use history::{
 };
 pub use ipc::{
     HostClient, HostRequest, HostResponse, HostSessionSummary, IpcError, MAX_REQUEST_BYTES,
-    MAX_RESPONSE_BYTES, PROTOCOL_VERSION, TerminalHostStatus, TerminalTakeoverLease,
-    default_terminal_socket_path,
+    MAX_RESPONSE_BYTES, MAX_WRITE_AUDIT_PAGE, PROTOCOL_VERSION, TerminalHostStatus,
+    TerminalInputKind, TerminalTakeoverLease, TerminalWriteActor, TerminalWriteAuditEntry,
+    TerminalWriteProvenance, TerminalWriteResult, default_terminal_socket_path,
 };
 pub use journal::{JournalLimits, SequencedFrame};
 pub use process::{

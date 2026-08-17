@@ -22,7 +22,7 @@ pub const MAX_FEDERATION_STEWARD_TAKEOVER_BATCH: usize = 20;
 pub const STEWARD_TAKEOVER_RELAY_PROTOCOL_VERSION: u16 = 1;
 // Protocol 8 is reserved for the terminal-host takeover relay commands. Until
 // that host protocol ships, no public API may enqueue these commands.
-pub const STEWARD_TAKEOVER_TERMINAL_PROTOCOL_VERSION: u16 = 8;
+pub const STEWARD_TAKEOVER_TERMINAL_PROTOCOL_VERSION: u16 = 9;
 const MAX_LOCAL_TAKEOVER_OUTBOX: usize = 256;
 const MAX_KEEPER_TAKEOVER_COMMANDS: usize = 10_000;
 const MAX_TAKEOVER_REASON_BYTES: usize = 2_000;
