@@ -89,6 +89,11 @@ For each naturally occurring session, record only what is relevant:
   repeated multi-step journey in Settings, but the operator reviews and
   controls its definition and activation; typed deterministic steps execute
   below Queen while judgment and external authority remain explicit.
+- A worker's ordered task queue is the only upcoming-work staging surface. It
+  may contain unlimited assigned Ready work but exactly one In Progress item.
+  Workers normally advance themselves; deterministic coordination handles only
+  exact handoffs, and Queen intervenes when progression stalls or needs
+  judgment. No separate speculative-preparation feature is planned.
 - The protocol migration left API and holder builds aligned on protocol 9,
   both services active with zero restarts, database `quick_check` at `ok`, and
   the holder reporting one running and one retained Queen session. No Jira,

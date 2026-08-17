@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Four safeguards closed; six operator choices recorded 2026-08-17**
+Status: **Four safeguards closed; seven operator choices recorded 2026-08-17**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -209,6 +209,32 @@ for routines. Queen decides when repetition merits a proposal and surfaces it
 in Settings; the operator controls its definition and activation. Do not build
 a free-form workflow editor before real Queen-proposed routines prove the
 necessary vocabulary.
+
+## Decision 7: worker queues are the preparation surface
+
+**Evidence.** Legacy's speculative task preparation attempted to improve
+throughput before assignment was certain. It produced wrong-recipient and
+context-injection failures because preparation and delivery were coupled to a
+live terminal rather than an authoritative worker queue.
+
+**Current Next boundary.** Tasks already carry durable worker assignment,
+repository ownership, lifecycle, revision, and queue order. The task lifecycle
+enforces one Active item per worker, while other assigned work can remain Ready.
+The coordinator and Queen can observe whether a completed worker advances.
+
+**Recommendation.** Do not add a separate staged-work concept. Each worker's
+durable ordered task queue is the staging surface: exactly one item may be In
+Progress, with no product limit on assigned queued work. On completion, the
+worker should normally advance to the next eligible item. Deterministic
+coordination may perform an exact policy-complete handoff without a Queen call;
+Queen keeps the worker moving when self-advancement stalls or when priority,
+dependency, blocker, or ownership requires judgment. No queued task becomes a
+terminal injection merely because it is next.
+
+**Operator decision (2026-08-17).** Preserve unlimited per-worker queued work
+with one In Progress item. Treat that queue—not speculative preparation—as the
+authoritative upcoming-work surface. Workers normally move themselves forward;
+Queen intervenes when they do not.
 
 ## Evidence that would change these recommendations
 
