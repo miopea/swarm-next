@@ -111,6 +111,7 @@ snapshots.
 | Legacy capability | Disposition | Swarm Next interpretation |
 | --- | --- | --- |
 | Durable PTY holder | Keep outcome | Independent Rust worker engine with protocol compatibility and retained provider conversations. |
+| Terminal-write attribution | Keep outcome | Compile-enforced typed writer identity and input shape at the holder boundary; bounded content-free diagnostics only. |
 | Worker state classifier | Redesign | Provider/runtime events plus explicit engagement and lifecycle state; terminal text is supporting evidence only. |
 | Drone safe approvals | Remove as a core need | Provider-native automatic approval supersedes most prompt clicking. External effects still require explicit Swarm authority. |
 | Drone scheduling and housekeeping | Keep outcome, redesign | Deterministic coordinator below Queen; no LLM call for typed, reversible, policy-complete work. |

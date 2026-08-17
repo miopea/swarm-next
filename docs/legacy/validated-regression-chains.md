@@ -156,12 +156,13 @@ This chain is also post-`2026.8.13`; treat the implementation as development
 evidence. Its architectural lesson is independent of the JSONL mechanism.
 
 **Stable outcome:** terminal input provenance belongs at the single byte-write
-boundary, with `unknown` as a visible failure state and no secret-bearing content
-in the record. Swarm Next has strong actor provenance for task activity and
-durable high-level deliveries, but both operator and automation bytes still
-converge on `HostRequest::Write { session_id, bytes }`. Add typed provenance and
-a bounded content-free audit at that boundary rather than trying to reconstruct
-an incident from surrounding task events.
+boundary, with no secret-bearing content in the record. Swarm Next `7c84cb9`
+now makes actor and coarse input shape mandatory on `HostRequest::Write`, derives
+Steward identity from the active lease, and records accepted and rejected writes
+in a holder-owned audit capped at 10,000 entries and 24 hours. A private,
+no-store diagnostic read returns at most 1,000 newest entries. Tests cover every
+ordinary writer, actor propagation, rejected takeover writes, coarse input
+classification, and the absence of terminal content from serialized evidence.
 
 ## Approval rules, effect gates, and brakes
 

@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Three safeguards closed; focused operator choices not yet recorded**
+Status: **Four safeguards closed; focused operator choices not yet recorded**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -22,8 +22,11 @@ These are ordinary quality work rather than product forks:
    retry attempt. A real-PTY test holds the same decision through five delivery
    cycles, proves no Swarm bytes entered the picker, answers it as the operator,
    and then observes the queued delivery complete.
-4. **Pending boundary safeguard:** carry typed actor and input-shape provenance through every ordinary terminal
-   write and record it at the terminal-host choke point without content.
+4. **Closed:** `7c84cb9` makes typed actor and coarse input shape mandatory
+   at the terminal-host write boundary. The holder keeps a bounded, content-free
+   audit of accepted and rejected writes, including operator device, Swarm
+   coordination, and Steward lease identity; compile-enforced request shapes
+   prevent a new ordinary writer from silently omitting provenance.
 
 Items 3 and 4 protect boundaries; they do not decide whether Queen may eventually
 answer a provider question.
@@ -50,9 +53,15 @@ terminal input still transfers authority. Focused WebSocket coverage proves an
 existing desktop attachment can reclaim geometry after a phone attachment
 without reconnecting or sending a sacrificial keystroke. The full web and API
 suites passed, the fix is deployed, and the worker-engine process was preserved.
-Post-deploy PTYs remained `31 x 99` because the already-open installed PWA still
-held the previous JavaScript asset. Closure therefore requires one final live
-proof after that PWA loads the new asset. This remains a mechanical Ring 1
+Post-deploy PTYs remained narrow. A later current installed PWA reproduced the
+failure more sharply: Scout's visible desktop surface filled the viewport while
+the live Linux PTY measured only `7 x 50`. The first browser fit had accepted a
+usable transitional mobile measurement, and an unchanged xterm geometry could
+then suppress the later host repair. `c27ecc5` requires two stable fit frames
+and republishes settled visible geometry even when xterm's own row and column
+count did not change. The exact `7 x 50` to `42 x 168` transition is covered by
+a browser regression test. Closure still requires one final live proof after
+that build is deployed. This remains a mechanical Ring 1
 safeguard with no operator product choice, and no Legacy resize code was ported.
 
 ## Decision 1: Queen and provider questions
