@@ -13005,7 +13005,7 @@ mod tests {
             executable: PathBuf::from("/bin/sh"),
             arguments: vec![
                 "-lc".into(),
-                "printf socket-ready; read value; printf 'socket:%s' \"$value\"; read value; printf 'socket:%s' \"$value\"".into(),
+                "printf socket-ready; read value; printf 'socket:%s' \"$value\"; read value; printf 'socket:%s' \"$value\"; read value".into(),
             ],
             working_directory: workspace.clone(),
         };
@@ -13145,6 +13145,43 @@ mod tests {
             .unwrap();
         assert_eq!(released.status(), StatusCode::NO_CONTENT);
         assert!(store.worker_accepts_injection(worker.id, i64::MIN).unwrap());
+        assert!(
+            store
+                .device_owns_worker_geometry(
+                    session.id(),
+                    Some(PresenceDeviceId::from_str(phone_device).unwrap()),
+                )
+                .unwrap()
+        );
+
+        // Releasing operator attention must not strand the PTY at its old
+        // width. The last device that actually typed keeps geometry authority
+        // until another device supplies input.
+        second_websocket
+            .send(ClientMessage::Text(
+                r#"{"type":"resize","rows":46,"columns":140}"#.into(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let swarm_terminal::Resume::Snapshot { snapshot } = session.resume_after(None).unwrap()
+        else {
+            panic!("fresh terminal read must return a snapshot");
+        };
+        assert_eq!((snapshot.rows, snapshot.columns), (46, 140));
+
+        websocket
+            .send(ClientMessage::Text(
+                r#"{"type":"resize","rows":50,"columns":150}"#.into(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let swarm_terminal::Resume::Snapshot { snapshot } = session.resume_after(None).unwrap()
+        else {
+            panic!("fresh terminal read must return a snapshot");
+        };
+        assert_eq!((snapshot.rows, snapshot.columns), (46, 140));
 
         let mut reused_request = websocket_url.into_client_request().unwrap();
         reused_request.headers_mut().insert(

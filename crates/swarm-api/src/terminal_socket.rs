@@ -378,9 +378,8 @@ async fn handle_input(
         match action {
             ClientTerminalAction::Resize(size) => {
                 requested_size = size;
-                let now = unix_timestamp();
                 let Ok(owns_geometry) =
-                    task_store.device_owns_worker_engagement(session_id, owner_device_id, now)
+                    task_store.device_owns_worker_geometry(session_id, owner_device_id)
                 else {
                     let _ = send_control(
                         &outbound,

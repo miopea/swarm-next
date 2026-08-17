@@ -94,7 +94,7 @@ pub(crate) const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 65;
+const CURRENT_SCHEMA_VERSION: i64 = 66;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1666,7 +1666,54 @@ fn migrate_recent_schema(
     if schema_version < 65 {
         coordinator::migrate_coordinator_unstarted_work_attention(transaction)?;
     }
+    if schema_version < 66 {
+        migrate_terminal_geometry_ownership(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_terminal_geometry_ownership(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let sessions_exist = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                       WHERE type = 'table' AND name = 'worker_sessions')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    let engagements_exist = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                       WHERE type = 'table' AND name = 'worker_engagements')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    let geometry_owner_exists = sessions_exist
+        && transaction
+            .prepare("PRAGMA table_info(worker_sessions)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .any(|column| column == "geometry_owner_device_id");
+    if sessions_exist && !geometry_owner_exists {
+        transaction.execute_batch(
+            "ALTER TABLE worker_sessions ADD COLUMN geometry_owner_device_id TEXT;",
+        )?;
+    }
+    if sessions_exist && engagements_exist {
+        transaction.execute_batch(
+            "UPDATE worker_sessions
+             SET geometry_owner_device_id = (
+                 SELECT owner_device_id FROM worker_engagements
+                 WHERE worker_engagements.session_id = worker_sessions.session_id
+             )
+             WHERE geometry_owner_device_id IS NULL
+               AND EXISTS (
+                   SELECT 1 FROM worker_engagements
+                   WHERE worker_engagements.session_id = worker_sessions.session_id
+               );",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", 66)
 }
 
 fn migrate_managed_worker_roles(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -4117,6 +4164,58 @@ mod tests {
         let existing = migrated.list_task_activity(task_id, 10).unwrap();
         assert_eq!(existing.events[0].actor_kind, TaskActivityActorKind::System);
         assert_eq!(existing.events[0].actor_id, None);
+        migrated.verify_integrity().unwrap();
+    }
+
+    #[test]
+    fn migrates_schema_v65_to_durable_terminal_geometry_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let (session_id, device_id) = {
+            let store = TaskStore::open(&path).unwrap();
+            let worker = store
+                .create_worker(
+                    "Clover",
+                    swarm_domain::ProviderKind::ClaudeCode,
+                    "/workspace",
+                    false,
+                    1,
+                )
+                .unwrap();
+            let session_id = WorkerSessionId::new();
+            let device_id = swarm_domain::PresenceDeviceId::new();
+            store.bind_worker_session(worker.id, session_id).unwrap();
+            store
+                .renew_worker_engagement(session_id, Some(device_id), 100, 300)
+                .unwrap();
+            store
+                .connection()
+                .unwrap()
+                .execute_batch(
+                    "ALTER TABLE worker_sessions DROP COLUMN geometry_owner_device_id;
+                     PRAGMA user_version = 65;",
+                )
+                .unwrap();
+            (session_id, device_id)
+        };
+
+        let migrated = TaskStore::open(path).unwrap();
+        let connection = migrated.connection().unwrap();
+        let geometry_owner: Option<String> = connection
+            .query_row(
+                "SELECT geometry_owner_device_id FROM worker_sessions WHERE session_id = ?1",
+                [session_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(geometry_owner, Some(device_id.to_string()));
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+        drop(connection);
         migrated.verify_integrity().unwrap();
     }
 }

@@ -621,6 +621,12 @@ impl TaskStore {
                 owner_device_id
             ],
         )?;
+        transaction.execute(
+            "UPDATE worker_sessions
+             SET geometry_owner_device_id = ?2
+             WHERE session_id = ?1 AND ended_at IS NULL",
+            params![session_id.to_string(), owner_device_id],
+        )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
         transaction.commit()?;
         Ok(true)
@@ -650,8 +656,8 @@ impl TaskStore {
         Ok(released)
     }
 
-    /// Returns whether this exact device currently owns the unexpired operator
-    /// engagement for a live worker session.
+    /// Returns whether this exact device most recently supplied operator input to
+    /// a live worker session, regardless of whether its attention lease expired.
     ///
     /// Terminal geometry is shared by every viewer of one server-owned PTY.
     /// Resize authority therefore follows the device that most recently sent
@@ -660,22 +666,21 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns an error when persistence is unavailable.
-    pub fn device_owns_worker_engagement(
+    pub fn device_owns_worker_geometry(
         &self,
         session_id: WorkerSessionId,
         owner_device_id: Option<PresenceDeviceId>,
-        now: i64,
     ) -> Result<bool, TaskStoreError> {
         let connection = self.connection()?;
         let owner_device_id = owner_device_id.map(|device_id| device_id.to_string());
         connection
             .query_row(
                 "SELECT EXISTS(
-                     SELECT 1 FROM worker_engagements
-                     WHERE session_id = ?1 AND expires_at > ?2
-                       AND owner_device_id IS ?3
+                     SELECT 1 FROM worker_sessions
+                     WHERE session_id = ?1 AND ended_at IS NULL
+                       AND geometry_owner_device_id IS ?2
                  )",
-                params![session_id.to_string(), now, owner_device_id],
+                params![session_id.to_string(), owner_device_id],
                 |row| row.get(0),
             )
             .map_err(TaskStoreError::from)
@@ -1495,7 +1500,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_geometry_authority_follows_the_engaged_device() {
+    fn terminal_geometry_authority_follows_the_last_engaged_device() {
         let store = TaskStore::in_memory().unwrap();
         let worker = store
             .create_worker("Clover", ProviderKind::ClaudeCode, "/workspace", false, 1)
@@ -1507,7 +1512,7 @@ mod tests {
 
         assert!(
             !store
-                .device_owns_worker_engagement(session, Some(desktop), 100)
+                .device_owns_worker_geometry(session, Some(desktop))
                 .unwrap()
         );
         store
@@ -1515,17 +1520,24 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .device_owns_worker_engagement(session, Some(desktop), 101)
+                .device_owns_worker_geometry(session, Some(desktop))
                 .unwrap()
         );
         assert!(
             !store
-                .device_owns_worker_engagement(session, Some(phone), 101)
+                .device_owns_worker_geometry(session, Some(phone))
                 .unwrap()
         );
         assert!(
-            !store
-                .device_owns_worker_engagement(session, Some(desktop), 401)
+            store
+                .device_owns_worker_geometry(session, Some(desktop))
+                .unwrap()
+        );
+        assert!(store.release_worker_engagement(session, desktop).unwrap());
+        assert!(store.worker_accepts_injection(worker.id, 401).unwrap());
+        assert!(
+            store
+                .device_owns_worker_geometry(session, Some(desktop))
                 .unwrap()
         );
 
@@ -1534,12 +1546,12 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .device_owns_worker_engagement(session, Some(phone), 103)
+                .device_owns_worker_geometry(session, Some(phone))
                 .unwrap()
         );
         assert!(
             !store
-                .device_owns_worker_engagement(session, Some(desktop), 103)
+                .device_owns_worker_geometry(session, Some(desktop))
                 .unwrap()
         );
     }
