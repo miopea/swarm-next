@@ -1,8 +1,8 @@
 use std::{env, process::ExitCode};
 
 use swarm_cli::{
-    CliError, LifecycleCommand, execute, format_status, inspect_legacy_database, parse_command,
-    verify_database,
+    CliError, LifecycleCommand, execute, export_legacy_tasks, format_status,
+    inspect_legacy_database, parse_command, verify_database,
 };
 use swarm_terminal::{HostClient, default_terminal_socket_path};
 
@@ -30,6 +30,19 @@ async fn run() -> Result<(), CliError> {
             "{}",
             serde_json::to_string(&report)
                 .map_err(|error| CliError::LegacyDatabase(error.to_string()))?
+        );
+        return Ok(());
+    }
+    if let LifecycleCommand::ExportLegacyTasks {
+        ref source,
+        ref output,
+    } = command
+    {
+        let bundle = export_legacy_tasks(source, output)?;
+        println!(
+            "exported {} Legacy task records to {}",
+            bundle.tasks.len(),
+            output.display()
         );
         return Ok(());
     }

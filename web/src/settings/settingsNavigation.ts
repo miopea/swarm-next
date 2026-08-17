@@ -6,6 +6,7 @@ export const SETTINGS_SECTIONS = [
   ["settings-runtime", "System"],
   ["settings-apiary", "Apiary"],
   ["settings-integrations", "Integrations"],
+  ["settings-migration", "Migration"],
   ["settings-backup", "Backup"],
   ["settings-diagnostics", "Diagnostics"],
 ] as const;

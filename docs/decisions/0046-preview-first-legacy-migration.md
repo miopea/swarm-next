@@ -1,0 +1,48 @@
+# ADR-0046: Preview-first Legacy migration with a reversible handoff
+
+Status: Accepted
+
+## Context
+
+Swarm Next must eventually migrate existing Hives without asking Legacy Swarm to understand or write the Next database. Open local tasks are the first required slice. Jira remains canonical for Jira-linked work, while Legacy-only tasks, worker routing, learnings, decision history, and Routine candidates need an auditable path over time.
+
+Writing both databases during one import would create a distributed transaction that SQLite cannot make atomic. A partial failure could hide work in Legacy before it is usable in Next. Treating every historical record as live Next state would also import obsolete behavior and noise.
+
+## Decision
+
+Swarm Next owns a versioned, bounded migration package and a preview-first import workflow.
+
+1. The source Legacy snapshot is opened read-only and is never attached to the Next database.
+2. Export produces a portable package with source identity, format version, source record IDs, and explicit exclusions.
+3. Next recomputes validation, normalization, worker mapping, Jira exclusion, and duplicate detection for both preview and commit.
+4. The operator explicitly selects records after reviewing transformed, skipped, invalid, unsupported, and duplicate results.
+5. One SQLite transaction creates the selected Next records as Drafts, provenance links, and an immutable migration batch receipt. Source status and proposed Next state remain visible in the preview, but import cannot start workers, dispatch tasks, or trigger Queen automation.
+6. Jira-linked tasks are skipped and later recreated by normal Jira synchronization.
+7. A Legacy task that was Active is proposed as Ready because no Legacy provider process is transferred, but remains Draft until the operator approves normal work. Its prior state remains in provenance.
+8. After the operator verifies the Next batch, a separate **Finish migration** step may create a fresh Legacy backup and apply the signed receipt. Legacy keeps the transferred tasks visible and read-only as `Moved to Swarm Next`; it does not mark them completed.
+9. Finishing is never automatic. If an untouched Next batch is rolled back, its receipt can restore the corresponding Legacy tasks.
+10. No dual write or ongoing synchronization exists between Legacy and Next.
+
+The package envelope is extensible, but the first accepted section contains open non-Jira tasks only. Later sections require their own normalization and review policy rather than inheriting task behavior.
+
+## Consequences
+
+Migration is resumable, explainable, and safe to rehearse. Duplicate imports can be rejected by source identity and record provenance. Legacy remains a recoverable reference during dogfooding without remaining the migration authority.
+
+The workflow has two deliberate confirmations and cannot promise one atomic transaction across both applications. Legacy finalization requires a compatible receipt consumer and backup support before it can ship. Attachments, dependencies, email reply identity, learnings, and historical messages remain unsupported until their own migration policies are implemented.
+
+## Alternatives considered
+
+- Let Legacy write the Next database: rejected because it couples the retired architecture to the replacement schema.
+- Update Legacy during Next import: rejected because partial cross-database failure could hide live work.
+- Leave imported tasks fully actionable in both applications: rejected because operators and Queens could perform the same work twice.
+- Import every historical task: rejected because completed history would overwhelm the active queue and duplicate Jira.
+
+## Validation
+
+- Tests prove the exporter cannot mutate the Legacy snapshot.
+- Preview and commit use the same normalization function and package digest.
+- Import tests cover invalid records, Jira exclusions, exact worker matching, active-to-ready transformation, duplicates, transaction rollback, and provenance.
+- Rollback rejects batches whose imported tasks changed after import.
+- Browser tests prove that no record is imported before explicit selection and confirmation.
+- Legacy finalization tests use a disposable snapshot, verify its pre-write backup, and prove receipt reversal before the feature is exposed.

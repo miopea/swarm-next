@@ -58,10 +58,16 @@ pub use federation_jira_claims::{
     FederationJiraClaimIntent, FederationJiraClaimPhase, MAX_FEDERATION_JIRA_CLAIM_BATCH,
 };
 mod jira;
+mod migration;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
 pub use jira::{
     JiraCommentDispatch, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionDispatch,
     JiraTransitionFailure,
+};
+pub use migration::{
+    LEGACY_MIGRATION_FORMAT, LEGACY_MIGRATION_VERSION, LegacyImportDisposition,
+    LegacyMigrationBundle, LegacyMigrationCommit, LegacyMigrationPreview, LegacyMigrationReceipt,
+    LegacyMigrationRollback, LegacyMigrationSource, LegacyTaskPreview, LegacyTaskRecord,
 };
 mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
@@ -95,7 +101,8 @@ const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
 const TERMINAL_GEOMETRY_SCHEMA_VERSION: i64 = 66;
-const CURRENT_SCHEMA_VERSION: i64 = TERMINAL_GEOMETRY_SCHEMA_VERSION;
+const LEGACY_MIGRATION_SCHEMA_VERSION: i64 = 67;
+const CURRENT_SCHEMA_VERSION: i64 = LEGACY_MIGRATION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -326,6 +333,16 @@ pub enum TaskStoreError {
     UnsupportedSchemaVersion { found: i64, supported: i64 },
     #[error("database integrity check failed: {0}")]
     IntegrityFailure(String),
+    #[error("the Legacy migration package is invalid or unsupported")]
+    InvalidMigrationBundle,
+    #[error("the Legacy migration package changed after preview")]
+    MigrationBundleChanged,
+    #[error("the Legacy migration selection is empty, duplicated, or no longer eligible")]
+    InvalidMigrationSelection,
+    #[error("the Legacy migration batch was not found or was already rolled back")]
+    MigrationBatchNotFound,
+    #[error("the Legacy migration batch contains work that has changed and cannot be rolled back")]
+    MigrationBatchChanged,
 }
 
 impl TaskStore {
@@ -1669,6 +1686,9 @@ fn migrate_recent_schema(
     }
     if schema_version < TERMINAL_GEOMETRY_SCHEMA_VERSION {
         migrate_terminal_geometry_ownership(transaction)?;
+    }
+    if schema_version < LEGACY_MIGRATION_SCHEMA_VERSION {
+        migration::migrate_legacy_migration_batches(transaction)?;
     }
     Ok(())
 }
@@ -4172,45 +4192,31 @@ mod tests {
     fn migrates_the_immediately_previous_schema_to_the_declared_ceiling() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("swarm-next.sqlite3");
-        let (session_id, device_id) = {
+        {
             let store = TaskStore::open(&path).unwrap();
-            let worker = store
-                .create_worker(
-                    "Clover",
-                    swarm_domain::ProviderKind::ClaudeCode,
-                    "/workspace",
-                    false,
-                    1,
-                )
-                .unwrap();
-            let session_id = WorkerSessionId::new();
-            let device_id = swarm_domain::PresenceDeviceId::new();
-            store.bind_worker_session(worker.id, session_id).unwrap();
-            store
-                .renew_worker_engagement(session_id, Some(device_id), 100, 300)
-                .unwrap();
             store
                 .connection()
                 .unwrap()
                 .execute_batch(&format!(
-                    "ALTER TABLE worker_sessions DROP COLUMN geometry_owner_device_id;
-                         PRAGMA user_version = {};",
+                    "DROP TABLE migration_task_links;
+                     DROP TABLE migration_batches;
+                     PRAGMA user_version = {};",
                     CURRENT_SCHEMA_VERSION - 1
                 ))
                 .unwrap();
-            (session_id, device_id)
-        };
+        }
 
         let migrated = TaskStore::open(path).unwrap();
         let connection = migrated.connection().unwrap();
-        let geometry_owner: Option<String> = connection
+        let migration_tables: i64 = connection
             .query_row(
-                "SELECT geometry_owner_device_id FROM worker_sessions WHERE session_id = ?1",
-                [session_id.to_string()],
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name IN ('migration_batches', 'migration_task_links')",
+                [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(geometry_owner, Some(device_id.to_string()));
+        assert_eq!(migration_tables, 2);
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))

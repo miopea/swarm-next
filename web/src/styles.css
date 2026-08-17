@@ -742,6 +742,28 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .settings-card { display: grid; align-content: start; gap: 16px; min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 7px 20px color-mix(in srgb, var(--text) 6%, transparent); }
 .settings-card h3 { margin: 0; font-size: 1.08rem; }
 .settings-card > p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.55; }
+.migration-drop { display: grid; gap: 5px; padding: 22px; border: 1px dashed var(--line-strong); border-radius: var(--radius-md); background: var(--panel-soft); cursor: pointer; text-align: center; }
+.migration-drop:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+.migration-drop.disabled { cursor: wait; opacity: .65; }
+.migration-drop span { color: var(--muted); font-size: .82rem; }
+.migration-drop input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
+.migration-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.migration-summary span { display: grid; gap: 2px; padding: 12px 14px; }
+.migration-summary span + span { border-inline-start: 1px solid var(--line); }
+.migration-summary strong { font-size: 1.15rem; }
+.migration-summary small { color: var(--muted); }
+.migration-selection-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.migration-records { display: grid; max-block-size: 430px; overflow: auto; border-block: 1px solid var(--line); }
+.migration-record { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 12px 4px; border-block-end: 1px solid var(--line); cursor: pointer; }
+.migration-record:last-child { border-block-end: 0; }
+.migration-record.unavailable { cursor: default; opacity: .62; }
+.migration-record-copy { display: grid; gap: 3px; min-width: 0; }
+.migration-record-copy strong { overflow-wrap: anywhere; }
+.migration-record-copy small { color: var(--muted); }
+.migration-record-copy .migration-warning { color: var(--muted); font-weight: 600; }
+.migration-confirmation, .migration-receipt { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--accent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+.migration-confirmation span, .migration-receipt p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.5; }
+.migration-message { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--panel-soft); color: var(--text) !important; }
 .worker-settings { grid-column: 1 / -1; }
 .configured-workers { display: grid; gap: 7px; }
 .configured-worker { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto auto; min-height: 58px; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-soft); }
@@ -1286,6 +1308,13 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .settings-workspace { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); padding: 12px; overflow-x: hidden; }
   .settings-section-nav { top: -4px; margin-inline: -4px; padding: 7px; }
   .settings-card { min-width: 0; }
+  .migration-summary { grid-template-columns: minmax(0, 1fr); }
+  .migration-summary span + span { border-inline-start: 0; border-block-start: 1px solid var(--line); }
+  .migration-selection-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .migration-selection-actions button:last-child { grid-column: 1 / -1; }
+  .migration-records { max-block-size: 55dvh; }
+  .migration-settings > .primary-action, .migration-confirmation .settings-actions, .migration-receipt > button { width: 100%; }
+  .migration-confirmation .settings-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
   .apiary-backend-choice, .apiary-readiness { grid-template-columns: minmax(0, 1fr); }
   .apiary-identity-summary { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
   .apiary-identity-summary > span:not(.apiary-backend-badge) { grid-column: 1; }

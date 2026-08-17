@@ -12,6 +12,7 @@ mod jira;
 mod jira_oauth;
 mod maintenance;
 mod microsoft_oauth;
+mod migration;
 mod notifications;
 mod orchestration;
 mod outlook;
@@ -2383,6 +2384,24 @@ fn api_router(state: AppState) -> Router {
             post(maintenance::maintain_worker_engine),
         )
         .route("/api/v1/backups/database", get(backups::download_database))
+        .route(
+            "/api/v1/migrations/legacy/tasks",
+            get(migration::list_active_legacy_task_migrations),
+        )
+        .route(
+            "/api/v1/migrations/legacy/tasks/preview",
+            post(migration::preview_legacy_tasks)
+                .layer(DefaultBodyLimit::max(migration::MAX_MIGRATION_BUNDLE_BYTES)),
+        )
+        .route(
+            "/api/v1/migrations/legacy/tasks/commit",
+            post(migration::commit_legacy_tasks)
+                .layer(DefaultBodyLimit::max(migration::MAX_MIGRATION_BUNDLE_BYTES)),
+        )
+        .route(
+            "/api/v1/migrations/legacy/tasks/rollback",
+            post(migration::rollback_legacy_tasks),
+        )
         .route(
             "/api/v1/feedback/reports",
             get(feedback::list_reports).post(feedback::create_report),
@@ -6524,6 +6543,31 @@ fn email_attachment_error(error: email_attachments::EmailAttachmentError) -> Api
 #[allow(clippy::too_many_lines)]
 fn task_store_error(error: &TaskStoreError) -> ApiError {
     match error {
+        TaskStoreError::InvalidMigrationBundle => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_migration_bundle",
+            error.to_string(),
+        ),
+        TaskStoreError::MigrationBundleChanged => ApiError::new(
+            StatusCode::CONFLICT,
+            "migration_bundle_changed",
+            error.to_string(),
+        ),
+        TaskStoreError::InvalidMigrationSelection => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_migration_selection",
+            error.to_string(),
+        ),
+        TaskStoreError::MigrationBatchNotFound => ApiError::new(
+            StatusCode::NOT_FOUND,
+            "migration_batch_not_found",
+            error.to_string(),
+        ),
+        TaskStoreError::MigrationBatchChanged => ApiError::new(
+            StatusCode::CONFLICT,
+            "migration_batch_changed",
+            error.to_string(),
+        ),
         TaskStoreError::NotFound => {
             ApiError::new(StatusCode::NOT_FOUND, "task_not_found", error.to_string())
         }

@@ -95,7 +95,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   );
 
   const settingsNavigation = screen.getByRole("navigation", { name: "Settings sections" });
-  expect(settingsNavigation).toHaveTextContent("CrewPresenceQueenAlertsSystemApiaryIntegrationsBackupDiagnostics");
+  expect(settingsNavigation).toHaveTextContent("CrewPresenceQueenAlertsSystemApiaryIntegrationsMigrationBackupDiagnostics");
   expect(screen.getByRole("button", { name: "Diagnostics" })).toHaveAttribute("aria-controls", "settings-diagnostics");
   fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
   expect(screen.getByRole("button", { name: "Diagnostics" })).toHaveAttribute("aria-current", "location");

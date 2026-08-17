@@ -49,6 +49,18 @@ export {
   updateTask,
 } from "./api/tasks";
 export {
+  commitLegacyTaskMigration,
+  previewLegacyTaskMigration,
+  rollbackLegacyTaskMigration,
+} from "./api/migration";
+export type {
+  LegacyImportDisposition,
+  LegacyMigrationBundle,
+  LegacyMigrationPreview,
+  LegacyMigrationReceipt,
+  LegacyTaskPreview,
+} from "./api/migration";
+export {
   addJiraComment,
   beginJiraAuthorization,
   createJiraBinding,

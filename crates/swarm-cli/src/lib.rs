@@ -2,7 +2,12 @@ use std::{ffi::OsString, path::PathBuf, time::Duration};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use swarm_domain::WorkerSessionId;
+use swarm_persistence::{
+    LEGACY_MIGRATION_FORMAT, LEGACY_MIGRATION_VERSION, LegacyMigrationBundle,
+    LegacyMigrationSource, LegacyTaskRecord,
+};
 
 use swarm_terminal::{
     HostClient, HostRequest, HostResponse, IpcError, PROTOCOL_VERSION, TerminalHostStatus,
@@ -18,16 +23,28 @@ pub enum LifecycleCommand {
     Status,
     BeginDrain,
     CancelDrain,
-    WaitReady { timeout: Duration },
-    StopSession { session_id: WorkerSessionId },
-    VerifyDatabase { path: std::path::PathBuf },
-    InspectLegacy { path: std::path::PathBuf },
+    WaitReady {
+        timeout: Duration,
+    },
+    StopSession {
+        session_id: WorkerSessionId,
+    },
+    VerifyDatabase {
+        path: std::path::PathBuf,
+    },
+    InspectLegacy {
+        path: std::path::PathBuf,
+    },
+    ExportLegacyTasks {
+        source: std::path::PathBuf,
+        output: std::path::PathBuf,
+    },
 }
 
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error(
-        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|stop-session UUID|verify-database PATH|inspect-legacy PATH>"
+        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|stop-session UUID|verify-database PATH|inspect-legacy PATH|export-legacy-tasks SOURCE OUTPUT>"
     )]
     Usage,
     #[error("wait timeout must be an integer from 1 through 86400 seconds")]
@@ -119,6 +136,14 @@ pub fn parse_command(
             }
             Ok(LifecycleCommand::InspectLegacy { path })
         }
+        "export-legacy-tasks" => {
+            let source = arguments.next().map(PathBuf::from).ok_or(CliError::Usage)?;
+            let output = arguments.next().map(PathBuf::from).ok_or(CliError::Usage)?;
+            if arguments.next().is_some() || !source.is_absolute() || !output.is_absolute() {
+                return Err(CliError::Usage);
+            }
+            Ok(LifecycleCommand::ExportLegacyTasks { source, output })
+        }
         _ => Err(CliError::Usage),
     }
 }
@@ -160,10 +185,151 @@ pub async fn execute(
                 _ => Err(CliError::UnexpectedResponse),
             }
         }
-        LifecycleCommand::VerifyDatabase { .. } | LifecycleCommand::InspectLegacy { .. } => {
-            Err(CliError::Usage)
-        }
+        LifecycleCommand::VerifyDatabase { .. }
+        | LifecycleCommand::InspectLegacy { .. }
+        | LifecycleCommand::ExportLegacyTasks { .. } => Err(CliError::Usage),
     }
+}
+
+/// Exports a versioned, portable task package from a Legacy snapshot.
+/// The source is opened read-only and the output path must not already exist.
+///
+/// # Errors
+/// Returns an error for an invalid snapshot, unsupported task schema, malformed
+/// Legacy JSON fields, or an output collision.
+pub fn export_legacy_tasks(
+    source: impl AsRef<std::path::Path>,
+    output: impl AsRef<std::path::Path>,
+) -> Result<LegacyMigrationBundle, CliError> {
+    let source = source.as_ref();
+    let output = output.as_ref();
+    if output.exists() {
+        return Err(CliError::LegacyDatabase(
+            "migration output already exists; choose a new file".into(),
+        ));
+    }
+    let snapshot =
+        std::fs::read(source).map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let snapshot_digest = format!("{:x}", Sha256::digest(&snapshot));
+    let connection = open_legacy_read_only(source)?;
+    let schema_version = legacy_schema_version(&connection)?;
+    if !table_exists(&connection, "tasks")? {
+        return Err(CliError::LegacyDatabase(
+            "Legacy tasks table is missing".into(),
+        ));
+    }
+    let installation_id = legacy_installation_id(&connection)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, title, description, status, priority, assigned_worker,
+                    jira_key, block_reason, acceptance_criteria, attachments,
+                    source_email_id, CAST(created_at AS INTEGER), CAST(updated_at AS INTEGER)
+             FROM tasks
+             WHERE archived_at IS NULL
+             ORDER BY COALESCE(number, 9223372036854775807), created_at, id",
+        )
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let rows = statement
+        .query_map([], |row| {
+            let criteria = parse_json_strings(row.get::<_, String>(8)?);
+            let attachments = parse_json_count(row.get::<_, String>(9)?);
+            Ok(LegacyTaskRecord {
+                source_id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                status: row.get(3)?,
+                priority: row.get(4)?,
+                assigned_worker: row.get(5)?,
+                jira_key: row.get(6)?,
+                block_reason: row.get(7)?,
+                acceptance_criteria: criteria,
+                attachment_count: attachments,
+                source_email_id: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let tasks = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let bundle = LegacyMigrationBundle {
+        format: LEGACY_MIGRATION_FORMAT.into(),
+        version: LEGACY_MIGRATION_VERSION,
+        source: LegacyMigrationSource {
+            installation_id,
+            schema_version,
+            exported_at: unix_timestamp(),
+            snapshot_digest,
+        },
+        tasks,
+    };
+    let bytes = serde_json::to_vec_pretty(&bundle)
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    std::fs::write(output, bytes).map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    Ok(bundle)
+}
+
+fn open_legacy_read_only(path: &std::path::Path) -> Result<Connection, CliError> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let integrity: String = connection
+        .pragma_query_value(None, "quick_check", |row| row.get(0))
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    if integrity != "ok" {
+        return Err(CliError::LegacyDatabase(format!(
+            "integrity check failed: {integrity}"
+        )));
+    }
+    Ok(connection)
+}
+
+fn legacy_schema_version(connection: &Connection) -> Result<Option<i64>, CliError> {
+    if !table_exists(connection, "schema_version")? {
+        return Ok(None);
+    }
+    connection
+        .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))
+}
+
+fn legacy_installation_id(connection: &Connection) -> Result<String, CliError> {
+    let mut statement = connection
+        .prepare("SELECT id, name FROM workers ORDER BY id")
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let mut hasher = Sha256::new();
+    for row in rows {
+        let (id, name) = row.map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+        hasher.update(id.as_bytes());
+        hasher.update([0]);
+        hasher.update(name.as_bytes());
+        hasher.update([0xff]);
+    }
+    Ok(format!("legacy-{:x}", hasher.finalize()))
+}
+
+fn parse_json_strings(value: String) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(&value).unwrap_or_default()
+}
+
+fn parse_json_count(value: String) -> usize {
+    serde_json::from_str::<Vec<serde_json::Value>>(&value).map_or(0, |items| items.len())
+}
+
+fn unix_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs() as i64)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -473,6 +639,53 @@ mod tests {
         assert_eq!(report.tasks.eligible, 1);
         assert_eq!(report.groups.invalid, 0);
         assert_eq!(std::fs::metadata(path).unwrap().len(), before);
+    }
+
+    #[test]
+    fn legacy_task_export_is_portable_read_only_and_refuses_overwrite() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("legacy.sqlite3");
+        let output = directory.path().join("legacy-tasks.json");
+        {
+            let connection = rusqlite::Connection::open(&source).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL);
+                     INSERT INTO schema_version VALUES (19, 1);
+                     CREATE TABLE workers (id TEXT, name TEXT, path TEXT);
+                     INSERT INTO workers VALUES ('worker-1', 'Daisy', '/private/path');
+                     CREATE TABLE tasks (
+                         id TEXT, number INTEGER, title TEXT, description TEXT, status TEXT,
+                         priority TEXT, assigned_worker TEXT, jira_key TEXT, block_reason TEXT,
+                         acceptance_criteria TEXT, attachments TEXT, source_email_id TEXT,
+                         created_at REAL, updated_at REAL, archived_at REAL
+                     );
+                     INSERT INTO tasks VALUES
+                       ('task-1', 1, 'Ship this', 'Outcome', 'active', 'high', 'Daisy', NULL, '',
+                        '[\"Verified\"]', '[\"one.png\"]', NULL, 100, 200, NULL),
+                       ('task-2', 2, 'Jira work', '', 'assigned', 'normal', NULL, 'WWD-2', '',
+                        '[]', '[]', NULL, 100, 200, NULL),
+                       ('archived', 3, 'Old', '', 'done', 'normal', NULL, NULL, '',
+                        '[]', '[]', NULL, 100, 200, 300);",
+                )
+                .unwrap();
+        }
+        let before = std::fs::read(&source).unwrap();
+        let bundle = export_legacy_tasks(&source, &output).unwrap();
+        assert_eq!(bundle.version, LEGACY_MIGRATION_VERSION);
+        assert_eq!(bundle.tasks.len(), 2);
+        assert_eq!(bundle.tasks[0].acceptance_criteria, vec!["Verified"]);
+        assert_eq!(bundle.tasks[0].attachment_count, 1);
+        assert!(
+            !std::fs::read_to_string(&output)
+                .unwrap()
+                .contains("/private/path")
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), before);
+        assert!(matches!(
+            export_legacy_tasks(&source, &output),
+            Err(CliError::LegacyDatabase(_))
+        ));
     }
 
     #[test]

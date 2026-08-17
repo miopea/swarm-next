@@ -15,6 +15,7 @@ import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import EmailSettings from "./EmailSettings";
 import JiraSettings from "./JiraSettings";
+import LegacyMigrationSettings from "./LegacyMigrationSettings";
 import WorkerSettings from "./WorkerSettings";
 import { navigateToSettingsSection, readSettingsSection, SETTINGS_SECTIONS } from "./settingsNavigation";
 
@@ -387,6 +388,8 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
 
       <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} />
       <EmailSettings operatorToken={operatorToken} readiness={emailReadiness} unavailable={emailUnavailable} />
+
+      <LegacyMigrationSettings busy={busy} operatorToken={operatorToken} />
 
       <section id="settings-backup" className="settings-card" aria-labelledby="backup-heading">
         <div><p className="eyebrow">Backup</p><h3 id="backup-heading">Carry your Hive safely</h3></div>
