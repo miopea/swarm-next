@@ -23,7 +23,7 @@ Decision meanings:
 | Task board | Redesign | Preserve work management while simplifying task types, transitions, and presentation. |
 | Task assignment | Redesign | Preserve manual and assisted assignment; separate recommendations from execution policy. |
 | Task history and audit | Keep | Implemented as bounded, durable per-task events plus a quiet operator Activity view with task search and progress, assignment, and change filters. It excludes terminal output and transport noise. |
-| Direct terminal input | Keep | Essential, with explicit input ownership and stale-session protection. |
+| Direct terminal input | Keep | Essential, with explicit input ownership, stale-session protection, provider-prompt guards, and content-free actor/shape attribution at the terminal-host write boundary. Typed content and terminal output never enter that audit. |
 | Groups and bulk worker actions | Investigate | Likely useful, but validate actual use and whether workspace selection replaces groups. |
 | Worker routing descriptions | Redesign | Implemented as operator-reviewed Hive metadata for Queen routing, distinct from provider memory and project instructions. Swarm can draft locally from bounded README/manifest metadata or optionally improve that packet with one tool-free, non-persistent, budget-capped Claude turn; neither path saves without operator review. |
 
@@ -32,7 +32,7 @@ Decision meanings:
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
 | Routine approval drones | Remove | Provider-native permissions own provider tool approval. Keep only typed Swarm-level operator decisions. |
-| Worker activity and attention | Redesign | Implemented from the bounded host-owned terminal surface: Sleeping is unloaded, Resting is live and idle, Buzzing is active or conservatively unknown, and operator decisions are explicit. Provider classifiers and content-free state-change events keep the roster authoritative without browser polling. |
+| Worker activity and attention | Redesign | Implemented from the bounded host-owned terminal surface: Sleeping is unloaded, Resting is live and idle, Buzzing is active or conservatively unknown, and operator decisions are explicit. Provider classifiers and content-free state-change events keep the roster authoritative without browser polling. An open provider selection or confirmation prompt is also an input authority boundary: unrelated automation refuses without losing its intended message, while any authorized answer binds to the exact current prompt and requires read-back. |
 | Crash/revival automation | Redesign | Becomes worker lifecycle recovery, not a drone. |
 | Host pressure management | Redesign | Observation-first API and terminal-host memory evidence now has explicit thresholds and operator visibility; automated recovery waits for soak evidence and a safe target. |
 | Context-pressure handling | Investigate | Reassess against current provider compaction and context-management capabilities. |
@@ -144,7 +144,7 @@ after receipt verification.
 
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
-| SQLite persistence | Keep/Redesign | Embedded source of truth with one owner, transactional migrations, backups, and integrity checks. |
+| SQLite persistence | Keep/Redesign | Embedded source of truth with one owner, transactional migrations, backups, and integrity checks. The latest migration step and declared schema ceiling require a mechanical drift test so a compiled migration cannot remain unreachable. |
 | Configuration UI | Redesign | Human-oriented settings grouped by outcome; durable workers can be created, renamed, assigned an always-active policy, and ordered without path entry. Local Hive names and Keeper-owned Apiary names are editable public labels without changing durable identity, ownership, membership, or signing keys. The control room shows the current Hive plus Personal, Keeper, or Member context from that same private identity snapshot on desktop and mobile. No competing YAML/DB precedence after import. |
 | CLI | Redesign | Installation, service, diagnostics, import/export, and automation only; normal operation remains web-first. |
 | Self-update and restart | Redesign | Atomic update, compatibility check, worker preservation, health verification, and rollback. Development Settings refreshes working-copy detection while it remains open, so a newly pulled App/API revision becomes actionable without restarting the page; activation remains an explicit worker-preserving action. |

@@ -69,6 +69,17 @@ The audit promotes outcomes, not mechanisms:
 10. **Provider support is earned independently.** A shared interface does not
     make provider state detection, recovery, shortcuts, or permission behavior
     equivalent.
+11. **A provider question is an input authority boundary.** Unrelated automation
+    cannot write through an open selection or confirmation prompt. Refusal keeps
+    the intended message recoverable; an authorized answer binds to the exact
+    current prompt and distinguishes write, observation, and acceptance.
+12. **Every terminal write has content-free provenance.** The terminal owner can
+    identify actor, target, time, input shape, and write outcome without storing
+    typed content, credentials, or terminal output. Unknown attribution is a
+    visible defect rather than an omitted row.
+13. **Schema and scratch ownership are mechanically complete.** The newest
+    migration cannot drift from the declared current schema, and test or runtime
+    temporary artifacts have explicit owners whose cleanup is verified.
 
 ## What not to port
 
