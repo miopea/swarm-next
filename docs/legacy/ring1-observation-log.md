@@ -108,6 +108,11 @@ For each naturally occurring session, record only what is relevant:
   Gemini remain support targets that must earn the same acceptance. Routine
   cross-provider handoff is documented but deferred; per-task model choice
   inside one provider remains an opportunity for focused discussion.
+- Within-provider model routing starts in Queen recommendation mode with the
+  worker's strongest preferred model as default. An opt-in Fast lane may follow
+  evidence. A model can change inside a task only between stopped turns through
+  an explicit provider command and verified read-back; active or uncertain
+  provider state blocks the switch.
 - The protocol migration left API and holder builds aligned on protocol 9,
   both services active with zero restarts, database `quick_check` at `ok`, and
   the holder reporting one running and one retained Queen session. No Jira,

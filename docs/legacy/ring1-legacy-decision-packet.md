@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Four safeguards closed; ten operator choices recorded 2026-08-17**
+Status: **Four safeguards closed; eleven operator choices recorded 2026-08-17**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -319,6 +319,38 @@ OpenCode and Gemini remain desired support targets. Document, but defer,
 cross-provider handover. Investigate per-task model choice within a provider,
 where the operational jump is smaller and the value may be materially higher.
 
+## Decision 11: conservative within-provider model routing
+
+**Evidence.** Most daily work currently stays on the strongest Claude model
+because Max-tier capacity makes token-price optimization unimportant. A faster
+model can still reduce elapsed time for bounded work, but automatic selection
+becomes friction when it surprises the operator or lowers quality on ambiguous
+work.
+
+**Current Next boundary.** A worker owns one provider conversation and a
+configured default model. Within Claude, an explicit `/model` command can
+change the model without abandoning the task or conversation, provided the
+current turn has stopped. Next does not yet own a typed, verified model-routing
+policy or history.
+
+**Recommendation.** Keep the strongest preferred model as each worker's
+default. Begin with Queen recommendations in shadow mode, then allow an opt-in
+Fast lane only for bounded, reversible, single-repository work with explicit
+completion checks and no architecture, security, migration, deployment,
+credential, external-message, or ambiguous product judgment. Worker and task
+pins override routing. Queen records her reason and the observed model. A model
+may change within a task only between stopped turns: apply the explicit
+provider command, read back the intended model, and continue only after the
+provider confirms it. Never switch during generation, tool execution, an open
+provider question, or uncertain state. If a fast model struggles, stop at a
+safe boundary and recommend escalation rather than concealing the change.
+
+**Operator decision (2026-08-17).** Adopt the conservative recommendation with
+one correction: within-provider model changes need not wait for a new task.
+They may occur inside the current task when the model is stopped and the
+explicit `/model` switch is applied and verified. Default to recommendation
+mode before enabling automatic Fast lane on selected workers or repositories.
+
 ## Evidence that would change these recommendations
 
 - A naturally occurring prompt class that Queen can answer safely and repeatedly
@@ -341,6 +373,8 @@ where the operational jump is smaller and the value may be materially higher.
 - Provider-specific acceptance evidence strong enough to call OpenCode or
   Gemini first-class, or repeated real work showing that a cross-provider
   handoff is worth productizing rather than merely documenting.
+- Shadow-routing evidence that Queen identifies genuinely bounded fast-model
+  work without surprising the operator or degrading verification quality.
 
 Decisions should be recorded after that evidence or an explicit operator choice,
 not inferred from Legacy commit volume.
