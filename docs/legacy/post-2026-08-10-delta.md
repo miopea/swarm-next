@@ -67,9 +67,9 @@ inspected; it is not a claim that a live operator journey has passed.
 
 | Outcome | Current owner | Existing proof | Remaining proof |
 | --- | --- | --- | --- |
-| Provider attention classification | `crates/swarm-terminal/src/provider_activity.rs`; worker projection in `crates/swarm-api/src/lib.rs` | Captured Claude picker fixtures classify as `AwaitingOperator`; ordinary resting and active controls are present. | Prove every automated delivery refuses while that state is current and retains its intended message. |
-| Terminal input authority and provenance | `crates/swarm-terminal/src/ipc.rs`, `process.rs`, and `crates/swarm-api/src/terminal_socket.rs` | Exact, revisioned Steward takeover leases and local reclaim are tested; operator engagement is durably recorded before browser input is sent. | Add an actor-bearing ordinary-write envelope, choke-point audit, unknown-actor test, secret-exclusion test, and retention bound. |
-| Guarded coordinator delivery | `crates/swarm-api/src/lib.rs`; durable delivery records in `crates/swarm-persistence` | Delivery records distinguish acknowledged, rejected, retryable, and uncertain. Message rendering is observed before Enter. | Add provider-prompt admission and semantic post-write evidence; never label write acknowledgement as provider acceptance or task start. |
+| Provider attention classification | `crates/swarm-terminal/src/provider_activity.rs`; worker projection and delivery admission in `crates/swarm-api/src/lib.rs` | Captured Claude picker fixtures classify as `AwaitingOperator`; all four durable delivery paths recoverably hold behind the exact current snapshot; a real PTY retained one delivery through five cycles and released it only after operator input. | Product policy for any future Queen-authorized answer remains separate; ordinary coordination refusal is closed. |
+| Terminal input authority and provenance | `crates/swarm-terminal/src/ipc.rs`, `process.rs`, and `crates/swarm-api/src/terminal_socket.rs` | Exact Steward takeover and local reclaim remain tested. `HostRequest::Write` now requires a typed actor and coarse input kind, and the holder owns a content-free 10,000-event/24-hour audit with private bounded reads. | Decide whether the evidence stays diagnostics-only or gains a small Activity summary; no content-bearing log is allowed. |
+| Guarded coordinator delivery | `crates/swarm-api/src/lib.rs`; durable delivery records in `crates/swarm-persistence` | Delivery records distinguish acknowledged, rejected, retryable, and uncertain; provider-question admission returns work to its durable queue without consuming retry budget. | Add semantic post-write evidence only for a future action that claims provider acceptance; never relabel write acknowledgement as task start. |
 | Task activity attribution | `crates/swarm-domain/src/lib.rs` and `crates/swarm-persistence/src/lib.rs` | Operator, worker, Jira, email, and system actors are durable; persistence tests assert worker identity. | Keep this separate from byte-write provenance rather than treating one as a substitute for the other. |
 | SQLite evolution | `crates/swarm-persistence/src/lib.rs` | One current version, forward-only transactional steps, historical migration tests, integrity verification, and a structural immediately-previous-schema test tied to the declared ceiling. | Exercise a production-shaped previous-version fixture during release acceptance whenever the next real schema change lands. |
 | Temporary artifacts | Rust `tempfile` ownership across API, persistence, terminal, and tests | Inspected production paths use owned `NamedTempFile`, `TempDir`, or `tempdir` values. The Outlook helper cleanup is now explicit and asserted. | Keep the no-retained-test-artifact invariant in full-suite and release acceptance. |
@@ -78,14 +78,16 @@ inspected; it is not a claim that a live operator journey has passed.
 
 Targeted verification on 2026-08-16 passed all five provider-activity cases,
 the exact takeover/local-reclaim authority case, and authenticated task-activity
-actor persistence. Those green tests support the positive claims above. They do
-not close the two explicitly identified gaps: ordinary writes still carry no
-actor, and coordination still has no provider-prompt admission check.
+actor persistence. Ring 1 then closed both identified boundary gaps: `1a3c89b`
+added shared provider-question admission with the real-PTY hold/release proof,
+and `7c84cb9` added compile-enforced holder write provenance plus bounded,
+content-free audit coverage. Neither change authorizes Queen to answer a prompt.
 
 ## Questions reserved for a real product choice
 
-These are not requests for immediate operator input. They become decision packets
-only after the implementation comparison and Ring 1 evidence are complete.
+The implementation comparison is complete enough to make these real choices.
+Their current evidence, recommendation, and exact alternatives are maintained in
+`docs/legacy/ring1-legacy-decision-packet.md`.
 
 - When Queen sees a provider selection prompt, should she only notify, recommend
   an option, or answer under an explicit confidence/permission policy? Different
@@ -99,7 +101,7 @@ only after the implementation comparison and Ring 1 evidence are complete.
 
 ## Next evidence step
 
-Check the five chains against exact Legacy diffs and executable tests, then map
-each surviving outcome to a current Next owner and test. During the first week of
-Ring 1 use, record only observed overlap. The first operator discussion should be
-a small packet of genuine choices, not a tour of all 98 commits.
+Continue recording only observed Ring 1 overlap, refresh the root-to-tip ledger
+if Legacy advances, and close the four focused operator choices in the decision
+packet. Do not turn any remaining delta row into a port ticket without current
+Next evidence.

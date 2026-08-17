@@ -32,6 +32,7 @@ Read and review these documents in order:
 28. [Legacy Swarm evolution atlas](26-legacy-evolution-atlas.md)
 29. [Legacy final product contract audit](legacy/final-contract-audit.md)
 30. [Legacy stable release boundaries](legacy/stable-release-boundaries.md)
+31. [Legacy atlas completion audit](legacy/atlas-completion-audit.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do
