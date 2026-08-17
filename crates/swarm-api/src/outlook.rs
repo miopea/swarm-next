@@ -533,7 +533,7 @@ mod tests {
 
     use super::*;
 
-    async fn connected_probe() -> (OutlookProbe, Url) {
+    async fn connected_probe() -> (OutlookProbe, Url, tempfile::TempDir) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let app = Router::new()
@@ -556,13 +556,13 @@ mod tests {
                 StatusCode::ACCEPTED
             }));
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let directory = tempfile::tempdir().unwrap().keep();
+        let directory = tempfile::tempdir().unwrap();
         let oauth = MicrosoftOAuthClient::new_with_endpoints(
             Client::new(),
             "client-id",
             "client-secret",
             "https://swarm.example.test/",
-            directory.join("email-oauth.json"),
+            directory.path().join("email-oauth.json"),
             "https://login.microsoft.test/authorize",
             &format!("http://{address}/token"),
             &format!("http://{address}/"),
@@ -577,12 +577,14 @@ mod tests {
         (
             OutlookProbe::oauth(oauth),
             Url::parse(&format!("http://{address}/")).unwrap(),
+            directory,
         )
     }
 
     #[tokio::test]
     async fn lists_previews_downloads_and_replies_with_bounded_graph_calls() {
-        let (probe, _) = connected_probe().await;
+        let (probe, _, directory) = connected_probe().await;
+        let directory_path = directory.path().to_path_buf();
         let readiness = probe.readiness().await;
         assert_eq!(readiness.connection, OutlookConnectionState::Ready);
         let inbox = probe.inbox(Some("reporter")).await.unwrap();
@@ -600,11 +602,14 @@ mod tests {
                 .unwrap(),
             "graph:message-1"
         );
+        drop(probe);
+        drop(directory);
+        assert!(!directory_path.exists());
     }
 
     #[tokio::test]
     async fn rejects_unbounded_search_and_identifiers() {
-        let (probe, _) = connected_probe().await;
+        let (probe, _, _directory) = connected_probe().await;
         assert_eq!(
             probe.inbox(Some(&"x".repeat(MAX_QUERY_BYTES + 1))).await,
             Err(OutlookError::InvalidRequest)

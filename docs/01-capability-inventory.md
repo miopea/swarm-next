@@ -144,7 +144,7 @@ after receipt verification.
 
 | Capability | Decision | Rationale and intended direction |
 |---|---|---|
-| SQLite persistence | Keep/Redesign | Embedded source of truth with one owner, transactional migrations, backups, and integrity checks. The latest migration step and declared schema ceiling require a mechanical drift test so a compiled migration cannot remain unreachable. |
+| SQLite persistence | Keep/Redesign | Embedded source of truth with one owner, transactional migrations, backups, and integrity checks. The latest migration and declared schema ceiling now share one named version, and a structural immediately-previous-schema test prevents an unreachable compiled step. |
 | Configuration UI | Redesign | Human-oriented settings grouped by outcome; durable workers can be created, renamed, assigned an always-active policy, and ordered without path entry. Local Hive names and Keeper-owned Apiary names are editable public labels without changing durable identity, ownership, membership, or signing keys. The control room shows the current Hive plus Personal, Keeper, or Member context from that same private identity snapshot on desktop and mobile. No competing YAML/DB precedence after import. |
 | CLI | Redesign | Installation, service, diagnostics, import/export, and automation only; normal operation remains web-first. |
 | Self-update and restart | Redesign | Atomic update, compatibility check, worker preservation, health verification, and rollback. Development Settings refreshes working-copy detection while it remains open, so a newly pulled App/API revision becomes actionable without restarting the page; activation remains an explicit worker-preserving action. |

@@ -94,7 +94,8 @@ pub(crate) const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
-const CURRENT_SCHEMA_VERSION: i64 = 66;
+const TERMINAL_GEOMETRY_SCHEMA_VERSION: i64 = 66;
+const CURRENT_SCHEMA_VERSION: i64 = TERMINAL_GEOMETRY_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1666,7 +1667,7 @@ fn migrate_recent_schema(
     if schema_version < 65 {
         coordinator::migrate_coordinator_unstarted_work_attention(transaction)?;
     }
-    if schema_version < 66 {
+    if schema_version < TERMINAL_GEOMETRY_SCHEMA_VERSION {
         migrate_terminal_geometry_ownership(transaction)?;
     }
     Ok(())
@@ -1713,7 +1714,7 @@ fn migrate_terminal_geometry_ownership(
                );",
         )?;
     }
-    transaction.pragma_update(None, "user_version", 66)
+    transaction.pragma_update(None, "user_version", TERMINAL_GEOMETRY_SCHEMA_VERSION)
 }
 
 fn migrate_managed_worker_roles(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -4168,7 +4169,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_schema_v65_to_durable_terminal_geometry_ownership() {
+    fn migrates_the_immediately_previous_schema_to_the_declared_ceiling() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("swarm-next.sqlite3");
         let (session_id, device_id) = {
@@ -4191,10 +4192,11 @@ mod tests {
             store
                 .connection()
                 .unwrap()
-                .execute_batch(
+                .execute_batch(&format!(
                     "ALTER TABLE worker_sessions DROP COLUMN geometry_owner_device_id;
-                     PRAGMA user_version = 65;",
-                )
+                         PRAGMA user_version = {};",
+                    CURRENT_SCHEMA_VERSION - 1
+                ))
                 .unwrap();
             (session_id, device_id)
         };

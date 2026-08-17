@@ -18,6 +18,21 @@ app; reconnect and resize require explicit protocols, bounded journals, and
 idempotent process identity. Swarm Next keeps those contracts in the Rust worker
 engine and tests app reload separately from holder replacement.
 
+Ring 1 reproduced the operator outcome on 2026-08-16 through a different cause:
+the browser renderer filled its desktop container, but the shared PTY retained
+an older narrow geometry after attention moved between devices and after a
+fresh worker revival. `ca91cc3f` separated durable geometry authority from the
+expiring operator-attention lease, and `5871b7f0` let the first identified
+viewer fit a newly revived, otherwise unowned terminal. A later Ring 1 repro
+showed that a dormant session could still retain another device's width;
+`e8c73a7` lets an explicitly selected foreground attachment claim its viewport
+on worker selection or refresh. Focused WebSocket tests prove that background
+and later passive viewers cannot steal geometry and that actual input transfers
+it. Live proof then took Queen and Scout through desktop, Android, and
+desktop again with zero page overflow and rendered rows reaching the terminal's
+right edge. This closes the observed Next defect without copying Legacy's
+dashboard resize machinery.
+
 ## Automated input authority and operator focus
 
 `d547b6e2` added a terminal-active guard after drones and Queen injected while
@@ -165,9 +180,12 @@ than user-facing feature logic.
 **Stable outcome:** the latest migration step and current schema version need a
 mechanical invariant, and every temporary artifact needs one explicit owner with
 cleanup proven by a test. Next's forward-only SQLite design and owned Rust
-temporary values substantially reduce both risks. The current Outlook test
-helper still calls `tempfile::tempdir().unwrap().keep()`, however, so the cleanup
-class has one small confirmed recurrence to remove.
+temporary values substantially reduce both risks. Ring 1 found and removed one
+small recurrence: the Outlook probe helper deliberately retained its temporary
+OAuth directory. The helper now returns the owned `TempDir` and proves cleanup,
+while the newest migration uses one named schema-version constant and a test
+migrates exactly `CURRENT_SCHEMA_VERSION - 1` to the declared ceiling. These are
+ordinary safeguards, not reasons to port Legacy's migration or scratch system.
 
 ## Jira closure and divergence evidence
 

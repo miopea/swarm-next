@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Draft recommendations; operator choices not yet recorded**
+Status: **Two safeguards closed; focused operator choices not yet recorded**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -9,21 +9,36 @@ answer.
 
 ## Immediate safeguards with no product fork
 
-These should be handled as ordinary quality work:
+These are ordinary quality work rather than product forks:
 
-1. Remove the Outlook test helper's retained temporary directories and add a
-   cleanup assertion.
-2. Add a structural persistence test tying the newest migration step to the
-   declared current schema version.
-3. Refuse unrelated automated terminal delivery while the exact current provider
+1. **Closed:** the Outlook test helper now retains an owned temporary directory
+   only for the test lifetime and asserts cleanup.
+2. **Closed:** the newest migration and declared current schema version share one
+   named ceiling, and a structural test migrates exactly the immediately
+   previous version.
+3. **Pending boundary safeguard:** refuse unrelated automated terminal delivery while the exact current provider
    activity is `AwaitingOperator`. Preserve the intended delivery as recoverable
    rather than marking it delivered, dropping it, or replaying it later without
    context.
-4. Carry typed actor and input-shape provenance through every ordinary terminal
+4. **Pending boundary safeguard:** carry typed actor and input-shape provenance through every ordinary terminal
    write and record it at the terminal-host choke point without content.
 
 Items 3 and 4 protect boundaries; they do not decide whether Queen may eventually
 answer a provider question.
+
+## Ring 1 overlap that required no product choice
+
+The live desktop terminal could fill its browser container while Claude stayed
+at an older narrow PTY width. Legacy's resize history made the operator outcome
+recognizable, but Next's cause was its own: geometry authority expired with
+attention or was absent after revival. Next now keeps geometry authority
+separate from attention, lets the first identified viewer fit an unowned fresh
+session, and lets the selected foreground view replace stale cross-device
+geometry on worker selection or refresh (`e8c73a7`). Later passive devices
+cannot steal the shared size, while real input transfers authority. Queen and
+Scout passed desktop, Android, and
+desktop-again proof. This is classified **already prevented after Ring 1 fix**;
+there is no remaining operator decision and no Legacy resize code was ported.
 
 ## Decision 1: Queen and provider questions
 

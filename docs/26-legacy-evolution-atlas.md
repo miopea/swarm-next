@@ -203,6 +203,14 @@ subject in `docs/legacy/commit-capability-ledger.csv`. Its generation script is
 `scripts/analysis/build-legacy-commit-ledger.cjs`; the self-test protects log,
 classification, and reference parsing.
 
+The 2026-08-17 refresh fetched Legacy `origin/main` again and confirmed it still
+ends at `1f559e84415c29ad4c12a9d6676098a4125e08f3`, with root
+`c4aeedd1d1ec532faafae441f4f6b651ef6e1d6b` and 1,529 reachable commits.
+Regenerating the ledger, summary, and regression candidates from that exact
+remote ref produced byte-identical artifacts. The local Legacy checkout remains
+98 commits behind by design and was not modified; the remote ref, not the
+working tree, is the archaeology authority.
+
 The file-aware pass finds 380 worker, 377 task, 309 provider, 295 terminal, 293
 settings, 264 drone, 201 Queen, 146 resource, 107 security/auth, 99 mobile/PWA,
 95 Jira, 95 worker-state, 90 messaging, 77 recovery, and 31 email commits. These
