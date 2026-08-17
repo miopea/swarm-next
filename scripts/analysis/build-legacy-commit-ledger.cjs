@@ -182,7 +182,8 @@ if (process.argv.includes("--self-test")) {
 
 const source = path.resolve(process.argv[2] || "../swarm");
 const output = path.resolve(process.argv[3] || "docs/legacy");
-const git = spawnSync("git", ["-c", `safe.directory=${source.replace(/\\/g, "/")}`, "-C", source, "log", "--reverse", "--date=iso-strict", "--numstat", "--format=@@@%H%x1f%ad%x1f%s%x1f%b"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+const revision = process.argv[4] || "HEAD";
+const git = spawnSync("git", ["-c", `safe.directory=${source.replace(/\\/g, "/")}`, "-C", source, "log", revision, "--reverse", "--date=iso-strict", "--numstat", "--format=@@@%H%x1f%ad%x1f%s%x1f%b"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 if (git.status !== 0) fail(git.stderr || "legacy git log failed");
 const commits = parseLog(git.stdout);
 if (!commits.length) fail("legacy history was empty");

@@ -10,23 +10,25 @@ which fixes caused regressions, and which constraints have since disappeared.
 Swarm Next uses that evidence to avoid both amnesia and accidental porting.
 
 This atlas is reviewing every reachable legacy commit from the repository root
-to the final legacy release. Each capability is classified as **keep the outcome**,
+to the latest reachable commit, while recording the last packaged release as a
+separate stability boundary. Each capability is classified as **keep the outcome**,
 **redesign**, **remove**, **defer**, or **investigate**. A commit count is not a
 priority score; repeated fixes usually indicate a difficult boundary, not a
 feature that should be copied.
 
 ## Repository baseline
 
-- Reachable history: 1,431 commits from 2026-02-07 through 2026-08-10.
-- Release commits: 362.
-- Conventional-change subjects: 303 fixes, 187 features, 38 refactors,
-  14 tests, 9 performance changes, and 3 security changes, plus earlier
+- Reachable history: 1,529 commits from 2026-02-07 through 2026-08-16.
+- Release commits: 375. The latest packaged boundary is `2026.8.13`; 71 later
+  commits are development evidence and have not survived a packaged-release
+  boundary.
+- Conventional-change subjects: 396 fixes, 202 features, 45 refactors,
+  20 tests, 9 performance changes, and 3 security changes, plus earlier
   unconventionally named work.
-- Subject-level evidence clusters include 131 terminal/PTY changes, 118 task or
-  assignment changes, 83 Queen changes, 77 drone/polling changes, 74 settings
-  changes, 44 worker-state changes, 36 mobile/PWA changes, 34 security/auth
-  changes, 25 messaging changes, 23 recovery changes, 21 memory/resource
-  changes, and 19 email changes. These sets overlap.
+- The current file-aware evidence clusters include 380 worker, 377 task, 309
+  provider, 295 terminal, 293 settings, 264 drone, 201 Queen, 146 resource,
+  107 security/auth, 99 mobile/PWA, 95 Jira, 95 worker-state, 90 messaging,
+  77 recovery, and 31 email commits. These sets overlap.
 
 The root commit already contains adaptive polling and circuit breakers, so this
 repository begins after the very first prototype. The audit therefore treats
@@ -194,19 +196,25 @@ again or guesses that work began.
 
 ## Complete commit ledger
 
-The repeatable ledger pass now covers all 1,431 reachable commits. It records
+The repeatable ledger pass now covers all 1,529 reachable commits. It records
 full and short identity, timestamp, change type, release marker, file-aware and
 subject-only capability tags, linked issue references, file count, churn, and
 subject in `docs/legacy/commit-capability-ledger.csv`. Its generation script is
 `scripts/analysis/build-legacy-commit-ledger.cjs`; the self-test protects log,
 classification, and reference parsing.
 
-The file-aware pass finds 346 task, 341 worker, 279 terminal, 234 drone, 174
-Queen, 136 resource, 97 mobile/PWA, 86 Jira, 85 worker-state, 82 messaging, 75
-recovery, and 30 email commits. These overlapping counts are deliberately
+The file-aware pass finds 380 worker, 377 task, 309 provider, 295 terminal, 293
+settings, 264 drone, 201 Queen, 146 resource, 107 security/auth, 99 mobile/PWA,
+95 Jira, 95 worker-state, 90 messaging, 77 recovery, and 31 email commits. These
+overlapping counts are deliberately
 broader than the subject-only baseline above: they include implementation files
 and commit bodies, so they describe evidence touched rather than author intent.
 The generated summary and bounded regression candidates live beside the ledger.
+
+The explicit 98-commit delta after the original 2026-08-10 freeze is reviewed
+in `docs/legacy/post-2026-08-10-delta.md`. It separates released behavior from
+later development experiments and compares the highest-value findings against
+Swarm Next before proposing any work.
 
 Six high-value chains were then checked against commit messages and touched
 source/test files in `docs/legacy/validated-regression-chains.md`: terminal

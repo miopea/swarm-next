@@ -183,6 +183,20 @@ Generated from commit subjects and dates. Candidates share their primary subject
   - 4f04990d (2026-02-25): fix(drones): block Queen continue on empty prompts
   - e43025e9 (2026-02-26): Fix CI lint errors from terminal stability changes
 
+## 7887087a — feat(dashboard): worker tiles show which task, and whether it is started (#1496)
+
+- Date: 2026-08-11
+- Subject capability overlap: tasks, workers, ui_ux
+- Corrective follow-ups within four days: 8
+  - d29c3c63 (2026-08-12): fix(goals): clear an armed native /goal when its task stops being active (#1536)
+  - 52eea9f5 (2026-08-12): fix(queen): stop claiming a dispatch happened, and sweep the stranded row (#1527)
+  - f649ecb8 (2026-08-13): fix(mcp): refuse a task routed to a worker that does not exist (#1543)
+  - 567e8de7 (2026-08-13): fix(mcp): swarm_create_task now applies the priority it was given (#1543)
+  - febc8624 (2026-08-14): fix(drones): nudge suppression keys on state_duration, not MCP dispatches (#1615)
+  - 72c66362 (2026-08-14): fix(queen): interrupt reports a dispatch, not an outcome (#1608)
+  - 16dde76b (2026-08-14): fix(tasks): an ASSIGNED-and-BACKLOG task had no legal close route (#1636)
+  - f01a065a (2026-08-15): fix(drones): stop nudging workers whose task is ACTIVE and they're working (#1664)
+
 ## f4643c6e — feat(drones): detect operator terminal approvals + "Approve Always" rules
 
 - Date: 2026-02-27
@@ -194,6 +208,30 @@ Generated from commit subjects and dates. Candidates share their primary subject
   - 95c82311 (2026-03-01): fix(terminal): restore full scrollback on reload and fix mobile viewport race
   - 65bb2147 (2026-03-02): fix(jira): handle empty project in JQL builder
   - d913421c (2026-03-03): fix(jira): merge status_map with defaults so empty {} doesn't break transitions
+
+## ee54b7fc — feat(messaging)!: broadcast is Queen-only
+
+- Date: 2026-08-12
+- Subject capability overlap: queen, messaging
+- Corrective follow-ups within four days: 6
+  - 58339e99 (2026-08-14): fix(queen): report the hold instead of claiming delivery, and record that interrupt does not close a picker (#1608)
+  - 85491fc4 (2026-08-14): fix(queen): read back before claiming a prompt was answered (#1608)
+  - af324d2c (2026-08-14): fix(queen): answer a picker with arrows and Enter, never by typing the digit (#1608)
+  - 78c1ef4d (2026-08-14): fix(queen): dismiss reads back, and stops claiming Escape works (#1623)
+  - 314f05bf (2026-08-15): fix(queen): dismiss is OBSERVED to work, and declines rather than commits (#1623)
+  - b338f1c8 (2026-08-15): fix(queen): a refused prompt is now recoverable on both sides (#1648)
+
+## be122e22 — feat(queen): answer and dismiss an open selection prompt (#1608)
+
+- Date: 2026-08-14
+- Subject capability overlap: queen
+- Corrective follow-ups within four days: 6
+  - 58339e99 (2026-08-14): fix(queen): report the hold instead of claiming delivery, and record that interrupt does not close a picker (#1608)
+  - 85491fc4 (2026-08-14): fix(queen): read back before claiming a prompt was answered (#1608)
+  - af324d2c (2026-08-14): fix(queen): answer a picker with arrows and Enter, never by typing the digit (#1608)
+  - 78c1ef4d (2026-08-14): fix(queen): dismiss reads back, and stops claiming Escape works (#1623)
+  - 314f05bf (2026-08-15): fix(queen): dismiss is OBSERVED to work, and declines rather than commits (#1623)
+  - b338f1c8 (2026-08-15): fix(queen): a refused prompt is now recoverable on both sides (#1648)
 
 ## 7650262b — Add mouse escape sequence logging to modal terminal onData
 
@@ -359,36 +397,3 @@ Generated from commit subjects and dates. Candidates share their primary subject
   - 0437930e (2026-04-01): fix: exempt /ws and /ws/terminal from session auth middleware
   - e970ee1f (2026-04-02): fix(ui): improve mobile terminal readability and action button layout
   - e11d2662 (2026-04-02): fix: prevent terminal reset on agent spawn output bursts
-
-## 7d7f04bb — feat: add tiled multi-worker terminal monitoring
-
-- Date: 2026-03-30
-- Subject capability overlap: terminal, workers
-- Corrective follow-ups within four days: 5
-  - 146719a8 (2026-03-30): fix: prevent browser Ctrl+L/D when terminal has focus
-  - 0437930e (2026-04-01): fix: exempt /ws and /ws/terminal from session auth middleware
-  - e970ee1f (2026-04-02): fix(ui): improve mobile terminal readability and action button layout
-  - e11d2662 (2026-04-02): fix: prevent terminal reset on agent spawn output bursts
-  - de178f9c (2026-04-03): revert: let Ctrl+L pass through to PTY naturally
-
-## 48d0222f — feat: unified SQLite storage — Phase 2 (tasks, history, proposals)
-
-- Date: 2026-04-01
-- Subject capability overlap: tasks
-- Corrective follow-ups within four days: 5
-  - 5c69835e (2026-04-02): fix: complete DB migration — auth secrets, CLI tasks, mtime watcher
-  - 3bf1a59f (2026-04-02): fix: cancel DB maintenance task on shutdown + clear secrets on disconnect
-  - 22dea759 (2026-04-02): fix: refresh task/buzz panels on WS reconnect and tab focus
-  - a2678331 (2026-04-02): fix: SqliteTaskStore.save() now deletes removed tasks from DB
-  - 41eb85d4 (2026-04-03): fix: show all task fields in create and edit modal consistently
-
-## 045b26b1 — feat(mcp): broadcast tools/list_changed to connected sessions (task #226)
-
-- Date: 2026-04-21
-- Subject capability overlap: tasks, messaging, providers
-- Corrective follow-ups within four days: 5
-  - 317dd4cd (2026-04-21): fix(mcp): auto-revive session on unknown Mcp-Session-Id (task #227)
-  - c4835e2b (2026-04-21): fix(pressure+state): hysteresis + measured values + stuck-BUZZING net (task #236)
-  - 37273fc3 (2026-04-21): fix(queen): full-body view option on queen_view_messages + stream (task #237)
-  - 94126729 (2026-04-21): fix(mcp): SSE POST-response piggyback on auto-revive (task #239)
-  - 653bdfc1 (2026-04-24): fix(mcp): identity diagnostic when worker_name=unknown in complete_task (task #275)
