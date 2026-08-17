@@ -115,6 +115,11 @@ impl ProviderTerminalAdapter for ClaudeCodeAdapter {
                 .ok_or(ProviderCommandError::McpConfigNotUtf8)?;
             arguments.push("--mcp-config".into());
             arguments.push(config.into());
+            // Worker authority is deliberately defined by the role-scoped
+            // Swarm config. Loading account or project MCP servers alongside
+            // it can hide the required tools after a resumed conversation and
+            // gives unattended workers capabilities the Hive did not grant.
+            arguments.push("--strict-mcp-config".into());
         }
         Ok(ProviderCommand {
             executable: PathBuf::from("claude"),
@@ -209,8 +214,12 @@ mod tests {
                 .command_for_with_mcp(Path::new("/workspace/example"), start, Some(config))
                 .unwrap();
             assert_eq!(
-                &command.arguments[command.arguments.len() - 2..],
-                ["--mcp-config", "/state/swarm-next/agents/worker.json"]
+                &command.arguments[command.arguments.len() - 3..],
+                [
+                    "--mcp-config",
+                    "/state/swarm-next/agents/worker.json",
+                    "--strict-mcp-config"
+                ]
             );
         }
     }
@@ -231,6 +240,7 @@ mod tests {
                 "--continue",
                 "--mcp-config",
                 "/state/swarm-next/agents/worker.json",
+                "--strict-mcp-config",
                 "--settings",
                 "/home/operator/.claude/settings.json",
             ]
