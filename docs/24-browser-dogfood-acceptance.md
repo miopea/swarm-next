@@ -1465,3 +1465,24 @@ the independently updated terminal host through the API to worker settings:
   Queen provider PID `2966160` remained unchanged. Database `quick_check`
   remained `ok`; no input, Jira, task, worker, or Apiary mutation occurred, the
   viewport override was reset, and the temporary proof tab was closed.
+- Main commits `382909ec`, `9615af0a`, `2b6379a2`, and `568038fc`, deployed as
+  host-compatible release `0.1.0-ebaece8f7e20`, add a read-only task-detail
+  dialog without making the dense board rows taller. Double-clicking a task or
+  choosing **View details** shows full Jira metadata, description text, bounded
+  attachment metadata, and authenticated image previews; **Edit** remains a
+  separate mutation path. Attachment bytes are scoped back to the exact linked
+  issue, capped at 15 MiB, restricted to raster media, and checked against the
+  file signature before Swarm serves them. Live proof exposed two Atlassian
+  transport requirements that the mock alone could not: the content endpoint
+  must use `redirect=false`, and that form rejects a media-specific `Accept`
+  header with HTTP 406. The corrected request now returns the real 39,287-byte
+  PNG for WWD-4976. The feature gate passed 430 Rust tests, all 261 frontend
+  tests, strict TypeScript, the production build, formatting, and
+  warnings-denied Clippy; the follow-up transport fix passed all 151 API tests
+  and warnings-denied Clippy. A reusable read-only Chromium smoke then decoded
+  the real 642 by 386 image at desktop 1,440 by 900 and Android-size 412 by 915.
+  The dialog remained inside each viewport and both surfaces had zero
+  horizontal page overflow or browser errors. API PID advanced to `509824`;
+  terminal-holder PID `2966127` and worker-engine build `f8abd293` remained
+  unchanged. Database `quick_check` remained `ok`; no Jira, task, worker, or
+  Apiary mutation occurred, and the private proof tab was closed.
