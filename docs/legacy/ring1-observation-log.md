@@ -47,8 +47,17 @@ For each naturally occurring session, record only what is relevant:
 - `c27ecc5` requires two stable fit frames and republishes the final visible
   geometry even when xterm's own row/column count is unchanged. The exact
   `7 x 50` to `42 x 168` sequence and the full frontend gate pass.
-- Live closure remains pending because the protocol update requires one
-  intentionally disruptive worker-engine restart.
+- The operator approved the intentionally disruptive worker-engine restart.
+  Protocol 9 was installed from release
+  `0.1.0-dev-ba284f1f7e49-20260817111126-1078561`; Queen revived from its saved
+  provider conversation and the manually awake, non-always-active Scout
+  correctly remained sleeping.
+- The live Queen terminal then measured 1,052 by 738 CSS pixels inside a
+  1,440 by 900 desktop viewport, 398 by 576 inside an Android-size 412 by 915
+  viewport, and exactly 1,052 by 738 again after returning to desktop. Both
+  surfaces had zero horizontal page overflow, the browser emitted no warnings
+  or errors, and the proof tab was closed. This closes the observed
+  mobile-to-desktop terminal-geometry defect.
 
 ### Sleeping-worker ownership and resource attribution
 
@@ -71,6 +80,10 @@ For each naturally occurring session, record only what is relevant:
   diagnostics-only; repository-specific completion checks remain repository
   owned; and configurable worker command macros remain deferred while real
   repetition is measured.
+- The protocol migration left API and holder builds aligned on protocol 9,
+  both services active with zero restarts, database `quick_check` at `ok`, and
+  the holder reporting one running and one retained Queen session. No Jira,
+  email, task, or Apiary mutation was used for the proof.
 
 ## Window closure test
 

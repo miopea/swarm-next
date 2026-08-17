@@ -1514,3 +1514,15 @@ the independently updated terminal host through the API to worker settings:
   and workloads. The accepted operator outcome is narrower and decisive:
   sleeping Next workers are genuinely unloaded, awake workers are attributable
   to the holder, and unrelated Legacy processes are not charged to Next.
+- Operator-approved release
+  `0.1.0-dev-ba284f1f7e49-20260817111126-1078561` migrates the worker engine
+  from protocol 8 to protocol 9 and closes the Ring 1 terminal-geometry defect.
+  Both live services returned active with zero restarts, API and holder build
+  identities matched, database `quick_check` returned `ok`, Queen revived from
+  its saved provider conversation, and the non-always-active Scout correctly
+  remained sleeping. The live Queen terminal measured 1,052 by 738 CSS pixels
+  at desktop 1,440 by 900, 398 by 576 at Android-size 412 by 915, and exactly
+  1,052 by 738 after returning to desktop. Both surfaces had zero horizontal
+  overflow and the browser emitted no warnings or errors. No Jira, email, task,
+  or Apiary mutation occurred; the viewport override was reset and the proof
+  tab was closed.

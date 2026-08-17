@@ -60,9 +60,13 @@ usable transitional mobile measurement, and an unchanged xterm geometry could
 then suppress the later host repair. `c27ecc5` requires two stable fit frames
 and republishes settled visible geometry even when xterm's own row and column
 count did not change. The exact `7 x 50` to `42 x 168` transition is covered by
-a browser regression test. Closure still requires one final live proof after
-that build is deployed. This remains a mechanical Ring 1
-safeguard with no operator product choice, and no Legacy resize code was ported.
+a browser regression test. The operator-approved protocol-9 migration deployed
+that build and restarted the worker engine. The revived Queen then occupied
+1,052 by 738 CSS pixels at desktop 1,440 by 900, 398 by 576 at Android-size
+412 by 915, and exactly 1,052 by 738 after returning to desktop, with zero page
+overflow and no browser warnings or errors. The temporary proof tab was closed.
+The live outcome is therefore closed as a mechanical Ring 1 safeguard with no
+operator product choice, and no Legacy resize code was ported.
 
 ## Decision 1: Queen and provider questions
 
