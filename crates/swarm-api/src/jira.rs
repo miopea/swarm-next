@@ -822,6 +822,11 @@ impl JiraReadinessProbe {
             .map_err(|()| JiraAdapterError::InvalidResponse)?
             .pop_if_empty()
             .push(attachment_id);
+        // Atlassian normally redirects this endpoint to its media host. Asking
+        // Jira to proxy the bytes keeps the bounded download on the already
+        // authenticated API connection and avoids cross-host redirect/TLS
+        // failures in long-running installations.
+        url.query_pairs_mut().append_pair("redirect", "false");
         let response = authorize(access.client.get(url), &access.authorization)
             .header(reqwest::header::ACCEPT, attachment.media_type.as_str())
             .send()
@@ -1482,7 +1487,13 @@ mod tests {
             )
             .route(
                 "/rest/api/3/attachment/content/attachment-1",
-                get(|| async { ([(reqwest::header::CONTENT_TYPE.as_str(), "image/png")], b"\x89PNG\r\n\x1a\nbody".to_vec()) }),
+                get(|Query(query): Query<HashMap<String, String>>| async move {
+                    assert_eq!(query.get("redirect").map(String::as_str), Some("false"));
+                    (
+                        [(reqwest::header::CONTENT_TYPE.as_str(), "image/png")],
+                        b"\x89PNG\r\n\x1a\nbody".to_vec(),
+                    )
+                }),
             );
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let adapter = JiraReadinessProbe::configured(
