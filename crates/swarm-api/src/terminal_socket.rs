@@ -41,6 +41,8 @@ enum ClientTerminalMessage {
     Resize {
         rows: u16,
         columns: u16,
+        #[serde(default)]
+        claim_geometry: bool,
     },
 }
 
@@ -434,7 +436,10 @@ async fn handle_input(
             }
         };
         match action {
-            ClientTerminalAction::Resize(size) => {
+            ClientTerminalAction::Resize {
+                size,
+                claim_geometry,
+            } => {
                 requested_size = size;
                 let Some(owner_device_id) = owner_device_id else {
                     let _ = send_control(
@@ -447,9 +452,12 @@ async fn handle_input(
                     .await;
                     return;
                 };
-                let Ok(owns_geometry) =
+                let owns_geometry = if claim_geometry {
+                    task_store.claim_worker_geometry(session_id, owner_device_id)
+                } else {
                     task_store.claim_unowned_worker_geometry(session_id, owner_device_id)
-                else {
+                };
+                let Ok(owns_geometry) = owns_geometry else {
                     let _ = send_control(
                         &outbound,
                         &ServerTerminalMessage::Error {
@@ -513,8 +521,14 @@ async fn handle_input(
 }
 
 enum ClientTerminalAction {
-    Input { request: HostRequest, engaged: bool },
-    Resize(TerminalSize),
+    Input {
+        request: HostRequest,
+        engaged: bool,
+    },
+    Resize {
+        size: TerminalSize,
+        claim_geometry: bool,
+    },
 }
 
 struct ClientMessageError {
@@ -535,12 +549,15 @@ fn client_request(
                 bytes: text.into_bytes(),
             },
         }),
-        Ok(ClientTerminalMessage::Resize { rows, columns })
-            if rows >= MIN_TERMINAL_ROWS && columns >= MIN_TERMINAL_COLUMNS =>
-        {
-            Ok(ClientTerminalAction::Resize(TerminalSize::new(
-                rows, columns,
-            )))
+        Ok(ClientTerminalMessage::Resize {
+            rows,
+            columns,
+            claim_geometry,
+        }) if rows >= MIN_TERMINAL_ROWS && columns >= MIN_TERMINAL_COLUMNS => {
+            Ok(ClientTerminalAction::Resize {
+                size: TerminalSize::new(rows, columns),
+                claim_geometry,
+            })
         }
         Ok(ClientTerminalMessage::Resize { .. }) => Err(ClientMessageError {
             code: "invalid_terminal_size",

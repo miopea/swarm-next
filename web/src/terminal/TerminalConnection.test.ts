@@ -110,6 +110,7 @@ function harness(
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 test("requests a no-store grant and applies a snapshot before sequenced deltas", async () => {
@@ -138,6 +139,30 @@ test("requests a no-store grant and applies a snapshot before sequenced deltas",
   );
   expect(handlers.onOutput).toHaveBeenCalledTimes(1);
   expect(Array.from(vi.mocked(handlers.onOutput).mock.calls[0][0])).toEqual([111, 110, 101]);
+});
+
+test("visible viewport resizes reclaim geometry while hidden observers stay passive", async () => {
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+
+  connection.resize(38, 154);
+  expect(JSON.parse(sockets[0].sent.at(-1) ?? "null")).toEqual({
+    type: "resize",
+    rows: 38,
+    columns: 154,
+    claim_geometry: true,
+  });
+
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  connection.resize(20, 72);
+  expect(JSON.parse(sockets[0].sent.at(-1) ?? "null")).toEqual({
+    type: "resize",
+    rows: 20,
+    columns: 72,
+    claim_geometry: false,
+  });
 });
 
 test("uses the trusted browser cookie for terminal attach grants", async () => {

@@ -13180,6 +13180,23 @@ mod tests {
         };
         assert_eq!((snapshot.rows, snapshot.columns), (46, 140));
 
+        // A desktop socket can remain connected while another device becomes
+        // the geometry owner. Maximizing or otherwise resizing that visible
+        // desktop is an explicit claim and must repair the PTY without a
+        // reconnect or a sacrificial keystroke.
+        websocket
+            .send(ClientMessage::Text(
+                r#"{"type":"resize","rows":50,"columns":150,"claim_geometry":true}"#.into(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let swarm_terminal::Resume::Snapshot { snapshot } = session.resume_after(None).unwrap()
+        else {
+            panic!("fresh terminal read must return a snapshot");
+        };
+        assert_eq!((snapshot.rows, snapshot.columns), (50, 150));
+
         // Refreshing or selecting this terminal in a visible foreground view
         // is an explicit geometry claim. It repairs dimensions left by another
         // device without requiring the operator to type first.

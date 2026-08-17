@@ -113,7 +113,16 @@ export class TerminalConnection {
   resize(rows: number, columns: number): void {
     if (rows <= 0 || columns <= 0) return;
     this.#size = { rows, columns };
-    this.#send({ type: "resize", rows, columns });
+    this.#send({
+      type: "resize",
+      rows,
+      columns,
+      // A viewport change in the visible Swarm window is an explicit operator
+      // action just like selecting or refreshing the worker. Let it repair a
+      // PTY size left by another device without allowing a hidden PWA's
+      // ResizeObserver to steal geometry in the background.
+      claim_geometry: document.visibilityState === "visible",
+    });
   }
 
   dispose(): void {
