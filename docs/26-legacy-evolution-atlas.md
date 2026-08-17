@@ -260,6 +260,18 @@ Next's shared boundary, not a port of Legacy's terminal parser. Prompt identity,
 Queen recommendations, and any future authorized answer policy remain open
 product decisions.
 
+Ring 1 now has direct same-host evidence for the resource-ownership outcome as
+well. The live Next roster reported two awake workers out of 30 configured, and
+the `swarm-next-terminal-host.service` cgroup owned exactly those two provider
+processes. The remaining 28 sleeping workers owned no provider process. Extra
+Claude processes on the machine were traced to Legacy's separate `swarm.service`
+cgroup. The simultaneous snapshots—Legacy 23,591,497,728 bytes and 438 tasks,
+Next holder 398,946,304 bytes and 23 tasks, Next API 20,357,120 bytes and five
+tasks—are deliberately not treated as a per-worker comparison because the
+loaded fleets and workloads differ. They do prove the atlas invariant that
+sleeping Next workers are unloaded and every loaded Next provider is attributable
+to the worker engine rather than inferred from a machine-wide process list.
+
 The explicit revert and diagnostic-experiment pass lives in
 `docs/legacy/reversions-and-abandoned-experiments.md`. It covers the browser
 terminal handler rollback, systemd worker-killing regression, Ctrl+L

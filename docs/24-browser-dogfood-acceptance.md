@@ -1500,3 +1500,17 @@ the independently updated terminal host through the API to worker settings:
   failure, progress, regenerate, and explicit-save paths. No worker profile,
   provider session, task, Jira issue, or Apiary record changed, and the private
   proof tab was closed.
+- A same-host Ring 1 process-attribution sample resolves the apparent mismatch
+  between the **2/30** Swarm Next worker count and the many visible Claude
+  processes. The `swarm-next-terminal-host.service` cgroup owned exactly two
+  provider processes—Queen and Scout—in their expected repositories, matching
+  the two awake workers. None of the other 28 configured sleeping workers had
+  a provider process. The other observed Claude processes belonged to the
+  independently running Legacy `swarm.service` cgroup. At the same instant,
+  Legacy used 23,591,497,728 bytes across 438 tasks; the Next worker engine used
+  398,946,304 bytes across 23 tasks, and the Next API used 20,357,120 bytes
+  across five tasks. These values are service-cgroup snapshots, not a normalized
+  per-worker benchmark: the two applications had very different loaded fleets
+  and workloads. The accepted operator outcome is narrower and decisive:
+  sleeping Next workers are genuinely unloaded, awake workers are attributable
+  to the holder, and unrelated Legacy processes are not charged to Next.
