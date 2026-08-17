@@ -140,6 +140,25 @@ impl TaskStore {
                 "Queen automation already has an active run".into(),
             ));
         }
+        if state == "uncertain" {
+            let changed = transaction.execute(
+                "UPDATE queen_automation
+                 SET state = 'queued', trigger = 'manual', attempts = 0,
+                     attempted_at = NULL, delivered_at = NULL, finished_at = NULL,
+                     outcome = NULL, updated_at = ?1
+                 WHERE id = 1 AND state = 'uncertain' AND run_id IS NOT NULL",
+                [now],
+            )?;
+            if changed != 1 {
+                return Err(TaskStoreError::IntegrityFailure(
+                    "uncertain Queen automation review could not be resumed".into(),
+                ));
+            }
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+            transaction.commit()?;
+            drop(connection);
+            return self.queen_automation_status(now);
+        }
         let (fingerprint, _) = actionable_fingerprint(&transaction)?;
         queue_run(
             &transaction,
@@ -685,6 +704,46 @@ mod tests {
             QueenAutomationState::Uncertain
         );
         assert!(store.claim_queen_automation(12).unwrap().is_none());
+    }
+
+    #[test]
+    fn operator_retry_preserves_interrupted_run_identity_until_queen_finishes() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let requested = store.request_queen_automation_run(10).unwrap();
+        let original_run_id = requested.run_id.unwrap();
+        let claimed = store.claim_queen_automation(11).unwrap().unwrap();
+        assert_eq!(claimed.run_id, original_run_id);
+        assert_eq!(store.recover_inflight_queen_automation().unwrap(), 1);
+
+        let resumed = store.request_queen_automation_run(12).unwrap();
+        assert_eq!(resumed.state, QueenAutomationState::Queued);
+        assert_eq!(resumed.run_id.as_deref(), Some(original_run_id.as_str()));
+        assert_eq!(resumed.attempts, 0);
+
+        let retried = store.claim_queen_automation(13).unwrap().unwrap();
+        assert_eq!(retried.run_id, original_run_id);
+        assert!(
+            store
+                .complete_queen_automation_delivery(&original_run_id, 14)
+                .unwrap()
+        );
+        assert!(
+            store
+                .finish_queen_automation_run(
+                    &original_run_id,
+                    QueenAutomationOutcome::Completed,
+                    15,
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            store.queen_automation_status(16).unwrap().state,
+            QueenAutomationState::Completed
+        );
     }
 
     #[test]

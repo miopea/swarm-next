@@ -24,7 +24,7 @@ export function queenAutomationStateDetail(status: QueenAutomationStatus | undef
   if (!status) return "Loading durable automation state.";
   if (status.waiting_reason) return status.waiting_reason;
   if (status.state === "running") return `${status.actionable_count} actionable item${status.actionable_count === 1 ? "" : "s"} in this review.`;
-  if (status.state === "uncertain") return "Swarm will not silently repeat an interrupted review. Run Queen again after checking her terminal.";
+  if (status.state === "uncertain") return "Delivery was interrupted before Swarm could confirm completion. Retry resumes this same review after you check Queen's terminal.";
   if (status.state === "completed" && status.outcome === "needs_operator") return "Open Queen when you are ready to resolve her decision.";
   if (status.state === "completed") return "The latest bounded review ended safely.";
   if (status.enabled) return `${status.actionable_count} actionable item${status.actionable_count === 1 ? "" : "s"}; new durable changes trigger a review.`;

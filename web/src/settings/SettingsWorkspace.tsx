@@ -277,7 +277,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
                   setQueenAutomationBusy(false);
                 }
               }}
-            >{queenAutomationBusy ? "Checking…" : "Run Queen now"}</button>
+            >{queenAutomationBusy ? "Checking…" : queenAutomation?.state === "uncertain" ? "Retry Queen review" : "Run Queen now"}</button>
             <small>Manual review works even when automatic review is off.</small>
           </div>
           <p className="queen-conductor-boundary">She pauses while you are working with her. Jira, Apiary, email, deployment, purchases, messages, and other external effects remain blocked without separate operator approval.</p>
