@@ -1447,3 +1447,21 @@ the independently updated terminal host through the API to worker settings:
   `2966160`, and worker-engine build `f8abd293`. Database `quick_check` remained
   `ok`, the viewport override was reset, and the temporary proof tab was
   closed.
+- Main commit `a0468faf`, deployed as host-compatible release
+  `0.1.0-a566cef69af4`, makes the device with the current operator engagement
+  lease the sole authority for shared PTY geometry. Passive desktop and mobile
+  viewers remember their own fitted size without resizing the provider; the
+  first input from another device atomically transfers the engagement and
+  applies that device's latest bounded dimensions before its bytes. A real-PTY
+  regression proves passive desktop and phone attachments cannot fight, while
+  explicit input transfers authority in both directions. The complete gate
+  passed 429 Rust tests, warnings-denied Clippy, formatting, all 259 frontend
+  tests, strict TypeScript, and the production build. The deployed Queen
+  terminal remained connected and populated through Android-size 412 by 915
+  and back to the default 1,465 by 1,339 desktop viewport with zero horizontal
+  overflow and 66 rendered rows at both sizes; the proof tab emitted no browser
+  warnings or errors. API PID advanced to `445611`; terminal-host PID
+  `2966127`, worker-engine build `f8abd293`, Claude provider PID `97543`, and
+  Queen provider PID `2966160` remained unchanged. Database `quick_check`
+  remained `ok`; no input, Jira, task, worker, or Apiary mutation occurred, the
+  viewport override was reset, and the temporary proof tab was closed.
