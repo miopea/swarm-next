@@ -169,6 +169,14 @@ impl ProcessTerminalSession {
         // buffer so operators can review bounded history and restored snapshots.
         if is_claude_executable(&command.executable) {
             command_builder.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
+            if uses_strict_swarm_mcp(command) {
+                // Swarm exposes a deliberately small, role-scoped tool set.
+                // Load it eagerly so Queen automation never depends on
+                // Claude's deferred ToolSearch index. Current Claude Code can
+                // connect to an authenticated HTTP MCP server while omitting
+                // all of its tools from that index after startup or resume.
+                command_builder.env("ENABLE_TOOL_SEARCH", "false");
+            }
         }
         let child = pair
             .slave
@@ -374,6 +382,14 @@ fn is_claude_executable(executable: &std::path::Path) -> bool {
     executable
         .file_name()
         .is_some_and(|name| name == "claude" || name == "claude.exe")
+}
+
+fn uses_strict_swarm_mcp(command: &ProviderCommand) -> bool {
+    is_claude_executable(&command.executable)
+        && command
+            .arguments
+            .iter()
+            .any(|argument| argument == "--strict-mcp-config")
 }
 
 fn resume_has_output(resume: &Resume) -> bool {
@@ -946,6 +962,22 @@ mod tests {
         assert!(is_claude_executable(Path::new("C:/tools/claude.exe")));
         assert!(!is_claude_executable(Path::new("codex")));
         assert!(!is_claude_executable(Path::new("claude-helper")));
+    }
+
+    #[test]
+    fn only_strict_claude_sessions_load_scoped_mcp_tools_upfront() {
+        let mut command = ProviderCommand {
+            executable: PathBuf::from("claude"),
+            arguments: vec!["--continue".into()],
+            working_directory: env::temp_dir(),
+        };
+        assert!(!uses_strict_swarm_mcp(&command));
+
+        command.arguments.push("--strict-mcp-config".into());
+        assert!(uses_strict_swarm_mcp(&command));
+
+        command.executable = PathBuf::from("codex");
+        assert!(!uses_strict_swarm_mcp(&command));
     }
 
     fn output_until(session: &ProcessTerminalSession, text: &str) -> String {
