@@ -94,6 +94,11 @@ For each naturally occurring session, record only what is relevant:
   Workers normally advance themselves; deterministic coordination handles only
   exact handoffs, and Queen intervenes when progression stalls or needs
   judgment. No separate speculative-preparation feature is planned.
+- Conversation-pressure handling is redesigned as explainable worker health.
+  Queen may recommend a clean provider conversation at a safe task boundary
+  using typed provider and task evidence; renewal preserves worker identity,
+  queue, history, and a reviewed handoff and may never silently replace an
+  actively working conversation.
 - The protocol migration left API and holder builds aligned on protocol 9,
   both services active with zero restarts, database `quick_check` at `ok`, and
   the holder reporting one running and one retained Queen session. No Jira,

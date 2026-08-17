@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Four safeguards closed; seven operator choices recorded 2026-08-17**
+Status: **Four safeguards closed; eight operator choices recorded 2026-08-17**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -236,6 +236,34 @@ with one In Progress item. Treat that queue—not speculative preparation—as t
 authoritative upcoming-work surface. Workers normally move themselves forward;
 Queen intervenes when they do not.
 
+## Decision 8: conversation health and safe renewal
+
+**Evidence.** Legacy's context-pressure watcher injected `/compact`, rotated
+sessions, and accumulated heuristics around provider text and timing. The
+desired outcome was not an automatic slash command; it was recognizing when a
+long-lived conversation had become burdened, confused, repetitive, or detached
+from current work, then renewing it without losing worker continuity.
+
+**Current Next boundary.** Provider conversations are retained independently
+from worker and App/API lifetime, modern providers perform their own compaction,
+and durable tasks preserve the work boundary. Next does not yet combine
+provider context metrics, compaction events, task transitions, repeated
+failures, and operator corrections into an explainable conversation-health
+assessment.
+
+**Recommendation.** Add visible conversation health to each loaded worker.
+Queen may recommend a clean provider conversation at a safe task boundary and
+must show the evidence behind that recommendation. Renewal preserves the worker
+identity, repository, task queue, durable history, and a reviewed handoff
+summary. It never silently replaces an actively working conversation, never
+uses terminal text as sole authority, and never treats provider compaction
+alone as failure.
+
+**Operator decision (2026-08-17).** Build the explainable conversation-health
+and Queen-recommended safe-renewal outcome. This is the intended successor to
+Legacy's context-pressure automation, not a port of `/compact` injection or
+timer heuristics.
+
 ## Evidence that would change these recommendations
 
 - A naturally occurring prompt class that Queen can answer safely and repeatedly
@@ -249,6 +277,9 @@ Queen intervenes when they do not.
 - A repeated multi-step journey whose trigger, deterministic steps, Queen
   decisions, approvals, cancellation, and failure outcome can be stated
   explicitly.
+- A conversation-health recommendation whose provider metrics, task boundary,
+  repeated failures, compaction history, and operator corrections explain why
+  renewal would improve the worker without interrupting active work.
 
 Decisions should be recorded after that evidence or an explicit operator choice,
 not inferred from Legacy commit volume.
