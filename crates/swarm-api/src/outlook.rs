@@ -357,10 +357,12 @@ impl OutlookProbe {
         )?;
         url.query_pairs_mut()
             .append_pair("$top", &MAX_ATTACHMENTS.to_string())
-            .append_pair(
-                "$select",
-                "id,name,contentType,size,isInline,contentId,@odata.type",
-            );
+            // `contentId` belongs to `fileAttachment`, not Graph's base
+            // `attachment` resource. Selecting it (or `@odata.type`) on the
+            // collection makes Graph reject every message with attachments.
+            // The type discriminator is returned automatically, while the
+            // concrete attachment download supplies `contentId` during import.
+            .append_pair("$select", "id,name,contentType,size,isInline");
         let page = graph_json::<AttachmentPage>(access, url, false).await?;
         if page.value.len() > MAX_ATTACHMENTS {
             return Err(OutlookError::ResponseLimitExceeded);
@@ -521,10 +523,12 @@ fn map_oauth_error(error: OAuthError) -> OutlookError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use axum::{
         Json, Router,
         body::Bytes,
-        extract::Path,
+        extract::{Path, Query},
         http::{HeaderMap, StatusCode},
         routing::{get, post},
     };
@@ -548,7 +552,14 @@ mod tests {
                 assert_eq!(headers.get("prefer").unwrap(), "outlook.body-content-type=\"text\"");
                 Json(json!({"id":"message-1","conversationId":"conversation-1","internetMessageId":"<one@example.test>","subject":"Website issue","from":{"emailAddress":{"name":"Reporter","address":"reporter@example.test"}},"receivedDateTime":"2026-08-14T12:30:00Z","webLink":"https://outlook.office.com/mail/message-1","hasAttachments":true,"bodyPreview":"The page is broken","body":{"contentType":"text","content":"The page is broken in production."}}))
             }))
-            .route("/me/messages/{id}/attachments", get(|| async { Json(json!({"value":[{"@odata.type":"#microsoft.graph.fileAttachment","id":"attachment-1","name":"screen.png","contentType":"image/png","size":15,"isInline":false,"contentId":null}]})) }))
+            .route("/me/messages/{id}/attachments", get(|Query(query): Query<HashMap<String, String>>| async move {
+                assert_eq!(query.get("$top").map(String::as_str), Some("16"));
+                assert_eq!(
+                    query.get("$select").map(String::as_str),
+                    Some("id,name,contentType,size,isInline")
+                );
+                Json(json!({"value":[{"@odata.type":"#microsoft.graph.fileAttachment","id":"attachment-1","name":"screen.png","contentType":"image/png","size":15,"isInline":false}]}))
+            }))
             .route("/me/messages/{id}/attachments/{attachment_id}", get(|| async { Json(json!({"@odata.type":"#microsoft.graph.fileAttachment","id":"attachment-1","name":"screen.png","contentType":"image/png","size":15,"isInline":false,"contentId":null,"contentBytes":"iVBORw0KGgpwcml2YXRl"})) }))
             .route("/me/messages/{id}/reply", post(|Path(id): Path<String>, body: Bytes| async move {
                 assert_eq!(id, "message-1");
