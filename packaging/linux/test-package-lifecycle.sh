@@ -90,6 +90,7 @@ package="$repo_root/packaging/linux/swarm-next-package"
 "$package" install "$test_root/bundle-1.0.0"
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "1.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
+[ "$(readlink "$SWARM_BIN_ROOT/swarm-terminal-host")" = "$SWARM_INSTALL_ROOT/host-current/bin/swarm-terminal-host" ]
 [ -f "$SWARM_CONFIG_ROOT/swarm-next.env" ]
 [ "$(stat -c %a "$SWARM_CONFIG_ROOT/swarm-next.env")" = "600" ]
 grep -q '127.0.0.1:8766' "$SWARM_CONFIG_ROOT/swarm-next.env"
@@ -252,6 +253,7 @@ printf '0\n' > "$HOME/running-sessions"
 : > "$HOME/systemctl.log"
 "$package" reconcile-host
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
+[ -x "$SWARM_BIN_ROOT/swarm-terminal-host" ]
 grep -q '^--user restart swarm-next-terminal-host.service$' "$HOME/systemctl.log"
 
 # Protocol changes fail closed against the independently pinned host.
@@ -324,6 +326,7 @@ if SWARM_INSTALL_ROOT="$HOME/.local/lib/not-swarm" "$package" uninstall; then
 fi
 "$package" uninstall
 [ ! -e "$SWARM_INSTALL_ROOT" ]
+[ ! -e "$SWARM_BIN_ROOT/swarm-terminal-host" ]
 [ -f "$SWARM_STATE_ROOT/operator-data" ]
 [ -f "$SWARM_CONFIG_ROOT/swarm-next.env" ]
 printf 'package lifecycle smoke passed\n'

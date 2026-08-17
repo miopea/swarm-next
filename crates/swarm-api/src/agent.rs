@@ -42,7 +42,7 @@ use tokio::sync::Notify;
 use tower::ServiceExt;
 
 const CONFIG_SERVER_NAME: &str = "swarm-next";
-const MCP_BRIDGE_COMMAND: &str = "swarm-next-terminal-host";
+const MCP_BRIDGE_COMMAND: &str = "swarm-terminal-host";
 const TOKEN_BYTES: usize = 32;
 
 #[derive(Clone)]

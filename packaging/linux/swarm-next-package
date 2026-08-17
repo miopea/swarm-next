@@ -290,6 +290,7 @@ activate_host_link() {
   release=$1
   ln -sfn "$release" "$install_root/host-current.next"
   mv -Tf "$install_root/host-current.next" "$install_root/host-current"
+  ln -sfn "$install_root/host-current/bin/swarm-terminal-host" "$bin_root/swarm-terminal-host"
 }
 
 install_units() {
@@ -558,6 +559,7 @@ uninstall_product() {
     "$unit_root/swarm-next.target"
   run_systemctl daemon-reload
   [ ! -L "$bin_root/swarmctl" ] || rm -f "$bin_root/swarmctl"
+  [ ! -L "$bin_root/swarm-terminal-host" ] || rm -f "$bin_root/swarm-terminal-host"
   rm -rf "$install_root"
   printf 'Application removed. Configuration and state were preserved in %s and %s.\n' "$config_root" "$state_root"
 }
