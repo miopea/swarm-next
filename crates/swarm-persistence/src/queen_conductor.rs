@@ -387,13 +387,17 @@ impl TaskStore {
         Ok(policy.permits(presence, action, false))
     }
 
-    /// Converts crash-interrupted delivery into explicit uncertainty without replay.
+    /// Converts API-interrupted delivery or execution into explicit uncertainty without replay.
     ///
     /// # Errors
     /// Returns an error when the durable marker cannot be recovered.
     pub fn recover_inflight_queen_automation(&self) -> Result<usize, TaskStoreError> {
         let connection = self.connection()?;
-        Ok(connection.execute("UPDATE queen_automation SET state = 'uncertain', updated_at = unixepoch() WHERE state = 'delivering'", [])?)
+        Ok(connection.execute(
+            "UPDATE queen_automation SET state = 'uncertain', updated_at = unixepoch()
+             WHERE state IN ('delivering', 'running')",
+            [],
+        )?)
     }
 }
 
@@ -690,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn crash_interrupted_delivery_becomes_uncertain_without_replay() {
+    fn api_interrupted_delivery_becomes_uncertain_without_replay() {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         store
@@ -704,6 +708,35 @@ mod tests {
             QueenAutomationState::Uncertain
         );
         assert!(store.claim_queen_automation(12).unwrap().is_none());
+    }
+
+    #[test]
+    fn api_restart_recovers_a_running_review_for_operator_retry() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let requested = store.request_queen_automation_run(10).unwrap();
+        let original_run_id = requested.run_id.unwrap();
+        let delivery = store.claim_queen_automation(11).unwrap().unwrap();
+        assert!(
+            store
+                .complete_queen_automation_delivery(&delivery.run_id, 12)
+                .unwrap()
+        );
+
+        assert_eq!(store.recover_inflight_queen_automation().unwrap(), 1);
+        let interrupted = store.queen_automation_status(13).unwrap();
+        assert_eq!(interrupted.state, QueenAutomationState::Uncertain);
+        assert_eq!(
+            interrupted.run_id.as_deref(),
+            Some(original_run_id.as_str())
+        );
+
+        let resumed = store.request_queen_automation_run(14).unwrap();
+        assert_eq!(resumed.state, QueenAutomationState::Queued);
+        assert_eq!(resumed.run_id.as_deref(), Some(original_run_id.as_str()));
     }
 
     #[test]
