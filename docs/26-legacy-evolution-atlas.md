@@ -224,6 +224,15 @@ in `docs/legacy/post-2026-08-10-delta.md`. It separates released behavior from
 later development experiments and compares the highest-value findings against
 Swarm Next before proposing any work.
 
+The stable-boundary sample in
+`docs/legacy/stable-release-boundaries.md` checks the first explicit package,
+each later monthly endpoint, the final `2026.8.13` package, and current
+development main. It records an important limit: the first 935 commits predate
+any explicit release marker, and implementation presence at a later package
+does not prove a composed UI or background watcher ever ran. The Command Center
+and unwired verification watcher provide positive controls for both failure
+modes.
+
 Six high-value chains were then checked against commit messages and touched
 source/test files in `docs/legacy/validated-regression-chains.md`: terminal
 ownership, automated-input authority, revive loops, speculative preparation,
@@ -258,8 +267,8 @@ final legacy tree itself did not support.
 
 1. Expand validated regression chains when a new dogfood gap needs historical
    evidence.
-2. Continue sampling implementation at stable release boundaries rather than
-   treating post-release development as settled behavior.
+2. Extend the stable-boundary sample only when a new Ring 1 finding depends on
+   whether a specific Legacy mechanism was packaged or merely developed.
 3. Feed each surviving outcome into the capability inventory and Ring 1 evidence;
    do not create port tickets directly from this atlas.
 
