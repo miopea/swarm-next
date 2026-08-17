@@ -434,6 +434,33 @@ impl TaskStore {
             .ok_or(TaskStoreError::WorkerNotFound)
     }
 
+    /// Returns the configured provider for one currently active process session.
+    ///
+    /// # Errors
+    /// Returns `WorkerSessionNotActive` when the session is no longer bound or
+    /// a data-integrity error when its provider value is invalid.
+    pub fn provider_for_active_session(
+        &self,
+        session_id: WorkerSessionId,
+    ) -> Result<ProviderKind, TaskStoreError> {
+        let connection = self.connection()?;
+        let provider = connection
+            .query_row(
+                "SELECT profile.provider
+                 FROM worker_sessions session
+                 JOIN worker_profiles profile ON profile.id = session.worker_id
+                 WHERE session.session_id = ?1 AND session.ended_at IS NULL
+                   AND profile.archived_at IS NULL",
+                [session_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::WorkerSessionNotActive)?;
+        ProviderKind::from_str(&provider).map_err(|_| {
+            TaskStoreError::IntegrityFailure("active worker session has an invalid provider".into())
+        })
+    }
+
     /// Atomically binds a new immutable process session to a stable worker profile.
     ///
     /// # Errors

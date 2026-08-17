@@ -263,6 +263,31 @@ impl TaskStore {
         self.finish_delivery(run_id, now, Some(failure))
     }
 
+    /// Returns a claimed Queen prompt to its durable queue without consuming
+    /// an attempt when the provider is waiting for operator input.
+    ///
+    /// # Errors
+    /// Returns an error when the exact delivery marker cannot be updated.
+    pub fn defer_queen_automation_delivery(
+        &self,
+        run_id: &str,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE queen_automation
+             SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = ?2
+             WHERE id = 1 AND run_id = ?1 AND state = 'delivering'",
+            params![run_id, now],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
     fn finish_delivery(
         &self,
         run_id: &str,

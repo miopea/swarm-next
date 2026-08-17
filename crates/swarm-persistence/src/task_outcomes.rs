@@ -120,6 +120,27 @@ impl TaskStore {
         self.finish_task_outcome(id, now, Some(failure))
     }
 
+    /// Returns a claimed Queen handoff to its durable queue without consuming
+    /// an attempt when the provider is waiting for operator input.
+    ///
+    /// # Errors
+    /// Returns a persistence or data-integrity error.
+    pub fn defer_task_outcome(&self, id: &str, now: i64) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE task_outcome_deliveries
+             SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = ?2
+             WHERE id = ?1 AND state = 'dispatching'",
+            params![id, now],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
     fn finish_task_outcome(
         &self,
         id: &str,

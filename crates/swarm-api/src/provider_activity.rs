@@ -40,22 +40,9 @@ async fn observe(
         .collect::<Vec<_>>();
     stream::iter(observations)
         .map(|(session_id, provider)| async move {
-            match request_host(
-                state,
-                HostRequest::Read {
-                    session_id,
-                    after_sequence: None,
-                },
-            )
-            .await
-            {
-                Ok(HostResponse::Output {
-                    resume: swarm_terminal::Resume::Snapshot { snapshot },
-                    running: true,
-                    ..
-                }) => Some((session_id, classify_observed_activity(provider, &snapshot))),
-                _ => None,
-            }
+            observe_session(state, session_id, provider)
+                .await
+                .map(|activity| (session_id, activity))
         })
         .buffer_unordered(8)
         .filter_map(async move |observation| observation)
@@ -63,12 +50,39 @@ async fn observe(
         .await
 }
 
+/// Reads the exact current host-owned snapshot for one provider session.
+///
+/// Coordination delivery uses this immediately before writing so an open
+/// provider question is an input-authority boundary rather than a visual hint.
+pub(super) async fn observe_session(
+    state: &AppState,
+    session_id: WorkerSessionId,
+    provider: ProviderKind,
+) -> Option<ProviderActivity> {
+    match request_host(
+        state,
+        HostRequest::Read {
+            session_id,
+            after_sequence: None,
+        },
+    )
+    .await
+    {
+        Ok(HostResponse::Output {
+            resume: swarm_terminal::Resume::Snapshot { snapshot },
+            running: true,
+            ..
+        }) => Some(classify_observed_activity(provider, &snapshot)),
+        _ => None,
+    }
+}
+
 /// Adds application-level provider UI recognition without changing the
 /// independently deployed terminal engine. Claude can leave a slash-command
 /// palette open below its input row; enough suggestions can push the prompt
 /// outside the terminal crate's deliberately small recent-line window even
 /// though the provider is visibly waiting for input.
-fn classify_observed_activity(
+pub(super) fn classify_observed_activity(
     provider: ProviderKind,
     snapshot: &TerminalSnapshot,
 ) -> ProviderActivity {

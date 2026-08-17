@@ -123,6 +123,31 @@ impl TaskStore {
         self.finish_task_dispatch(assignment_id, now, Some(failure))
     }
 
+    /// Returns a claimed briefing to its durable queue without consuming an
+    /// attempt when the provider is waiting for operator input.
+    ///
+    /// # Errors
+    /// Returns a persistence or data-integrity error.
+    pub fn defer_task_dispatch(
+        &self,
+        assignment_id: &str,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE task_dispatches
+             SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = ?2
+             WHERE assignment_id = ?1 AND state = 'dispatching'",
+            params![assignment_id, now],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
     fn finish_task_dispatch(
         &self,
         assignment_id: &str,

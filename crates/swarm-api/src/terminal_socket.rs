@@ -441,43 +441,16 @@ async fn handle_input(
                 claim_geometry,
             } => {
                 requested_size = size;
-                let Some(owner_device_id) = owner_device_id else {
-                    let _ = send_control(
-                        &outbound,
-                        &ServerTerminalMessage::Error {
-                            code: "terminal_resize_authority_unavailable",
-                            message: "terminal resize requires an identified device".into(),
-                        },
-                    )
-                    .await;
-                    return;
-                };
-                let owns_geometry = if claim_geometry {
-                    task_store.claim_worker_geometry(session_id, owner_device_id)
-                } else {
-                    task_store.claim_unowned_worker_geometry(session_id, owner_device_id)
-                };
-                let Ok(owns_geometry) = owns_geometry else {
-                    let _ = send_control(
-                        &outbound,
-                        &ServerTerminalMessage::Error {
-                            code: "terminal_resize_authority_unavailable",
-                            message: "terminal resize authority could not be checked".into(),
-                        },
-                    )
-                    .await;
-                    return;
-                };
-                if owns_geometry
-                    && !forward_host_request(
-                        &terminal_host,
-                        HostRequest::Resize {
-                            session_id,
-                            size: requested_size,
-                        },
-                        &outbound,
-                    )
-                    .await
+                if !handle_resize(
+                    &terminal_host,
+                    &task_store,
+                    session_id,
+                    owner_device_id,
+                    requested_size,
+                    claim_geometry,
+                    &outbound,
+                )
+                .await
                 {
                     return;
                 }
@@ -518,6 +491,54 @@ async fn handle_input(
             }
         }
     }
+}
+
+async fn handle_resize(
+    terminal_host: &HostClient,
+    task_store: &TaskStore,
+    session_id: WorkerSessionId,
+    owner_device_id: Option<PresenceDeviceId>,
+    requested_size: TerminalSize,
+    claim_geometry: bool,
+    outbound: &mpsc::Sender<Message>,
+) -> bool {
+    let Some(owner_device_id) = owner_device_id else {
+        let _ = send_control(
+            outbound,
+            &ServerTerminalMessage::Error {
+                code: "terminal_resize_authority_unavailable",
+                message: "terminal resize requires an identified device".into(),
+            },
+        )
+        .await;
+        return false;
+    };
+    let owns_geometry = if claim_geometry {
+        task_store.claim_worker_geometry(session_id, owner_device_id)
+    } else {
+        task_store.claim_unowned_worker_geometry(session_id, owner_device_id)
+    };
+    let Ok(owns_geometry) = owns_geometry else {
+        let _ = send_control(
+            outbound,
+            &ServerTerminalMessage::Error {
+                code: "terminal_resize_authority_unavailable",
+                message: "terminal resize authority could not be checked".into(),
+            },
+        )
+        .await;
+        return false;
+    };
+    !owns_geometry
+        || forward_host_request(
+            terminal_host,
+            HostRequest::Resize {
+                session_id,
+                size: requested_size,
+            },
+            outbound,
+        )
+        .await
 }
 
 enum ClientTerminalAction {

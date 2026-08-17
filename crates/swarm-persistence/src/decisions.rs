@@ -335,6 +335,31 @@ impl TaskStore {
         self.finish_decision_delivery(id, now, Some(failure))
     }
 
+    /// Returns a claimed delivery to its durable queue without consuming an
+    /// attempt when the provider is waiting for operator input.
+    ///
+    /// # Errors
+    /// Returns a persistence or integrity error.
+    pub fn defer_decision_delivery(
+        &self,
+        id: DecisionRequestId,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE decision_deliveries
+             SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = ?2
+             WHERE decision_id = ?1 AND state = 'dispatching'",
+            params![id.to_string(), now],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
     fn finish_decision_delivery(
         &self,
         id: DecisionRequestId,

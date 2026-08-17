@@ -1051,7 +1051,8 @@ impl AppState {
             }
         };
         for delivery in deliveries {
-            let outcome = match submit_terminal_message(
+            let outcome = match submit_coordination_message(
+                store,
                 client,
                 delivery.session_id,
                 decision_delivery_message(&delivery),
@@ -1061,6 +1062,10 @@ impl AppState {
             {
                 Ok(TerminalSubmission::Acknowledged) => {
                     store.complete_decision_delivery(delivery.decision_id, unix_timestamp())
+                }
+                Ok(TerminalSubmission::Deferred) => {
+                    tracing::info!(decision_id = %delivery.decision_id, worker_id = %delivery.worker_id, "decision delivery is held behind an open provider question");
+                    store.defer_decision_delivery(delivery.decision_id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Rejected { code, message }) => {
                     tracing::warn!(decision_id = %delivery.decision_id, worker_id = %delivery.worker_id, %code, %message, "decision delivery was rejected by terminal host");
@@ -1105,7 +1110,8 @@ impl AppState {
             }
         };
         for delivery in deliveries {
-            let outcome = match submit_terminal_message(
+            let outcome = match submit_coordination_message(
+                store,
                 client,
                 delivery.session_id,
                 task_dispatch_message(&delivery),
@@ -1115,6 +1121,10 @@ impl AppState {
             {
                 Ok(TerminalSubmission::Acknowledged) => {
                     store.complete_task_dispatch(&delivery.assignment_id, unix_timestamp())
+                }
+                Ok(TerminalSubmission::Deferred) => {
+                    tracing::info!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, "task briefing is held behind an open provider question");
+                    store.defer_task_dispatch(&delivery.assignment_id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Rejected { code, message }) => {
                     tracing::warn!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, %code, %message, "task briefing was rejected by terminal host");
@@ -1158,7 +1168,8 @@ impl AppState {
             }
         };
         for outcome in outcomes {
-            let result = match submit_terminal_message(
+            let result = match submit_coordination_message(
+                store,
                 client,
                 outcome.session_id,
                 task_outcome_message(&outcome),
@@ -1168,6 +1179,10 @@ impl AppState {
             {
                 Ok(TerminalSubmission::Acknowledged) => {
                     store.complete_task_outcome(&outcome.id, unix_timestamp())
+                }
+                Ok(TerminalSubmission::Deferred) => {
+                    tracing::info!(task_id = %outcome.task_id, reporter_id = %outcome.reporting_worker_id, recipient_id = %outcome.recipient_worker_id, "task outcome is held behind an open provider question");
+                    store.defer_task_outcome(&outcome.id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Rejected { code, message }) => {
                     tracing::warn!(task_id = %outcome.task_id, reporter_id = %outcome.reporting_worker_id, recipient_id = %outcome.recipient_worker_id, %code, %message, "task outcome was rejected by terminal host");
@@ -1211,7 +1226,8 @@ impl AppState {
                 return;
             }
         };
-        let result = match submit_terminal_message(
+        let result = match submit_coordination_message(
+            store,
             client,
             delivery.session_id,
             queen_automation_message(&delivery),
@@ -1221,6 +1237,10 @@ impl AppState {
         {
             Ok(TerminalSubmission::Acknowledged) => {
                 store.complete_queen_automation_delivery(&delivery.run_id, unix_timestamp())
+            }
+            Ok(TerminalSubmission::Deferred) => {
+                tracing::info!(run_id = %delivery.run_id, "Queen automation is held behind an open provider question");
+                store.defer_queen_automation_delivery(&delivery.run_id, unix_timestamp())
             }
             Ok(TerminalSubmission::Rejected { code, message }) => {
                 tracing::warn!(run_id = %delivery.run_id, %code, %message, "Queen automation was rejected by terminal host");
@@ -1305,6 +1325,7 @@ impl AppState {
 #[derive(Debug, Eq, PartialEq)]
 enum TerminalSubmission {
     Acknowledged,
+    Deferred,
     Rejected { code: String, message: String },
     Uncertain,
 }
@@ -1316,9 +1337,29 @@ enum TerminalSubmission {
 /// the host's output sequence to advance and confirms a bounded delivery marker
 /// in the canonical snapshot before sending Enter. Ordering therefore depends
 /// on observed terminal state, never an arbitrary delay.
+async fn submit_coordination_message(
+    store: &TaskStore,
+    client: &HostClient,
+    session_id: WorkerSessionId,
+    bytes: Vec<u8>,
+    marker: &[u8],
+) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
+    let provider = match store.provider_for_active_session(session_id) {
+        Ok(provider) => provider,
+        Err(error) => {
+            return Ok(TerminalSubmission::Rejected {
+                code: "provider_identity_unavailable".into(),
+                message: error.to_string(),
+            });
+        }
+    };
+    submit_terminal_message(client, session_id, provider, bytes, marker).await
+}
+
 async fn submit_terminal_message(
     client: &HostClient,
     session_id: WorkerSessionId,
+    provider: ProviderKind,
     mut bytes: Vec<u8>,
     marker: &[u8],
 ) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
@@ -1333,6 +1374,18 @@ async fn submit_terminal_message(
         })
         .await?
     {
+        HostResponse::Output {
+            resume: swarm_terminal::Resume::Snapshot { snapshot },
+            running: true,
+            ..
+        } => {
+            if provider_activity::classify_observed_activity(provider, &snapshot)
+                == ProviderActivity::AwaitingOperator
+            {
+                return Ok(TerminalSubmission::Deferred);
+            }
+            snapshot.sequence
+        }
         HostResponse::Output { resume, .. } => resume_sequence(&resume),
         HostResponse::Error { code, message } => {
             return Ok(TerminalSubmission::Rejected { code, message });
@@ -11874,6 +11927,159 @@ mod tests {
             assert!(tokio::time::Instant::now() < deadline);
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+
+        session.stop().unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn provider_question_defers_coordination_without_exhausting_delivery() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(16_384, 256), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec![
+                "-lc".into(),
+                concat!(
+                    "printf 'Choose an approach:\n❯ 1. Continue\n  2. Change course\n",
+                    "  3. Cancel\nEsc to cancel\n'; ",
+                    "IFS= read -r answer; ",
+                    "printf '\\033[2J\\033[H❯ \nmanual mode on · ? for shortcuts · ← for agents\n'; ",
+                    "while IFS= read -r line; do printf 'received:%s\\n' \"$line\"; done",
+                )
+                .into(),
+            ],
+            working_directory: workspace.clone(),
+        };
+        let session = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+        let client = HostClient::new(&socket);
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let response = client
+                .request(&HostRequest::Read {
+                    session_id: session.id(),
+                    after_sequence: None,
+                })
+                .await
+                .unwrap();
+            let HostResponse::Output {
+                resume: swarm_terminal::Resume::Snapshot { snapshot },
+                ..
+            } = response
+            else {
+                panic!("terminal host should return the provider question");
+            };
+            if String::from_utf8_lossy(&snapshot.bytes).contains("Esc to cancel") {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store
+            .ensure_queen(workspace.to_string_lossy().as_ref())
+            .unwrap();
+        store.bind_worker_session(queen.id, session.id()).unwrap();
+        let actions = vec!["ship".to_string(), "hold".to_string()];
+        let decision = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Approve the release",
+                reason: "The candidate is ready",
+                risk: "Users wait if held",
+                evidence: "All checks pass",
+                suggested_action: "Ship",
+                allowed_actions: &actions,
+                deadline: None,
+            })
+            .unwrap();
+        store
+            .resolve_decision_request(decision.id, "ship", "Proceed")
+            .unwrap();
+        let state = AppState::default()
+            .with_terminal_host(client.clone(), "secret")
+            .with_task_store(store.clone());
+
+        for _ in 0..5 {
+            state.deliver_coordination().await;
+        }
+        assert_eq!(
+            store
+                .get_decision_request(decision.id)
+                .unwrap()
+                .delivery_state,
+            Some(swarm_domain::DecisionDeliveryState::Queued),
+        );
+        let before_answer = client
+            .request(&HostRequest::Read {
+                session_id: session.id(),
+                after_sequence: None,
+            })
+            .await
+            .unwrap();
+        let HostResponse::Output {
+            resume: swarm_terminal::Resume::Snapshot { snapshot },
+            ..
+        } = before_answer
+        else {
+            panic!("terminal host should retain the provider question");
+        };
+        assert!(!String::from_utf8_lossy(&snapshot.bytes).contains("[Swarm decision"));
+
+        assert!(matches!(
+            client
+                .request(&HostRequest::Write {
+                    session_id: session.id(),
+                    bytes: vec![b'\r'],
+                })
+                .await
+                .unwrap(),
+            HostResponse::Acknowledged
+        ));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let response = client
+                .request(&HostRequest::Read {
+                    session_id: session.id(),
+                    after_sequence: None,
+                })
+                .await
+                .unwrap();
+            let HostResponse::Output {
+                resume: swarm_terminal::Resume::Snapshot { snapshot },
+                ..
+            } = response
+            else {
+                panic!("terminal host should return the resting provider");
+            };
+            if String::from_utf8_lossy(&snapshot.bytes).contains("manual mode on") {
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        state.deliver_coordination().await;
+        assert_eq!(
+            store
+                .get_decision_request(decision.id)
+                .unwrap()
+                .delivery_state,
+            Some(swarm_domain::DecisionDeliveryState::Delivered),
+        );
 
         session.stop().unwrap();
         server_task.abort();
