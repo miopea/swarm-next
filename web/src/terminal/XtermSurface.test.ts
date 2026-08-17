@@ -163,8 +163,48 @@ test("authoritative fit waits until xterm can propose real dimensions", async ()
   expect(xterm.fit).not.toHaveBeenCalled();
 
   frames.shift()?.(32);
+  await Promise.resolve();
+  expect(xterm.fit).not.toHaveBeenCalled();
+
+  frames.shift()?.(48);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
   expect(xterm.terminal).toMatchObject({ rows: 38, cols: 132 });
+});
+
+test("authoritative fit ignores one usable transitional mobile measurement", async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  xterm.propose
+    .mockReset()
+    .mockReturnValueOnce({ rows: 7, cols: 50 })
+    .mockReturnValue({ rows: 42, cols: 168 });
+  const surface = new XtermSurface();
+  surface.open(document.createElement("div"));
+
+  const fitting = surface.fit();
+  await Promise.resolve();
+  frames.shift()?.(0);
+  await Promise.resolve();
+  expect(xterm.terminal).toMatchObject({ rows: 24, cols: 80 });
+
+  frames.shift()?.(16);
+  await Promise.resolve();
+  expect(xterm.terminal).toMatchObject({ rows: 24, cols: 80 });
+
+  frames.shift()?.(32);
+  await expect(fitting).resolves.toEqual({ rows: 42, columns: 168 });
+  expect(xterm.terminal).toMatchObject({ rows: 42, cols: 168 });
+  surface.dispose();
 });
 
 test("turns an upward one-finger drag into older terminal scrollback", () => {
@@ -328,6 +368,10 @@ test("authoritative fit rejects non-finite geometry and normalizes fractional me
   expect(xterm.terminal).toMatchObject({ rows: 24, cols: 80 });
 
   frames.shift()?.(16);
+  await Promise.resolve();
+  expect(xterm.terminal).toMatchObject({ rows: 24, cols: 80 });
+
+  frames.shift()?.(32);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
   expect(xterm.terminal).toMatchObject({ rows: 38, cols: 132 });
   surface.dispose();
@@ -459,6 +503,8 @@ test("snapshot geometry stays hidden until the visible renderer is refitted", as
   const fitting = surface.fit();
   await Promise.resolve();
   frames.shift()?.(0);
+  await Promise.resolve();
+  frames.shift()?.(16);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
   expect(element.style.visibility).toBe("");
   xterm.refresh.mockClear();
@@ -485,11 +531,14 @@ test("repaints unchanged geometry after a settled viewport change", async () => 
   xterm.clearTextureAtlas.mockClear();
   const surface = new XtermSurface();
   surface.open(element);
+  const listener = vi.fn();
+  surface.onResize(listener);
 
   window.dispatchEvent(new Event("resize"));
   await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_FOR_TEST_MS + 16);
 
   expect(xterm.resize).not.toHaveBeenCalled();
+  expect(listener).toHaveBeenCalledWith({ rows: 24, columns: 80 });
   expect(xterm.clearTextureAtlas).toHaveBeenCalledOnce();
   expect(xterm.refresh).toHaveBeenCalledWith(0, 23);
   await vi.advanceTimersByTimeAsync(350);

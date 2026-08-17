@@ -6,6 +6,7 @@ import type { TerminalSnapshot } from "./TerminalConnection";
 import type { Disposable, TerminalSurface } from "./TerminalController";
 
 const MAX_FIT_FRAMES = 60;
+const STABLE_FIT_FRAMES = 2;
 const RESIZE_SETTLE_MS = 120;
 const REDRAW_RETRY_MS = 350;
 const TOUCH_DRAG_THRESHOLD_PX = 4;
@@ -17,6 +18,11 @@ export class XtermSurface implements TerminalSurface {
   readonly #terminal: Terminal;
   readonly #fit = new FitAddon();
   readonly #themeObserver: MutationObserver | undefined;
+  readonly #terminalResizeSubscription: Disposable;
+  readonly #resizeListeners = new Map<
+    (size: { rows: number; columns: number }) => void,
+    { rows: number; columns: number }
+  >();
   #resizeObserver: ResizeObserver | undefined;
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
   #redrawFrame: number | undefined;
@@ -28,6 +34,8 @@ export class XtermSurface implements TerminalSurface {
   #touchDistanceY = 0;
   #touchRemainderY = 0;
   #restorePending = false;
+  #geometryPublicationQueued = false;
+  #geometryPublicationForced = false;
   #disposed = false;
 
   constructor() {
@@ -41,6 +49,7 @@ export class XtermSurface implements TerminalSurface {
       theme: terminalTheme(documentColorTheme()),
     });
     this.#terminal.loadAddon(this.#fit);
+    this.#terminalResizeSubscription = this.#terminal.onResize(() => this.#queueGeometryPublication());
     this.#themeObserver = typeof MutationObserver === "undefined" ? undefined : new MutationObserver(() => {
       this.#terminal.options.theme = terminalTheme(documentColorTheme());
     });
@@ -82,12 +91,22 @@ export class XtermSurface implements TerminalSurface {
       if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
       this.#cancelScheduledFit();
       await document.fonts?.ready;
+      let previous: { rows: number; columns: number } | undefined;
+      let stableFrames = 0;
       for (let frame = 0; frame < MAX_FIT_FRAMES; frame += 1) {
         await nextAnimationFrame();
         if (this.#disposed) throw new Error("Cannot fit a disposed terminal renderer");
         const dimensions = this.#fit.proposeDimensions();
         const usable = usableDimensions(dimensions);
-        if (!usable) continue;
+        if (!usable) {
+          previous = undefined;
+          stableFrames = 0;
+          continue;
+        }
+        if (previous?.rows === usable.rows && previous.columns === usable.columns) stableFrames += 1;
+        else stableFrames = 1;
+        previous = usable;
+        if (stableFrames < STABLE_FIT_FRAMES) continue;
         this.#terminal.resize(usable.columns, usable.rows);
         this.#refreshViewport();
         return usable;
@@ -121,29 +140,9 @@ export class XtermSurface implements TerminalSurface {
   }
 
   onResize(listener: (size: { rows: number; columns: number }) => void): Disposable {
-    let active = true;
-    let notificationQueued = false;
-    let lastRows = this.#terminal.rows;
-    let lastColumns = this.#terminal.cols;
-    const subscription = this.#terminal.onResize(() => {
-      if (!active || notificationQueued) return;
-      notificationQueued = true;
-      queueMicrotask(() => {
-        notificationQueued = false;
-        if (!active || this.#disposed) return;
-        const rows = this.#terminal.rows;
-        const columns = this.#terminal.cols;
-        if (rows === lastRows && columns === lastColumns) return;
-        lastRows = rows;
-        lastColumns = columns;
-        listener({ rows, columns });
-      });
-    });
+    this.#resizeListeners.set(listener, { rows: this.#terminal.rows, columns: this.#terminal.cols });
     return {
-      dispose: () => {
-        active = false;
-        subscription.dispose();
-      },
+      dispose: () => this.#resizeListeners.delete(listener),
     };
   }
 
@@ -152,6 +151,8 @@ export class XtermSurface implements TerminalSurface {
     this.#cancelScheduledFit();
     this.#cancelScheduledRedraw();
     this.#themeObserver?.disconnect();
+    this.#terminalResizeSubscription.dispose();
+    this.#resizeListeners.clear();
     this.#resizeObserver?.disconnect();
     window.removeEventListener("resize", this.#handleViewportChange);
     window.removeEventListener("focus", this.#handleViewportChange);
@@ -295,8 +296,15 @@ export class XtermSurface implements TerminalSurface {
     const dimensions = this.#fit.proposeDimensions();
     const usable = usableDimensions(dimensions);
     if (!usable) return;
-    if (usable.rows !== this.#terminal.rows || usable.columns !== this.#terminal.cols) {
+    const changed = usable.rows !== this.#terminal.rows || usable.columns !== this.#terminal.cols;
+    if (changed) {
       this.#terminal.resize(usable.columns, usable.rows);
+    } else {
+      // A different device can leave the shared PTY at stale dimensions while
+      // this renderer already believes it is correctly fitted. Re-publish the
+      // settled visible geometry so the active Swarm window can repair the
+      // host without relying on xterm to emit a changed-size event.
+      this.#queueGeometryPublication(true);
     }
     // A stable row/column count does not mean Chromium's backing canvas is
     // healthy. Explicitly repaint after responsive layout and PWA resumes.
@@ -346,6 +354,25 @@ export class XtermSurface implements TerminalSurface {
     this.#element.dataset.terminalBufferLines = String(buffer.length);
     this.#element.dataset.terminalScrollbackRows = String(buffer.baseY);
     this.#element.dataset.terminalViewportRow = String(buffer.viewportY);
+  }
+
+  #queueGeometryPublication(force = false): void {
+    if (this.#disposed) return;
+    this.#geometryPublicationForced ||= force;
+    if (this.#geometryPublicationQueued) return;
+    this.#geometryPublicationQueued = true;
+    queueMicrotask(() => {
+      this.#geometryPublicationQueued = false;
+      if (this.#disposed) return;
+      const size = { rows: this.#terminal.rows, columns: this.#terminal.cols };
+      const forced = this.#geometryPublicationForced;
+      this.#geometryPublicationForced = false;
+      for (const [listener, previous] of this.#resizeListeners) {
+        if (!forced && previous.rows === size.rows && previous.columns === size.columns) continue;
+        this.#resizeListeners.set(listener, size);
+        listener(size);
+      }
+    });
   }
 
   #scheduleFit(): void {
