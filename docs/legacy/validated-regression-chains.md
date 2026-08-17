@@ -83,3 +83,107 @@ the atlas.
 authoritative; terminal text is bounded supporting evidence. Swarm Next keeps
 one invalidation stream, quiet steady state, content-free diagnostics, and
 browser-process soak evidence.
+
+## Provider prompt authority and recoverable refusal
+
+`fe4e1eb4` first stopped ordinary automated text from answering an open provider
+prompt. The later `de3870ae`, `a184cfaf`, `be122e22`, `58339e99`, `5576f21d`,
+`85491fc4`, `af324d2c`, `72c66362`, `78c1ef4`, `cbca9aeb`, `314f05bf`, and
+`b338f1c8` sequence shows why a hold alone was insufficient. Legacy needed a
+stable prompt fingerprint, structured choices, explicit answer and dismiss
+verbs, cursor-relative navigation rather than typed digits, read-back before
+claiming success, refusal instead of ineffective interrupt, and a recoverable
+copy of a message refused while the prompt was open. The tests use captured
+real prompts, and live probes falsified several code-reading assumptions.
+
+The last code in this chain is after Legacy's final packaged `2026.8.13`
+boundary, so its mechanism is not release-proven. The incident evidence is
+nevertheless strong: two workers lost a measured 14.8 hours on unanswered
+pickers, and an automated message was observed to disappear on refusal.
+
+**Stable outcome:** a provider question is a typed attention object and an input
+authority boundary. Unrelated automation must refuse without losing its body;
+an authorized answer must bind to the exact current question and report written,
+observed, and accepted as different facts. Swarm Next already classifies a
+visible picker as `AwaitingOperator`, but its coordination delivery currently
+does not consult that state before the shared `HostRequest::Write` path. The
+outcome survives; Legacy's terminal parser does not automatically come with it.
+
+## Every terminal writer is attributable
+
+`ec70c136` moved PTY-write attribution to the holder choke point after a picker
+was answered six times without any record of who supplied the input. It recorded
+actor, worker, timestamp, byte count, and a coarse input kind while deliberately
+excluding content. `a562a02f` isolated the audit during tests, `f3057e8f` asserted
+actor propagation on every path, and `9d568098` added a sweep that fails when a
+new writer omits its actor. The sequence then supported worker-level commit
+identity and live holder-drift diagnosis in `4dd95466` and `f40dd284`.
+
+This chain is also post-`2026.8.13`; treat the implementation as development
+evidence. Its architectural lesson is independent of the JSONL mechanism.
+
+**Stable outcome:** terminal input provenance belongs at the single byte-write
+boundary, with `unknown` as a visible failure state and no secret-bearing content
+in the record. Swarm Next has strong actor provenance for task activity and
+durable high-level deliveries, but both operator and automation bytes still
+converge on `HostRequest::Write { session_id, bytes }`. Add typed provenance and
+a bounded content-free audit at that boundary rather than trying to reconstruct
+an incident from surrounding task events.
+
+## Approval rules, effect gates, and brakes
+
+`814876ca` and `19730e44` showed that deletion-oriented deny rules missed SQL
+mutation, privilege grants, credential persistence, device writes, and package
+publication. `dccf03c8` proved that a safe word in one compound-command segment
+could approve everything around it. `70f9d10b` then separated safe-looking verbs
+from dangerous effects such as credential reads and outbound payloads. When
+those guards changed from advisory escalation to denial, `9173b1ed` immediately
+found ordinary commands blocked. `5f16ad5f`, `d6476e99`, and `26796719` ultimately
+separated a hard effect gate from a human-approval brake because one return type
+could not safely represent both.
+
+The chain repeatedly measured both hazards and ordinary-work corpora. It also
+states its honest limit: substring configuration cannot become a complete shell
+security boundary, and a denylist cannot recognize every sensitive object or
+legitimate destination.
+
+**Stable outcome:** hard boundaries are typed effect contracts owned by code;
+operator convenience rules cannot widen them. Human-review brakes and absolute
+gates need different types, defaults, and failure behavior. Swarm Next does not
+port Legacy's approval drones or regex policy engine. Its deterministic
+coordinator is restricted to typed application operations, so the mechanism is
+obsolete while the design constraint remains mandatory for each future action.
+
+## Migration ceiling and temporary artifact ownership
+
+`93284b41` changed one version constant after discovering that a previously
+shipped migration could never execute. `da7d8a10` replaced `tempfile.mktemp`
+patterns after the test suite accumulated 16 GB of abandoned files and pushed
+the disk to 95 percent. Both failures were silent infrastructure drift rather
+than user-facing feature logic.
+
+**Stable outcome:** the latest migration step and current schema version need a
+mechanical invariant, and every temporary artifact needs one explicit owner with
+cleanup proven by a test. Next's forward-only SQLite design and owned Rust
+temporary values substantially reduce both risks. The current Outlook test
+helper still calls `tempfile::tempdir().unwrap().keep()`, however, so the cleanup
+class has one small confirmed recurrence to remove.
+
+## Jira closure and divergence evidence
+
+`3bbea838` ran a project citation check when a Jira ticket closed. `dbe59a07`,
+`11f0e495`, and `ea33e4a0` built a daily, per-repository verification sweep, and
+`1f559e84` added board-versus-Jira divergence. Nearby `862a49fd` and `35854dd9`
+showed that ancestry alone cannot prove squash-merged work reached main.
+
+These are all post-release development changes. They demonstrate recurring
+operator need for canonical-state convergence and trustworthy completion proof,
+not a universal requirement for these exact scripts.
+
+**Stable outcome:** linked Jira terminal states must reconcile without depending
+on a bounded open-issue query, and a completion claim must retain concise durable
+verification evidence. Swarm Next already fetches exact linked issue identities,
+including closed issues, and persists mapped inbound and outbound transitions.
+Project-specific citation, branch-containment, or deployment checks remain
+optional typed policies that should be adopted only when Ring 1 evidence shows
+they prevent real false completion.
