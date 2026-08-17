@@ -130,6 +130,10 @@ fi
 [ -x "$SWARM_INSTALL_ROOT/current/swarm-next-package" ]
 [ -d "$SWARM_STATE_ROOT/providers/claude" ]
 
+# An ordinary app/API update repairs the stable worker bridge launcher without
+# moving or restarting the independently pinned terminal host.
+rm -f "$SWARM_BIN_ROOT/swarm-terminal-host"
+
 # Development mode is explicit, checkout-scoped, same-port, and restarts only
 # the replaceable API when it is enabled or disabled.
 dev_checkout="$HOME/projects/swarm-next"
@@ -203,6 +207,7 @@ done
 : > "$HOME/systemctl.log"
 : > "$HOME/swarmctl.log"
 "$package" update "$test_root/bundle-2.0.0"
+[ -x "$SWARM_BIN_ROOT/swarm-terminal-host" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/current/VERSION")" = "2.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/previous/VERSION")" = "1.0.0" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]

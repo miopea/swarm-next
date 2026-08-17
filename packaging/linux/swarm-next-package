@@ -284,13 +284,19 @@ activate_link() {
   ln -sfn "$release" "$install_root/current.next"
   mv -Tf "$install_root/current.next" "$install_root/current"
   ln -sfn "$install_root/current/bin/swarmctl" "$bin_root/swarmctl"
+  publish_host_launcher
+}
+
+publish_host_launcher() {
+  [ -L "$install_root/host-current" ] || return 0
+  ln -sfn "$install_root/host-current/bin/swarm-terminal-host" "$bin_root/swarm-terminal-host"
 }
 
 activate_host_link() {
   release=$1
   ln -sfn "$release" "$install_root/host-current.next"
   mv -Tf "$install_root/host-current.next" "$install_root/host-current"
-  ln -sfn "$install_root/host-current/bin/swarm-terminal-host" "$bin_root/swarm-terminal-host"
+  publish_host_launcher
 }
 
 install_units() {
