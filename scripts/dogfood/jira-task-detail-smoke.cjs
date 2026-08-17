@@ -55,6 +55,9 @@ async function verifySurface(browser, surface) {
       await page.getByRole("button", { name: "Unlock Swarm" }).click();
     }
     await page.getByRole("button", { name: /Tasks/ }).click();
+    // A fresh browser intentionally receives one 401 while probing for an
+    // existing trusted session before the operator token is submitted.
+    errors.length = 0;
     const task = page.locator("article").filter({ hasText: issueKey }).first();
     await task.waitFor({ state: "visible" });
     await task.dblclick();
