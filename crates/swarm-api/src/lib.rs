@@ -1228,6 +1228,33 @@ impl AppState {
                 return;
             }
         };
+        let provider = match store.provider_for_active_session(delivery.session_id) {
+            Ok(provider) => provider,
+            Err(error) => {
+                tracing::warn!(run_id = %delivery.run_id, message = %error, "Queen provider identity was unavailable");
+                let _ = store.fail_queen_automation_delivery(
+                    &delivery.run_id,
+                    unix_timestamp(),
+                    QueenAutomationFailure::Retryable,
+                );
+                return;
+            }
+        };
+        if provider_activity::observe_session(self, delivery.session_id, provider).await
+            != Some(ProviderActivity::Resting)
+        {
+            tracing::info!(run_id = %delivery.run_id, "Queen automation is waiting for a fresh resting prompt");
+            match store.defer_queen_automation_delivery(&delivery.run_id, unix_timestamp()) {
+                Ok(true) => self.control_room_notify.notify_waiters(),
+                Ok(false) => {
+                    tracing::warn!(run_id = %delivery.run_id, "Queen automation readiness claim was no longer active");
+                }
+                Err(error) => {
+                    tracing::warn!(run_id = %delivery.run_id, message = %error, "Queen automation readiness deferral could not be persisted");
+                }
+            }
+            return;
+        }
         let result = match submit_coordination_message(
             store,
             client,
@@ -12277,6 +12304,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queen_automation_waits_until_the_provider_has_a_resting_prompt() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(8192, 128), 2, [workspace.clone()]).unwrap(),
+        );
+        let command = ProviderCommand {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec![
+                "-lc".into(),
+                "printf 'starting provider\\n'; sleep 5".into(),
+            ],
+            working_directory: workspace.clone(),
+        };
+        let queen_terminal = registry.spawn(&command, TerminalSize::default()).unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        let server = HostServer::bind(&socket, registry).unwrap();
+        let server_task = tokio::spawn(server.run());
+
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store
+            .ensure_queen(workspace.to_string_lossy().as_ref())
+            .unwrap();
+        store
+            .bind_worker_session(queen.id, queen_terminal.id())
+            .unwrap();
+        let task = store
+            .create_task(
+                "Wait for Queen readiness",
+                workspace.to_string_lossy().as_ref(),
+            )
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        let queued = store.set_queen_automation_enabled(true, 100).unwrap();
+        assert_eq!(queued.state, swarm_domain::QueenAutomationState::Queued);
+
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
+        state.deliver_coordination().await;
+
+        let deferred = store.queen_automation_status(101).unwrap();
+        assert_eq!(deferred.state, swarm_domain::QueenAutomationState::Queued);
+        assert_eq!(deferred.attempts, 0);
+
+        queen_terminal.stop().unwrap();
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn worker_review_handoff_drives_one_bounded_queen_automation_run() {
         let runtime = TempDir::new().unwrap();
@@ -12288,7 +12366,7 @@ mod tests {
             executable: PathBuf::from("/bin/sh"),
             arguments: vec![
                 "-lc".into(),
-                "while IFS= read -r value; do printf 'received:%s\\n' \"$value\"; done".into(),
+                "printf 'manual mode on · ? for shortcuts · ← for agents\\n❯ \\n'; while IFS= read -r value; do printf 'received:%s\\n' \"$value\"; done".into(),
             ],
             working_directory: workspace.clone(),
         };
