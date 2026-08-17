@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Four safeguards closed; five operator choices recorded 2026-08-17**
+Status: **Four safeguards closed; six operator choices recorded 2026-08-17**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -184,6 +184,32 @@ several Hives behave similarly.
 a Settings ruleset. Keep learning developer-specific, reviewable, scoped,
 editable, and explicit rather than automatically mutating hidden policy.
 
+## Decision 6: Queen-discovered routines
+
+**Evidence.** Legacy accumulated pipelines, playbooks, and standing loops as
+separate workflow mechanisms. Their underlying value was repeatable work; their
+risk was another broad automation surface whose steps, authority, and failure
+behavior were difficult to see together.
+
+**Current Next boundary.** Tasks express durable outcomes, repository skills
+express repository-owned procedure, and the deterministic coordinator performs
+typed policy-complete actions. Next does not yet preserve a repeated multi-step
+operator journey as one named, reviewable routine.
+
+**Recommendation.** Queen may recognize a repeated journey and propose a
+Routine. The proposal shows its scope, typed steps, Queen judgment points,
+trigger or schedule, required approvals, external effects, cancellation, and
+failure behavior. It remains inert until reviewed. Settings owns the routine
+list and all edit, enable, schedule, disable, and retirement controls. The
+coordinator executes only the approved deterministic steps; Queen retains
+ambiguity, and every external effect keeps its separate authority.
+
+**Operator decision (2026-08-17).** Use the same transparent learning pattern
+for routines. Queen decides when repetition merits a proposal and surfaces it
+in Settings; the operator controls its definition and activation. Do not build
+a free-form workflow editor before real Queen-proposed routines prove the
+necessary vocabulary.
+
 ## Evidence that would change these recommendations
 
 - A naturally occurring prompt class that Queen can answer safely and repeatedly
@@ -194,6 +220,9 @@ editable, and explicit rather than automatically mutating hidden policy.
   or unreliable.
 - Repeated operator corrections that support one stable, narrowly scoped rule
   without expanding authority or contradicting later corrections.
+- A repeated multi-step journey whose trigger, deterministic steps, Queen
+  decisions, approvals, cancellation, and failure outcome can be stated
+  explicitly.
 
 Decisions should be recorded after that evidence or an explicit operator choice,
 not inferred from Legacy commit volume.

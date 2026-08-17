@@ -85,6 +85,10 @@ For each naturally occurring session, record only what is relevant:
   from repeated corrections, but it remains inert until approved; the active
   ruleset must be visible, editable, and removable in Settings and may not
   silently expand authority or become shared Apiary policy.
+- Queen-discovered Routines follow the same boundary. Queen may surface a
+  repeated multi-step journey in Settings, but the operator reviews and
+  controls its definition and activation; typed deterministic steps execute
+  below Queen while judgment and external authority remain explicit.
 - The protocol migration left API and holder builds aligned on protocol 9,
   both services active with zero restarts, database `quick_check` at `ok`, and
   the holder reporting one running and one retained Queen session. No Jira,
