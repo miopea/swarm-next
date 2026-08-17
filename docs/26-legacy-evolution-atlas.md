@@ -230,6 +230,16 @@ ownership, automated-input authority, revive loops, speculative preparation,
 mobile scrollback, and state classification. Their stable outcomes already map
 to Swarm Next invariants; none creates a port ticket by itself.
 
+Ring 1 has already strengthened one of those chains. A wide-desktop session
+showed the browser terminal occupying its full container while the live Queen
+and Scout PTYs remained `31 x 99`; the existing foreground attachment could not
+reclaim geometry merely by resizing. `30aa2d5` makes visible resize an explicit
+geometry claim while hidden clients remain passive. This is a Next protocol
+correction informed by Legacy's resize history, not a Legacy port. Its focused
+and full automated coverage is green and the deployed App/API swap preserved
+the worker engine; the atlas keeps the item open until the installed PWA loads
+the new asset and a live PTY remeasurement proves the operator outcome.
+
 The explicit revert and diagnostic-experiment pass lives in
 `docs/legacy/reversions-and-abandoned-experiments.md`. It covers the browser
 terminal handler rollback, systemd worker-killing regression, Ctrl+L

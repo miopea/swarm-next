@@ -34,11 +34,24 @@ recognizable, but Next's cause was its own: geometry authority expired with
 attention or was absent after revival. Next now keeps geometry authority
 separate from attention, lets the first identified viewer fit an unowned fresh
 session, and lets the selected foreground view replace stale cross-device
-geometry on worker selection or refresh (`e8c73a7`). Later passive devices
-cannot steal the shared size, while real input transfers authority. Queen and
-Scout passed desktop, Android, and
-desktop-again proof. This is classified **already prevented after Ring 1 fix**;
-there is no remaining operator decision and no Legacy resize code was ported.
+geometry on its initial attachment (`e8c73a7`). Queen and Scout then passed the
+first desktop, Android, and desktop-again proof, but a later wide-desktop Ring 1
+session falsified the broader closure claim: the visible terminal filled its
+container while both live PTYs still measured `31 x 99`. An already-connected
+foreground client could send a resize without reclaiming geometry from an older
+attachment, so neither an ordinary resize nor the page's refresh control could
+change the PTY.
+
+`30aa2d5` moves that claim into the resize protocol. Every visible-client resize
+explicitly reclaims geometry; a hidden client remains passive, and ordinary
+terminal input still transfers authority. Focused WebSocket coverage proves an
+existing desktop attachment can reclaim geometry after a phone attachment
+without reconnecting or sending a sacrificial keystroke. The full web and API
+suites passed, the fix is deployed, and the worker-engine process was preserved.
+Post-deploy PTYs remained `31 x 99` because the already-open installed PWA still
+held the previous JavaScript asset. Closure therefore requires one final live
+proof after that PWA loads the new asset. This remains a mechanical Ring 1
+safeguard with no operator product choice, and no Legacy resize code was ported.
 
 ## Decision 1: Queen and provider questions
 

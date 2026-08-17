@@ -26,11 +26,25 @@ expiring operator-attention lease, and `5871b7f0` let the first identified
 viewer fit a newly revived, otherwise unowned terminal. A later Ring 1 repro
 showed that a dormant session could still retain another device's width;
 `e8c73a7` lets an explicitly selected foreground attachment claim its viewport
-on worker selection or refresh. Focused WebSocket tests prove that background
-and later passive viewers cannot steal geometry and that actual input transfers
-it. Live proof then took Queen and Scout through desktop, Android, and
-desktop again with zero page overflow and rendered rows reaching the terminal's
-right edge. This closes the observed Next defect without copying Legacy's
+at its initial WebSocket attachment. Focused WebSocket tests proved that
+background and later passive viewers could not steal geometry and that actual
+input transferred it. The first live proof then took Queen and Scout through
+desktop, Android, and desktop again with zero page overflow and rendered rows
+reaching the terminal's right edge.
+
+A subsequent wide-desktop Ring 1 session exposed one more ownership boundary.
+The renderer occupied the full container while both Queen and Scout PTYs
+measured `31 x 99`; the already-connected foreground PWA's resize messages were
+passive, so maximizing, resizing, and the page refresh control did not reclaim
+geometry from the older attachment. `30aa2d5` adds an explicit
+`claim_geometry` bit to every resize: visible clients claim, hidden clients stay
+passive, and the server preserves backwards-compatible unowned claims for older
+clients. An integration test now has an existing desktop socket lose ownership
+to a phone socket and reclaim it by resizing, without reconnecting or typing.
+Full web and API validation passed and App/API deployment preserved the live
+terminal-host and provider PIDs. Final live closure is intentionally pending
+until the installed PWA loads the new asset and the PTY width is remeasured.
+This still addresses the Next-owned protocol rather than copying Legacy's
 dashboard resize machinery.
 
 ## Automated input authority and operator focus
