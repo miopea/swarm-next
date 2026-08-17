@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Four safeguards closed; four operator choices recorded 2026-08-17**
+Status: **Four safeguards closed; five operator choices recorded 2026-08-17**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -160,6 +160,30 @@ typed task/decision action, mobile control, or natural-language worker message.
 **Operator decision (2026-08-17).** Defer configurable worker command macros and
 measure real repetition. Keep the fixed product navigation shortcuts.
 
+## Decision 5: learnable developer preferences
+
+**Evidence.** Legacy's Dreamer and learning-miner experiments tried to turn
+operator corrections into future behavior. The useful outcome is personal
+adaptation; the danger is hidden policy that silently changes Queen's authority
+or spreads one correction across unrelated repositories and operators.
+
+**Current Next boundary.** Swarm Next preserves task history, discussions,
+worker descriptions, repository-owned policy, and explicit settings, but it
+does not promote repeated operator corrections into reusable guidance.
+
+**Recommendation.** Add a transparent Queen learning-suggestion queue. A
+suggestion must cite the bounded correction evidence that produced it, propose
+the narrowest useful scope, and remain inert until the operator approves it.
+Approved rules are visible and editable in Settings, carry provenance and
+revision history, and can be disabled or removed. Rules customize each
+developer's Hive; they do not silently expand Queen authority, approve external
+effects, expose private terminal content, or become Apiary policy merely because
+several Hives behave similarly.
+
+**Operator decision (2026-08-17).** Build the learnable preference outcome with
+a Settings ruleset. Keep learning developer-specific, reviewable, scoped,
+editable, and explicit rather than automatically mutating hidden policy.
+
 ## Evidence that would change these recommendations
 
 - A naturally occurring prompt class that Queen can answer safely and repeatedly
@@ -168,6 +192,8 @@ measure real repetition. Keep the fixed product navigation shortcuts.
 - The same completion failure across multiple unrelated repositories.
 - A repeated mobile or desktop command whose current path is materially slower
   or unreliable.
+- Repeated operator corrections that support one stable, narrowly scoped rule
+  without expanding authority or contradicting later corrections.
 
 Decisions should be recorded after that evidence or an explicit operator choice,
 not inferred from Legacy commit volume.

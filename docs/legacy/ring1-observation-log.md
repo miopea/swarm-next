@@ -80,6 +80,11 @@ For each naturally occurring session, record only what is relevant:
   diagnostics-only; repository-specific completion checks remain repository
   owned; and configurable worker command macros remain deferred while real
   repetition is measured.
+- The operator also selected transparent, developer-specific learning as an
+  evidence-backed opportunity. Queen may propose a narrowly scoped preference
+  from repeated corrections, but it remains inert until approved; the active
+  ruleset must be visible, editable, and removable in Settings and may not
+  silently expand authority or become shared Apiary policy.
 - The protocol migration left API and holder builds aligned on protocol 9,
   both services active with zero restarts, database `quick_check` at `ok`, and
   the holder reporting one running and one retained Queen session. No Jira,
