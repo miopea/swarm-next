@@ -249,6 +249,16 @@ and full automated coverage is green and the deployed App/API swap preserved
 the worker engine; the atlas keeps the item open until the installed PWA loads
 the new asset and a live PTY remeasurement proves the operator outcome.
 
+Ring 1 also closed the first provider-question authority boundary in `1a3c89b`.
+All durable coordination paths now inspect the exact current host snapshot and
+recoverably defer while the provider is `AwaitingOperator`; they neither write
+through the picker nor spend their bounded retry budget. The real-PTY proof
+holds a delivery across five coordinator cycles and releases it only after the
+operator answers. This is the stable refusal outcome from Legacy implemented at
+Next's shared boundary, not a port of Legacy's terminal parser. Prompt identity,
+Queen recommendations, and any future authorized answer policy remain open
+product decisions.
+
 The explicit revert and diagnostic-experiment pass lives in
 `docs/legacy/reversions-and-abandoned-experiments.md`. It covers the browser
 terminal handler rollback, systemd worker-killing regression, Ctrl+L

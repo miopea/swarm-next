@@ -133,10 +133,14 @@ pickers, and an automated message was observed to disappear on refusal.
 **Stable outcome:** a provider question is a typed attention object and an input
 authority boundary. Unrelated automation must refuse without losing its body;
 an authorized answer must bind to the exact current question and report written,
-observed, and accepted as different facts. Swarm Next already classifies a
-visible picker as `AwaitingOperator`, but its coordination delivery currently
-does not consult that state before the shared `HostRequest::Write` path. The
-outcome survives; Legacy's terminal parser does not automatically come with it.
+observed, and accepted as different facts. Swarm Next `1a3c89b` now checks the
+canonical host snapshot at the shared durable-coordination boundary. A visible
+picker returns decision results, task briefs, worker outcomes, and Queen prompts
+to their durable queues without consuming a retry attempt. A real-PTY test holds
+one delivery through five cycles, proves the picker received no Swarm bytes, and
+delivers only after an operator answer exposes the resting prompt. This closes
+the unrelated-write safeguard; typed prompt identity and authorized answering
+remain separate product work. Legacy's parser was not ported.
 
 ## Every terminal writer is attributable
 

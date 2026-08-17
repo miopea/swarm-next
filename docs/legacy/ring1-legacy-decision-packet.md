@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Two safeguards closed; focused operator choices not yet recorded**
+Status: **Three safeguards closed; focused operator choices not yet recorded**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -16,10 +16,12 @@ These are ordinary quality work rather than product forks:
 2. **Closed:** the newest migration and declared current schema version share one
    named ceiling, and a structural test migrates exactly the immediately
    previous version.
-3. **Pending boundary safeguard:** refuse unrelated automated terminal delivery while the exact current provider
-   activity is `AwaitingOperator`. Preserve the intended delivery as recoverable
-   rather than marking it delivered, dropping it, or replaying it later without
-   context.
+3. **Closed:** `1a3c89b` makes every durable coordination writer read the exact
+   current provider snapshot before writing. When that snapshot is
+   `AwaitingOperator`, the delivery returns to its durable queue without using a
+   retry attempt. A real-PTY test holds the same decision through five delivery
+   cycles, proves no Swarm bytes entered the picker, answers it as the operator,
+   and then observes the queued delivery complete.
 4. **Pending boundary safeguard:** carry typed actor and input-shape provenance through every ordinary terminal
    write and record it at the terminal-host choke point without content.
 
@@ -57,8 +59,10 @@ safeguard with no operator product choice, and no Legacy resize code was ported.
 
 **Evidence.** Legacy lost 14.8 measured worker-hours to two unanswered pickers.
 Its first attempted solutions falsely claimed success, typed a digit as free
-text, or lost the refused message. Next already recognizes a picker but does not
-yet guard automated writes with that state.
+text, or lost the refused message. Next now refuses unrelated durable
+coordination while the exact current snapshot is a picker and preserves that
+delivery without consuming its retry budget. It still deliberately does not
+answer the picker.
 
 **Recommendation.** For Ring 1, Queen may observe the question, explain the
 choices, and notify the operator, but may not answer automatically. Build the
