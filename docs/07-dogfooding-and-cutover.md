@@ -1,6 +1,6 @@
 # Dogfooding and cutover
 
-Status: **Proposed**
+Status: **Ring 1 ready — bounded real-use evidence begins next**
 
 ## Isolation
 
@@ -30,6 +30,12 @@ injection, and browser automation.
 
 The primary operator uses Swarm Next for bounded tasks while legacy Swarm
 remains the immediate fallback.
+
+The 2026-08-16 promotion gate is recorded in
+[`20-daily-driver-readiness.md`](20-daily-driver-readiness.md). Ring 1 begins
+with automatic Queen review still opt-in, real Jira mutations operator-driven,
+and legacy available independently. The refreshed legacy evolution review runs
+alongside this week of use; its findings are discussion inputs, not port tickets.
 
 ### Ring 2: parallel daily use
 

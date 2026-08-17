@@ -1,6 +1,6 @@
 # Daily-driver readiness: legacy outcomes and Next product cut
 
-Status: **Accepted implementation sequence**
+Status: **Ready for bounded Ring 1 dogfood**
 
 This comparison uses the current legacy UI, routes, tests, and operator
 observations as evidence. It does not treat legacy parity as the goal. Swarm
@@ -119,3 +119,36 @@ Ring 1 begins when the operator can:
 Ring 2 requires a multi-day soak with legacy still available as an independent
 fallback. Missing outcomes become evidence; they do not automatically become
 legacy ports.
+
+## Ring 1 promotion record — 2026-08-16
+
+**Decision: ready to begin non-critical real work.** This is a build-gate
+decision, not a claim that a week of daily use has already succeeded. Legacy
+Swarm remains installed as the independent fallback while ordinary work starts
+moving through Swarm Next.
+
+| Promotion outcome | Current evidence |
+|---|---|
+| Queen is already live | One durable always-active Queen reattaches across API and browser releases without duplication; repeated recovery opens a visible circuit instead of looping. |
+| Workers are configured once | Thirty durable profiles retain names, repository ownership, provider, ordering, descriptions, and conversations; Sleeping workers consume no provider runtime memory and wake through one explicit action. |
+| Terminals survive normal use | Canonical host-owned history, engaged-device geometry, mobile scroll, ANSI color, paste, switching, reload, and compatible-release preservation are proven in automated and live Chromium journeys. |
+| Ordinary work can be planned and completed | Local, Jira, and email-origin tasks expose explicit lifecycle, priority, worker ownership, discussion, history, full detail, authenticated images, and guarded completion evidence. |
+| Quiet workers receive one durable brief | Assignment binds stable worker ownership; the current process receives one sanitized briefing, and a sleeping owner is serialized through resource-aware wake admission. |
+| Changes arrive without refresh | The authenticated resumable control-room feed invalidates typed snapshots; Refresh remains a recovery action rather than normal synchronization. |
+| App updates preserve work | Compatible App/API releases repeatedly preserved terminal-holder PID `2966127`, worker-engine identity, provider sessions, task ownership, and database integrity. Worker-engine replacement remains a separately warned maintenance action. |
+| Failures are attributable | Diagnostics separate browser, API, database, terminal holder, loaded provider runtimes, machine pressure, Jira, email, and notification health; dogfood reports remain previewed and sanitized. |
+
+The bounded Queen journey closes the automation safety gate: one worker can
+advance assigned work through Review, deliver one outcome to Queen, trigger one
+actionable-work run, and finish that exact run without Jira, Apiary, email,
+deployment, or other external effects. Live automatic review remains opt-in and
+was verified **off / idle** at promotion.
+
+Ring 1 now gathers evidence that cannot be manufactured by more implementation:
+
+1. one week of non-critical daily work on desktop and Android;
+2. real operator value from Queen routing, notifications, Jira reconciliation,
+   email intake, and worker state accuracy;
+3. memory and recovery behavior across normal multi-day use;
+4. refreshed legacy-history findings classified against observed Swarm Next
+   gaps rather than converted directly into port work.

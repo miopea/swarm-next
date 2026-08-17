@@ -230,6 +230,32 @@ final legacy tree itself did not support.
 3. Feed each surviving outcome into the capability inventory and dogfood plan;
    do not create port tickets directly from this atlas.
 
+## Ring 1 companion refresh
+
+The first atlas froze reachable history on 2026-08-10. Once bounded Ring 1 use
+begins, the review resumes in parallel with one week of real Swarm Next work:
+
+1. refresh the ledger from the root commit through the then-latest reachable
+   legacy commit, preserving full commit identity and making the post-2026-08-10
+   delta explicit;
+2. sample stable release boundaries so the review distinguishes experiments,
+   same-day reversions, regressions, and behavior that survived normal use;
+3. expand regression chains only where actual Swarm Next dogfood exposes a
+   related operator outcome, architectural risk, or missing recovery path;
+4. classify each material finding as **already prevented**, **relevant
+   redesign**, **optional opportunity**, **obsolete constraint**, or
+   **unresolved evidence**;
+5. compare findings against Swarm Next's current domain owners, tests, live
+   behavior, and measured operator friction before proposing any work;
+6. bring the operator a small decision packet—with the legacy history, current
+   Next behavior, user benefit, cost, and recommendation—and ask focused
+   questions only when a real product choice remains.
+
+The refresh does not modify legacy files, configuration, databases, or running
+processes. A finding is never an automatic port, defect, or requirement. The
+purpose is to make the real-use week more perceptive without letting history
+override the cleaner Next architecture.
+
 ## Acceptance for the archaeology milestone
 
 - Every legacy capability has one disposition and an operator outcome.
