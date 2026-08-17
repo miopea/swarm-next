@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Four safeguards closed; nine operator choices recorded 2026-08-17**
+Status: **Four safeguards closed; ten operator choices recorded 2026-08-17**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -292,6 +292,33 @@ worker chatter.
 mobile as a first-class check-in surface. Make it useful both for returning to
 work and for briefly checking on the Hive while away.
 
+## Decision 10: provider support and handoff
+
+**Evidence.** Legacy advertised multiple coding providers while its executable
+evidence showed materially different state detection, recovery, permission,
+shortcut, and interaction maturity. Provider identity therefore cannot be a
+cosmetic selector or a promise of equal experience.
+
+**Current Next boundary.** Worker identity, repository ownership, tasks, and
+history are independent from a retained provider conversation. That makes a
+cross-provider handoff architecturally possible, but it does not make the
+provider experiences equivalent or the handoff common enough to justify a
+product workflow now.
+
+**Recommendation.** Treat Claude and Codex as the current first-class drivers.
+Keep OpenCode and Gemini as intended providers whose first-class status must be
+earned independently through interactive terminal, state, permission,
+recovery, mobile, restart, and upgrade acceptance. Document the durable handoff
+contract between providers, but do not build a routine midstream transfer UI
+during Ring 1. Preserve provider changes as an explicit, rare operator action.
+Explore model selection inside one provider separately because it can route a
+new task without changing the provider conversation contract.
+
+**Operator decision (2026-08-17).** Claude and Codex drive the product now;
+OpenCode and Gemini remain desired support targets. Document, but defer,
+cross-provider handover. Investigate per-task model choice within a provider,
+where the operational jump is smaller and the value may be materially higher.
+
 ## Evidence that would change these recommendations
 
 - A naturally occurring prompt class that Queen can answer safely and repeatedly
@@ -311,6 +338,9 @@ work and for briefly checking on the Hive while away.
 - A return interval whose durable changes can be summarized without repeating
   routine worker chatter or showing the same unread briefing independently on
   every device.
+- Provider-specific acceptance evidence strong enough to call OpenCode or
+  Gemini first-class, or repeated real work showing that a cross-provider
+  handoff is worth productizing rather than merely documenting.
 
 Decisions should be recorded after that evidence or an explicit operator choice,
 not inferred from Legacy commit volume.

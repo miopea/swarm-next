@@ -104,6 +104,10 @@ For each naturally occurring session, record only what is relevant:
   events, and next plans. Desktop and mobile are equal check-in surfaces; read
   state synchronizes across devices, and Keeper sees exception rollups rather
   than routine Hive noise.
+- Claude and Codex are the current first-class coding providers. OpenCode and
+  Gemini remain support targets that must earn the same acceptance. Routine
+  cross-provider handoff is documented but deferred; per-task model choice
+  inside one provider remains an opportunity for focused discussion.
 - The protocol migration left API and holder builds aligned on protocol 9,
   both services active with zero restarts, database `quick_check` at `ok`, and
   the holder reporting one running and one retained Queen session. No Jira,
