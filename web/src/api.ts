@@ -50,8 +50,12 @@ export {
 } from "./api/tasks";
 export {
   commitLegacyTaskMigration,
+  commitLegacyWorkerMigration,
+  listActiveLegacyWorkerMigrations,
   previewLegacyTaskMigration,
+  previewLegacyWorkerMigration,
   rollbackLegacyTaskMigration,
+  rollbackLegacyWorkerMigration,
 } from "./api/migration";
 export type {
   LegacyImportDisposition,
@@ -59,6 +63,10 @@ export type {
   LegacyMigrationPreview,
   LegacyMigrationReceipt,
   LegacyTaskPreview,
+  LegacyWorkerImportDisposition,
+  LegacyWorkerMigrationPreview,
+  LegacyWorkerMigrationReceipt,
+  LegacyWorkerPreview,
 } from "./api/migration";
 export {
   addJiraComment,

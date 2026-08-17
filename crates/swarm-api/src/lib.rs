@@ -2403,6 +2403,24 @@ fn api_router(state: AppState) -> Router {
             post(migration::rollback_legacy_tasks),
         )
         .route(
+            "/api/v1/migrations/legacy/workers",
+            get(migration::list_active_legacy_worker_migrations),
+        )
+        .route(
+            "/api/v1/migrations/legacy/workers/preview",
+            post(migration::preview_legacy_workers)
+                .layer(DefaultBodyLimit::max(migration::MAX_MIGRATION_BUNDLE_BYTES)),
+        )
+        .route(
+            "/api/v1/migrations/legacy/workers/commit",
+            post(migration::commit_legacy_workers)
+                .layer(DefaultBodyLimit::max(migration::MAX_MIGRATION_BUNDLE_BYTES)),
+        )
+        .route(
+            "/api/v1/migrations/legacy/workers/rollback",
+            post(migration::rollback_legacy_workers),
+        )
+        .route(
             "/api/v1/feedback/reports",
             get(feedback::list_reports).post(feedback::create_report),
         )

@@ -1065,14 +1065,14 @@ fn parse_worker_identity(value: &str) -> Result<WorkerId, TaskStoreError> {
     WorkerId::from_str(value).map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
 }
 
-fn validate_worker_name(name: &str) -> Result<(), TaskStoreError> {
+pub(crate) fn validate_worker_name(name: &str) -> Result<(), TaskStoreError> {
     if name.is_empty() || name.len() > MAX_WORKER_NAME_BYTES || name.chars().any(char::is_control) {
         return Err(TaskStoreError::InvalidWorkerName);
     }
     Ok(())
 }
 
-fn validate_worker_description(description: &str) -> Result<(), TaskStoreError> {
+pub(crate) fn validate_worker_description(description: &str) -> Result<(), TaskStoreError> {
     if description.len() > MAX_WORKER_DESCRIPTION_BYTES || description.chars().any(char::is_control)
     {
         return Err(TaskStoreError::InvalidWorkerDescription);

@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use swarm_domain::{TaskActivityActorKind, TaskId, TaskPriority, TaskState, WorkerId, WorkerRole};
+use swarm_domain::{
+    ProviderKind, TaskActivityActorKind, TaskId, TaskPriority, TaskState, WorkerId, WorkerRole,
+};
 use uuid::Uuid;
 
 use super::{
@@ -14,6 +16,7 @@ use super::{
 pub const LEGACY_MIGRATION_FORMAT: &str = "swarm-next-migration";
 pub const LEGACY_MIGRATION_VERSION: u16 = 1;
 pub const MAX_MIGRATION_TASKS: usize = 10_000;
+pub const MAX_MIGRATION_WORKERS: usize = 1_000;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LegacyMigrationBundle {
@@ -22,6 +25,24 @@ pub struct LegacyMigrationBundle {
     pub source: LegacyMigrationSource,
     #[serde(default)]
     pub tasks: Vec<LegacyTaskRecord>,
+    #[serde(default)]
+    pub workers: Vec<LegacyWorkerRecord>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LegacyWorkerRecord {
+    pub source_id: String,
+    pub name: String,
+    pub workspace: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub provider: String,
+    pub position: i64,
+    #[serde(default)]
+    pub has_identity_file: bool,
+    #[serde(default)]
+    pub isolation: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -62,6 +83,60 @@ pub enum LegacyImportDisposition {
     SkippedJira,
     SkippedClosed,
     Invalid,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LegacyWorkerImportDisposition {
+    Ready,
+    Transformed,
+    Duplicate,
+    ManagedByNext,
+    Invalid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LegacyWorkerPreview {
+    pub source_id: String,
+    pub name: String,
+    pub workspace: String,
+    pub provider: ProviderKind,
+    pub disposition: LegacyWorkerImportDisposition,
+    pub selectable: bool,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LegacyWorkerMigrationPreview {
+    pub bundle_digest: String,
+    pub source_installation_id: String,
+    pub records: Vec<LegacyWorkerPreview>,
+    pub selectable: usize,
+    pub skipped: usize,
+    pub invalid: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LegacyWorkerMigrationCommit {
+    pub bundle_digest: String,
+    pub selected_source_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LegacyWorkerMigrationReceipt {
+    pub batch_id: String,
+    pub bundle_digest: String,
+    pub source_installation_id: String,
+    pub imported_worker_ids: Vec<WorkerId>,
+    pub imported_source_ids: Vec<String>,
+    pub imported_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LegacyWorkerMigrationRollback {
+    pub batch_id: String,
+    pub removed_workers: usize,
+    pub rolled_back_at: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -128,9 +203,371 @@ struct NormalizedTask {
     warnings: Vec<String>,
 }
 
+#[derive(Clone)]
+struct NormalizedWorker {
+    source_id: String,
+    name: String,
+    workspace: String,
+    description: String,
+    provider: ProviderKind,
+    disposition: LegacyWorkerImportDisposition,
+    selectable: bool,
+    warnings: Vec<String>,
+}
+
 impl TaskStore {
+    /// Returns reversible worker-import receipts that have not been rolled back.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when migration records cannot be read or contain an
+    /// invalid worker identifier.
+    pub fn list_active_legacy_worker_migration_receipts(
+        &self,
+    ) -> Result<Vec<LegacyWorkerMigrationReceipt>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT batch.id, batch.source_digest, batch.source_installation_id,
+                    batch.imported_at, link.worker_id, link.source_worker_id
+             FROM migration_worker_batches batch
+             JOIN migration_worker_links link ON link.batch_id = batch.id
+             WHERE batch.rolled_back_at IS NULL
+             ORDER BY batch.imported_at DESC, batch.id, link.source_worker_id",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut receipts = Vec::<LegacyWorkerMigrationReceipt>::new();
+        for (batch_id, digest, installation_id, imported_at, worker_id, source_id) in rows {
+            if receipts
+                .last()
+                .is_none_or(|receipt| receipt.batch_id != batch_id)
+            {
+                receipts.push(LegacyWorkerMigrationReceipt {
+                    batch_id,
+                    bundle_digest: digest,
+                    source_installation_id: installation_id,
+                    imported_worker_ids: Vec::new(),
+                    imported_source_ids: Vec::new(),
+                    imported_at,
+                });
+            }
+            let Some(receipt) = receipts.last_mut() else {
+                return Err(TaskStoreError::InvalidMigrationBundle);
+            };
+            receipt.imported_worker_ids.push(
+                worker_id
+                    .parse()
+                    .map_err(|_| TaskStoreError::InvalidMigrationBundle)?,
+            );
+            receipt.imported_source_ids.push(source_id);
+        }
+        Ok(receipts)
+    }
+
+    /// Produces a read-only roster plan. Provider processes, conversations,
+    /// identity files, approval rules, and group membership are never imported.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the package is invalid or existing worker state
+    /// cannot be read.
+    pub fn preview_legacy_worker_migration(
+        &self,
+        bundle: &LegacyMigrationBundle,
+    ) -> Result<LegacyWorkerMigrationPreview, TaskStoreError> {
+        let digest = validate_bundle(bundle)?;
+        let records = self
+            .normalize_legacy_workers(bundle)?
+            .into_iter()
+            .map(|worker| LegacyWorkerPreview {
+                source_id: worker.source_id,
+                name: worker.name,
+                workspace: worker.workspace,
+                provider: worker.provider,
+                disposition: worker.disposition,
+                selectable: worker.selectable,
+                warnings: worker.warnings,
+            })
+            .collect::<Vec<_>>();
+        Ok(LegacyWorkerMigrationPreview {
+            bundle_digest: digest,
+            source_installation_id: bundle.source.installation_id.clone(),
+            selectable: records.iter().filter(|record| record.selectable).count(),
+            skipped: records
+                .iter()
+                .filter(|record| {
+                    matches!(
+                        record.disposition,
+                        LegacyWorkerImportDisposition::Duplicate
+                            | LegacyWorkerImportDisposition::ManagedByNext
+                    )
+                })
+                .count(),
+            invalid: records
+                .iter()
+                .filter(|record| record.disposition == LegacyWorkerImportDisposition::Invalid)
+                .count(),
+            records,
+        })
+    }
+
+    /// Imports an explicit worker selection as sleeping durable profiles.
+    /// No provider process is started and no Legacy provider conversation is attached.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the package or selection changed, a duplicate is
+    /// detected at commit time, or the profiles cannot be stored atomically.
+    pub fn commit_legacy_worker_migration(
+        &self,
+        bundle: &LegacyMigrationBundle,
+        commit: &LegacyWorkerMigrationCommit,
+    ) -> Result<LegacyWorkerMigrationReceipt, TaskStoreError> {
+        let digest = validate_bundle(bundle)?;
+        if digest != commit.bundle_digest {
+            return Err(TaskStoreError::MigrationBundleChanged);
+        }
+        let selected = commit
+            .selected_source_ids
+            .iter()
+            .map(|id| id.trim().to_owned())
+            .collect::<HashSet<_>>();
+        if selected.is_empty() || selected.len() != commit.selected_source_ids.len() {
+            return Err(TaskStoreError::InvalidMigrationSelection);
+        }
+        let workers = self
+            .normalize_legacy_workers(bundle)?
+            .into_iter()
+            .filter(|worker| selected.contains(&worker.source_id))
+            .collect::<Vec<_>>();
+        if workers.len() != selected.len() || workers.iter().any(|worker| !worker.selectable) {
+            return Err(TaskStoreError::InvalidMigrationSelection);
+        }
+
+        let identity = self.local_hive_identity()?;
+        let batch_id = Uuid::now_v7().to_string();
+        let imported_at = unix_timestamp();
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO migration_worker_batches
+             (id, source_installation_id, source_digest, imported_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![batch_id, bundle.source.installation_id, digest, imported_at],
+        )?;
+        let first_position: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM worker_profiles
+             WHERE hive_id = ?1 AND archived_at IS NULL",
+            [identity.hive.id.to_string()],
+            |row| row.get(0),
+        )?;
+        let mut imported_worker_ids = Vec::with_capacity(workers.len());
+        let mut imported_source_ids = Vec::with_capacity(workers.len());
+        for (offset, worker) in workers.into_iter().enumerate() {
+            let position = first_position
+                + i64::try_from(offset).map_err(|_| TaskStoreError::InvalidMigrationSelection)?;
+            let duplicate_exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM worker_profiles
+                 WHERE hive_id = ?1 AND archived_at IS NULL
+                   AND (lower(trim(name)) = lower(trim(?2)) OR workspace = ?3))",
+                params![identity.hive.id.to_string(), worker.name, worker.workspace],
+                |row| row.get(0),
+            )?;
+            if duplicate_exists {
+                return Err(TaskStoreError::MigrationBundleChanged);
+            }
+            let worker_id = WorkerId::new();
+            transaction.execute(
+                "INSERT INTO worker_profiles
+                 (id, hive_id, name, description, role, provider, workspace,
+                  autostart, position, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 'worker', ?5, ?6, 0, ?7, ?8, ?8)",
+                params![
+                    worker_id.to_string(),
+                    identity.hive.id.to_string(),
+                    worker.name,
+                    worker.description,
+                    worker.provider.to_string(),
+                    worker.workspace,
+                    position,
+                    imported_at,
+                ],
+            )?;
+            let digest = worker_profile_digest(
+                &worker.name,
+                &worker.description,
+                worker.provider,
+                &worker.workspace,
+                position,
+                imported_at,
+            );
+            transaction.execute(
+                "INSERT INTO migration_worker_links
+                 (batch_id, source_worker_id, worker_id, imported_profile_digest)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![batch_id, worker.source_id, worker_id.to_string(), digest],
+            )?;
+            imported_worker_ids.push(worker_id);
+            imported_source_ids.push(worker.source_id);
+        }
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        transaction.commit()?;
+        Ok(LegacyWorkerMigrationReceipt {
+            batch_id,
+            bundle_digest: digest,
+            source_installation_id: bundle.source.installation_id.clone(),
+            imported_worker_ids,
+            imported_source_ids,
+            imported_at,
+        })
+    }
+
+    /// Removes an untouched worker-import batch. Any profile edit, session, or
+    /// owned task makes rollback fail closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the receipt is missing or changed, an imported
+    /// profile has been used or edited, or the rollback cannot be committed.
+    #[allow(clippy::too_many_lines)]
+    pub fn rollback_legacy_worker_migration(
+        &self,
+        batch_id: &str,
+        bundle_digest: &str,
+    ) -> Result<LegacyWorkerMigrationRollback, TaskStoreError> {
+        let batch_id = batch_id.trim();
+        let bundle_digest = bundle_digest.trim();
+        if batch_id.is_empty() || bundle_digest.is_empty() {
+            return Err(TaskStoreError::MigrationBatchNotFound);
+        }
+        let rolled_back_at = unix_timestamp();
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let stored_digest = transaction
+            .query_row(
+                "SELECT source_digest FROM migration_worker_batches
+                 WHERE id = ?1 AND rolled_back_at IS NULL",
+                [batch_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::MigrationBatchNotFound)?;
+        if stored_digest != bundle_digest {
+            return Err(TaskStoreError::MigrationBundleChanged);
+        }
+        let links = {
+            let mut statement = transaction.prepare(
+                "SELECT link.worker_id, link.imported_profile_digest,
+                        profile.name, profile.description, profile.provider,
+                        profile.workspace, profile.position, profile.updated_at,
+                        profile.archived_at,
+                        EXISTS(SELECT 1 FROM worker_sessions session
+                               WHERE session.worker_id = link.worker_id),
+                        EXISTS(SELECT 1 FROM tasks task
+                               WHERE task.assigned_worker_id = link.worker_id)
+                 FROM migration_worker_links link
+                 LEFT JOIN worker_profiles profile ON profile.id = link.worker_id
+                 WHERE link.batch_id = ?1 ORDER BY link.source_worker_id",
+            )?;
+            statement
+                .query_map([batch_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                        row.get::<_, Option<i64>>(8)?,
+                        row.get::<_, bool>(9)?,
+                        row.get::<_, bool>(10)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut removable = Vec::with_capacity(links.len());
+        for (
+            worker_id,
+            expected,
+            name,
+            description,
+            provider,
+            workspace,
+            position,
+            updated_at,
+            archived_at,
+            has_sessions,
+            has_tasks,
+        ) in links
+        {
+            let Some((name, description, provider, workspace, position, updated_at)) = name
+                .zip(description)
+                .zip(provider)
+                .zip(workspace)
+                .zip(position)
+                .zip(updated_at)
+                .map(
+                    |(((((name, description), provider), workspace), position), updated_at)| {
+                        (name, description, provider, workspace, position, updated_at)
+                    },
+                )
+            else {
+                return Err(TaskStoreError::MigrationBatchChanged);
+            };
+            let provider = provider
+                .parse()
+                .map_err(|_| TaskStoreError::MigrationBatchChanged)?;
+            if archived_at.is_some()
+                || has_sessions
+                || has_tasks
+                || worker_profile_digest(
+                    &name,
+                    &description,
+                    provider,
+                    &workspace,
+                    position,
+                    updated_at,
+                ) != expected
+            {
+                return Err(TaskStoreError::MigrationBatchChanged);
+            }
+            removable.push(worker_id);
+        }
+        for worker_id in &removable {
+            transaction.execute("DELETE FROM worker_profiles WHERE id = ?1", [worker_id])?;
+        }
+        transaction.execute(
+            "UPDATE migration_worker_batches SET rolled_back_at = ?2 WHERE id = ?1",
+            params![batch_id, rolled_back_at],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        transaction.commit()?;
+        Ok(LegacyWorkerMigrationRollback {
+            batch_id: batch_id.to_owned(),
+            removed_workers: removable.len(),
+            rolled_back_at,
+        })
+    }
+
     /// Returns active migration receipts so a safe rollback remains available
     /// after navigating away from Settings or restarting the browser.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when migration records cannot be read or contain an
+    /// invalid task identifier.
     pub fn list_active_legacy_migration_receipts(
         &self,
     ) -> Result<Vec<LegacyMigrationReceipt>, TaskStoreError> {
@@ -175,7 +612,9 @@ impl TaskStore {
                     imported_at,
                 });
             }
-            let receipt = receipts.last_mut().expect("receipt was just inserted");
+            let Some(receipt) = receipts.last_mut() else {
+                return Err(TaskStoreError::InvalidMigrationBundle);
+            };
             receipt.imported_task_ids.push(
                 task_id
                     .parse()
@@ -187,6 +626,11 @@ impl TaskStore {
     }
 
     /// Produces the exact normalized plan that commit will recompute.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the package is invalid or current task and worker
+    /// state cannot be read.
     pub fn preview_legacy_task_migration(
         &self,
         bundle: &LegacyMigrationBundle,
@@ -233,6 +677,12 @@ impl TaskStore {
 
     /// Imports explicitly selected, revalidated records in one local transaction.
     /// No worker process is started and no assignment briefing is dispatched.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the package or selection changed, or the selected
+    /// tasks cannot be committed atomically.
+    #[allow(clippy::too_many_lines)]
     pub fn commit_legacy_task_migration(
         &self,
         bundle: &LegacyMigrationBundle,
@@ -354,6 +804,11 @@ impl TaskStore {
 
     /// Removes an untouched import batch atomically. Any activity after import
     /// fails closed so normal work can never be erased by rollback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the receipt is missing or changed, an imported task
+    /// has activity, or the rollback cannot be committed.
     pub fn rollback_legacy_task_migration(
         &self,
         batch_id: &str,
@@ -419,6 +874,7 @@ impl TaskStore {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     fn normalize_legacy_tasks(
         &self,
         bundle: &LegacyMigrationBundle,
@@ -565,12 +1021,141 @@ impl TaskStore {
         }
         Ok(output)
     }
+
+    #[allow(clippy::too_many_lines)]
+    fn normalize_legacy_workers(
+        &self,
+        bundle: &LegacyMigrationBundle,
+    ) -> Result<Vec<NormalizedWorker>, TaskStoreError> {
+        let existing = self.list_worker_profiles()?;
+        let connection = self.connection()?;
+        let mut output = Vec::with_capacity(bundle.workers.len());
+        for source in &bundle.workers {
+            let source_id = source.source_id.trim().to_owned();
+            let name = source.name.trim().to_owned();
+            let workspace = source.workspace.trim().to_owned();
+            let description = source.description.trim().to_owned();
+            let mut warnings = Vec::new();
+            let mut disposition = LegacyWorkerImportDisposition::Ready;
+            let mut selectable = true;
+            let provider = match source.provider.trim().to_lowercase().as_str() {
+                "codex" => ProviderKind::Codex,
+                "" | "claude" | "claude_code" => ProviderKind::ClaudeCode,
+                other => {
+                    warnings.push(format!(
+                        "Legacy provider '{other}' is unavailable; this worker will use Claude Code."
+                    ));
+                    disposition = LegacyWorkerImportDisposition::Transformed;
+                    ProviderKind::ClaudeCode
+                }
+            };
+            if source.has_identity_file {
+                warnings.push(
+                    "Legacy identity-file content is private and is not imported; use the reviewed worker description instead."
+                        .into(),
+                );
+                disposition = LegacyWorkerImportDisposition::Transformed;
+            }
+            if !source.isolation.trim().is_empty() {
+                warnings.push(
+                    "Legacy isolation settings are not copied; Swarm Next applies its own workspace policy."
+                        .into(),
+                );
+                disposition = LegacyWorkerImportDisposition::Transformed;
+            }
+            if name.eq_ignore_ascii_case("queen")
+                || name.eq_ignore_ascii_case("project root")
+                || name.eq_ignore_ascii_case("scout")
+            {
+                disposition = LegacyWorkerImportDisposition::ManagedByNext;
+                selectable = false;
+                warnings.push(if name.eq_ignore_ascii_case("queen") {
+                    "Swarm Next owns one durable Queen; the Legacy Queen is not duplicated.".into()
+                } else {
+                    "Swarm Next Scout owns cross-repository work; Project Root is not duplicated."
+                        .into()
+                });
+            }
+            if source_id.is_empty()
+                || workspace.is_empty()
+                || workspace.len() > super::MAX_WORKSPACE_BYTES
+                || workspace.chars().any(char::is_control)
+                || super::workers::validate_worker_name(&name).is_err()
+                || super::workers::validate_worker_description(&description).is_err()
+            {
+                disposition = LegacyWorkerImportDisposition::Invalid;
+                selectable = false;
+                warnings.push(
+                    "Required worker data is empty, contains control characters, or exceeds Swarm Next safety bounds."
+                        .into(),
+                );
+            }
+            let already_imported = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM migration_worker_batches batch
+                 JOIN migration_worker_links link ON link.batch_id = batch.id
+                 WHERE batch.source_installation_id = ?1 AND link.source_worker_id = ?2
+                   AND batch.rolled_back_at IS NULL)",
+                params![bundle.source.installation_id, source_id],
+                |row| row.get::<_, bool>(0),
+            )?;
+            let duplicate = existing.iter().find(|worker| {
+                worker.name.eq_ignore_ascii_case(&name) || worker.workspace == workspace
+            });
+            if selectable && (already_imported || duplicate.is_some()) {
+                disposition = LegacyWorkerImportDisposition::Duplicate;
+                selectable = false;
+                warnings.push(if already_imported {
+                    "This exact Legacy worker is already present in an active migration batch."
+                        .into()
+                } else if let Some(duplicate) = duplicate {
+                    format!(
+                        "Swarm Next already has worker '{}' for this name or repository.",
+                        duplicate.name
+                    )
+                } else {
+                    "Swarm Next already has this worker.".into()
+                });
+            }
+            output.push(NormalizedWorker {
+                source_id,
+                name,
+                workspace,
+                description,
+                provider,
+                disposition,
+                selectable,
+                warnings,
+            });
+        }
+        Ok(output)
+    }
+}
+
+fn worker_profile_digest(
+    name: &str,
+    description: &str,
+    provider: ProviderKind,
+    workspace: &str,
+    position: i64,
+    updated_at: i64,
+) -> String {
+    let bytes = serde_json::to_vec(&(
+        name,
+        description,
+        provider.to_string(),
+        workspace,
+        position,
+        updated_at,
+    ))
+    .expect("worker profile digest tuple serializes");
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn validate_bundle(bundle: &LegacyMigrationBundle) -> Result<String, TaskStoreError> {
     if bundle.format != LEGACY_MIGRATION_FORMAT
         || bundle.version != LEGACY_MIGRATION_VERSION
         || bundle.tasks.len() > MAX_MIGRATION_TASKS
+        || bundle.workers.len() > MAX_MIGRATION_WORKERS
         || bundle.source.installation_id.trim().is_empty()
         || bundle.source.snapshot_digest.trim().is_empty()
     {
@@ -638,7 +1223,7 @@ fn build_description(source: &LegacyTaskRecord) -> String {
 fn unix_timestamp() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs() as i64)
+        .map_or(0, |duration| duration.as_secs().cast_signed())
 }
 
 pub(super) fn migrate_legacy_migration_batches(
@@ -672,6 +1257,33 @@ pub(super) fn migrate_legacy_migration_batches(
     )
 }
 
+pub(super) fn migrate_legacy_worker_migrations(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS migration_worker_batches (
+             id TEXT PRIMARY KEY,
+             source_installation_id TEXT NOT NULL,
+             source_digest TEXT NOT NULL,
+             imported_at INTEGER NOT NULL,
+             rolled_back_at INTEGER
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS one_active_worker_migration_per_source_digest
+             ON migration_worker_batches(source_installation_id, source_digest)
+             WHERE rolled_back_at IS NULL;
+         CREATE TABLE IF NOT EXISTS migration_worker_links (
+             batch_id TEXT NOT NULL REFERENCES migration_worker_batches(id) ON DELETE CASCADE,
+             source_worker_id TEXT NOT NULL,
+             worker_id TEXT NOT NULL UNIQUE REFERENCES worker_profiles(id) ON DELETE CASCADE,
+             imported_profile_digest TEXT NOT NULL,
+             PRIMARY KEY (batch_id, source_worker_id)
+         );
+         CREATE INDEX IF NOT EXISTS migration_worker_source_lookup
+             ON migration_worker_links(source_worker_id, batch_id);
+         PRAGMA user_version = 68;",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -688,6 +1300,7 @@ mod tests {
                 snapshot_digest: "abc123".into(),
             },
             tasks,
+            workers: Vec::new(),
         }
     }
 
@@ -707,6 +1320,25 @@ mod tests {
             created_at: Some(100),
             updated_at: Some(200),
         }
+    }
+
+    fn worker(id: &str, name: &str, workspace: &str) -> LegacyWorkerRecord {
+        LegacyWorkerRecord {
+            source_id: id.into(),
+            name: name.into(),
+            workspace: workspace.into(),
+            description: format!("Owns {name}"),
+            provider: "claude".into(),
+            position: 4,
+            has_identity_file: false,
+            isolation: String::new(),
+        }
+    }
+
+    fn worker_bundle(workers: Vec<LegacyWorkerRecord>) -> LegacyMigrationBundle {
+        let mut bundle = bundle(Vec::new());
+        bundle.workers = workers;
+        bundle
     }
 
     fn store() -> TaskStore {
@@ -855,5 +1487,120 @@ mod tests {
             Err(TaskStoreError::MigrationBatchChanged)
         ));
         assert_eq!(store.list_tasks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn worker_preview_skips_managed_and_duplicate_profiles() {
+        let store = store();
+        let bundle = worker_bundle(vec![
+            worker("new", "Daisy", "/projects/daisy"),
+            worker("root", "Project Root", "/projects"),
+            worker("duplicate", "Clover", "/projects/clover-other"),
+        ]);
+
+        let preview = store.preview_legacy_worker_migration(&bundle).unwrap();
+
+        assert_eq!(preview.selectable, 1);
+        assert_eq!(preview.skipped, 2);
+        assert_eq!(preview.invalid, 0);
+        assert!(preview.records[0].selectable);
+        assert_eq!(
+            preview.records[1].disposition,
+            LegacyWorkerImportDisposition::ManagedByNext
+        );
+        assert_eq!(
+            preview.records[2].disposition,
+            LegacyWorkerImportDisposition::Duplicate
+        );
+    }
+
+    #[test]
+    fn worker_import_is_sleeping_ordered_provenanced_and_reversible() {
+        let store = store();
+        let bundle = worker_bundle(vec![
+            worker("daisy", "Daisy", "/projects/daisy"),
+            LegacyWorkerRecord {
+                provider: "unknown-provider".into(),
+                has_identity_file: true,
+                ..worker("poppy", "Poppy", "/projects/poppy")
+            },
+        ]);
+        let preview = store.preview_legacy_worker_migration(&bundle).unwrap();
+        assert_eq!(preview.selectable, 2);
+        assert_eq!(
+            preview.records[1].disposition,
+            LegacyWorkerImportDisposition::Transformed
+        );
+        let receipt = store
+            .commit_legacy_worker_migration(
+                &bundle,
+                &LegacyWorkerMigrationCommit {
+                    bundle_digest: preview.bundle_digest.clone(),
+                    selected_source_ids: vec!["daisy".into(), "poppy".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(receipt.imported_worker_ids.len(), 2);
+        let profiles = store.list_worker_profiles().unwrap();
+        let daisy = profiles
+            .iter()
+            .find(|worker| worker.name == "Daisy")
+            .unwrap();
+        let poppy = profiles
+            .iter()
+            .find(|worker| worker.name == "Poppy")
+            .unwrap();
+        assert!(daisy.active_session_id.is_none());
+        assert!(!daisy.autostart);
+        assert_eq!(poppy.provider, ProviderKind::ClaudeCode);
+        assert!(daisy.position < poppy.position);
+        assert_eq!(
+            store
+                .list_active_legacy_worker_migration_receipts()
+                .unwrap(),
+            vec![receipt.clone()]
+        );
+
+        let rollback = store
+            .rollback_legacy_worker_migration(&receipt.batch_id, &receipt.bundle_digest)
+            .unwrap();
+        assert_eq!(rollback.removed_workers, 2);
+        assert!(
+            store
+                .list_worker_profiles()
+                .unwrap()
+                .iter()
+                .all(|worker| worker.name != "Daisy" && worker.name != "Poppy")
+        );
+    }
+
+    #[test]
+    fn worker_rollback_refuses_profile_changes_or_use() {
+        let store = store();
+        let bundle = worker_bundle(vec![worker("daisy", "Daisy", "/projects/daisy")]);
+        let preview = store.preview_legacy_worker_migration(&bundle).unwrap();
+        let receipt = store
+            .commit_legacy_worker_migration(
+                &bundle,
+                &LegacyWorkerMigrationCommit {
+                    bundle_digest: preview.bundle_digest,
+                    selected_source_ids: vec!["daisy".into()],
+                },
+            )
+            .unwrap();
+        store
+            .update_worker_profile(
+                receipt.imported_worker_ids[0],
+                None,
+                Some("Reviewed owner description"),
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            store.rollback_legacy_worker_migration(&receipt.batch_id, &receipt.bundle_digest),
+            Err(TaskStoreError::MigrationBatchChanged)
+        ));
     }
 }

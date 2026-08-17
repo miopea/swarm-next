@@ -68,6 +68,9 @@ pub use migration::{
     LEGACY_MIGRATION_FORMAT, LEGACY_MIGRATION_VERSION, LegacyImportDisposition,
     LegacyMigrationBundle, LegacyMigrationCommit, LegacyMigrationPreview, LegacyMigrationReceipt,
     LegacyMigrationRollback, LegacyMigrationSource, LegacyTaskPreview, LegacyTaskRecord,
+    LegacyWorkerImportDisposition, LegacyWorkerMigrationCommit, LegacyWorkerMigrationPreview,
+    LegacyWorkerMigrationReceipt, LegacyWorkerMigrationRollback, LegacyWorkerPreview,
+    LegacyWorkerRecord,
 };
 mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
@@ -102,7 +105,8 @@ pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
 const MAX_WORKSPACE_BYTES: usize = 4096;
 const TERMINAL_GEOMETRY_SCHEMA_VERSION: i64 = 66;
 const LEGACY_MIGRATION_SCHEMA_VERSION: i64 = 67;
-const CURRENT_SCHEMA_VERSION: i64 = LEGACY_MIGRATION_SCHEMA_VERSION;
+const LEGACY_WORKER_MIGRATION_SCHEMA_VERSION: i64 = 68;
+const CURRENT_SCHEMA_VERSION: i64 = LEGACY_WORKER_MIGRATION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1689,6 +1693,9 @@ fn migrate_recent_schema(
     }
     if schema_version < LEGACY_MIGRATION_SCHEMA_VERSION {
         migration::migrate_legacy_migration_batches(transaction)?;
+    }
+    if schema_version < LEGACY_WORKER_MIGRATION_SCHEMA_VERSION {
+        migration::migrate_legacy_worker_migrations(transaction)?;
     }
     Ok(())
 }
@@ -4198,8 +4205,8 @@ mod tests {
                 .connection()
                 .unwrap()
                 .execute_batch(&format!(
-                    "DROP TABLE migration_task_links;
-                     DROP TABLE migration_batches;
+                    "DROP TABLE migration_worker_links;
+                     DROP TABLE migration_worker_batches;
                      PRAGMA user_version = {};",
                     CURRENT_SCHEMA_VERSION - 1
                 ))
@@ -4211,7 +4218,8 @@ mod tests {
         let migration_tables: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
-                 WHERE type = 'table' AND name IN ('migration_batches', 'migration_task_links')",
+                 WHERE type = 'table' AND name IN
+                     ('migration_worker_batches', 'migration_worker_links')",
                 [],
                 |row| row.get(0),
             )

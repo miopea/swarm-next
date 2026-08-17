@@ -764,6 +764,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .migration-confirmation, .migration-receipt { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--accent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
 .migration-confirmation span, .migration-receipt p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.5; }
 .migration-message { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--panel-soft); color: var(--text) !important; }
+.migration-section { display: grid; gap: 12px; padding-block: 16px; border-block-start: 1px solid var(--line); }
+.migration-section > p { margin: 0; color: var(--muted); line-height: 1.5; }
 .worker-settings { grid-column: 1 / -1; }
 .configured-workers { display: grid; gap: 7px; }
 .configured-worker { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto auto; min-height: 58px; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-soft); }

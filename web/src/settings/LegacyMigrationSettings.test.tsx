@@ -14,8 +14,18 @@ test("previews before importing and selects only server-approved records", async
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    if (url.endsWith("/api/v1/migrations/legacy/tasks")) return ok([]);
-    if (url.endsWith("/preview")) {
+    if (url.endsWith("/api/v1/migrations/legacy/tasks") || url.endsWith("/api/v1/migrations/legacy/workers")) return ok([]);
+    if (url.endsWith("/workers/preview")) {
+      return ok({
+        bundle_digest: "preview-digest",
+        source_installation_id: "legacy-hive",
+        selectable: 0,
+        skipped: 0,
+        invalid: 0,
+        records: [],
+      });
+    }
+    if (url.endsWith("/tasks/preview")) {
       return ok({
         bundle_digest: "preview-digest",
         source_installation_id: "legacy-hive",
@@ -47,7 +57,7 @@ test("previews before importing and selects only server-approved records", async
         ],
       });
     }
-    if (url.endsWith("/commit")) {
+    if (url.endsWith("/tasks/commit")) {
       return ok({
         batch_id: "batch-1",
         bundle_digest: "preview-digest",
@@ -80,15 +90,15 @@ test("previews before importing and selects only server-approved records", async
 
   expect(await screen.findByText("Finish local work")).toBeInTheDocument();
   expect(screen.getByText("Jira work").closest("label")?.querySelector("input")).toBeDisabled();
-  await waitFor(() => expect(requests).toHaveLength(2));
+  await waitFor(() => expect(requests).toHaveLength(4));
   expect(screen.getByRole("button", { name: "Review import of 1" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Review import of 1" }));
-  expect(requests).toHaveLength(2);
+  expect(requests).toHaveLength(4);
   expect(screen.getByText(/Existing workers stay asleep and Legacy is not changed/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Import selected tasks" }));
 
-  await waitFor(() => expect(requests).toHaveLength(3));
-  expect(requests[2].body).toMatchObject({
+  await waitFor(() => expect(requests).toHaveLength(5));
+  expect(requests[4].body).toMatchObject({
     commit: { bundle_digest: "preview-digest", selected_source_ids: ["local-1"] },
   });
   expect(await screen.findByText("Imported safely")).toBeInTheDocument();
@@ -96,20 +106,92 @@ test("previews before importing and selects only server-approved records", async
 });
 
 test("recovers an active migration receipt after reopening settings", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => ok([{
-    batch_id: "batch-recovered",
-    bundle_digest: "digest",
-    source_installation_id: "legacy-hive",
-    source_snapshot_digest: "snapshot",
-    imported_task_ids: ["task-1"],
-    imported_source_ids: ["legacy-1"],
-    imported_at: 123,
-  }])));
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).endsWith("/workers")) return ok([]);
+    return ok([{
+      batch_id: "batch-recovered",
+      bundle_digest: "digest",
+      source_installation_id: "legacy-hive",
+      source_snapshot_digest: "snapshot",
+      imported_task_ids: ["task-1"],
+      imported_source_ids: ["legacy-1"],
+      imported_at: 123,
+    }]);
+  }));
 
   render(<LegacyMigrationSettings busy={false} operatorToken="token" />);
 
   expect(await screen.findByText("Imported safely")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Undo this untouched import" })).toBeEnabled();
+});
+
+test("previews selected Legacy workers as sleeping before adding them", async () => {
+  const requests: Array<{ url: string; body: unknown }> = [];
+  let taskPreviewCount = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    if (url.endsWith("/tasks") || url.endsWith("/workers")) return ok([]);
+    if (url.endsWith("/tasks/preview")) {
+      taskPreviewCount += 1;
+      return ok(taskPreviewCount === 1
+        ? { bundle_digest: "digest", source_installation_id: "legacy", selectable: 0, skipped: 0, invalid: 0, records: [] }
+        : {
+            bundle_digest: "digest",
+            source_installation_id: "legacy",
+            selectable: 1,
+            skipped: 0,
+            invalid: 0,
+            records: [{
+              source_id: "task-daisy",
+              title: "Work now matched to Daisy",
+              source_status: "assigned",
+              target_state: "ready",
+              priority: "normal",
+              matched_worker_id: "next-daisy",
+              matched_worker_name: "Daisy",
+              disposition: "ready",
+              selectable: true,
+              warnings: [],
+            }],
+          });
+    }
+    if (url.endsWith("/workers/preview")) {
+      return ok({
+        bundle_digest: "digest",
+        source_installation_id: "legacy",
+        selectable: 1,
+        skipped: 1,
+        invalid: 0,
+        records: [
+          { source_id: "daisy", name: "Daisy", workspace: "/projects/daisy", provider: "claude_code", disposition: "ready", selectable: true, warnings: [] },
+          { source_id: "root", name: "Project Root", workspace: "/projects", provider: "claude_code", disposition: "managed_by_next", selectable: false, warnings: ["Swarm Next Scout owns cross-repository work; Project Root is not duplicated."] },
+        ],
+      });
+    }
+    if (url.endsWith("/workers/commit")) {
+      return ok({ batch_id: "workers-1", bundle_digest: "digest", source_installation_id: "legacy", imported_worker_ids: ["next-daisy"], imported_source_ids: ["daisy"], imported_at: 123 }, 201);
+    }
+    throw new Error(`unexpected ${url}`);
+  }));
+  const { container } = render(<LegacyMigrationSettings busy={false} operatorToken="token" />);
+  const payload = JSON.stringify({ format: "swarm-next-migration", version: 1, source: { installation_id: "legacy", exported_at: 1, snapshot_digest: "source" }, tasks: [], workers: [{ source_id: "daisy" }] });
+  const file = new File([payload], "legacy.json", { type: "application/json" });
+  Object.defineProperty(file, "text", { value: async () => payload });
+  fireEvent.change(container.querySelector("input[type=file]")!, { target: { files: [file] } });
+
+  expect(await screen.findByText("Daisy")).toBeInTheDocument();
+  expect(screen.getByText("Project Root").closest("label")?.querySelector("input")).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Review 1 worker" }));
+  expect(screen.getByText(/No Claude or Codex process starts/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Add selected workers" }));
+
+  expect(await screen.findByText("Familiar crew added safely")).toBeInTheDocument();
+  expect(await screen.findByText("Work now matched to Daisy")).toBeInTheDocument();
+  expect(screen.getByText(/Task matches were refreshed/)).toBeInTheDocument();
+  expect(taskPreviewCount).toBe(2);
+  const commit = requests.find((request) => request.url.endsWith("/workers/commit"));
+  expect(commit?.body).toMatchObject({ commit: { selected_source_ids: ["daisy"] } });
 });
 
 function ok(body: unknown, status = 200) {

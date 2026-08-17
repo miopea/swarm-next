@@ -2,13 +2,20 @@ import { useEffect, useState } from "react";
 
 import {
   commitLegacyTaskMigration,
+  commitLegacyWorkerMigration,
   listActiveLegacyTaskMigrations,
+  listActiveLegacyWorkerMigrations,
   previewLegacyTaskMigration,
+  previewLegacyWorkerMigration,
   rollbackLegacyTaskMigration,
+  rollbackLegacyWorkerMigration,
   type LegacyMigrationBundle,
   type LegacyMigrationPreview,
   type LegacyMigrationReceipt,
   type LegacyTaskPreview,
+  type LegacyWorkerMigrationPreview,
+  type LegacyWorkerMigrationReceipt,
+  type LegacyWorkerPreview,
 } from "../api/migration";
 import { downloadJson } from "../shared/download";
 
@@ -22,11 +29,16 @@ const MAX_FILE_BYTES = 16 * 1024 * 1024;
 export default function LegacyMigrationSettings({ busy, operatorToken }: Props) {
   const [bundle, setBundle] = useState<LegacyMigrationBundle>();
   const [preview, setPreview] = useState<LegacyMigrationPreview>();
+  const [workerPreview, setWorkerPreview] = useState<LegacyWorkerMigrationPreview>();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedWorkers, setSelectedWorkers] = useState<Set<string>>(new Set());
   const [receipt, setReceipt] = useState<LegacyMigrationReceipt>();
+  const [workerReceipt, setWorkerReceipt] = useState<LegacyWorkerMigrationReceipt>();
   const [working, setWorking] = useState(false);
   const [confirmImport, setConfirmImport] = useState(false);
   const [confirmRollback, setConfirmRollback] = useState(false);
+  const [confirmWorkerImport, setConfirmWorkerImport] = useState(false);
+  const [confirmWorkerRollback, setConfirmWorkerRollback] = useState(false);
   const [message, setMessage] = useState<string>();
   const disabled = busy || working;
 
@@ -38,6 +50,13 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
       })
       .catch(() => {
         // Import remains available if older daemons do not expose receipt recovery yet.
+      });
+    void listActiveLegacyWorkerMigrations(operatorToken)
+      .then((receipts) => {
+        if (!cancelled && receipts.length > 0) setWorkerReceipt(receipts[0]);
+      })
+      .catch(() => {
+        // Older daemons may not have the worker migration slice yet.
       });
     return () => { cancelled = true; };
   }, [operatorToken]);
@@ -54,15 +73,22 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
     setWorking(true);
     try {
       const parsed = JSON.parse(await file.text()) as LegacyMigrationBundle;
-      const nextPreview = await previewLegacyTaskMigration(operatorToken, parsed);
+      const [nextPreview, nextWorkerPreview] = await Promise.all([
+        previewLegacyTaskMigration(operatorToken, parsed),
+        previewLegacyWorkerMigration(operatorToken, parsed),
+      ]);
       setBundle(parsed);
       setPreview(nextPreview);
+      setWorkerPreview(nextWorkerPreview);
       setSelected(new Set(nextPreview.records.filter((record) => record.selectable).map((record) => record.source_id)));
-      setMessage(nextPreview.selectable === 0 ? "Nothing in this package is ready to import." : undefined);
+      setSelectedWorkers(new Set(nextWorkerPreview.records.filter((record) => record.selectable).map((record) => record.source_id)));
+      setMessage(nextPreview.selectable === 0 && nextWorkerPreview.selectable === 0 ? "Nothing in this package is ready to import." : undefined);
     } catch {
       setBundle(undefined);
       setPreview(undefined);
+      setWorkerPreview(undefined);
       setSelected(new Set());
+      setSelectedWorkers(new Set());
       setMessage("Swarm could not read this migration package. Create a fresh package and try again.");
     } finally {
       setWorking(false);
@@ -78,6 +104,62 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
       return next;
     });
     setConfirmImport(false);
+  }
+
+  function toggleWorker(record: LegacyWorkerPreview) {
+    if (!record.selectable) return;
+    setSelectedWorkers((current) => {
+      const next = new Set(current);
+      if (next.has(record.source_id)) next.delete(record.source_id);
+      else next.add(record.source_id);
+      return next;
+    });
+    setConfirmWorkerImport(false);
+  }
+
+  async function importSelectedWorkers() {
+    if (!bundle || !workerPreview || selectedWorkers.size === 0) return;
+    setWorking(true);
+    setMessage(undefined);
+    try {
+      const nextReceipt = await commitLegacyWorkerMigration(
+        operatorToken,
+        bundle,
+        workerPreview,
+        [...selectedWorkers],
+      );
+      setWorkerReceipt(nextReceipt);
+      setConfirmWorkerImport(false);
+      try {
+        const refreshedTaskPreview = await previewLegacyTaskMigration(operatorToken, bundle);
+        setPreview(refreshedTaskPreview);
+        setSelected(new Set(refreshedTaskPreview.records.filter((record) => record.selectable).map((record) => record.source_id)));
+        setMessage(`${nextReceipt.imported_worker_ids.length} sleeping worker${nextReceipt.imported_worker_ids.length === 1 ? " was" : "s were"} added. Task matches were refreshed; no provider process was started.`);
+      } catch {
+        setMessage(`${nextReceipt.imported_worker_ids.length} sleeping worker${nextReceipt.imported_worker_ids.length === 1 ? " was" : "s were"} added. Reopen this package before importing tasks so worker matches are current.`);
+      }
+    } catch {
+      setMessage("The worker import was not applied. Refresh the preview before trying again.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function rollbackWorkers() {
+    if (!workerReceipt) return;
+    setWorking(true);
+    setMessage(undefined);
+    try {
+      const result = await rollbackLegacyWorkerMigration(operatorToken, workerReceipt);
+      setWorkerReceipt(undefined);
+      setConfirmWorkerRollback(false);
+      setMessage(`${result.removed_workers} untouched imported worker${result.removed_workers === 1 ? " was" : "s were"} removed.`);
+    } catch {
+      setConfirmWorkerRollback(false);
+      setMessage("An imported worker has changed or been used, so Swarm protected it from rollback.");
+    } finally {
+      setWorking(false);
+    }
   }
 
   async function importSelected() {
@@ -118,10 +200,10 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
 
   return (
     <section id="settings-migration" className="settings-card migration-settings" aria-labelledby="migration-heading">
-      <div><p className="eyebrow">Migration</p><h3 id="migration-heading">Bring your open Legacy work with you</h3></div>
-      <p>Preview a package before anything changes. Jira work stays in Jira, completed history stays in Legacy, and imports remain Draft until you approve them on the task board.</p>
+      <div><p className="eyebrow">Migration</p><h3 id="migration-heading">Bring your Legacy Hive forward</h3></div>
+      <p>Preview the familiar crew and open local work before anything changes. Workers arrive sleeping; tasks remain Draft until you approve them. Jira work stays in Jira.</p>
 
-      {!preview && !receipt && (
+      {!preview && !workerPreview && !receipt && !workerReceipt && (
         <label className={`migration-drop ${disabled ? "disabled" : ""}`}>
           <strong>{working ? "Checking package…" : "Choose Legacy migration package"}</strong>
           <span>Swarm validates every record and shows exactly what would change.</span>
@@ -134,6 +216,71 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
         </label>
       )}
 
+      {workerPreview && !workerReceipt && workerPreview.records.length > 0 && (
+        <div className="migration-section" aria-labelledby="migration-workers-heading">
+          <div><p className="eyebrow">Crew</p><h4 id="migration-workers-heading">Review familiar workers</h4></div>
+          <p>Repository paths and reviewed descriptions come across. Workers stay sleeping, and provider conversations, identity files, groups, and approval rules stay behind.</p>
+          <div className="migration-summary" aria-label="Worker migration preview summary">
+            <span><strong>{workerPreview.selectable}</strong><small>Ready to add</small></span>
+            <span><strong>{workerPreview.skipped}</strong><small>Already represented</small></span>
+            <span><strong>{workerPreview.invalid}</strong><small>Needs attention</small></span>
+          </div>
+          <div className="migration-selection-actions">
+            <button type="button" className="text-button" onClick={() => setSelectedWorkers(new Set(workerPreview.records.filter((record) => record.selectable).map((record) => record.source_id)))}>Select recommended</button>
+            <button type="button" className="text-button" onClick={() => setSelectedWorkers(new Set())}>Clear</button>
+            {!preview?.records.length && <button type="button" className="text-button" onClick={() => { setBundle(undefined); setPreview(undefined); setWorkerPreview(undefined); setSelectedWorkers(new Set()); }}>Choose another package</button>}
+          </div>
+          <div className="migration-records" role="list" aria-label="Legacy worker migration preview">
+            {workerPreview.records.map((record) => (
+              <label key={record.source_id} className={`migration-record ${record.selectable ? "" : "unavailable"}`}>
+                <input
+                  type="checkbox"
+                  checked={selectedWorkers.has(record.source_id)}
+                  disabled={!record.selectable || disabled}
+                  onChange={() => toggleWorker(record)}
+                />
+                <span className="migration-record-copy">
+                  <strong>{record.name || "Unnamed Legacy worker"}</strong>
+                  <small>{record.workspace} · {record.provider === "codex" ? "Codex" : "Claude Code"} · Sleeping</small>
+                  {record.warnings.map((warning) => <small key={warning} className="migration-warning">{warning}</small>)}
+                </span>
+              </label>
+            ))}
+          </div>
+          {!confirmWorkerImport ? (
+            <button type="button" className="primary-action" disabled={disabled || selectedWorkers.size === 0} onClick={() => setConfirmWorkerImport(true)}>Review {selectedWorkers.size} worker{selectedWorkers.size === 1 ? "" : "s"}</button>
+          ) : (
+            <div className="migration-confirmation" role="group" aria-label="Confirm Legacy worker import">
+              <strong>Add {selectedWorkers.size} sleeping worker{selectedWorkers.size === 1 ? "" : "s"}?</strong>
+              <span>Swarm creates durable roster entries only. No Claude or Codex process starts.</span>
+              <div className="settings-actions">
+                <button type="button" className="secondary-button" disabled={disabled} onClick={() => setConfirmWorkerImport(false)}>Keep reviewing</button>
+                <button type="button" className="primary-action" disabled={disabled} onClick={() => void importSelectedWorkers()}>{working ? "Adding…" : "Add selected workers"}</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {workerReceipt && (
+        <div className="migration-receipt" role="status">
+          <strong>Familiar crew added safely</strong>
+          <p>{workerReceipt.imported_worker_ids.length} worker{workerReceipt.imported_worker_ids.length === 1 ? " is" : "s are"} sleeping in the roster. Review names, repositories, providers, and descriptions before waking anyone.</p>
+          {!confirmWorkerRollback ? (
+            <button type="button" className="secondary-button" disabled={disabled} onClick={() => setConfirmWorkerRollback(true)}>Undo untouched worker import</button>
+          ) : (
+            <div className="migration-confirmation">
+              <strong>Remove these imported workers?</strong>
+              <span>Swarm refuses if any worker was edited, awakened, or assigned work.</span>
+              <div className="settings-actions">
+                <button type="button" className="secondary-button" disabled={disabled} onClick={() => setConfirmWorkerRollback(false)}>Keep workers</button>
+                <button type="button" className="danger-button" disabled={disabled} onClick={() => void rollbackWorkers()}>{working ? "Checking…" : "Undo worker import"}</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {preview && !receipt && (
         <>
           <div className="migration-summary" aria-label="Migration preview summary">
@@ -144,7 +291,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
           <div className="migration-selection-actions">
             <button type="button" className="text-button" onClick={() => setSelected(new Set(preview.records.filter((record) => record.selectable).map((record) => record.source_id)))}>Select recommended</button>
             <button type="button" className="text-button" onClick={() => setSelected(new Set())}>Clear</button>
-            <button type="button" className="text-button" onClick={() => { setBundle(undefined); setPreview(undefined); setSelected(new Set()); }}>Choose another package</button>
+            <button type="button" className="text-button" onClick={() => { setBundle(undefined); setPreview(undefined); setWorkerPreview(undefined); setSelected(new Set()); setSelectedWorkers(new Set()); }}>Choose another package</button>
           </div>
           <div className="migration-records" role="list" aria-label="Legacy task migration preview">
             {preview.records.map((record) => (
@@ -198,7 +345,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
         </div>
       )}
       {message && <p className="migration-message" role="status">{message}</p>}
-      <small className="privacy-note">Migration packages contain private task content. Store them like a Hive backup. Repositories, credentials, terminal sessions, and Jira records are never included.</small>
+      <small className="privacy-note">Migration packages contain private task content and repository paths. Store them like a Hive backup. Credentials, terminal sessions, provider conversations, identity files, and Jira records are never included.</small>
     </section>
   );
 }

@@ -7,7 +7,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use swarm_persistence::{LegacyMigrationBundle, LegacyMigrationCommit};
+use swarm_persistence::{
+    LegacyMigrationBundle, LegacyMigrationCommit, LegacyWorkerMigrationCommit,
+};
 
 use super::{ApiError, AppState, authorize, task_store, task_store_error};
 
@@ -23,6 +25,12 @@ pub(super) struct CommitLegacyMigrationRequest {
 pub(super) struct RollbackLegacyMigrationRequest {
     batch_id: String,
     bundle_digest: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CommitLegacyWorkerMigrationRequest {
+    bundle: LegacyMigrationBundle,
+    commit: LegacyWorkerMigrationCommit,
 }
 
 pub(super) async fn preview_legacy_tasks(
@@ -69,6 +77,55 @@ pub(super) async fn rollback_legacy_tasks(
     authorize(&state, &headers)?;
     let rollback = task_store(&state)?
         .rollback_legacy_task_migration(&request.batch_id, &request.bundle_digest)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(Json(rollback).into_response())
+}
+
+pub(super) async fn preview_legacy_workers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(bundle): Json<LegacyMigrationBundle>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let preview = task_store(&state)?
+        .preview_legacy_worker_migration(&bundle)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(Json(preview).into_response())
+}
+
+pub(super) async fn list_active_legacy_worker_migrations(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let receipts = task_store(&state)?
+        .list_active_legacy_worker_migration_receipts()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(Json(receipts).into_response())
+}
+
+pub(super) async fn commit_legacy_workers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CommitLegacyWorkerMigrationRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let receipt = task_store(&state)?
+        .commit_legacy_worker_migration(&request.bundle, &request.commit)
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok((StatusCode::CREATED, Json(receipt)).into_response())
+}
+
+pub(super) async fn rollback_legacy_workers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<RollbackLegacyMigrationRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let rollback = task_store(&state)?
+        .rollback_legacy_worker_migration(&request.batch_id, &request.bundle_digest)
         .map_err(|error| task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok(Json(rollback).into_response())

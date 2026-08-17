@@ -23,13 +23,22 @@ Swarm Next owns a versioned, bounded migration package and a preview-first impor
 9. Finishing is never automatic. If an untouched Next batch is rolled back, its receipt can restore the corresponding Legacy tasks.
 10. No dual write or ongoing synchronization exists between Legacy and Next.
 
-The package envelope is extensible, but the first accepted section contains open non-Jira tasks only. Later sections require their own normalization and review policy rather than inheriting task behavior.
+The package envelope is extensible. Open non-Jira tasks and the durable worker
+roster are independent review sections with separate commits and rollback
+receipts. Worker import brings across the display name, repository path,
+operator-reviewed routing description, provider choice, and relative ordering.
+Every imported worker is sleeping and does not autostart. Provider processes,
+provider conversations, terminal history, identity-file contents, groups,
+isolation settings, credentials, and approval rules are excluded. Existing
+workers match by name or repository, and the managed Queen, Scout, and Legacy
+Project Root identities are never duplicated. Any later section requires its
+own normalization and review policy rather than inheriting task behavior.
 
 ## Consequences
 
 Migration is resumable, explainable, and safe to rehearse. Duplicate imports can be rejected by source identity and record provenance. Legacy remains a recoverable reference during dogfooding without remaining the migration authority.
 
-The workflow has two deliberate confirmations and cannot promise one atomic transaction across both applications. Legacy finalization requires a compatible receipt consumer and backup support before it can ship. Attachments, dependencies, email reply identity, learnings, and historical messages remain unsupported until their own migration policies are implemented.
+The workflow has deliberate confirmations and cannot promise one atomic transaction across both applications. Legacy finalization requires a compatible receipt consumer and backup support before it can ship. Attachments, dependencies, email reply identity, learnings, and historical messages remain unsupported until their own migration policies are implemented.
 
 ## Alternatives considered
 
@@ -46,3 +55,6 @@ The workflow has two deliberate confirmations and cannot promise one atomic tran
 - Rollback rejects batches whose imported tasks changed after import.
 - Browser tests prove that no record is imported before explicit selection and confirmation.
 - Legacy finalization tests use a disposable snapshot, verify its pre-write backup, and prove receipt reversal before the feature is exposed.
+- Worker tests prove managed-identity and duplicate exclusions, sleeping import,
+  stable ordering, provider fallback, provenance, and rollback refusal after a
+  worker is edited, awakened, or assigned work.

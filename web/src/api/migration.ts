@@ -18,6 +18,42 @@ export type LegacyMigrationBundle = {
     snapshot_digest: string;
   };
   tasks: unknown[];
+  workers?: unknown[];
+};
+
+export type LegacyWorkerImportDisposition =
+  | "ready"
+  | "transformed"
+  | "duplicate"
+  | "managed_by_next"
+  | "invalid";
+
+export type LegacyWorkerPreview = {
+  source_id: string;
+  name: string;
+  workspace: string;
+  provider: "claude_code" | "codex";
+  disposition: LegacyWorkerImportDisposition;
+  selectable: boolean;
+  warnings: string[];
+};
+
+export type LegacyWorkerMigrationPreview = {
+  bundle_digest: string;
+  source_installation_id: string;
+  records: LegacyWorkerPreview[];
+  selectable: number;
+  skipped: number;
+  invalid: number;
+};
+
+export type LegacyWorkerMigrationReceipt = {
+  batch_id: string;
+  bundle_digest: string;
+  source_installation_id: string;
+  imported_worker_ids: string[];
+  imported_source_ids: string[];
+  imported_at: number;
 };
 
 export type LegacyTaskPreview = {
@@ -104,4 +140,55 @@ export async function rollbackLegacyTaskMigration(
     }),
   });
   return response.json() as Promise<{ batch_id: string; removed_tasks: number; rolled_back_at: number }>;
+}
+
+export async function listActiveLegacyWorkerMigrations(
+  operatorToken: string,
+): Promise<LegacyWorkerMigrationReceipt[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/migrations/legacy/workers");
+  return response.json() as Promise<LegacyWorkerMigrationReceipt[]>;
+}
+
+export async function previewLegacyWorkerMigration(
+  operatorToken: string,
+  bundle: LegacyMigrationBundle,
+): Promise<LegacyWorkerMigrationPreview> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/migrations/legacy/workers/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(bundle),
+  });
+  return response.json() as Promise<LegacyWorkerMigrationPreview>;
+}
+
+export async function commitLegacyWorkerMigration(
+  operatorToken: string,
+  bundle: LegacyMigrationBundle,
+  preview: LegacyWorkerMigrationPreview,
+  selectedSourceIds: string[],
+): Promise<LegacyWorkerMigrationReceipt> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/migrations/legacy/workers/commit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      bundle,
+      commit: {
+        bundle_digest: preview.bundle_digest,
+        selected_source_ids: selectedSourceIds,
+      },
+    }),
+  });
+  return response.json() as Promise<LegacyWorkerMigrationReceipt>;
+}
+
+export async function rollbackLegacyWorkerMigration(
+  operatorToken: string,
+  receipt: LegacyWorkerMigrationReceipt,
+): Promise<{ batch_id: string; removed_workers: number; rolled_back_at: number }> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/migrations/legacy/workers/rollback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ batch_id: receipt.batch_id, bundle_digest: receipt.bundle_digest }),
+  });
+  return response.json() as Promise<{ batch_id: string; removed_workers: number; rolled_back_at: number }>;
 }

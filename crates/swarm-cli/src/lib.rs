@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use swarm_domain::WorkerSessionId;
 use swarm_persistence::{
     LEGACY_MIGRATION_FORMAT, LEGACY_MIGRATION_VERSION, LegacyMigrationBundle,
-    LegacyMigrationSource, LegacyTaskRecord,
+    LegacyMigrationSource, LegacyTaskRecord, LegacyWorkerRecord,
 };
 
 use swarm_terminal::{
@@ -44,7 +44,7 @@ pub enum LifecycleCommand {
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error(
-        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|stop-session UUID|verify-database PATH|inspect-legacy PATH|export-legacy-tasks SOURCE OUTPUT>"
+        "usage: swarmctl <status|drain|cancel-drain|wait-ready [timeout-seconds]|stop-session UUID|verify-database PATH|inspect-legacy PATH|export-legacy SOURCE OUTPUT>"
     )]
     Usage,
     #[error("wait timeout must be an integer from 1 through 86400 seconds")]
@@ -136,7 +136,7 @@ pub fn parse_command(
             }
             Ok(LifecycleCommand::InspectLegacy { path })
         }
-        "export-legacy-tasks" => {
+        "export-legacy" | "export-legacy-tasks" => {
             let source = arguments.next().map(PathBuf::from).ok_or(CliError::Usage)?;
             let output = arguments.next().map(PathBuf::from).ok_or(CliError::Usage)?;
             if arguments.next().is_some() || !source.is_absolute() || !output.is_absolute() {
@@ -231,8 +231,8 @@ pub fn export_legacy_tasks(
         .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
     let rows = statement
         .query_map([], |row| {
-            let criteria = parse_json_strings(row.get::<_, String>(8)?);
-            let attachments = parse_json_count(row.get::<_, String>(9)?);
+            let criteria = parse_json_strings(&row.get::<_, String>(8)?);
+            let attachments = parse_json_count(&row.get::<_, String>(9)?);
             Ok(LegacyTaskRecord {
                 source_id: row.get(0)?,
                 title: row.get(1)?,
@@ -253,6 +253,29 @@ pub fn export_legacy_tasks(
     let tasks = rows
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, path, description, provider, sort_order,
+                    CASE WHEN trim(identity) <> '' THEN 1 ELSE 0 END, isolation
+             FROM workers ORDER BY sort_order, name, id",
+        )
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
+    let workers = statement
+        .query_map([], |row| {
+            Ok(LegacyWorkerRecord {
+                source_id: row.get(0)?,
+                name: row.get(1)?,
+                workspace: row.get(2)?,
+                description: row.get(3)?,
+                provider: row.get(4)?,
+                position: row.get(5)?,
+                has_identity_file: row.get(6)?,
+                isolation: row.get(7)?,
+            })
+        })
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
     let bundle = LegacyMigrationBundle {
         format: LEGACY_MIGRATION_FORMAT.into(),
         version: LEGACY_MIGRATION_VERSION,
@@ -263,6 +286,7 @@ pub fn export_legacy_tasks(
             snapshot_digest,
         },
         tasks,
+        workers,
     };
     let bytes = serde_json::to_vec_pretty(&bundle)
         .map_err(|error| CliError::LegacyDatabase(error.to_string()))?;
@@ -318,18 +342,18 @@ fn legacy_installation_id(connection: &Connection) -> Result<String, CliError> {
     Ok(format!("legacy-{:x}", hasher.finalize()))
 }
 
-fn parse_json_strings(value: String) -> Vec<String> {
-    serde_json::from_str::<Vec<String>>(&value).unwrap_or_default()
+fn parse_json_strings(value: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(value).unwrap_or_default()
 }
 
-fn parse_json_count(value: String) -> usize {
-    serde_json::from_str::<Vec<serde_json::Value>>(&value).map_or(0, |items| items.len())
+fn parse_json_count(value: &str) -> usize {
+    serde_json::from_str::<Vec<serde_json::Value>>(value).map_or(0, |items| items.len())
 }
 
 fn unix_timestamp() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs() as i64)
+        .map_or(0, |duration| duration.as_secs().cast_signed())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -652,8 +676,12 @@ mod tests {
                 .execute_batch(
                     "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL);
                      INSERT INTO schema_version VALUES (19, 1);
-                     CREATE TABLE workers (id TEXT, name TEXT, path TEXT);
-                     INSERT INTO workers VALUES ('worker-1', 'Daisy', '/private/path');
+                     CREATE TABLE workers (
+                         id TEXT, name TEXT, path TEXT, description TEXT, provider TEXT,
+                         isolation TEXT, identity TEXT, sort_order INTEGER
+                     );
+                     INSERT INTO workers VALUES
+                       ('worker-1', 'Daisy', '/private/path', 'Owns Daisy', 'claude', '', '', 3);
                      CREATE TABLE tasks (
                          id TEXT, number INTEGER, title TEXT, description TEXT, status TEXT,
                          priority TEXT, assigned_worker TEXT, jira_key TEXT, block_reason TEXT,
@@ -676,11 +704,9 @@ mod tests {
         assert_eq!(bundle.tasks.len(), 2);
         assert_eq!(bundle.tasks[0].acceptance_criteria, vec!["Verified"]);
         assert_eq!(bundle.tasks[0].attachment_count, 1);
-        assert!(
-            !std::fs::read_to_string(&output)
-                .unwrap()
-                .contains("/private/path")
-        );
+        assert_eq!(bundle.workers.len(), 1);
+        assert_eq!(bundle.workers[0].workspace, "/private/path");
+        assert_eq!(bundle.workers[0].description, "Owns Daisy");
         assert_eq!(std::fs::read(&source).unwrap(), before);
         assert!(matches!(
             export_legacy_tasks(&source, &output),

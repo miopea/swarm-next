@@ -40,7 +40,8 @@ async fn run() -> Result<(), CliError> {
     {
         let bundle = export_legacy_tasks(source, output)?;
         println!(
-            "exported {} Legacy task records to {}",
+            "exported {} Legacy workers and {} open task records to {}",
+            bundle.workers.len(),
             bundle.tasks.len(),
             output.display()
         );
