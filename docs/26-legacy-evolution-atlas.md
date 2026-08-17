@@ -132,6 +132,9 @@ snapshots.
 
 The useful part of legacy drones becomes a boring, auditable coordinator below
 Queen. It operates only when all required facts and authority are present.
+The commit-level mechanism and outcome split is recorded in
+`docs/legacy/drone-disposition.md`; “obsolete” applies to the terminal-reading,
+regex-approving mini-agent, not to deterministic background coordination.
 
 1. **Deterministic state work:** reconcile outboxes, expire leases, wake a worker
    for an already assigned task, apply allowed lifecycle transitions, refresh
