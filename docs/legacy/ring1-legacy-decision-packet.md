@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Four safeguards closed; eight operator choices recorded 2026-08-17**
+Status: **Four safeguards closed; nine operator choices recorded 2026-08-17**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -264,6 +264,34 @@ and Queen-recommended safe-renewal outcome. This is the intended successor to
 Legacy's context-pressure automation, not a port of `/compact` injection or
 timer heuristics.
 
+## Decision 9: cross-device return briefing
+
+**Evidence.** Legacy's Command Center attempted to summarize fleet state, but
+some surfaces were assembled UI rather than a proven event-driven operator
+brief. Swarm Next has durable task, decision, worker, sync, resource, presence,
+and Apiary evidence, yet a returning operator can still need to inspect several
+workers to understand what changed while away.
+
+**Current Next boundary.** Needs You, Queen, Night Watch, device-aware presence,
+notifications, and the Keeper overview expose their own state. They do not yet
+compose one acknowledged, cross-device summary of meaningful changes since the
+operator last checked in.
+
+**Recommendation.** Queen prepares a quiet Return briefing when the operator
+comes back from Away or Night Watch, including completed or shipped outcomes,
+running work, blockers and decisions, stalled or recovered workers, failed
+external synchronization, important resource or update events, and Queen's next
+plan. It appears as a dismissible surface in Queen and Needs You rather than a
+blocking modal. Opening the mobile PWA also counts as a check-in and receives a
+compact mobile-first version. Read and dismissal state synchronize across the
+operator's devices so reviewing it once does not create duplicate noise.
+Keeper receives only cross-Hive exceptions and meaningful rollups, not routine
+worker chatter.
+
+**Operator decision (2026-08-17).** Build the cross-device Return briefing with
+mobile as a first-class check-in surface. Make it useful both for returning to
+work and for briefly checking on the Hive while away.
+
 ## Evidence that would change these recommendations
 
 - A naturally occurring prompt class that Queen can answer safely and repeatedly
@@ -280,6 +308,9 @@ timer heuristics.
 - A conversation-health recommendation whose provider metrics, task boundary,
   repeated failures, compaction history, and operator corrections explain why
   renewal would improve the worker without interrupting active work.
+- A return interval whose durable changes can be summarized without repeating
+  routine worker chatter or showing the same unread briefing independently on
+  every device.
 
 Decisions should be recorded after that evidence or an explicit operator choice,
 not inferred from Legacy commit volume.

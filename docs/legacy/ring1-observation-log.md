@@ -99,6 +99,11 @@ For each naturally occurring session, record only what is relevant:
   using typed provider and task evidence; renewal preserves worker identity,
   queue, history, and a reviewed handoff and may never silently replace an
   actively working conversation.
+- Queen's Return briefing summarizes meaningful changes since Away or Night
+  Watch across completed work, active work, decisions, recovery, sync, resource
+  events, and next plans. Desktop and mobile are equal check-in surfaces; read
+  state synchronizes across devices, and Keeper sees exception rollups rather
+  than routine Hive noise.
 - The protocol migration left API and holder builds aligned on protocol 9,
   both services active with zero restarts, database `quick_check` at `ok`, and
   the holder reporting one running and one retained Queen session. No Jira,
