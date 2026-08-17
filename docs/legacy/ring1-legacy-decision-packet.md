@@ -73,6 +73,11 @@ coordination while the exact current snapshot is a picker and preserves that
 delivery without consuming its retry budget. It still deliberately does not
 answer the picker.
 
+**Current Next boundary.** `ProviderActivity::AwaitingOperator` is projected as
+an attention state and is checked by decision delivery, task briefing, worker
+outcomes, and Queen automation. Each path returns the item to its durable queue.
+There is no general prompt-answer command or hidden Queen-answer policy.
+
 **Recommendation.** For Ring 1, Queen may observe the question, explain the
 choices, and notify the operator, but may not answer automatically. Build the
 typed prompt identity, exact-answer, expiry, read-back, refusal, and recovery
@@ -93,6 +98,12 @@ small allowlist of Queen-answerable prompt classes.
 high-level task and approval logs did not cover the byte-write path. Recording at
 the holder choke point made the question answerable without storing secrets.
 
+**Current Next boundary.** Every ordinary holder write now requires a typed
+actor and coarse input kind. The holder retains at most 10,000 content-free
+events for at most 24 hours, and the API exposes a private no-store read capped
+at 1,000 newest entries. The browser does not currently place this evidence in
+worker Activity or the normal diagnostics report.
+
 **Recommendation.** Retain a bounded rolling content-free audit—for example,
 the newest 10,000 events or 24 hours, whichever is smaller. Show summarized
 actor, worker, input kind, write result, and time inside private diagnostics and
@@ -109,6 +120,12 @@ checker, and Jira-divergence sweeps. The general problem is real, but the exact
 checks encode one organization's workflows and arrived after the final packaged
 release.
 
+**Current Next boundary.** Task completion already requires durable verification
+evidence, and Jira-linked state has explicit convergence machinery. Worker
+descriptions can tell Queen about repository-specific release responsibility,
+but no global citation, ancestry, branch-containment, or organization-specific
+checker framework currently turns those conventions into universal authority.
+
 **Recommendation.** Keep universal completion requirements narrow: durable
 verification evidence, confirmed Jira convergence, and explicit release or
 handoff evidence when shipping was in scope. Put repository-specific checks in
@@ -124,6 +141,11 @@ or nominate one additional cross-repository check for the first Ring 1 week.
 **Evidence.** Legacy added operator-defined shortcuts and immediately required
 fixes because the settings list was inert and persistence was absent. The need
 was real enough to build; the general macro surface was fragile.
+
+**Current Next boundary.** Swarm provides fixed, tested navigation shortcuts for
+primary surfaces, adjacent workers, and quick navigation. Those controls pause
+while the operator is typing. They are product navigation, not configurable
+terminal commands or arbitrary worker macros.
 
 **Recommendation.** Defer arbitrary shortcuts during the first week. Record
 repeated operator inputs and mobile friction without content capture. Promote a
