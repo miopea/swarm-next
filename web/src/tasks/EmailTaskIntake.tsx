@@ -6,6 +6,7 @@ import {
   fetchEmailMessage,
   fetchEmailReadiness,
   importEmailTask,
+  recoverTransientRuntime,
   type EmailMessage,
   type EmailMessageSummary,
   type EmailReadiness,
@@ -101,7 +102,12 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
     setBusy(true);
     setMessage("");
     try {
-      const selected = await Promise.all(selectedIds.map((id) => fetchEmailMessage(operatorToken, id)));
+      const selected: EmailMessage[] = [];
+      for (const id of selectedIds) {
+        setMessage(`Opening message ${selected.length + 1} of ${selectedIds.length}…`);
+        selected.push(await recoverTransientRuntime(() => fetchEmailMessage(operatorToken, id)));
+      }
+      setMessage("");
       setSelectedMessages(selected);
       setPreviewIndex(0);
       setTitle(selected.length === 1

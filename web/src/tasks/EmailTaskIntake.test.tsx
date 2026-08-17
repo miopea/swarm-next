@@ -94,6 +94,52 @@ test("loads inline images through the private preview endpoint and hides cid mar
   expect(createObjectURL).toHaveBeenCalledOnce();
 });
 
+test("opens multiple messages sequentially and retries a transient gateway response", async () => {
+  let activeDetails = 0;
+  let highestConcurrency = 0;
+  let firstMessageAttempts = 0;
+  const summaries = ["message-1", "message-2"].map((id, index) => ({
+    id,
+    conversation_id: `thread-${index + 1}`,
+    internet_message_id: null,
+    subject: `Related report ${index + 1}`,
+    sender_name: "Alex",
+    sender_address: "alex@example.com",
+    received_at: 1_786_000_000 + index,
+    web_url: `https://outlook.test/${id}`,
+    has_attachments: false,
+    preview: `Preview ${index + 1}`,
+  }));
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/readiness")) return ok({ configured: true, connection: "ready", account_name: "Bea", account_address: "bea@example.com" });
+    if (url.endsWith("/inbox")) return ok(summaries);
+    const summary = summaries.find((item) => url.endsWith(`/messages/${item.id}`));
+    if (!summary) throw new Error(`Unexpected request: ${url}`);
+    activeDetails += 1;
+    highestConcurrency = Math.max(highestConcurrency, activeDetails);
+    try {
+      if (summary.id === "message-1" && firstMessageAttempts++ === 0) {
+        return new Response("temporary gateway failure", { status: 502 });
+      }
+      return ok({ summary, body_text: `Full report ${summary.id}`, attachments: [] });
+    } finally {
+      activeDetails -= 1;
+    }
+  }));
+
+  render(<EmailTaskIntake operatorToken="operator-token" onImported={vi.fn()} />);
+  const checkboxes = await screen.findAllByRole("checkbox");
+  fireEvent.click(checkboxes[0]);
+  fireEvent.click(checkboxes[1]);
+  fireEvent.click(screen.getByRole("button", { name: "Review 2 messages" }));
+
+  expect(await screen.findByDisplayValue(/Full report message-2/)).toBeInTheDocument();
+  expect(screen.getByText("2 source threads")).toBeInTheDocument();
+  expect(firstMessageAttempts).toBe(2);
+  expect(highestConcurrency).toBe(1);
+});
+
 test("directs the operator to integrations when Outlook is not connected", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => ok({ configured: true, connection: "not_connected", account_name: null, account_address: null })));
   render(<EmailTaskIntake operatorToken="operator-token" onImported={vi.fn()} />);
