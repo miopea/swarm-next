@@ -222,6 +222,13 @@ ownership, automated-input authority, revive loops, speculative preparation,
 mobile scrollback, and state classification. Their stable outcomes already map
 to Swarm Next invariants; none creates a port ticket by itself.
 
+The explicit revert and diagnostic-experiment pass lives in
+`docs/legacy/reversions-and-abandoned-experiments.md`. It covers the browser
+terminal handler rollback, systemd worker-killing regression, Ctrl+L
+misdiagnosis, speculative preparation, GPU-renderer regression, service-worker
+kill switch, and unproven browser-process write suspects. Its purpose is to
+retain why a plausible solution was removed, not merely its final diff.
+
 The final product-contract pass now compares the README's operator promises
 with the final implementation owners and executable tests in
 `docs/legacy/final-contract-audit.md`. It separates held contracts from limited,
@@ -231,11 +238,11 @@ final legacy tree itself did not support.
 
 ## Remaining history passes
 
-1. Expand validated regression chains beyond the six highest-risk operator
-   journeys when a new dogfood gap needs historical evidence.
-2. Sample the implementation at stable release boundaries rather than only the
-   final tree.
-3. Feed each surviving outcome into the capability inventory and dogfood plan;
+1. Expand validated regression chains when a new dogfood gap needs historical
+   evidence.
+2. Continue sampling implementation at stable release boundaries rather than
+   treating post-release development as settled behavior.
+3. Feed each surviving outcome into the capability inventory and Ring 1 evidence;
    do not create port tickets directly from this atlas.
 
 ## Ring 1 companion refresh
