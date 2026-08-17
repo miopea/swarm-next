@@ -60,6 +60,28 @@ deep checks against implementation and final state:
 5. **Resource and schema hygiene:** verify temporary artifact ownership and
    mechanically link migration ceiling, latest step, startup, and integrity.
 
+## Current Next owners and proof level
+
+This keeps each comparison falsifiable. “Static” means the current code path was
+inspected; it is not a claim that a live operator journey has passed.
+
+| Outcome | Current owner | Existing proof | Remaining proof |
+| --- | --- | --- | --- |
+| Provider attention classification | `crates/swarm-terminal/src/provider_activity.rs`; worker projection in `crates/swarm-api/src/lib.rs` | Captured Claude picker fixtures classify as `AwaitingOperator`; ordinary resting and active controls are present. | Prove every automated delivery refuses while that state is current and retains its intended message. |
+| Terminal input authority and provenance | `crates/swarm-terminal/src/ipc.rs`, `process.rs`, and `crates/swarm-api/src/terminal_socket.rs` | Exact, revisioned Steward takeover leases and local reclaim are tested; operator engagement is durably recorded before browser input is sent. | Add an actor-bearing ordinary-write envelope, choke-point audit, unknown-actor test, secret-exclusion test, and retention bound. |
+| Guarded coordinator delivery | `crates/swarm-api/src/lib.rs`; durable delivery records in `crates/swarm-persistence` | Delivery records distinguish acknowledged, rejected, retryable, and uncertain. Message rendering is observed before Enter. | Add provider-prompt admission and semantic post-write evidence; never label write acknowledgement as provider acceptance or task start. |
+| Task activity attribution | `crates/swarm-domain/src/lib.rs` and `crates/swarm-persistence/src/lib.rs` | Operator, worker, Jira, email, and system actors are durable; persistence tests assert worker identity. | Keep this separate from byte-write provenance rather than treating one as a substitute for the other. |
+| SQLite evolution | `crates/swarm-persistence/src/lib.rs` | One current version, forward-only transactional steps, historical migration tests, and integrity verification. | Add a structural newest-step/ceiling invariant and exercise a production-shaped previous-version fixture during release acceptance. |
+| Temporary artifacts | Rust `tempfile` ownership across API, persistence, terminal, and tests | Inspected production paths use owned `NamedTempFile`, `TempDir`, or `tempdir` values. | Remove the two-per-suite Outlook `TempDir::keep` leak and prove the test temp root returns to baseline. |
+| Jira convergence | `crates/swarm-api/src/jira.rs`, `crates/swarm-persistence/src/jira.rs`, and the API reconciliation runner | Exact linked issues are fetched even in terminal Jira states; mapped inbound state and durable outbound transitions are tested. | Ring 1 should observe real remote closure, comment, conflict, retry, and reload convergence without opening Jira for routine work. |
+| Typed deterministic safety | application services plus coordinator calls in `crates/swarm-api/src/lib.rs` | Current coordinator actions are narrow task, decision, wake, and delivery operations rather than arbitrary shell approval. | For every future deterministic effect, assert its authority, idempotency, boundary, refusal, and ordinary-work controls before enabling it. |
+
+Targeted verification on 2026-08-16 passed all five provider-activity cases,
+the exact takeover/local-reclaim authority case, and authenticated task-activity
+actor persistence. Those green tests support the positive claims above. They do
+not close the two explicitly identified gaps: ordinary writes still carry no
+actor, and coordination still has no provider-prompt admission check.
+
 ## Questions reserved for a real product choice
 
 These are not requests for immediate operator input. They become decision packets
