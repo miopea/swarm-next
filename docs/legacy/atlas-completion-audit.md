@@ -17,7 +17,7 @@ atlas.
 | Compare material findings with current Swarm Next architecture and live behavior | `post-2026-08-10-delta.md`, `final-contract-audit.md`, the capability table in `../26-legacy-evolution-atlas.md`, and `../24-browser-dogfood-acceptance.md` name current owners, tests, live evidence, and remaining proof. | **Proven for reviewed material findings.** | Continue the bounded live evidence window; do not infer unobserved equivalence. |
 | Classify findings without assuming a port | The atlas uses already-prevented, relevant-redesign, optional-opportunity, obsolete-constraint, and unresolved-evidence dispositions. `drone-disposition.md` demonstrates the mechanism/outcome split for the most misleading high-volume category. | **Proven.** | Preserve the same classification discipline for new evidence. |
 | Exercise one bounded week of Swarm Next Ring 1 use in parallel | `ring1-observation-log.md` defines the bounds and formal elapsed window; live evidence already includes provider-question refusal, typed PTY provenance, wide-terminal geometry failure and correction, worker-description generation, Jira image detail, and same-host resource attribution. | **Incomplete.** | A full bounded week has not yet elapsed. Record naturally occurring overlap, failures, recovery, and quiet periods through the declared end of the window. |
-| Bring only genuine product choices to the operator | `ring1-legacy-decision-packet.md` removes mechanical fixes and presents four evidence-backed choices with recommendations and current Next boundaries. | **Presented; operator choices pending.** | Record the operator's selections for provider questions, audit visibility, completion policy, and worker macros. |
+| Bring only genuine product choices to the operator | `ring1-legacy-decision-packet.md` removes mechanical fixes and records four evidence-backed operator choices against current Next boundaries. | **Proven and recorded 2026-08-17.** | Reopen a choice only if bounded Ring 1 evidence meets its stated change condition. |
 | Close the live wide-terminal outcome | `c27ecc5` has focused and full automated coverage for the observed `7 x 50` transitional fit, including stable-frame fitting and geometry republication. | **Code proven; live outcome incomplete.** | Deploy the protocol update during a safe worker-engine restart and remeasure desktop and mobile PTY geometry. |
 
 ## Current completion boundary
@@ -30,7 +30,8 @@ remaining work is deliberately narrow:
    Jira, email, or Apiary effects merely to manufacture evidence;
 3. deploy and live-prove the terminal geometry correction when a worker restart
    is safe;
-4. record the four operator product choices; and
+4. interview the operator about additional evidence-backed opportunities without
+   treating any Legacy feature as an automatic port; and
 5. run this audit again against the then-current tree, live release, and evidence
    before declaring the atlas objective complete.
 

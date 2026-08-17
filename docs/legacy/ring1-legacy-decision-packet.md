@@ -1,6 +1,6 @@
 # Ring 1 legacy decision packet
 
-Status: **Four safeguards closed; focused operator choices not yet recorded**
+Status: **Four safeguards closed; four operator choices recorded 2026-08-17**
 
 This packet contains only choices that survived the full-history evidence pass
 and comparison with current Swarm Next. It deliberately excludes findings that
@@ -89,8 +89,8 @@ contracts first. After real examples accumulate, allow per-prompt-class policy:
 - optionally Queen-answer for explicitly allowlisted, reversible workflow
   choices when the Hive's confidence policy permits it.
 
-**Operator choice.** Keep Ring 1 notify/recommend-only, or authorize an earlier
-small allowlist of Queen-answerable prompt classes.
+**Operator decision (2026-08-17).** Keep Ring 1 notify/recommend-only. Do not
+authorize Queen to answer provider questions automatically.
 
 ## Decision 2: PTY write evidence visibility
 
@@ -110,8 +110,8 @@ actor, worker, input kind, write result, and time inside private diagnostics and
 dogfood evidence; expose full export only through an explicit private action.
 Never show or persist typed bytes.
 
-**Operator choice.** Diagnostics-only by default, or a small recent-input trail
-in each worker's Activity surface.
+**Operator decision (2026-08-17).** Keep PTY write evidence diagnostics-only by
+default. Do not add a routine recent-input trail to worker Activity.
 
 ## Decision 3: completion verification policy
 
@@ -133,8 +133,9 @@ repository-owned declarative policy or skills, with bounded execution and clear
 failure evidence. Promote a check to a global default only after Ring 1 shows it
 prevents the same false completion across multiple repositories.
 
-**Operator choice.** Accept repository-owned policies as the default boundary,
-or nominate one additional cross-repository check for the first Ring 1 week.
+**Operator decision (2026-08-17).** Use repository-owned policies or skills as
+the default boundary. Add no organization-specific global checker during the
+first Ring 1 week.
 
 ## Decision 4: worker shortcuts
 
@@ -152,8 +153,8 @@ repeated operator inputs and mobile friction without content capture. Promote a
 small named action only when the same outcome repeats and cannot be handled by a
 typed task/decision action, mobile control, or natural-language worker message.
 
-**Operator choice.** Defer and measure, or identify one known daily shortcut that
-must be present before Ring 1 starts.
+**Operator decision (2026-08-17).** Defer configurable worker command macros and
+measure real repetition. Keep the fixed product navigation shortcuts.
 
 ## Evidence that would change these recommendations
 

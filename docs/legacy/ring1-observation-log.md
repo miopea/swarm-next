@@ -66,6 +66,11 @@ For each naturally occurring session, record only what is relevant:
   the 1,529-entry ledger.
 - Queen automatic operation remained off, no real Jira, email, task, worker, or
   Apiary mutation was used for this evidence, and proof browser tabs were closed.
+- The operator accepted all four recommended Ring 1 boundaries: Queen remains
+  notify/recommend-only at provider questions; PTY write evidence remains
+  diagnostics-only; repository-specific completion checks remain repository
+  owned; and configurable worker command macros remain deferred while real
+  repetition is measured.
 
 ## Window closure test
 
