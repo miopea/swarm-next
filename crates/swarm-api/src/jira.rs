@@ -831,7 +831,16 @@ impl JiraReadinessProbe {
             .header(reqwest::header::ACCEPT, attachment.media_type.as_str())
             .send()
             .await
-            .map_err(|_| JiraAdapterError::NetworkUnavailable)?;
+            .map_err(|error| {
+                tracing::warn!(
+                    timeout = error.is_timeout(),
+                    connect = error.is_connect(),
+                    request = error.is_request(),
+                    status = ?error.status(),
+                    "Jira attachment content request failed"
+                );
+                JiraAdapterError::NetworkUnavailable
+            })?;
         ensure_success(response.status())?;
         if response
             .content_length()
