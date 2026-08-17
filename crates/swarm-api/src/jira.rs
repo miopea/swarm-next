@@ -827,8 +827,10 @@ impl JiraReadinessProbe {
         // authenticated API connection and avoids cross-host redirect/TLS
         // failures in long-running installations.
         url.query_pairs_mut().append_pair("redirect", "false");
+        // Atlassian returns HTTP 406 when this non-redirect endpoint receives
+        // a media-specific Accept header. Let Jira select the representation,
+        // then enforce the declared type and file signature below.
         let response = authorize(access.client.get(url), &access.authorization)
-            .header(reqwest::header::ACCEPT, attachment.media_type.as_str())
             .send()
             .await
             .map_err(|error| {
