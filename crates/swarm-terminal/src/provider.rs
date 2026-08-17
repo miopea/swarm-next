@@ -31,6 +31,8 @@ pub enum ProviderCommandError {
     WorkspaceNotAbsolute,
     #[error("MCP configuration path must be valid UTF-8")]
     McpConfigNotUtf8,
+    #[error("Claude settings path must be valid UTF-8")]
+    ClaudeSettingsNotUtf8,
 }
 
 pub trait ProviderTerminalAdapter {
@@ -62,6 +64,31 @@ pub trait ProviderTerminalAdapter {
 
 #[derive(Clone, Debug, Default)]
 pub struct ClaudeCodeAdapter;
+
+impl ClaudeCodeAdapter {
+    /// Builds a Claude command that keeps Swarm's isolated session profile while
+    /// layering the operator's machine settings onto the provider process.
+    ///
+    /// # Errors
+    /// Returns an error for invalid workspace, MCP, or settings paths.
+    pub fn command_for_with_configuration(
+        &self,
+        workspace: &Path,
+        conversation: ClaudeConversationStart,
+        mcp_config: Option<&Path>,
+        settings: Option<&Path>,
+    ) -> Result<ProviderCommand, ProviderCommandError> {
+        let mut command = self.command_for_with_mcp(workspace, conversation, mcp_config)?;
+        if let Some(settings) = settings {
+            let settings = settings
+                .to_str()
+                .ok_or(ProviderCommandError::ClaudeSettingsNotUtf8)?;
+            command.arguments.push("--settings".into());
+            command.arguments.push(settings.into());
+        }
+        Ok(command)
+    }
+}
 
 impl ProviderTerminalAdapter for ClaudeCodeAdapter {
     fn command_for_with_mcp(
@@ -186,6 +213,28 @@ mod tests {
                 ["--mcp-config", "/state/swarm-next/agents/worker.json"]
             );
         }
+    }
+
+    #[test]
+    fn claude_layers_operator_settings_without_replacing_private_session_state() {
+        let command = ClaudeCodeAdapter
+            .command_for_with_configuration(
+                Path::new("/workspace/example"),
+                ClaudeConversationStart::Continue,
+                Some(Path::new("/state/swarm-next/agents/worker.json")),
+                Some(Path::new("/home/operator/.claude/settings.json")),
+            )
+            .unwrap();
+        assert_eq!(
+            command.arguments,
+            [
+                "--continue",
+                "--mcp-config",
+                "/state/swarm-next/agents/worker.json",
+                "--settings",
+                "/home/operator/.claude/settings.json",
+            ]
+        );
     }
     #[test]
     fn relative_workspace_fails_closed() {

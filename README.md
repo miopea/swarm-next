@@ -124,8 +124,11 @@ old host, refuses active sessions, switches the API and sidecar together, and
 restores both previous pointers if health verification fails.
 
 Claude runs with an isolated profile at
-`~/.local/state/swarm-next/providers/claude`, keeping the host-wide profile
-read-only. Authenticate that profile once before dogfooding:
+`~/.local/state/swarm-next/providers/claude`, keeping credentials and durable
+conversation state separate. Swarm layers the operator's read-only
+`~/.claude/settings.json` onto every Claude worker, so machine-wide permissions,
+hooks, and auto-mode policy remain consistent without moving session history.
+Authenticate the isolated profile once before dogfooding:
 
 ```sh
 CLAUDE_CONFIG_DIR="$HOME/.local/state/swarm-next/providers/claude" claude

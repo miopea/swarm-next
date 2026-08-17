@@ -10,8 +10,7 @@ use nix::unistd::Uid;
 use swarm_domain::WorkerSessionId;
 use swarm_terminal::{
     ClaudeCodeAdapter, CodexAdapter, HostRequest, HostResponse, HostSessionSummary,
-    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION, ProviderTerminalAdapter,
-    SessionRegistry, TerminalHostStatus,
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION, SessionRegistry, TerminalHostStatus,
 };
 use thiserror::Error;
 use tokio::{
@@ -327,7 +326,15 @@ fn dispatch_blocking(
             mcp_config,
             allow_outside_roots,
         } => ClaudeCodeAdapter
-            .command_for_with_mcp(&workspace, conversation, mcp_config.as_deref())
+            .command_for_with_configuration(
+                &workspace,
+                conversation,
+                mcp_config.as_deref(),
+                std::env::var_os("SWARM_CLAUDE_SETTINGS_PATH")
+                    .map(PathBuf::from)
+                    .filter(|path| path.is_file())
+                    .as_deref(),
+            )
             .map_err(|error| error.to_string())
             .and_then(|command| {
                 registry

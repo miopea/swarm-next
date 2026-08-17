@@ -119,6 +119,7 @@ grep -q '^Environment=PATH=%h/.cargo/bin:%h/.local/share/pnpm:%h/.local/bin:/usr
 [ -d "$SWARM_WORKSPACE_ROOT/queen" ]
 grep -q "ReadWritePaths=$SWARM_STATE_ROOT" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "CLAUDE_CONFIG_DIR=$SWARM_STATE_ROOT/providers/claude" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
+grep -q 'SWARM_CLAUDE_SETTINGS_PATH=%h/.claude/settings.json' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
 grep -q 'PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
 grep -q '^RuntimeDirectory=swarm-next$' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
 if grep -q '^RuntimeDirectory=' "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"; then
