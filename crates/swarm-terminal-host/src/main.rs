@@ -8,8 +8,13 @@ use swarm_terminal_host::HostServer;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+mod mcp_proxy;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if env::args().nth(1).as_deref() == Some("mcp-proxy") {
+        return mcp_proxy::run().await.map_err(Into::into);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| "swarm_terminal_host=info".into()),

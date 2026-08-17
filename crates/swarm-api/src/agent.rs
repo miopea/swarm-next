@@ -42,6 +42,7 @@ use tokio::sync::Notify;
 use tower::ServiceExt;
 
 const CONFIG_SERVER_NAME: &str = "swarm-next";
+const MCP_BRIDGE_COMMAND: &str = "swarm-next-terminal-host";
 const TOKEN_BYTES: usize = 32;
 
 #[derive(Clone)]
@@ -94,6 +95,10 @@ impl AgentBridge {
                 .authenticate_worker_agent(&digest)?
                 .is_some_and(|profile| profile.id == worker_id)
             {
+                if !config_uses_stdio_bridge(&contents) {
+                    let payload = self.worker_config_payload(&token)?;
+                    write_private_atomic(&path, &payload)?;
+                }
                 return Ok(path);
             }
         }
@@ -103,17 +108,25 @@ impl AgentBridge {
         self.tasks
             .store()
             .replace_worker_agent_credential(worker_id, &digest)?;
-        let payload = serde_json::to_vec_pretty(&json!({
-            "mcpServers": {
-                CONFIG_SERVER_NAME: {
-                    "type": "http",
-                    "url": self.mcp_url.as_ref(),
-                    "headers": { "Authorization": format!("Bearer {token}") }
-                }
-            }
-        }))?;
+        let payload = self.worker_config_payload(&token)?;
         write_private_atomic(&path, &payload)?;
         Ok(path)
+    }
+
+    fn worker_config_payload(&self, token: &str) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec_pretty(&json!({
+            "mcpServers": {
+                CONFIG_SERVER_NAME: {
+                    "type": "stdio",
+                    "command": MCP_BRIDGE_COMMAND,
+                    "args": ["mcp-proxy"],
+                    "env": {
+                        "SWARM_MCP_URL": self.mcp_url.as_ref(),
+                        "SWARM_MCP_AUTHORIZATION": format!("Bearer {token}")
+                    }
+                }
+            }
+        }))
     }
 
     fn authenticate(&self, headers: &HeaderMap) -> Result<AgentPrincipal, AgentBridgeError> {
@@ -1153,11 +1166,26 @@ fn generate_token() -> Result<String, AgentBridgeError> {
 fn token_from_config(contents: &str) -> Option<String> {
     let config: Value = serde_json::from_str(contents).ok()?;
     config
-        .pointer("/mcpServers/swarm-next/headers/Authorization")?
+        .pointer("/mcpServers/swarm-next/env/SWARM_MCP_AUTHORIZATION")
+        .or_else(|| config.pointer("/mcpServers/swarm-next/headers/Authorization"))?
         .as_str()?
         .strip_prefix("Bearer ")
         .filter(|token| token.len() == TOKEN_BYTES * 2)
         .map(str::to_owned)
+}
+
+fn config_uses_stdio_bridge(contents: &str) -> bool {
+    let Ok(config) = serde_json::from_str::<Value>(contents) else {
+        return false;
+    };
+    config
+        .pointer("/mcpServers/swarm-next/type")
+        .and_then(Value::as_str)
+        == Some("stdio")
+        && config
+            .pointer("/mcpServers/swarm-next/command")
+            .and_then(Value::as_str)
+            == Some(MCP_BRIDGE_COMMAND)
 }
 
 fn write_private_atomic(path: &Path, payload: &[u8]) -> Result<(), std::io::Error> {
@@ -1285,6 +1313,40 @@ mod tests {
         let response = handle(bridge, mcp_request(None, "tools/list", &json!({}))).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
+    }
+
+    #[test]
+    fn valid_http_configs_upgrade_to_the_local_bridge_without_rotating_authority() {
+        let (bridge, _, queen_id, _, _) = setup();
+        let path = bridge.ensure_worker_config(queen_id).unwrap();
+        let token = bearer_from_path(&path);
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "mcpServers": {
+                    "swarm-next": {
+                        "type": "http",
+                        "url": "http://127.0.0.1:8876/mcp",
+                        "headers": { "Authorization": format!("Bearer {token}") }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(bridge.ensure_worker_config(queen_id).unwrap(), path);
+        assert_eq!(bearer_from_path(&path), token);
+        let upgraded: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(
+            upgraded.pointer("/mcpServers/swarm-next/type"),
+            Some(&Value::String("stdio".into()))
+        );
+        assert_eq!(
+            upgraded.pointer("/mcpServers/swarm-next/command"),
+            Some(&Value::String(MCP_BRIDGE_COMMAND.into()))
+        );
     }
 
     #[tokio::test]

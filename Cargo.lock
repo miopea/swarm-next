@@ -2780,6 +2780,7 @@ name = "swarm-terminal-host"
 version = "0.1.0"
 dependencies = [
  "nix",
+ "reqwest",
  "serde_json",
  "swarm-domain",
  "swarm-terminal",
