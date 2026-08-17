@@ -13032,6 +13032,7 @@ mod tests {
         let grant = issue_terminal_grant(&app, session.id()).await;
         let second_grant = issue_terminal_grant(&app, session.id()).await;
         let resume_grant = issue_terminal_grant(&app, session.id()).await;
+        let foreground_grant = issue_terminal_grant(&app, session.id()).await;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -13044,11 +13045,11 @@ mod tests {
         let desktop_device = "019fedfc-1c30-70e1-a5e2-9a3c94268093";
         let phone_device = "019fedfc-1c30-70e1-a5e2-9a3c94268094";
         let mut websocket =
-            connect_terminal(&websocket_url, &grant, 30, 100, None, desktop_device).await;
+            connect_terminal(&websocket_url, &grant, 30, 100, None, desktop_device, true).await;
 
         let (initial, initial_dimensions, initial_sequence) =
             terminal_output_until(&mut websocket, "socket-ready").await;
-        assert_eq!(initial_dimensions, Some((24, 80)));
+        assert_eq!(initial_dimensions, Some((30, 100)));
         assert!(String::from_utf8_lossy(&initial).contains("socket-ready"));
 
         let mut resumed_websocket = connect_terminal(
@@ -13058,6 +13059,7 @@ mod tests {
             100,
             Some(initial_sequence),
             desktop_device,
+            true,
         )
         .await;
         let resumed_state = tokio::time::timeout(Duration::from_secs(1), resumed_websocket.next())
@@ -13073,11 +13075,19 @@ mod tests {
         assert_eq!(resumed_state["running"], true);
         assert_eq!(resumed_state["latest_sequence"], initial_sequence);
 
-        let mut second_websocket =
-            connect_terminal(&websocket_url, &second_grant, 16, 48, None, phone_device).await;
+        let mut second_websocket = connect_terminal(
+            &websocket_url,
+            &second_grant,
+            16,
+            48,
+            None,
+            phone_device,
+            false,
+        )
+        .await;
         let (_, second_initial_dimensions, _) =
             terminal_output_until(&mut second_websocket, "socket-ready").await;
-        assert_eq!(second_initial_dimensions, Some((24, 80)));
+        assert_eq!(second_initial_dimensions, Some((30, 100)));
 
         websocket
             .send(ClientMessage::Text(
@@ -13170,9 +13180,26 @@ mod tests {
         };
         assert_eq!((snapshot.rows, snapshot.columns), (46, 140));
 
-        websocket
+        // Refreshing or selecting this terminal in a visible foreground view
+        // is an explicit geometry claim. It repairs dimensions left by another
+        // device without requiring the operator to type first.
+        let mut foreground_websocket = connect_terminal(
+            &websocket_url,
+            &foreground_grant,
+            50,
+            150,
+            None,
+            desktop_device,
+            true,
+        )
+        .await;
+        let (_, foreground_dimensions, _) =
+            terminal_output_until(&mut foreground_websocket, "socket:phone").await;
+        assert_eq!(foreground_dimensions, Some((50, 150)));
+
+        second_websocket
             .send(ClientMessage::Text(
-                r#"{"type":"resize","rows":50,"columns":150}"#.into(),
+                r#"{"type":"resize","rows":55,"columns":160}"#.into(),
             ))
             .await
             .unwrap();
@@ -13181,7 +13208,7 @@ mod tests {
         else {
             panic!("fresh terminal read must return a snapshot");
         };
-        assert_eq!((snapshot.rows, snapshot.columns), (46, 140));
+        assert_eq!((snapshot.rows, snapshot.columns), (50, 150));
 
         let mut reused_request = websocket_url.into_client_request().unwrap();
         reused_request.headers_mut().insert(
@@ -13233,6 +13260,7 @@ mod tests {
         columns: u16,
         after_sequence: Option<u64>,
         device_id: &str,
+        claim_geometry: bool,
     ) -> WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>> {
         let mut request = websocket_url.into_client_request().unwrap();
         request.headers_mut().insert(
@@ -13249,7 +13277,7 @@ mod tests {
         websocket
             .send(ClientMessage::Text(
                 format!(
-                    r#"{{"type":"resume","after_sequence":{},"rows":{rows},"columns":{columns},"device_id":"{device_id}"}}"#,
+                    r#"{{"type":"resume","after_sequence":{},"rows":{rows},"columns":{columns},"device_id":"{device_id}","claim_geometry":{claim_geometry}}}"#,
                     after_sequence
                         .map_or_else(|| "null".to_owned(), |sequence| sequence.to_string())
                 )

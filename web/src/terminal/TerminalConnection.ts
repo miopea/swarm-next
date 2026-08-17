@@ -195,6 +195,11 @@ export class TerminalConnection {
         rows: size.rows,
         columns: size.columns,
         device_id: this.#deviceId,
+        // The selected foreground terminal is the operator's current viewport.
+        // Claiming only during a visible attachment lets refresh and worker
+        // selection repair stale geometry without allowing a background PWA
+        // to fight the active desktop or mobile view.
+        claim_geometry: document.visibilityState === "visible",
       }),
     );
   }

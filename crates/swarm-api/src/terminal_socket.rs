@@ -32,6 +32,8 @@ enum ClientTerminalMessage {
         columns: u16,
         #[serde(default)]
         device_id: Option<PresenceDeviceId>,
+        #[serde(default)]
+        claim_geometry: bool,
     },
     Input {
         text: String,
@@ -56,7 +58,7 @@ pub async fn serve_terminal_socket(
     task_store: TaskStore,
     control_room_notify: Arc<Notify>,
 ) {
-    let Some((after_sequence, initial_size, owner_device_id)) =
+    let Some((after_sequence, initial_size, owner_device_id, claim_geometry)) =
         complete_initial_handshake(&mut socket).await
     else {
         return;
@@ -72,6 +74,53 @@ pub async fn serve_terminal_socket(
             }
         }
     });
+
+    // Only the selected foreground terminal asks to replace stale geometry.
+    // ResizeObserver messages remain owner-bound, so background desktop and
+    // mobile viewers cannot oscillate the shared provider process afterward.
+    if claim_geometry {
+        let Some(owner_device_id) = owner_device_id else {
+            let _ = send_control(
+                &outbound_sender,
+                &ServerTerminalMessage::Error {
+                    code: "terminal_resize_authority_unavailable",
+                    message: "terminal geometry claim requires an identified device".into(),
+                },
+            )
+            .await;
+            drop(outbound_sender);
+            let _ = writer.await;
+            return;
+        };
+        match task_store.claim_worker_geometry(session_id, owner_device_id) {
+            Ok(true) => {
+                if !forward_host_request(
+                    &terminal_host,
+                    HostRequest::Resize {
+                        session_id,
+                        size: initial_size,
+                    },
+                    &outbound_sender,
+                )
+                .await
+                {
+                    drop(outbound_sender);
+                    let _ = writer.await;
+                    return;
+                }
+            }
+            Ok(false) | Err(_) => {
+                let _ = send_control(
+                    &outbound_sender,
+                    &ServerTerminalMessage::Error {
+                        code: "terminal_resize_authority_unavailable",
+                        message: "terminal geometry claim could not be recorded".into(),
+                    },
+                )
+                .await;
+            }
+        }
+    }
 
     let output_host = terminal_host.clone();
     let output_sender = outbound_sender.clone();
@@ -109,9 +158,9 @@ pub async fn serve_terminal_socket(
 
 async fn complete_initial_handshake(
     socket: &mut WebSocket,
-) -> Option<(Option<u64>, TerminalSize, Option<PresenceDeviceId>)> {
+) -> Option<(Option<u64>, TerminalSize, Option<PresenceDeviceId>, bool)> {
     let initial = tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv()).await;
-    let (after_sequence, initial_size, owner_device_id) = match initial {
+    let (after_sequence, initial_size, owner_device_id, claim_geometry) = match initial {
         Ok(Some(Ok(Message::Text(text)))) => {
             match serde_json::from_str::<ClientTerminalMessage>(&text) {
                 Ok(ClientTerminalMessage::Resume {
@@ -119,9 +168,13 @@ async fn complete_initial_handshake(
                     rows,
                     columns,
                     device_id,
-                }) if rows >= MIN_TERMINAL_ROWS && columns >= MIN_TERMINAL_COLUMNS => {
-                    (after_sequence, TerminalSize::new(rows, columns), device_id)
-                }
+                    claim_geometry,
+                }) if rows >= MIN_TERMINAL_ROWS && columns >= MIN_TERMINAL_COLUMNS => (
+                    after_sequence,
+                    TerminalSize::new(rows, columns),
+                    device_id,
+                    claim_geometry,
+                ),
                 Ok(_) => {
                     send_direct_error(
                         socket,
@@ -159,10 +212,15 @@ async fn complete_initial_handshake(
     };
 
     // A terminal is one server-owned PTY with potentially many desktop and
-    // mobile viewers. Merely attaching a viewer must not resize that shared
-    // provider process. The requested geometry is retained by this connection
-    // and becomes authoritative only after this device sends operator input.
-    Some((after_sequence, initial_size, owner_device_id))
+    // mobile viewers. A selected foreground attachment may explicitly claim
+    // its initial geometry; otherwise the requested size is retained by this
+    // connection and becomes authoritative after this device sends input.
+    Some((
+        after_sequence,
+        initial_size,
+        owner_device_id,
+        claim_geometry,
+    ))
 }
 
 async fn stream_output(

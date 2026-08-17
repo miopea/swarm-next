@@ -127,6 +127,7 @@ test("requests a no-store grant and applies a snapshot before sequenced deltas",
     rows: 24,
     columns: 80,
     device_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093",
+    claim_geometry: true,
   });
   sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
   sockets[0].message(outputFrame(1n, "one"));
@@ -208,6 +209,7 @@ test("detects sequence gaps and reconnects from a fresh snapshot", async () => {
     rows: 24,
     columns: 80,
     device_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093",
+    claim_geometry: true,
   });
   expect(handlers.onState).toHaveBeenCalledWith(
     "disconnected",
@@ -237,6 +239,7 @@ test("unexpected disconnect obtains a fresh grant and resumes without duplicatin
     rows: 24,
     columns: 80,
     device_id: "019fedfc-1c30-70e1-a5e2-9a3c94268093",
+    claim_geometry: true,
   });
   sockets[1].message(outputFrame(2n, "two"));
   await vi.waitFor(() => expect(connection.sequence).toBe(2));
