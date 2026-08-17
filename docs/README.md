@@ -33,6 +33,7 @@ Read and review these documents in order:
 29. [Legacy final product contract audit](legacy/final-contract-audit.md)
 30. [Legacy stable release boundaries](legacy/stable-release-boundaries.md)
 31. [Legacy atlas completion audit](legacy/atlas-completion-audit.md)
+32. [Ring 1 observation log](legacy/ring1-observation-log.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do
