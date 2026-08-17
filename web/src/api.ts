@@ -61,6 +61,8 @@ export {
   fetchJiraProjectStatuses,
   fetchJiraReadiness,
   fetchJiraTaskLinks,
+  fetchJiraTaskDetail,
+  fetchJiraTaskAttachment,
   reconcileJira,
   replaceJiraMappings,
   retryJiraTaskLink,
@@ -115,6 +117,8 @@ export type {
   JiraReadiness,
   JiraStatusMapping,
   JiraTaskLink,
+  JiraTaskDetail,
+  JiraTaskAttachment,
 } from "./api/jira";
 export type {
   Task,

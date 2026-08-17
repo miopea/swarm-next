@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use futures_util::StreamExt;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use swarm_domain::{JiraConnectionState, TaskState};
@@ -17,6 +18,8 @@ const MAX_ISSUES: usize = 200;
 const MAX_TRANSITIONS: usize = 128;
 const MAX_ISSUE_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_COMMENTS: usize = 100;
+const MAX_ATTACHMENTS: usize = 40;
+const MAX_ATTACHMENT_BYTES: usize = 15 * 1024 * 1024;
 
 #[derive(Clone, Default)]
 pub(crate) enum JiraReadinessProbe {
@@ -89,6 +92,28 @@ pub(crate) struct JiraComment {
     pub body: String,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct JiraIssueAttachment {
+    pub id: String,
+    pub filename: String,
+    pub media_type: String,
+    pub byte_size: usize,
+    pub is_image: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct JiraIssueDetail {
+    pub summary: String,
+    pub description: String,
+    pub attachments: Vec<JiraIssueAttachment>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct JiraAttachmentContent {
+    pub media_type: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -184,6 +209,17 @@ struct JiraIssueFields {
     status: JiraIssueStatus,
     assignee: Option<JiraIssueAssignee>,
     updated: String,
+    #[serde(default)]
+    attachment: Vec<JiraIssueAttachmentResponse>,
+}
+
+#[derive(Deserialize)]
+struct JiraIssueAttachmentResponse {
+    id: String,
+    filename: String,
+    #[serde(rename = "mimeType")]
+    media_type: String,
+    size: usize,
 }
 
 #[derive(Deserialize)]
@@ -712,6 +748,110 @@ impl JiraReadinessProbe {
             .collect())
     }
 
+    pub(crate) async fn issue_detail(
+        &self,
+        issue_id_or_key: &str,
+    ) -> Result<JiraIssueDetail, JiraAdapterError> {
+        let issue = valid_issue_identifier(issue_id_or_key)?;
+        let access = self.access().await?;
+        let mut url = endpoint(&access.base_url, "/rest/api/3/issue/")?;
+        url.path_segments_mut()
+            .map_err(|()| JiraAdapterError::InvalidResponse)?
+            .pop_if_empty()
+            .push(issue);
+        url.query_pairs_mut().append_pair(
+            "fields",
+            "summary,description,attachment,status,assignee,updated",
+        );
+        let response = authorize(access.client.get(url), &access.authorization)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|_| JiraAdapterError::NetworkUnavailable)?;
+        ensure_success(response.status())?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| JiraAdapterError::InvalidResponse)?;
+        let response = serde_json::from_slice::<JiraIssueResponse>(&bytes)
+            .map_err(|_| JiraAdapterError::InvalidResponse)?;
+        let summary = response.fields.summary.trim().to_owned();
+        if summary.is_empty() || summary.len() > 240 {
+            return Err(JiraAdapterError::InvalidResponse);
+        }
+        if response.fields.attachment.len() > MAX_ATTACHMENTS {
+            return Err(JiraAdapterError::ResponseLimitExceeded);
+        }
+        let attachments = response
+            .fields
+            .attachment
+            .into_iter()
+            .filter_map(valid_attachment)
+            .collect();
+        Ok(JiraIssueDetail {
+            summary,
+            description: response
+                .fields
+                .description
+                .as_ref()
+                .map(jira_document_text)
+                .unwrap_or_default(),
+            attachments,
+        })
+    }
+
+    pub(crate) async fn attachment(
+        &self,
+        issue_id_or_key: &str,
+        attachment_id: &str,
+    ) -> Result<JiraAttachmentContent, JiraAdapterError> {
+        let attachment_id = valid_attachment_identifier(attachment_id)?;
+        let detail = self.issue_detail(issue_id_or_key).await?;
+        let attachment = detail
+            .attachments
+            .into_iter()
+            .find(|candidate| candidate.id == attachment_id)
+            .filter(|candidate| candidate.is_image)
+            .ok_or(JiraAdapterError::PermissionDenied)?;
+        if attachment.byte_size > MAX_ATTACHMENT_BYTES {
+            return Err(JiraAdapterError::ResponseLimitExceeded);
+        }
+        let access = self.access().await?;
+        let mut url = endpoint(&access.base_url, "/rest/api/3/attachment/content/")?;
+        url.path_segments_mut()
+            .map_err(|()| JiraAdapterError::InvalidResponse)?
+            .pop_if_empty()
+            .push(attachment_id);
+        let response = authorize(access.client.get(url), &access.authorization)
+            .header(reqwest::header::ACCEPT, attachment.media_type.as_str())
+            .send()
+            .await
+            .map_err(|_| JiraAdapterError::NetworkUnavailable)?;
+        ensure_success(response.status())?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_ATTACHMENT_BYTES as u64)
+        {
+            return Err(JiraAdapterError::ResponseLimitExceeded);
+        }
+        let mut bytes = Vec::with_capacity(attachment.byte_size.min(MAX_ATTACHMENT_BYTES));
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| JiraAdapterError::InvalidResponse)?;
+            if bytes.len().saturating_add(chunk.len()) > MAX_ATTACHMENT_BYTES {
+                return Err(JiraAdapterError::ResponseLimitExceeded);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if bytes.is_empty() || !matches_image_signature(&attachment.media_type, &bytes) {
+            return Err(JiraAdapterError::InvalidResponse);
+        }
+        Ok(JiraAttachmentContent {
+            media_type: attachment.media_type,
+            bytes,
+        })
+    }
+
     pub(crate) async fn add_comment(
         &self,
         issue_id_or_key: &str,
@@ -946,6 +1086,62 @@ fn valid_project(project: &JiraProject) -> bool {
         && project.key.len() <= 64
         && !project.name.trim().is_empty()
         && project.name.len() <= 240
+}
+
+fn valid_issue_identifier(value: &str) -> Result<&str, JiraAdapterError> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
+        return Err(JiraAdapterError::InvalidResponse);
+    }
+    Ok(value)
+}
+
+fn valid_attachment_identifier(value: &str) -> Result<&str, JiraAdapterError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        return Err(JiraAdapterError::InvalidResponse);
+    }
+    Ok(value)
+}
+
+fn valid_attachment(value: JiraIssueAttachmentResponse) -> Option<JiraIssueAttachment> {
+    let filename = value.filename.trim().to_owned();
+    let media_type = value.media_type.trim().to_ascii_lowercase();
+    if valid_attachment_identifier(&value.id).is_err()
+        || filename.is_empty()
+        || filename.len() > 240
+        || filename.chars().any(char::is_control)
+        || media_type.len() > 128
+        || media_type.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let is_image = matches!(
+        media_type.as_str(),
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    );
+    Some(JiraIssueAttachment {
+        id: value.id,
+        filename,
+        media_type,
+        byte_size: value.size,
+        is_image,
+    })
+}
+
+fn matches_image_signature(media_type: &str, bytes: &[u8]) -> bool {
+    match media_type {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
 }
 
 fn recommended_state(category_key: &str) -> TaskState {
@@ -1255,6 +1451,58 @@ mod tests {
         assert_eq!(issues[0].key, "WEB-42");
         assert_eq!(issues[0].description, "Verify desktop\nand mobile.");
         assert_eq!(issues[0].assignee_name.as_deref(), Some("Bea"));
+    }
+
+    #[tokio::test]
+    async fn fetches_bounded_issue_detail_and_validated_image_attachment() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/rest/api/3/issue/WEB-42",
+                get(|Query(query): Query<HashMap<String, String>>| async move {
+                    assert!(query.get("fields").is_some_and(|fields| fields.contains("attachment")));
+                    Json(json!({
+                        "id": "20001",
+                        "key": "WEB-42",
+                        "fields": {
+                            "summary": "Show the evidence",
+                            "description": { "type": "doc", "version": 1, "content": [{
+                                "type": "paragraph", "content": [{ "type": "text", "text": "Full Jira detail" }]
+                            }] },
+                            "status": { "id": "1", "name": "To Do" },
+                            "assignee": null,
+                            "updated": "2026-08-16T13:00:00.000+0000",
+                            "attachment": [{
+                                "id": "attachment-1", "filename": "evidence.png", "mimeType": "image/png", "size": 12
+                            }]
+                        }
+                    }))
+                }),
+            )
+            .route(
+                "/rest/api/3/attachment/content/attachment-1",
+                get(|| async { ([(reqwest::header::CONTENT_TYPE.as_str(), "image/png")], b"\x89PNG\r\n\x1a\nbody".to_vec()) }),
+            );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let adapter = JiraReadinessProbe::configured(
+            &format!("http://{address}"),
+            "operator@example.test",
+            "token",
+        )
+        .unwrap();
+
+        let detail = adapter.issue_detail("WEB-42").await.unwrap();
+        assert_eq!(detail.description, "Full Jira detail");
+        assert_eq!(detail.attachments.len(), 1);
+        assert!(detail.attachments[0].is_image);
+        let image = adapter.attachment("WEB-42", "attachment-1").await.unwrap();
+        assert_eq!(image.media_type, "image/png");
+        assert!(image.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(
+            adapter.attachment("WEB-42", "not-linked").await,
+            Err(JiraAdapterError::PermissionDenied)
+        );
     }
 
     #[tokio::test]

@@ -52,6 +52,18 @@ export type JiraTaskLink = {
 };
 export type JiraComment = { id: string; author_name: string; body: string; created_at: string; updated_at: string };
 export type JiraCommentDispatch = { state: "queued" | "dispatching" | "delivered" | "conflict" | "uncertain" };
+export type JiraTaskAttachment = { id: string; filename: string; media_type: string; byte_size: number; is_image: boolean };
+export type JiraTaskDetail = { summary: string; description: string; attachments: JiraTaskAttachment[] };
+
+export async function fetchJiraTaskDetail(operatorToken: string, taskId: string): Promise<JiraTaskDetail> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/task-links/${encodeURIComponent(taskId)}/detail`);
+  return response.json() as Promise<JiraTaskDetail>;
+}
+
+export async function fetchJiraTaskAttachment(operatorToken: string, taskId: string, attachmentId: string): Promise<Blob> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/task-links/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`);
+  return response.blob();
+}
 
 export async function fetchJiraComments(operatorToken: string, taskId: string): Promise<JiraComment[]> {
   const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/jira/task-links/${encodeURIComponent(taskId)}/comments`);

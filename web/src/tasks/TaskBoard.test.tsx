@@ -20,6 +20,12 @@ const worker: Worker = {
   workspace: "/workspace/swarm", autostart: false, position: 1, active_session_id: null,
   created_at: 1, updated_at: 1, running: false, attention_state: "sleeping",
 };
+const jiraTaskLink = {
+  issue_id: "20001", issue_key: "WEB-42", issue_url: "https://jira.example.test/browse/WEB-42", binding_id: "binding-1",
+  project_key: "WEB", project_name: "Website Services", task_id: task.id,
+  jira_status_id: "1", jira_status_name: "To Do", jira_assignee_account_id: "account-1", jira_assignee_name: "Bradford",
+  remote_updated_at: "2026-08-13T13:00:00Z", last_synced_at: 1, outbound_state: null,
+} as const;
 
 function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> = {}) {
   const props: React.ComponentProps<typeof TaskBoard> = {
@@ -227,6 +233,46 @@ test("keeps Jira identity and remote status visible while routing work", () => {
   expect(within(jiraDetails).getByText("Status")).toBeInTheDocument();
   expect(within(jiraDetails).getByText("Assignee")).toBeInTheDocument();
   expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
+});
+
+test("opens a read-only task detail with Jira description and image on double click", async () => {
+  const createObjectURL = vi.fn().mockReturnValue("blob:jira-image");
+  const revokeObjectURL = vi.fn();
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+  vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+    if (url.endsWith("/detail")) {
+      return Promise.resolve(new Response(JSON.stringify({
+        summary: task.title,
+        description: "Full Jira description\nwith the missing screenshot.",
+        attachments: [{ id: "attachment-1", filename: "evidence.png", media_type: "image/png", byte_size: 128, is_image: true }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+    return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" }), { status: 200 }));
+  }));
+  renderBoard({ jiraTaskLinks: [jiraTaskLink] });
+
+  fireEvent.doubleClick(screen.getByRole("article", { name: task.title }));
+
+  const dialog = await screen.findByRole("dialog", { name: task.title });
+  expect(within(dialog).getByText(/Full Jira description/)).toBeInTheDocument();
+  const image = await within(dialog).findByRole("img", { name: "evidence.png" });
+  expect(image).toHaveAttribute("src", "blob:jira-image");
+  expect(within(dialog).getByRole("link", { name: "Open in Jira" })).toHaveAttribute("href", jiraTaskLink.issue_url);
+  expect(screen.queryByRole("form", { name: `Edit ${task.title}` })).not.toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:jira-image"));
+});
+
+test("keeps edit explicit and ignores double clicks on interactive task controls", () => {
+  renderBoard({ jiraTaskLinks: [jiraTaskLink] });
+  const card = screen.getByRole("article", { name: task.title });
+
+  const edit = within(card).getByRole("button", { name: "Edit" });
+  fireEvent.doubleClick(edit);
+  expect(screen.queryByRole("dialog", { name: task.title })).not.toBeInTheDocument();
+  fireEvent.click(edit);
+  expect(within(card).getByRole("form", { name: `Edit ${task.title}` })).toBeInTheDocument();
 });
 
 test("reads and posts Jira discussion without leaving the task", async () => {

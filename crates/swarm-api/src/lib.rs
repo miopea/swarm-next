@@ -2383,6 +2383,14 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/integrations/jira/task-links", get(jira_task_links))
         .route(
+            "/api/v1/integrations/jira/task-links/{task_id}/detail",
+            get(jira_task_detail),
+        )
+        .route(
+            "/api/v1/integrations/jira/task-links/{task_id}/attachments/{attachment_id}",
+            get(jira_task_attachment),
+        )
+        .route(
             "/api/v1/integrations/jira/task-links/{task_id}/comments",
             get(jira_task_comments).post(create_jira_task_comment),
         )
@@ -4239,6 +4247,76 @@ async fn jira_task_comments(
         .await
         .map_err(jira_adapter_error)?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(comments)).into_response())
+}
+
+async fn jira_task_detail(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let link = task_store(&state)?
+        .jira_issue_link_for_task(parse_task_id(&task_id)?)
+        .map_err(|error| task_store_error(&error))?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "jira_link_not_found",
+                "this task is not linked to Jira",
+            )
+        })?;
+    let detail = state
+        .jira_readiness
+        .issue_detail(&link.issue_key)
+        .await
+        .map_err(jira_adapter_error)?;
+    Ok(([(header::CACHE_CONTROL, "private, no-store")], Json(detail)).into_response())
+}
+
+async fn jira_task_attachment(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((task_id, attachment_id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let link = task_store(&state)?
+        .jira_issue_link_for_task(parse_task_id(&task_id)?)
+        .map_err(|error| task_store_error(&error))?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "jira_link_not_found",
+                "this task is not linked to Jira",
+            )
+        })?;
+    let content = state
+        .jira_readiness
+        .attachment(&link.issue_key, &attachment_id)
+        .await
+        .map_err(jira_adapter_error)?;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response_headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response_headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; sandbox"),
+    );
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&content.media_type)
+            .map_err(|_| jira_adapter_error(jira::JiraAdapterError::InvalidResponse))?,
+    );
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("inline"),
+    );
+    Ok((response_headers, content.bytes).into_response())
 }
 
 async fn create_jira_task_comment(

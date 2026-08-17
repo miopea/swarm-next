@@ -16,6 +16,7 @@ import EmailResolutionPanel from "./EmailResolutionPanel";
 import JiraDiscussion from "./JiraDiscussion";
 import TaskActivityPanel from "./TaskActivityPanel";
 import TaskAssignment from "./TaskAssignment";
+import TaskDetailDialog from "./TaskDetailDialog";
 import TaskMetadata from "./TaskMetadata";
 
 export type TaskCardProps = {
@@ -64,6 +65,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
   const [menuOpen, setMenuOpen] = useState(false);
   const [discussionOpen, setDiscussionOpen] = useState(false);
   const [emailDetailsOpen, setEmailDetailsOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const cardRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -105,6 +107,11 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
     setDiscussionOpen((current) => !current);
   }
 
+  function openDetailsFromEvent(target: EventTarget | null) {
+    if (target instanceof Element && target.closest("button, a, input, select, textarea, form")) return;
+    setDetailsOpen(true);
+  }
+
   return (
     <article
       ref={cardRef}
@@ -120,7 +127,8 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
       onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragLeave(); }}
       onDrop={(event) => { event.preventDefault(); onDropBefore(); }}
       onContextMenu={(event) => { event.preventDefault(); setMenuOpen(true); }}
-      onKeyDown={(event) => { if (event.key === "Escape") setMenuOpen(false); }}
+      onDoubleClick={(event) => openDetailsFromEvent(event.target)}
+      onKeyDown={(event) => { if (event.key === "Escape") setMenuOpen(false); if (event.key === "Enter") openDetailsFromEvent(event.target); }}
     >
       <TaskMetadata task={task} jiraLink={jiraLink} busy={busy} onRetryJira={onRetryJira} />
       <h4>{task.title}</h4>
@@ -142,6 +150,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
       </div>
       {menuOpen && (
         <div className="task-menu" role="menu" aria-label={`${task.title} actions`}>
+          <button role="menuitem" onClick={() => runMenuAction(() => setDetailsOpen(true))}>View details</button>
           <button role="menuitem" onClick={() => runMenuAction(() => setEditing(true))}>Edit task</button>
           <button role="menuitem" onClick={() => runMenuAction(toggleHistory)}>{historyOpen ? "Hide history" : "Show history"}</button>
           {task.state !== "completed" && <button role="menuitem" disabled={busy || !canMoveEarlier} onClick={() => runMenuAction(onMoveEarlier)}>Move earlier</button>}
@@ -153,6 +162,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
       {historyOpen && <TaskActivityPanel activity={activity} loading={historyLoading} failed={historyError} onRetry={() => void loadActivity()} />}
       {discussionOpen && jiraLink && <JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} />}
       {emailDetailsOpen && emailSources.length > 0 && <EmailResolutionPanel operatorToken={operatorToken} task={task} sources={emailSources} />}
+      {detailsOpen && <TaskDetailDialog task={task} jiraLink={jiraLink} operatorToken={operatorToken} onClose={() => setDetailsOpen(false)} onEdit={() => { setDetailsOpen(false); setEditing(true); }} />}
     </article>
   );
 }
