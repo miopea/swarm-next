@@ -15,7 +15,7 @@ This is the working product audit for the first real developer week. It records 
 | Inspect Keeper/Member Apiary state | Pass | Pass | Apiary is supervisory; work creation remains on Tasks. Member Hives can see public Apiary structure without routine terminal noise. |
 | Resize and use a terminal | Pass in current code | Pass in current code | Terminal owns the remaining viewport, touch scrolling follows the content gesture, and a Jump to latest control appears away from the bottom. Re-prove after the next live release. |
 | Recover Queen automation submission | Test pass; live release pending | Same | Submission now waits for stable output, retries Enter, and proves the marker left the input instead of trusting a host acknowledgement. |
-| Find Legacy data for migration | Fixed; live release pending | Fixed; live release pending | Primary path discovers the normal local Legacy database read-only. File selection remains an advanced fallback. |
+| Find Legacy data for migration | Pass | Pass | Primary path discovers the normal local Legacy database read-only. File selection remains an advanced fallback. |
 | Understand runtime updates | Pass in current UI | Pass | Worker engine and App/API are separate cards with versions, risk, and action state. Re-prove progress across a real update after release. |
 | Find one worker or command in a 31-worker Hive | Pass | Pass | The Awake filter keeps the rail calm; quick navigation filters sleeping workers by name and scrolls inside its bounded dialog. Alt+K opens it from ordinary desktop controls. |
 
@@ -29,11 +29,13 @@ This is the working product audit for the first real developer week. It records 
 6. **Mobile terminal metadata is reduced.** The internal session identifier is hidden at phone sizes so the status and controls do not collide.
 7. **Legacy history no longer buries migration work.** Closed Legacy tasks, malformed records, and records staying in Legacy are hidden from the actionable preview by default, each with its own counted disclosure control.
 8. **A normal provider runtime is no longer a critical alert.** Loaded Claude and Codex process trees use the same 2/4 GiB pressure bands as automatic worker admission instead of the Rust service's smaller 256/512 MiB thresholds.
+9. **Runtime identities stay useful without consuming the card.** App/API and worker-engine surfaces share one version presenter that keeps the release and short revision while dropping development timestamps and process suffixes.
 
 ## Live deployed proof — 2026-08-18
 
 - Desktop and 412 × 915 phone layouts were exercised against `swarm2.bfgsolutions.net` on App/API `0.1.0-5a8a14b7d9ca`.
 - The normal Legacy database was found read-only, previewed, and cancelled. Release `0.1.0-ca4d9ff2ff0e` showed 16 actionable tasks initially, with 33 malformed records, 62 records staying in Legacy, and 1,708 closed tasks behind separate disclosures. No import was committed.
+- Runtime diagnostics were rechecked on `0.1.0-7d9538977d9c`: one loaded provider tree at 474.6 MiB remained **Normal**, machine memory remained separately visible, and the terminal-host service stayed at 43.9 MiB.
 - A merged Outlook task opened directly into its single review/edit dialog. Both images appeared, both attachment records were present, and guarded removal stayed visible without changing the task.
 - A long Queen terminal moved into scrollback with Shift+PageUp, exposed **Jump to latest**, and returned to the live prompt when selected.
 - Quick navigation opened from its toolbar action and Alt+K, filtered a 31-worker roster down to the requested Codex workers, and kept the result list scrollable at phone size.
@@ -58,9 +60,15 @@ This is the working product audit for the first real developer week. It records 
 - Resize the worker rail repeatedly and rotate/change viewport; confirm the terminal does not jump, blank, or retain stale geometry.
 - Run a worker-engine update and verify immediate progress, worker-engine build identity, completion, and accurate timeout recovery.
 - Run an App/API development reload with a changed and unchanged checkout; only the changed checkout should offer an action.
-- Discover the normal Legacy Hive from Migration, preview open tasks/workers, cancel, refresh, and confirm neither database changed.
 - Generate a worker routing description with Claude and verify the progress state resolves to an editable success or a specific recoverable error.
 - Close and reopen both desktop and Android PWAs; authentication and the current workspace should survive.
+
+## Catalogued refinements after dogfood blockers
+
+- Add search/filtering to the Crew settings roster once worker editing, removal, and reordering can retain an unambiguous position in a filtered 30+ worker list.
+- Split the main browser bundle by workspace after the functional milestone; the current production build is healthy but its shared entry chunk is about 522 kB before gzip.
+- Give compute load a user-facing interpretation only after observing real Hive baselines. Do not invent a warning threshold from one four-CPU machine.
+- Keep desktop and Android PWA persistence on the real-device acceptance list; a responsive browser viewport cannot prove installed-app storage behavior.
 
 ## Morning decisions
 

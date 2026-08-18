@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { deployedRevision, runtimeVersionIdentity, shortRevision } from "./runtimeVersion";
 
 type Props = {
   busy: boolean;
@@ -59,16 +60,3 @@ function ReloadConfirmation({ busy, onCancel, onConfirm }: { busy: boolean; onCa
   </div>;
 }
 
-function deployedRevision(version: string) {
-  return version.match(/-(?:dev-)?([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7) ?? "the current build";
-}
-
-function shortRevision(revision?: string | null) {
-  return revision?.slice(0, 7);
-}
-
-function runtimeVersionIdentity(version: string) {
-  const revision = version.match(/-dev-([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7);
-  const release = version.split("-dev-")[0];
-  return revision ? `${release} · revision ${revision}` : version;
-}

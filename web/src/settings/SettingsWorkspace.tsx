@@ -19,6 +19,7 @@ import JiraSettings from "./JiraSettings";
 import LegacyMigrationSettings from "./LegacyMigrationSettings";
 import WorkerSettings from "./WorkerSettings";
 import { navigateToSettingsSection, readSettingsSection, SETTINGS_SECTIONS } from "./settingsNavigation";
+import { compactRuntimeVersion, runtimeVersionIdentity } from "./runtimeVersion";
 
 type Props = {
   busy: boolean;
@@ -469,19 +470,6 @@ function workerEngineLabel(health: Health | undefined, host: TerminalHostStatus 
     return "Update ready · restart required";
   }
   return `Current · ${host.running_sessions} active`;
-}
-
-function compactRuntimeVersion(version: string) {
-  const revision = version.match(/-dev-([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7);
-  const release = version.split("-dev-")[0];
-  return revision ? `Healthy · ${release} · ${revision}` : `Healthy · ${version}`;
-}
-
-function runtimeVersionIdentity(version?: string | null) {
-  if (!version) return "Unavailable";
-  const revision = version.match(/-dev-([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7);
-  const release = version.split("-dev-")[0];
-  return revision ? `${release} · revision ${revision}` : version;
 }
 
 function notificationStateLabel(state: NotificationCapabilityState) {

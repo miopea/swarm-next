@@ -19,6 +19,7 @@ import {
 } from "../api";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import { serializeDiagnosticReport, type RuntimeDiagnostics } from "./diagnosticReport";
+import { runtimeVersionIdentity } from "./runtimeVersion";
 
 type Props = {
   feedbackRevision: number;
@@ -76,7 +77,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   const launchFailures = workers.filter((worker) => Boolean(worker.runtime_error)).length;
   const providerStatus = launchFailures > 0 ? "Needs attention" : "Healthy";
   const terminalStatus = !runtime.loaded ? "Checking…" : runtime.terminalHost
-    ? runtime.terminalHost.draining ? "Updating safely" : `Healthy · ${runtime.terminalHost.host_version}`
+    ? runtime.terminalHost.draining ? "Updating safely" : `Healthy · ${runtimeVersionIdentity(runtime.terminalHost.host_version)}`
     : "Unavailable";
   const apiMemory = resourceLabel(runtime.resources?.api);
   const hostMemory = ownResourceLabel(runtime.resources?.terminal_host);
