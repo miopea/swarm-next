@@ -1,6 +1,34 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 
-import { fetchEmailTaskSources, type EmailTaskSource, type JiraComment, type JiraTaskLink, type SessionSummary, type Task, type TaskActivityPage, type TaskDraftInput, type TaskPriority, type TaskState, type TaskUpdateInput, type Worker } from "../api";
+import {
+  claimApiaryTask,
+  createApiaryTask,
+  fetchApiaryMembers,
+  fetchApiaryTasks,
+  fetchEmailTaskSources,
+  fetchFederationTaskOutbox,
+  fetchLocalApiaryTaskExecutions,
+  fetchMyFederationStewardship,
+  materializeLocalApiaryTaskExecution,
+  queueFederationStewardTask,
+  type ApiaryMember,
+  type ApiaryTask,
+  type EmailTaskSource,
+  type FederationStewardshipSnapshot,
+  type FederationTaskOutboxEntry,
+  type HiveIdentity,
+  type JiraComment,
+  type JiraTaskLink,
+  type LocalApiaryTaskExecution,
+  type SessionSummary,
+  type Task,
+  type TaskActivityPage,
+  type TaskDraftInput,
+  type TaskPriority,
+  type TaskState,
+  type TaskUpdateInput,
+  type Worker,
+} from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import { useReorderDrag } from "../shared/useReorderDrag";
 import JiraTaskIntake from "./JiraTaskIntake";
@@ -13,6 +41,7 @@ type Props = {
   tasks: Task[];
   jiraTaskLinks: JiraTaskLink[];
   operatorToken: string;
+  hiveIdentity?: HiveIdentity;
   focusTaskId?: string;
   focusRequest?: number;
   composeRequest?: number;
@@ -26,6 +55,7 @@ type Props = {
   onAssign: (task: Task, workerId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
   onOpenWorker: (sessionId: string) => void;
+  onOpenTask?: (taskId: string) => void;
   onFetchActivity: (taskId: string) => Promise<TaskActivityPage>;
   onFetchJiraComments: (taskId: string) => Promise<JiraComment[]>;
   onAddJiraComment: (taskId: string, body: string) => Promise<{ state: string }>;
@@ -79,6 +109,7 @@ export default function TaskBoard({
   tasks,
   jiraTaskLinks,
   operatorToken,
+  hiveIdentity,
   focusTaskId,
   focusRequest,
   composeRequest,
@@ -92,6 +123,7 @@ export default function TaskBoard({
   onAssign,
   onStartWorker,
   onOpenWorker,
+  onOpenTask,
   onFetchActivity,
   onFetchJiraComments,
   onAddJiraComment,
@@ -117,6 +149,17 @@ export default function TaskBoard({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<TaskPriority>("normal");
+  const [workScope, setWorkScope] = useState<"hive" | "apiary">("hive");
+  const [targetHiveId, setTargetHiveId] = useState("");
+  const [apiaryTasks, setApiaryTasks] = useState<ApiaryTask[]>([]);
+  const [apiaryMembers, setApiaryMembers] = useState<ApiaryMember[]>([]);
+  const [apiaryExecutions, setApiaryExecutions] = useState<LocalApiaryTaskExecution[]>([]);
+  const [apiaryOutbox, setApiaryOutbox] = useState<FederationTaskOutboxEntry[]>([]);
+  const [stewardship, setStewardship] = useState<FederationStewardshipSnapshot | null>(null);
+  const [apiaryWorkerChoices, setApiaryWorkerChoices] = useState<Record<string, string>>({});
+  const [actingApiaryTask, setActingApiaryTask] = useState<string>();
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string>();
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
   const [workerId, setWorkerId] = useState("");
   const [composeOpen, setComposeOpen] = useState(false);
@@ -128,11 +171,93 @@ export default function TaskBoard({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!title.trim() || !workerId) return;
-    await onCreate({ title, description, priority, worker_id: workerId });
-    setTitle("");
-    setDescription("");
-    setPriority("normal");
+    if (!title.trim()) return;
+    setCreating(true);
+    setCreateError(undefined);
+    try {
+      if (workScope === "apiary") {
+        if (isStewardCreator) {
+          if (!targetHiveId) return;
+          await queueFederationStewardTask(operatorToken, { target_hive_id: targetHiveId, title: title.trim(), description: description.trim(), priority });
+        } else {
+          await createApiaryTask(operatorToken, { title: title.trim(), description: description.trim(), priority, home_hive_id: targetHiveId || undefined });
+        }
+        await refreshApiaryWork();
+      } else {
+        if (!workerId) return;
+        await onCreate({ title, description, priority, worker_id: workerId });
+      }
+      setTitle("");
+      setDescription("");
+      setPriority("normal");
+      setTargetHiveId("");
+    } catch {
+      setCreateError(workScope === "apiary" ? "The Apiary task was not created. Existing work is unchanged." : "The task was not created. Existing work is unchanged.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  const apiaryContext = hiveIdentity?.apiary_context;
+  const inApiary = apiaryContext?.mode === "federated";
+  const isKeeper = inApiary && apiaryContext.local_role === "keeper";
+  const isStewardCreator = inApiary && apiaryContext.local_role === "member" && Boolean(stewardship?.stewardship?.capabilities.includes("assign"));
+  const canCreateApiaryWork = isKeeper || isStewardCreator;
+  const managedHiveIds = stewardship?.stewardship?.managed_hive_ids ?? [];
+  const apiaryTargetMembers = isStewardCreator
+    ? apiaryMembers.filter((member) => managedHiveIds.includes(member.hive_id))
+    : apiaryMembers.filter((member) => member.role === "member");
+
+  async function refreshApiaryWork() {
+    if (!inApiary) {
+      setApiaryTasks([]);
+      setApiaryMembers([]);
+      setApiaryExecutions([]);
+      setApiaryOutbox([]);
+      setStewardship(null);
+      return;
+    }
+    const [shared, members, executions, outbox, stewardshipResult] = await Promise.allSettled([
+      fetchApiaryTasks(operatorToken),
+      fetchApiaryMembers(operatorToken),
+      fetchLocalApiaryTaskExecutions(operatorToken),
+      fetchFederationTaskOutbox(operatorToken),
+      fetchMyFederationStewardship(operatorToken),
+    ]);
+    if (shared.status === "fulfilled") setApiaryTasks(Array.isArray(shared.value) ? shared.value : []);
+    if (members.status === "fulfilled") setApiaryMembers(Array.isArray(members.value) ? members.value : []);
+    if (executions.status === "fulfilled") setApiaryExecutions(Array.isArray(executions.value) ? executions.value : []);
+    if (outbox.status === "fulfilled") setApiaryOutbox(Array.isArray(outbox.value) ? outbox.value : []);
+    if (stewardshipResult.status === "fulfilled") setStewardship(stewardshipResult.value);
+  }
+
+  async function claimSharedTask(task: ApiaryTask) {
+    setActingApiaryTask(task.id);
+    setCreateError(undefined);
+    try {
+      await claimApiaryTask(operatorToken, task.id);
+      await refreshApiaryWork();
+    } catch {
+      setCreateError("This Apiary task could not be claimed. Its current owner is unchanged.");
+    } finally {
+      setActingApiaryTask(undefined);
+    }
+  }
+
+  async function sendSharedTaskToWorker(task: ApiaryTask) {
+    const selectedWorker = apiaryWorkerChoices[task.id];
+    if (!selectedWorker) return;
+    setActingApiaryTask(task.id);
+    setCreateError(undefined);
+    try {
+      const execution = await materializeLocalApiaryTaskExecution(operatorToken, task.id, selectedWorker);
+      await refreshApiaryWork();
+      onOpenTask?.(execution.local_task_id);
+    } catch {
+      setCreateError("This Apiary task could not be sent to the worker. Existing ownership is unchanged.");
+    } finally {
+      setActingApiaryTask(undefined);
+    }
   }
 
   useEffect(() => {
@@ -148,6 +273,15 @@ export default function TaskBoard({
       .catch(() => { if (!cancelled) setEmailTaskSources([]); });
     return () => { cancelled = true; };
   }, [operatorToken, tasks]);
+  useEffect(() => {
+    void refreshApiaryWork().catch(() => {
+      setApiaryTasks([]);
+      setApiaryMembers([]);
+    });
+  }, [operatorToken, inApiary]);
+  useEffect(() => {
+    if (!canCreateApiaryWork && workScope === "apiary") setWorkScope("hive");
+  }, [canCreateApiaryWork, workScope]);
   const { open: openTasks, completed: completedTasks, jiraByTask } = taskView;
   const focusedTaskCompleted = Boolean(focusTaskId && completedTasks.some((task) => task.id === focusTaskId));
   const canReorder = sort === "queue" && !query.trim() && filter === "all";
@@ -238,6 +372,12 @@ export default function TaskBoard({
           </div>
         </div>
         {composeOpen && <form id="new-task-form" onSubmit={(event) => void submit(event)}>
+          {canCreateApiaryWork ? <fieldset className="task-scope-field">
+            <legend>Who owns this work?</legend>
+            <label className={workScope === "hive" ? "selected" : ""}><input type="radio" name="task-scope" checked={workScope === "hive"} onChange={() => setWorkScope("hive")} /><span><strong>This Hive</strong><small>Private work for one local worker</small></span></label>
+            <label className={workScope === "apiary" ? "selected" : ""}><input type="radio" name="task-scope" checked={workScope === "apiary"} onChange={() => setWorkScope("apiary")} /><span><strong>Apiary</strong><small>{isStewardCreator ? "Shared work for a Hive in your Steward scope" : "Shared work owned by a Hive"}</small></span></label>
+            <small>{workScope === "hive" ? "Private to this Hive and assigned to one repository worker." : isStewardCreator ? "Sent through Keeper to the selected Hive. Its workers and repositories remain private." : "Shared across the Apiary. A Hive may claim it, or Keeper may route it."}</small>
+          </fieldset> : null}
           <div className="field-stack task-title-field">
             <label htmlFor="task-title">Task title</label>
             <input
@@ -267,7 +407,7 @@ export default function TaskBoard({
               {Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </div>
-          <div className="field-stack task-worker-field">
+          {workScope === "hive" ? <div className="field-stack task-worker-field">
             <label htmlFor="task-worker">Who should handle this?</label>
             <select id="task-worker" value={workerId} onChange={(event) => setWorkerId(event.target.value)}>
               {assignableWorkers.length === 0 && <option value="">Configure a worker first</option>}
@@ -275,8 +415,15 @@ export default function TaskBoard({
                 <option key={worker.id} value={worker.id}>{worker.name} · {repositoryName(worker.workspace)}</option>
               ))}
             </select>
-          </div>
-          <button disabled={busy || !title.trim() || !workerId}>Create draft</button>
+          </div> : <div className="field-stack task-worker-field">
+            <label htmlFor="task-home-hive">Route to a Hive <span>optional</span></label>
+            <select id="task-home-hive" value={targetHiveId} onChange={(event) => setTargetHiveId(event.target.value)}>
+              <option value="">{isStewardCreator ? "Choose a managed Hive" : "Unassigned · any Member may claim"}</option>
+              {apiaryTargetMembers.map((member) => <option key={member.hive_id} value={member.hive_id}>{member.hive_name} · {member.operator_display_name}</option>)}
+            </select>
+          </div>}
+          <button disabled={busy || creating || !title.trim() || (workScope === "hive" && !workerId) || (workScope === "apiary" && isStewardCreator && !targetHiveId)}>{creating ? "Creating…" : workScope === "apiary" ? isStewardCreator ? "Route through Keeper" : "Create for Apiary" : "Create draft"}</button>
+          {createError ? <p className="form-error task-create-error" role="alert">{createError}</p> : null}
         </form>}
         {jiraOpen ? <div id="jira-work-source"><JiraTaskIntake operatorToken={operatorToken} onImported={onJiraImported} /></div> : null}
         {emailOpen ? <div id="email-work-source"><EmailTaskIntake operatorToken={operatorToken} workers={workers} onImported={onEmailImported} /></div> : null}
@@ -352,6 +499,27 @@ export default function TaskBoard({
         )}
 
       </section>
+
+      {inApiary && apiaryTasks.length > 0 ? <section className="task-section apiary-task-section" aria-labelledby="apiary-work-heading">
+        <div className="section-heading"><div><p className="eyebrow">Shared across Hives</p><h3 id="apiary-work-heading">Apiary work</h3><small>Managed here; summarized in Apiary.</small></div><span className="count-badge">{apiaryTasks.length}</span></div>
+        {createError && !composeOpen ? <p className="form-error apiary-task-error" role="alert">{createError}</p> : null}
+        <div className="apiary-task-board-list">
+          {apiaryTasks.map((task) => {
+            const home = task.home_hive_id ? apiaryMembers.find((member) => member.hive_id === task.home_hive_id)?.hive_name ?? "Assigned Hive" : "Available to claim";
+            const localHiveId = hiveIdentity?.hive.id;
+            const mine = Boolean(localHiveId && task.home_hive_id === localHiveId);
+            const queued = apiaryOutbox.some((entry) => entry.state === "queued" && entry.command.task_id === task.id);
+            const execution = apiaryExecutions.find((candidate) => candidate.apiary_task_id === task.id);
+            return <article key={task.id} className="apiary-task-board-card">
+              <span><small>{priorityLabels[task.priority]} · {stateLabels[task.state]}</small><strong>{task.title}</strong>{task.description ? <p>{task.description}</p> : null}</span>
+              <span className="apiary-task-board-owner"><strong>{home}</strong><small>{mine ? "Owned by this Hive" : "Apiary task"}</small>
+                {queued ? <small>Change queued for Keeper</small> : inApiary && apiaryContext.local_role === "member" && !task.home_hive_id ? <button className="secondary-button" type="button" disabled={actingApiaryTask === task.id} onClick={() => void claimSharedTask(task)}>{actingApiaryTask === task.id ? "Claiming…" : "Claim for this Hive"}</button> : null}
+                {mine && execution ? <button className="secondary-button" type="button" onClick={() => onOpenTask?.(execution.local_task_id)}>Open local task</button> : mine ? <span className="apiary-task-worker-route"><select aria-label={`Worker for ${task.title}`} value={apiaryWorkerChoices[task.id] ?? ""} onChange={(event) => setApiaryWorkerChoices((current) => ({ ...current, [task.id]: event.target.value }))}><option value="">Choose a worker</option>{assignableWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {worker.attention_state}</option>)}</select><button className="primary-action" type="button" disabled={actingApiaryTask === task.id || !apiaryWorkerChoices[task.id]} onClick={() => void sendSharedTaskToWorker(task)}>{actingApiaryTask === task.id ? "Sending…" : "Send to worker"}</button></span> : null}
+              </span>
+            </article>;
+          })}
+        </div>
+      </section> : null}
 
       {completedTasks.length > 0 && (
         <details ref={completedTasksPanel} className="completed-tasks">

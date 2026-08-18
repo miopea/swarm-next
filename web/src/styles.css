@@ -266,6 +266,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .keeper-panel > header > small { max-width: 190px; color: var(--quiet); font-size: .67rem; line-height: 1.4; text-align: right; }
 .keeper-task-header > div { min-width: 0; }
 .keeper-task-header > div > small { display: block; margin-top: 4px; color: var(--quiet); font-size: .67rem; line-height: 1.4; }
+.keeper-work-boundary { margin: -4px 0 14px; color: var(--muted); font-size: .76rem; line-height: 1.5; }
 .keeper-handoff-heading { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line); }
 .keeper-task-form { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(110px, .35fr) minmax(190px, .7fr); gap: 11px; margin: 0 0 14px; padding: 13px; border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: var(--accent-soft); }
 .keeper-task-form label { display: grid; align-content: start; gap: 5px; min-width: 0; color: var(--muted); font-size: .7rem; }
@@ -410,10 +411,34 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-entry-actions { display: flex; flex: 0 0 auto; gap: 8px; }
 .task-entry-actions button { min-height: 38px; }
 .task-compose form { display: grid; grid-template-columns: minmax(260px, 1.25fr) minmax(220px, 1fr) 130px auto; align-content: end; align-items: end; gap: 10px; padding-top: 15px; border-top: 1px solid var(--line); }
+.task-scope-field { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(180px, 260px)) minmax(240px, 1fr); align-items: stretch; gap: 8px; margin: 0; padding: 0 0 12px; border: 0; border-bottom: 1px solid var(--line); }
+.task-scope-field legend { grid-column: 1 / -1; margin-bottom: 2px; color: var(--quiet); font-size: .66rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.task-scope-field > label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
+.task-scope-field > label.selected { border-color: var(--accent-line); background: var(--accent-soft); box-shadow: inset 3px 0 var(--honey); }
+.task-scope-field input { width: 17px; height: 17px; margin: 0; accent-color: var(--honey-strong); }
+.task-scope-field label span { display: grid; gap: 2px; }
+.task-scope-field label small, .task-scope-field > small { color: var(--muted); font-size: .69rem; line-height: 1.35; }
+.task-scope-field > small { align-self: center; padding-left: 5px; }
 .field-stack { display: grid; min-width: 0; gap: 7px; }
 .task-compose form button { white-space: nowrap; }
 .task-worker-field { grid-column: 1 / 3; }
 .task-compose form > button { grid-column: 3 / 5; justify-self: stretch; }
+.task-create-error { grid-column: 1 / -1; margin: 0; color: var(--bad); font-size: .75rem; }
+.apiary-task-section .section-heading small { display: block; margin-top: 3px; color: var(--muted); font-size: .7rem; }
+.apiary-task-board-list { display: grid; gap: 8px; }
+.apiary-task-board-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, auto); align-items: center; gap: 20px; padding: 13px 15px; border: 1px solid var(--accent-line); border-left: 3px solid var(--honey); border-radius: var(--radius-md); background: var(--panel); }
+.apiary-task-board-card > span { display: grid; min-width: 0; gap: 4px; }
+.apiary-task-board-card > span:last-child { justify-items: end; text-align: right; }
+.apiary-task-board-owner { align-content: center; }
+.apiary-task-board-owner button { margin-top: 4px; }
+.apiary-task-worker-route { display: grid; justify-items: stretch; gap: 6px; min-width: min(310px, 34vw); margin-top: 4px; }
+.apiary-task-worker-route select { min-width: 0; }
+.apiary-work-boundary { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px; border: 1px solid var(--accent-line); border-radius: var(--radius-md); background: var(--surface-soft); }
+.apiary-work-boundary > span { display: grid; gap: 3px; }
+.apiary-work-boundary small { color: var(--muted); }
+.apiary-task-board-card small { color: var(--muted); font-size: .68rem; }
+.apiary-task-board-card strong { overflow-wrap: anywhere; }
+.apiary-task-board-card p { display: -webkit-box; overflow: hidden; margin: 0; color: var(--muted); font-size: .75rem; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .jira-task-source { display: grid; grid-column: 1 / -1; gap: 12px; margin-top: 2px; padding-top: 16px; border-top: 1px solid var(--line); }
 .jira-task-source-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; }
 .jira-task-source-heading h3 { margin: 0; font-size: 1rem; }
@@ -1219,6 +1244,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 }
 @media (max-width: 1000px) {
   .task-compose form { grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr); }
+  .task-scope-field { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .task-scope-field > small { grid-column: 1 / -1; padding: 2px 0 0; }
   .task-priority-field { max-width: 180px; }
   .task-compose form button { grid-column: 1 / -1; justify-self: end; }
 }
@@ -1326,8 +1353,14 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-entry-actions button { width: 100%; }
   .task-compose.compose-collapsed { grid-template-columns: minmax(0, 1fr); margin-bottom: 18px; }
   .task-compose form { grid-template-columns: 1fr; }
+  .task-scope-field { grid-template-columns: 1fr; }
+  .task-scope-field > *, .task-scope-field > small { grid-column: 1; }
   .task-worker-field { grid-column: 1; }
   .task-compose form button { width: 100%; justify-self: stretch; }
+  .apiary-task-board-card { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+  .apiary-task-board-card > span:last-child { justify-items: start; text-align: left; }
+  .apiary-task-worker-route { min-width: 0; width: 100%; }
+  .apiary-work-boundary { align-items: stretch; flex-direction: column; }
   .task-mobile-controls { display: block; max-width: 1600px; margin: 0 auto 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
   .task-mobile-controls summary { display: flex; min-height: 42px; cursor: pointer; align-items: center; justify-content: space-between; padding: 8px 11px; color: var(--text); font-size: .78rem; font-weight: 650; list-style: none; }
   .task-mobile-controls summary::-webkit-details-marker { display: none; }

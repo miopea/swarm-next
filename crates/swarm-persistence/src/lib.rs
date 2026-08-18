@@ -85,6 +85,7 @@ pub use notifications::{
     NotificationDeliveryFailure, NotificationDispatch, NotificationSettings, PushSubscriptionInput,
     VapidKeyMaterial,
 };
+mod deployment_grants;
 mod orchestration;
 mod queen_conductor;
 pub use queen_conductor::{QueenAutomationDelivery, QueenAutomationFailure};
@@ -107,7 +108,8 @@ const TERMINAL_GEOMETRY_SCHEMA_VERSION: i64 = 66;
 const LEGACY_MIGRATION_SCHEMA_VERSION: i64 = 67;
 const LEGACY_WORKER_MIGRATION_SCHEMA_VERSION: i64 = 68;
 const TASK_REMOVAL_SCHEMA_VERSION: i64 = 69;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_REMOVAL_SCHEMA_VERSION;
+const DEPLOYMENT_GRANT_SCHEMA_VERSION: i64 = 70;
+const CURRENT_SCHEMA_VERSION: i64 = DEPLOYMENT_GRANT_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1762,6 +1764,9 @@ fn migrate_recent_schema(
     }
     if schema_version < TASK_REMOVAL_SCHEMA_VERSION {
         migrate_task_removal(transaction)?;
+    }
+    if schema_version < DEPLOYMENT_GRANT_SCHEMA_VERSION {
+        deployment_grants::migrate_deployment_grants(transaction)?;
     }
     Ok(())
 }
@@ -4331,8 +4336,8 @@ mod tests {
                 .connection()
                 .unwrap()
                 .execute_batch(&format!(
-                    "DROP INDEX tasks_visible_queue;
-                     ALTER TABLE tasks DROP COLUMN removed_at;
+                    "DROP TABLE deployment_authorizations;
+                     DROP TABLE deployment_grants;
                      PRAGMA user_version = {};",
                     CURRENT_SCHEMA_VERSION - 1
                 ))
@@ -4350,6 +4355,15 @@ mod tests {
             )
             .unwrap();
         assert!(removed_at_exists);
+        let deployment_grants_exist: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'deployment_grants')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(deployment_grants_exist);
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))

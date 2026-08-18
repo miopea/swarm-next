@@ -8,12 +8,13 @@ import {
 
 type Props = {
   status: QueenAutomationStatus | undefined;
+  coveredBySpecificDecision?: boolean;
   onOpenQueen: () => void;
   onReviewSettings: () => void;
 };
 
-export default function QueenAutomationAttentionCard({ status, onOpenQueen, onReviewSettings }: Props) {
-  if (!queenAutomationNeedsAttention(status)) return null;
+export default function QueenAutomationAttentionCard({ status, coveredBySpecificDecision = false, onOpenQueen, onReviewSettings }: Props) {
+  if (!queenAutomationNeedsAttention(status) || coveredBySpecificDecision) return null;
   return (
     <section className="queen-attention-card" aria-labelledby="queen-attention-heading">
       <span className="queen-attention-bee" aria-hidden="true"><BeeMascot expression="blocked" /></span>

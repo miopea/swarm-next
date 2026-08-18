@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   acceptApiaryClaimHandoff,
   cancelApiaryClaimHandoff,
-  claimApiaryTask,
   declineApiaryClaimHandoff,
   fetchApiaryClaimHandoffs,
   fetchApiaryHandoffTargets,
@@ -19,9 +18,7 @@ import {
   fetchFederationTaskOutboxStatus,
   fetchFederationStewardTaskOutbox,
   fetchFederationStewardAssists,
-  materializeLocalApiaryTaskExecution,
   offerApiaryClaimHandoff,
-  queueFederationStewardTask,
   queueFederationStewardAssist,
   respondFederationStewardAssist,
   type ApiaryMember,
@@ -40,17 +37,14 @@ import {
   type HiveIdentity,
   type LocalApiaryTaskExecution,
 } from "../api";
-import type { TaskPriority } from "../api/tasks";
-import type { Worker } from "../api/workers";
 import BeeMascot from "../brand/BeeMascot";
 import { catalogBlockerLabel, federationSyncCopy } from "./presentation";
 
 type Props = {
   identity: HiveIdentity;
   operatorToken: string;
-  workers: Worker[];
   onManage: () => void;
-  onOpenTask: (taskId: string) => void;
+  onOpenTasks: () => void;
 };
 type MemberSnapshot = {
   members: ApiaryMember[];
@@ -71,7 +65,7 @@ type MemberSnapshot = {
 
 const emptySnapshot: MemberSnapshot = { members: [], sharedWork: [], tasks: [], outbox: [], stewardTasks: [], stewardAssists: { incoming: [], outbox: [] }, handoffs: [], handoffTargets: [], executions: [] };
 
-export default function MemberControlRoom({ identity, operatorToken, workers, onManage, onOpenTask }: Props) {
+export default function MemberControlRoom({ identity, operatorToken, onManage, onOpenTasks }: Props) {
   const context = identity.apiary_context;
   const [snapshot, setSnapshot] = useState<MemberSnapshot>(emptySnapshot);
   const [state, setState] = useState<"loading" | "ready" | "partial">("loading");
@@ -137,43 +131,13 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
     outbox: snapshot.stewardAssists?.outbox ?? [],
   };
   const sentAssists = stewardAssists.sent;
-  const canAssign = stewardship?.capabilities.includes("assign") ?? false;
   const canAssist = stewardship?.capabilities.includes("assist") ?? false;
-  const [stewardTarget, setStewardTarget] = useState("");
-  const [stewardTitle, setStewardTitle] = useState("");
-  const [stewardDescription, setStewardDescription] = useState("");
-  const [stewardPriority, setStewardPriority] = useState<TaskPriority>("normal");
-  const [routingStewardTask, setRoutingStewardTask] = useState(false);
-  const [stewardTaskError, setStewardTaskError] = useState<string>();
   const [assistTarget, setAssistTarget] = useState("");
   const [assistMessage, setAssistMessage] = useState("");
   const [sendingAssist, setSendingAssist] = useState(false);
   const [actingAssist, setActingAssist] = useState<string>();
   const [assistError, setAssistError] = useState<string>();
-  const [actingTask, setActingTask] = useState<string>();
-  const [workerChoices, setWorkerChoices] = useState<Record<string, string>>({});
   const [actingHandoff, setActingHandoff] = useState<string>();
-  const queuedTaskIds = useMemo(() => new Set(snapshot.outbox.filter((entry) => entry.state === "queued").map((entry) => entry.command.task_id)), [snapshot.outbox]);
-  const executionByTask = useMemo(() => new Map(snapshot.executions.map((execution) => [execution.apiary_task_id, execution])), [snapshot.executions]);
-  const workerById = useMemo(() => new Map(workers.map((worker) => [worker.id, worker])), [workers]);
-  const privateWorkers = useMemo(() => workers.filter((worker) => worker.role !== "queen"), [workers]);
-  const act = useCallback(async (task: ApiaryTask) => {
-    setActingTask(task.id);
-    try {
-      await claimApiaryTask(operatorToken, task.id);
-      await refresh();
-    } finally { setActingTask(undefined); }
-  }, [operatorToken, refresh]);
-  const sendToWorker = useCallback(async (task: ApiaryTask) => {
-    const workerId = workerChoices[task.id];
-    if (!workerId) return;
-    setActingTask(task.id);
-    try {
-      const execution = await materializeLocalApiaryTaskExecution(operatorToken, task.id, workerId);
-      await refresh();
-      onOpenTask(execution.local_task_id);
-    } finally { setActingTask(undefined); }
-  }, [onOpenTask, operatorToken, refresh, workerChoices]);
   const transitionHandoff = useCallback(async (handoff: FederationClaimHandoff, action: "accept" | "decline" | "cancel") => {
     setActingHandoff(handoff.id);
     try {
@@ -183,26 +147,6 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
       await refresh();
     } finally { setActingHandoff(undefined); }
   }, [operatorToken, refresh]);
-  const routeStewardTask = useCallback(async () => {
-    if (!stewardTarget || !stewardTitle.trim()) return;
-    setRoutingStewardTask(true);
-    setStewardTaskError(undefined);
-    try {
-      await queueFederationStewardTask(operatorToken, {
-        target_hive_id: stewardTarget,
-        title: stewardTitle.trim(),
-        description: stewardDescription.trim(),
-        priority: stewardPriority,
-      });
-      setStewardTitle("");
-      setStewardDescription("");
-      await refresh();
-    } catch (error) {
-      setStewardTaskError(error instanceof Error ? error.message : "Keeper did not accept this task.");
-    } finally {
-      setRoutingStewardTask(false);
-    }
-  }, [operatorToken, refresh, stewardDescription, stewardPriority, stewardTarget, stewardTitle]);
   const requestStewardAssist = useCallback(async () => {
     if (!assistTarget || !assistMessage.trim()) return;
     setSendingAssist(true);
@@ -302,15 +246,10 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
             {assistError ? <p className="member-command-attention" role="alert">{assistError}</p> : null}
           </form> : null}
           {sentAssists.length ? <ul className="steward-task-outbox" aria-label="Sent Steward assistance">{sentAssists.slice(0, 5).map((request) => <li key={request.id}><span><strong>{request.message}</strong><small>{managedMembers.find((member) => member.hive_id === request.target_hive_id)?.hive_name ?? "Managed Hive"}</small></span><span className={`keeper-role-badge ${request.state === "declined" ? "keeper" : "member"}`}>{request.state === "pending" ? "Waiting for operator" : request.state === "accepted" ? "Help accepted" : "Help declined"}</span></li>)}</ul> : null}
-          {canAssign ? <form className="steward-task-form" onSubmit={(event) => { event.preventDefault(); void routeStewardTask(); }}>
-            <div className="steward-task-form-heading"><div><p className="eyebrow">Route shared work</p><h5>Give a managed Hive a clear outcome</h5></div><small>The target Hive chooses its private worker and repository.</small></div>
-            <label>Hive<select aria-label="Target Hive" required value={stewardTarget} onChange={(event) => setStewardTarget(event.target.value)}><option value="">Choose a managed Hive</option>{managedMembers.map((member) => <option key={member.hive_id} value={member.hive_id}>{member.hive_name}</option>)}</select></label>
-            <label className="steward-task-title">Outcome<input aria-label="Steward task outcome" required maxLength={240} value={stewardTitle} onChange={(event) => setStewardTitle(event.target.value)} placeholder="What should be true when this is done?" /></label>
-            <label>Priority<select aria-label="Steward task priority" value={stewardPriority} onChange={(event) => setStewardPriority(event.target.value as TaskPriority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
-            <label className="steward-task-description">Context<textarea aria-label="Steward task context" value={stewardDescription} onChange={(event) => setStewardDescription(event.target.value)} placeholder="Optional context, constraints, or what done looks like" /></label>
-            <button className="primary-action" disabled={routingStewardTask || !stewardTarget || !stewardTitle.trim()} type="submit">{routingStewardTask ? "Routing…" : "Route through Keeper"}</button>
-            {stewardTaskError ? <p className="member-command-attention" role="alert">{stewardTaskError}</p> : null}
-          </form> : null}
+          {stewardship.capabilities.includes("assign") ? <div className="apiary-work-boundary">
+            <span><strong>Route shared work from Tasks</strong><small>Your Steward scope appears there without exposing another Hive's private workers or repositories.</small></span>
+            <button className="secondary-button" type="button" onClick={onOpenTasks}>Open Tasks</button>
+          </div> : null}
           {snapshot.stewardTasks.some((entry) => entry.state !== "applied") ? <ul className="steward-task-outbox" aria-label="Steward task delivery status">{snapshot.stewardTasks.filter((entry) => entry.state !== "applied").map((entry) => <li key={entry.command.id}><span><strong>{entry.command.title}</strong><small>{managedMembers.find((member) => member.hive_id === entry.command.target_hive_id)?.hive_name ?? "Managed Hive"}</small></span><span className={`keeper-role-badge ${entry.state === "rejected" ? "keeper" : "member"}`}>{entry.state === "queued" ? "Sending to Keeper" : "Keeper declined"}</span></li>)}</ul> : null}
           {stewardAssists.outbox.some((entry) => entry.state !== "applied" && entry.command.action.kind === "request") ? <ul className="steward-task-outbox" aria-label="Steward assistance delivery status">{stewardAssists.outbox.map((entry) => {
             const action = entry.command.action;
@@ -327,6 +266,13 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
             <div><dt>Keeper</dt><dd>{keeper?.operator_display_name ?? "Waiting for roster"}</dd></div>
           </dl>
         </article>
+        <article className="keeper-panel member-roster-panel">
+          <header><div><p className="eyebrow">People and Hives</p><h4>Hives in this Apiary</h4></div><small>Shared identity and role · not live presence</small></header>
+          {snapshot.members.length ? <ul className="member-project-list" aria-label="Apiary Hive roster">{snapshot.members.map((member) => <li key={member.hive_id}>
+            <span><strong>{member.hive_name}</strong><small>{member.operator_display_name}</small></span>
+            <span className={`keeper-role-badge ${member.role}`}>{member.role === "keeper" ? "Keeper" : member.hive_id === identity.hive.id ? "This Hive" : "Member"}</span>
+          </li>)}</ul> : <p className="keeper-empty">The Apiary roster has not arrived yet.</p>}
+        </article>
         <article className="keeper-panel member-sync-panel">
           <header><div><p className="eyebrow">Synchronization</p><h4>{syncTitle}</h4></div><span className={`apiary-sync-indicator apiary-sync-${syncCondition}`} aria-hidden="true" /></header>
           <p className="member-sync-copy">{syncDetail}</p>
@@ -339,33 +285,15 @@ export default function MemberControlRoom({ identity, operatorToken, workers, on
           {snapshot.catalog?.blockers.length ? <ul className="member-blocker-list" aria-label="Shared work blockers">{snapshot.catalog.blockers.map((blocker) => <li key={blocker}>{catalogBlockerLabel(blocker)}</li>)}</ul> : <p className="member-ready-copy">Shared catalog prerequisites are ready.</p>}
         </article>
         <article className="keeper-panel member-task-panel">
-          <header><div><p className="eyebrow">Swarm tasks</p><h4>Polled from Keeper</h4></div><small>Keeper is canonical for this source</small></header>
+          <header><div><p className="eyebrow">Shared work pulse</p><h4>Swarm tasks polled from Keeper</h4></div><button className="secondary-button" type="button" onClick={onOpenTasks}>Manage in Tasks</button></header>
           {(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0) > 0 ? <p className="member-command-attention" role="status">{(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0)} change{(snapshot.outboxStatus?.conflict_count ?? 0) + (snapshot.outboxStatus?.rejected_count ?? 0) === 1 ? "" : "s"} need review after Keeper reconciliation.</p> : null}
           {snapshot.tasks.length ? <ul className="keeper-work-list member-task-list" aria-label="Member Keeper tasks">{snapshot.tasks.map((task) => {
             const mine = task.home_hive_id === identity.hive.id;
-            const queued = queuedTaskIds.has(task.id);
-            const execution = executionByTask.get(task.id);
             return <li key={task.id}>
               <span><strong>{task.title}</strong><small>{task.state} · {task.priority} · revision {task.revision}</small></span>
               <span className="member-task-owner">
                 <strong>{mine ? "This Hive" : task.home_hive_id ? "Another Hive" : "Unassigned"}</strong>
-                {queued ? <small>Queued for Keeper</small> : !task.home_hive_id ? (
-                  <button className="secondary-button" type="button" disabled={actingTask === task.id} onClick={() => void act(task)}>Claim for this Hive</button>
-                ) : execution ? <>
-                  <small>{workerById.get(execution.worker_id)?.name ?? "Private worker"} · {execution.state}</small>
-                  <small>{task.state === execution.state ? "Keeper is current" : `Keeper ${task.state} · syncing to ${execution.state}`}</small>
-                  <span className="member-task-actions">
-                    <button className="secondary-button" type="button" onClick={() => onOpenTask(execution.local_task_id)}>Open task</button>
-                  </span>
-                </> : mine ? (
-                  <span className="member-task-worker-route">
-                    <select aria-label={`Worker for ${task.title}`} value={workerChoices[task.id] ?? ""} onChange={(event) => setWorkerChoices((current) => ({ ...current, [task.id]: event.target.value }))}>
-                      <option value="">Choose private worker</option>
-                      {privateWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {worker.attention_state}</option>)}
-                    </select>
-                    <button className="primary-action" type="button" disabled={actingTask === task.id || !workerChoices[task.id]} onClick={() => void sendToWorker(task)}>{actingTask === task.id ? "Sending…" : "Send to worker"}</button>
-                  </span>
-                ) : null}
+                <small>{mine ? "Worker assignment stays private to this Hive" : "View only from Apiary"}</small>
               </span>
             </li>;
           })}</ul> : <p className="keeper-empty">No Swarm-generated Apiary tasks have been received.</p>}

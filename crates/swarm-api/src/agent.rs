@@ -32,8 +32,8 @@ use swarm_application::{
 };
 use swarm_domain::{
     ApiaryTaskId, DecisionRequestKind, DecisionUrgency, HiveId, JiraProjectBindingId,
-    QueenActionClass, QueenAutomationOutcome, TaskId, TaskPriority, TaskState, WorkerId,
-    WorkerRole,
+    QueenActionClass, QueenAutomationOutcome, QueenAutomationState, TaskId, TaskPriority,
+    TaskState, WorkerId, WorkerRole,
 };
 use swarm_persistence::{
     JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, TaskStore, TaskStoreError,
@@ -423,6 +423,34 @@ impl ServerHandler for AgentMcp {
                 .and_then(|decisions| structured(json!({ "decisions": decisions }))),
             "swarm_request_decision" => {
                 parse::<RequestDecisionInput>(arguments).and_then(|input| {
+                    if self.principal.role == WorkerRole::Queen
+                        && self
+                            .tasks
+                            .store()
+                            .queen_automation_status(crate::unix_timestamp())
+                            .map_err(ApplicationError::Store)?
+                            .state
+                            == QueenAutomationState::Running
+                    {
+                        if input.task_id.is_none() {
+                            return Err(ApplicationError::Store(
+                                TaskStoreError::IntegrityFailure(
+                                    "An unattended review must create one decision per concrete task. Do not group unrelated tasks into one approval.".into(),
+                                ),
+                            ));
+                        }
+                        if !input
+                            .allowed_actions
+                            .iter()
+                            .any(|action| action == &input.suggested_action)
+                        {
+                            return Err(ApplicationError::Store(
+                                TaskStoreError::IntegrityFailure(
+                                    "The suggested action must exactly match one button in allowed_actions during unattended review.".into(),
+                                ),
+                            ));
+                        }
+                    }
                     let task_id = input
                         .task_id
                         .as_deref()
@@ -846,19 +874,19 @@ fn list_decisions_tool() -> Tool {
 fn request_decision_tool() -> Tool {
     tool(
         "swarm_request_decision",
-        "Request operator judgment without interrupting another terminal. Use only when progress genuinely needs input, approval, credentials, conflict resolution, or help.",
+        "Request one concrete operator judgment without interrupting another terminal. During Queen automation, create a separate request for each task; never combine a fleet review or unrelated tasks into one approval. Button actions must describe only that linked task.",
         &json!({
             "type": "object",
             "properties": {
-                "task_id": { "type": ["string", "null"], "format": "uuid" },
+                "task_id": { "type": ["string", "null"], "format": "uuid", "description": "Required during Queen automation so the approval opens the exact task." },
                 "kind": { "type": "string", "enum": ["input", "approval", "credentials", "conflict", "help"] },
                 "urgency": { "type": "string", "enum": ["normal", "time_sensitive"], "default": "normal" },
                 "title": { "type": "string", "minLength": 1, "maxLength": 240 },
                 "reason": { "type": "string", "maxLength": 10000 },
                 "risk": { "type": "string", "maxLength": 10000, "default": "" },
                 "evidence": { "type": "string", "maxLength": 10000, "default": "" },
-                "suggested_action": { "type": "string", "maxLength": 10000 },
-                "allowed_actions": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
+                "suggested_action": { "type": "string", "maxLength": 80, "description": "The recommended button label. During Queen automation this must exactly match one allowed_actions value." },
+                "allowed_actions": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "description": "Short, task-specific operator choices. Do not encode actions for other tasks.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
                 "deadline": { "type": ["integer", "null"] }
             },
             "required": ["kind", "title", "reason", "suggested_action", "allowed_actions"],
@@ -1595,6 +1623,98 @@ mod tests {
         );
         let status = store.queen_automation_status(13).unwrap();
         assert_eq!(status.outcome, Some(QueenAutomationOutcome::NeedsOperator));
+    }
+
+    #[tokio::test]
+    async fn unattended_queen_decisions_are_task_specific_with_exact_buttons() {
+        let (bridge, store, queen_id, _, _) = setup();
+        let now = crate::unix_timestamp();
+        store
+            .bind_worker_session(queen_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+        store.request_queen_automation_run(now).unwrap();
+        let delivery = store.claim_queen_automation(now + 1).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&delivery.run_id, now + 2)
+            .unwrap();
+        let task = store
+            .create_task("Route one concrete task", "/workspace/petal")
+            .unwrap();
+        let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
+        let request = |arguments: serde_json::Value| {
+            mcp_request(
+                Some(&queen_token),
+                "tools/call",
+                &json!({ "name": "swarm_request_decision", "arguments": arguments }),
+            )
+        };
+
+        let grouped = response_json(
+            handle(
+                bridge.clone(),
+                request(json!({
+                    "kind": "approval",
+                    "title": "Approve all queued work",
+                    "reason": "Several tasks are waiting",
+                    "suggested_action": "Dispatch all",
+                    "allowed_actions": ["Dispatch all", "Hold all"]
+                })),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(grouped["result"]["isError"], true);
+        assert!(
+            grouped["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("one decision per concrete task")
+        );
+
+        let mismatched = response_json(
+            handle(
+                bridge.clone(),
+                request(json!({
+                    "task_id": task.id.to_string(),
+                    "kind": "approval",
+                    "title": "Route this task",
+                    "reason": "The repository owner is known",
+                    "suggested_action": "Dispatch to Petal",
+                    "allowed_actions": ["Approve", "Hold"]
+                })),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(mismatched["result"]["isError"], true);
+        assert!(
+            mismatched["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("exactly match one button")
+        );
+
+        let concrete = response_json(
+            handle(
+                bridge,
+                request(json!({
+                    "task_id": task.id.to_string(),
+                    "kind": "approval",
+                    "title": "Route this task to Petal",
+                    "reason": "Petal owns the repository",
+                    "suggested_action": "Dispatch to Petal",
+                    "allowed_actions": ["Dispatch to Petal", "Hold this task"]
+                })),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(concrete["result"]["isError"], false);
+        assert_eq!(store.list_decision_requests().unwrap().len(), 1);
+        assert_eq!(
+            concrete["result"]["structuredContent"]["task_id"],
+            task.id.to_string()
+        );
     }
 
     #[tokio::test]

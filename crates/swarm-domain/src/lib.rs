@@ -58,6 +58,8 @@ domain_id!(StewardshipId);
 domain_id!(ProviderConversationId);
 domain_id!(PresenceDeviceId);
 domain_id!(JiraProjectBindingId);
+domain_id!(DeploymentGrantId);
+domain_id!(DeploymentAuthorizationId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -3193,6 +3195,31 @@ pub struct QueenAutonomyPolicy {
     pub at_hive: QueenAutonomyLevel,
     pub away: QueenAutonomyLevel,
     pub night_watch: QueenAutonomyLevel,
+}
+
+/// One operator-created rule that Queen may consume during Night Watch.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeploymentGrant {
+    pub id: DeploymentGrantId,
+    pub worker_id: WorkerId,
+    pub worker_name: String,
+    pub repository: String,
+    pub environment: String,
+    pub max_uses: u32,
+    pub uses: u32,
+    pub expires_at: i64,
+    pub revoked_at: Option<i64>,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DeploymentAuthorization {
+    pub id: DeploymentAuthorizationId,
+    pub grant_id: DeploymentGrantId,
+    pub task_id: TaskId,
+    pub worker_id: WorkerId,
+    pub environment: String,
+    pub authorized_at: i64,
 }
 
 impl Default for QueenAutonomyPolicy {

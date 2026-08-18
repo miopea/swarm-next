@@ -41,14 +41,16 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
     throw new Error(`Unexpected request: ${url}`);
   }));
   const onManage = vi.fn();
-  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={[]} onManage={onManage} onOpenTask={() => undefined} />);
+  const onOpenTasks = vi.fn();
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" onManage={onManage} onOpenTasks={onOpenTasks} />);
 
   expect(await screen.findByRole("heading", { name: "Grand Garden" })).toBeInTheDocument();
   expect(screen.getByLabelText("Member Apiary summary")).toHaveTextContent("KeeperMeadow HiveCatalogVerifiedProjects ready1/1My Jira claims1Keeper tasks1");
-  expect(screen.getByText("Bea")).toBeInTheDocument();
+  expect(screen.getAllByText("Bea")).toHaveLength(2);
   expect(screen.getByRole("list", { name: "Member promoted Jira projects" })).toHaveTextContent("WWDWebsite DevelopmentReady");
   expect(screen.getByRole("list", { name: "Member shared work ownership" })).toHaveTextContent("WWD-101Website DevelopmentOwnedCora");
-  expect(screen.getByRole("list", { name: "Member Keeper tasks" })).toHaveTextContent("Prepare shared briefready · high · revision 1UnassignedClaim for this Hive");
+  expect(screen.getByRole("list", { name: "Member Keeper tasks" })).toHaveTextContent("Prepare shared briefready · high · revision 1UnassignedView only from Apiary");
+  expect(screen.getByRole("list", { name: "Apiary Hive roster" })).toHaveTextContent("Meadow HiveBeaKeeperClover HiveCoraThis Hive");
   expect(screen.getByText("Keeper task cursor").parentElement).toHaveTextContent("4");
   const stewardship = screen.getByRole("heading", { name: "Trusted support for 1 Hive" }).closest("article");
   expect(stewardship).toHaveTextContent("Clover Hive");
@@ -66,6 +68,8 @@ test("shows a Member her Keeper, convergence, projects, and local shared ownersh
   await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/claims/claim-1/handoffs"), expect.objectContaining({ method: "POST" })));
   fireEvent.click(screen.getByRole("button", { name: "Manage membership" }));
   expect(onManage).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: "Manage in Tasks" }));
+  expect(onOpenTasks).toHaveBeenCalledOnce();
 });
 
 test("keeps local work usable when part of the Member rollup is unavailable", async () => {
@@ -87,74 +91,14 @@ test("keeps local work usable when part of the Member rollup is unavailable", as
     if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "network_unavailable", projects: [], blockers: ["catalog_missing"] }));
     throw new Error(`Unexpected request: ${url}`);
   }));
-  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={[]} onManage={() => undefined} onOpenTask={() => undefined} />);
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" onManage={() => undefined} onOpenTasks={() => undefined} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("Local workers and owned work are unchanged");
   expect(screen.getByRole("list", { name: "Shared work blockers" })).toHaveTextContent("Keeper catalog has not arrived");
 });
 
-test("sends Keeper-routed work to one private worker and opens the local task", async () => {
-  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+test("keeps Steward work routing in Tasks without exposing the target Hive's workers", async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes("/tasks/task-1/local-execution")) {
-      expect(init).toMatchObject({ method: "POST", body: JSON.stringify({ worker_id: "worker-1" }) });
-      return Promise.resolve(ok({ apiary_task_id: "task-1", local_task_id: "local-1", worker_id: "worker-1", state: "ready", created_at: 2 }));
-    }
-    if (url.endsWith("/members")) return Promise.resolve(ok([]));
-    if (url.endsWith("/shared-work") || url.endsWith("/handoffs") || url.endsWith("/handoff-targets") || url.endsWith("/task-outbox") || url.endsWith("/local-executions")) return Promise.resolve(ok([]));
-    if (url.endsWith("/tasks") && !url.endsWith("/steward/tasks")) return Promise.resolve(ok([{ id: "task-1", apiary_id: "apiary-1", source: "swarm", title: "Prepare shared release", description: "", priority: "high", state: "ready", home_node_id: "node-2", home_hive_id: "hive-2", revision: 1, created_at: 1, updated_at: 1 }]));
-    if (url.endsWith("/sync-health")) return Promise.resolve(ok({ condition: "current", last_attempt_at: 1, last_success_at: 1, consecutive_failures: 0, next_attempt_at: null }));
-    if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 1, task_count: 1, last_applied_at: 1 }));
-    if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
-    if (url.endsWith("/steward/tasks")) return Promise.resolve(ok([]));
-    if (url.endsWith("/steward/assists")) return Promise.resolve(ok({ incoming: [], outbox: [] }));
-    if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
-    if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: [] }));
-    throw new Error(`Unexpected request: ${url}`);
-  }));
-  const onOpenTask = vi.fn();
-  const workers = [{ id: "worker-1", hive_id: "hive-2", name: "Clover", role: "worker" as const, provider: "claude_code" as const, workspace: "/projects/clover", autostart: false, position: 1, active_session_id: null, created_at: 1, updated_at: 1, running: false, attention_state: "sleeping" as const }];
-  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={workers} onManage={() => undefined} onOpenTask={onOpenTask} />);
-
-  fireEvent.change(await screen.findByRole("combobox", { name: "Worker for Prepare shared release" }), { target: { value: "worker-1" } });
-  fireEvent.click(screen.getByRole("button", { name: "Send to worker" }));
-  await waitFor(() => expect(onOpenTask).toHaveBeenCalledWith("local-1"));
-});
-
-test("shows linked worker progress as ordered Keeper synchronization", async () => {
-  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url.endsWith("/members") || url.endsWith("/shared-work") || url.endsWith("/handoffs") || url.endsWith("/handoff-targets") || url.endsWith("/task-outbox")) return Promise.resolve(ok([]));
-    if (url.endsWith("/local-executions")) return Promise.resolve(ok([{ apiary_task_id: "task-1", local_task_id: "local-1", worker_id: "worker-1", state: "active", created_at: 2 }]));
-    if (url.endsWith("/tasks") && !url.endsWith("/steward/tasks")) return Promise.resolve(ok([{ id: "task-1", apiary_id: "apiary-1", source: "swarm", title: "Prepare shared release", description: "", priority: "high", state: "ready", home_node_id: "node-2", home_hive_id: "hive-2", revision: 1, created_at: 1, updated_at: 1 }]));
-    if (url.endsWith("/sync-health")) return Promise.resolve(ok({ condition: "current", last_attempt_at: 1, last_success_at: 1, consecutive_failures: 0, next_attempt_at: null }));
-    if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 1, task_count: 1, last_applied_at: 1 }));
-    if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 1, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
-    if (url.endsWith("/steward/tasks")) return Promise.resolve(ok([]));
-    if (url.endsWith("/steward/assists")) return Promise.resolve(ok({ incoming: [], outbox: [] }));
-    if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
-    if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: [] }));
-    throw new Error(`Unexpected request: ${url}`);
-  }));
-  const workers = [{ id: "worker-1", hive_id: "hive-2", name: "Clover", role: "worker" as const, provider: "claude_code" as const, workspace: "/projects/clover", autostart: false, position: 1, active_session_id: null, created_at: 1, updated_at: 1, running: true, attention_state: "buzzing" as const }];
-  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={workers} onManage={() => undefined} onOpenTask={() => undefined} />);
-
-  expect(await screen.findByText("Keeper ready · syncing to active")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Open task" })).toBeInTheDocument();
-  expect(screen.queryByText(/Move shared work/)).not.toBeInTheDocument();
-});
-
-test("routes Steward work through Keeper without exposing the target Hive's workers", async () => {
-  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.endsWith("/steward/tasks") && init?.method === "POST") {
-      expect(JSON.parse(String(init.body))).toEqual({
-        target_hive_id: "hive-3",
-        title: "Restore the shared service",
-        description: "Confirm the customer-facing result.",
-        priority: "high",
-      });
-      return Promise.resolve(ok({ command: { id: "command-1" }, state: "queued" }));
-    }
     if (url.endsWith("/members")) return Promise.resolve(ok([
       { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: false },
       { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: true },
@@ -174,15 +118,13 @@ test("routes Steward work through Keeper without exposing the target Hive's work
     throw new Error(`Unexpected request: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
-  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={[]} onManage={() => undefined} onOpenTask={() => undefined} />);
+  const onOpenTasks = vi.fn();
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" onManage={() => undefined} onOpenTasks={onOpenTasks} />);
 
-  expect(await screen.findByRole("heading", { name: "Give a managed Hive a clear outcome" })).toBeInTheDocument();
-  fireEvent.change(screen.getByRole("combobox", { name: "Target Hive" }), { target: { value: "hive-3" } });
-  fireEvent.change(screen.getByRole("textbox", { name: "Steward task outcome" }), { target: { value: "Restore the shared service" } });
-  fireEvent.change(screen.getByRole("textbox", { name: "Steward task context" }), { target: { value: "Confirm the customer-facing result." } });
-  fireEvent.change(screen.getByRole("combobox", { name: "Steward task priority" }), { target: { value: "high" } });
-  fireEvent.click(screen.getByRole("button", { name: "Route through Keeper" }));
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/steward/tasks"), expect.objectContaining({ method: "POST" })));
+  expect(await screen.findByText("Route shared work from Tasks")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Open Tasks" }));
+  expect(onOpenTasks).toHaveBeenCalledOnce();
+  expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/steward/tasks"), expect.objectContaining({ method: "POST" }));
   expect(document.body).not.toHaveTextContent("Fern worker");
 });
 
@@ -212,7 +154,7 @@ test("offers and accepts Steward assistance without injecting a worker terminal"
     throw new Error(`Unexpected request: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
-  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" workers={[]} onManage={() => undefined} onOpenTask={() => undefined} />);
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" onManage={() => undefined} onOpenTasks={() => undefined} />);
 
   expect(await screen.findByRole("heading", { name: "A trusted Steward offered help" })).toBeInTheDocument();
   expect(screen.getByText("I can help verify the incident recovery.")).toBeInTheDocument();

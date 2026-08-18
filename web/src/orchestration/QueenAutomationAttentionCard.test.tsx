@@ -37,3 +37,8 @@ test("stays absent for a safe completed review", () => {
   const { container } = render(<QueenAutomationAttentionCard status={{ ...status, outcome: "completed" }} onOpenQueen={() => undefined} onReviewSettings={() => undefined} />);
   expect(container).toBeEmptyDOMElement();
 });
+
+test("stays absent when Queen already filed a concrete decision", () => {
+  const { container } = render(<QueenAutomationAttentionCard status={status} coveredBySpecificDecision onOpenQueen={() => undefined} onReviewSettings={() => undefined} />);
+  expect(container).toBeEmptyDOMElement();
+});

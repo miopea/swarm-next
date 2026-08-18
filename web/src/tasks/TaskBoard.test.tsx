@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import type { Task, Worker } from "../api";
+import type { HiveIdentity, Task, Worker } from "../api";
 import TaskBoard from "./TaskBoard";
 
 afterEach(() => {
@@ -118,6 +118,106 @@ test("creates a task with useful context and priority", () => {
     priority: "urgent",
     worker_id: worker.id,
   });
+});
+
+test("creates Apiary work from Tasks instead of the supervisory Apiary view", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    requests.push({ url, init });
+    if (url.endsWith("/api/v1/tasks/email-sources")) return Promise.resolve(ok([]));
+    if (url.endsWith("/api/v1/apiary/members")) return Promise.resolve(ok([
+      { hive_id: "hive-1", hive_name: "Lead Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false },
+    ]));
+    if (url.endsWith("/api/v1/apiary/tasks") && init?.method === "POST") {
+      return Promise.resolve({ ...ok({ id: "apiary-task-1", apiary_id: "apiary-1", source: "swarm", title: "Coordinate release", description: "Across both Hives", priority: "high", state: "ready", home_node_id: null, home_hive_id: "hive-2", revision: 1, created_at: 1, updated_at: 1 }), status: 201 });
+    }
+    if (url.endsWith("/api/v1/apiary/tasks")) return Promise.resolve(ok([]));
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+  renderBoard({ tasks: [], hiveIdentity: keeperIdentity() });
+
+  fireEvent.click(screen.getByRole("button", { name: "Write task" }));
+  fireEvent.click(screen.getByRole("radio", { name: /Apiary/ }));
+  fireEvent.change(screen.getByLabelText("Task title"), { target: { value: "  Coordinate release  " } });
+  fireEvent.change(screen.getByLabelText(/Description/), { target: { value: "  Across both Hives  " } });
+  fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "high" } });
+  await waitFor(() => expect(screen.getByLabelText(/Route to a Hive/)).toHaveTextContent("Clover Hive"));
+  fireEvent.change(screen.getByLabelText(/Route to a Hive/), { target: { value: "hive-2" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create for Apiary" }));
+
+  await waitFor(() => expect(requests.some(({ url, init }) => url.endsWith("/api/v1/apiary/tasks") && init?.method === "POST")).toBe(true));
+  const request = requests.find(({ url, init }) => url.endsWith("/api/v1/apiary/tasks") && init?.method === "POST");
+  expect(JSON.parse(String(request?.init?.body))).toEqual({ title: "Coordinate release", description: "Across both Hives", priority: "high", home_hive_id: "hive-2" });
+});
+
+test("lets a Member claim shared work from Tasks", async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/tasks/email-sources")) return Promise.resolve(ok([]));
+    if (url.endsWith("/api/v1/apiary/members")) return Promise.resolve(ok([{ hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: true }]));
+    if (url.endsWith("/api/v1/apiary/tasks/task-shared/claim") && init?.method === "POST") return Promise.resolve(ok({ command: { task_id: "task-shared" }, state: "queued" }));
+    if (url.endsWith("/api/v1/apiary/tasks")) return Promise.resolve(ok([apiaryTask()]));
+    if (url.endsWith("/api/v1/apiary/tasks/local-executions") || url.endsWith("/api/v1/apiary/task-outbox")) return Promise.resolve(ok([]));
+    if (url.endsWith("/api/v1/apiary/my-stewardship")) return Promise.resolve(ok(null));
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  renderBoard({ tasks: [], hiveIdentity: memberIdentity() });
+
+  fireEvent.click(await screen.findByRole("button", { name: "Claim for this Hive" }));
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/tasks/task-shared/claim"), expect.objectContaining({ method: "POST" })));
+});
+
+test("routes owned Apiary work to a private worker from Tasks", async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/tasks/email-sources")) return Promise.resolve(ok([]));
+    if (url.endsWith("/api/v1/apiary/members")) return Promise.resolve(ok([{ hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: true }]));
+    if (url.endsWith("/api/v1/apiary/tasks/task-shared/local-execution") && init?.method === "POST") return Promise.resolve(ok({ apiary_task_id: "task-shared", local_task_id: "local-1", worker_id: worker.id, state: "ready", created_at: 2 }));
+    if (url.endsWith("/api/v1/apiary/tasks")) return Promise.resolve(ok([{ ...apiaryTask(), home_hive_id: "hive-2", home_node_id: "node-2" }]));
+    if (url.endsWith("/api/v1/apiary/tasks/local-executions") || url.endsWith("/api/v1/apiary/task-outbox")) return Promise.resolve(ok([]));
+    if (url.endsWith("/api/v1/apiary/my-stewardship")) return Promise.resolve(ok(null));
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const onOpenTask = vi.fn();
+  renderBoard({ tasks: [], hiveIdentity: memberIdentity(), onOpenTask });
+
+  fireEvent.change(await screen.findByRole("combobox", { name: "Worker for Prepare shared brief" }), { target: { value: worker.id } });
+  fireEvent.click(screen.getByRole("button", { name: "Send to worker" }));
+
+  await waitFor(() => expect(onOpenTask).toHaveBeenCalledWith("local-1"));
+});
+
+test("lets a Steward route work from Tasks only to Hives in her scope", async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/tasks/email-sources")) return Promise.resolve(ok([]));
+    if (url.endsWith("/api/v1/apiary/members")) return Promise.resolve(ok([
+      { hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye", role: "member", is_local: false },
+      { hive_id: "hive-4", hive_name: "Poppy Hive", operator_id: "operator-4", operator_display_name: "Pia", role: "member", is_local: false },
+    ]));
+    if (url.endsWith("/api/v1/apiary/my-stewardship")) return Promise.resolve(ok({ stewardship: { managed_hive_ids: ["hive-3"], capabilities: ["assign"] } }));
+    if (url.endsWith("/api/v1/apiary/steward/tasks") && init?.method === "POST") return Promise.resolve(ok({ command: { id: "command-1" }, state: "queued" }));
+    if (url.endsWith("/api/v1/apiary/tasks") || url.endsWith("/api/v1/apiary/tasks/local-executions") || url.endsWith("/api/v1/apiary/task-outbox")) return Promise.resolve(ok([]));
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  renderBoard({ tasks: [], hiveIdentity: memberIdentity() });
+
+  fireEvent.click(screen.getByRole("button", { name: "Write task" }));
+  await waitFor(() => expect(screen.getByRole("radio", { name: /Apiary/ })).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("radio", { name: /Apiary/ }));
+  fireEvent.change(screen.getByLabelText("Task title"), { target: { value: "Restore shared service" } });
+  expect(screen.getByLabelText(/Route to a Hive/)).toHaveTextContent("Fern Hive");
+  expect(screen.getByLabelText(/Route to a Hive/)).not.toHaveTextContent("Poppy Hive");
+  fireEvent.change(screen.getByLabelText(/Route to a Hive/), { target: { value: "hive-3" } });
+  fireEvent.click(screen.getByRole("button", { name: "Route through Keeper" }));
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/apiary/steward/tasks"), expect.objectContaining({ method: "POST" })));
 });
 
 test("keeps worker ownership visible while the assigned worker is sleeping", () => {
@@ -421,3 +521,35 @@ test("shows Queen handoff state and its durable history note", async () => {
   fireEvent.click(screen.getByRole("menuitem", { name: "Show history" }));
   await waitFor(() => expect(screen.getByText("Android voice and shortcuts verified.")).toBeInTheDocument());
 });
+
+function keeperIdentity(): HiveIdentity {
+  return {
+    operator: { id: "operator-1", display_name: "Bea" },
+    hive: { id: "hive-1", name: "Lead Hive", operator_id: "operator-1", apiary_id: "apiary-1" },
+    apiary_context: {
+      mode: "federated",
+      apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" },
+      local_role: "keeper",
+    },
+  };
+}
+
+function memberIdentity(): HiveIdentity {
+  return {
+    operator: { id: "operator-2", display_name: "Cora" },
+    hive: { id: "hive-2", name: "Clover Hive", operator_id: "operator-2", apiary_id: "apiary-1" },
+    apiary_context: {
+      mode: "federated",
+      apiary: { id: "apiary-1", name: "Grand Garden", keeper_operator_id: "operator-1", shared_work_backend: "jira" },
+      local_role: "member",
+    },
+  };
+}
+
+function apiaryTask() {
+  return { id: "task-shared", apiary_id: "apiary-1", source: "swarm", title: "Prepare shared brief", description: "Coordinate the release", priority: "high", state: "ready", home_node_id: null, home_hive_id: null, revision: 1, created_at: 1, updated_at: 1 };
+}
+
+function ok(payload: unknown) {
+  return { ok: true, status: 200, json: async () => payload };
+}
