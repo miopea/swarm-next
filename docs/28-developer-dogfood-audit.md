@@ -49,6 +49,7 @@ This is the working product audit for the first real developer week. It records 
 25. **Queen's two queues no longer appear to contradict each other.** A pending operator decision remains explicit above the deterministic coordinator. Its mechanical counters now say **Worker starts queued**, **Worker cases surfaced**, and **Worker cases needing judgment** instead of the ambiguous **Waiting** and **Needs review** labels that looked like incorrect decision totals.
 26. **A new task never defaults to Scout by roster position.** Local task creation now requires the operator to choose the repository worker explicitly. Scout remains available for deliberate cross-repository work, but Swarm no longer silently routes ordinary work there simply because Scout is the first configured worker.
 27. **Terminal diagnostics explain their identity.** The internal Swarm terminal-session ID stays behind a disclosure, now says what it identifies, distinguishes itself from the Claude or Codex conversation, and can be copied for a support report.
+28. **Legacy repository spelling cannot duplicate an existing worker.** Migration compares repository identity after expanding the local home shorthand, normalizing separators, and ignoring a trailing slash. A Legacy `~/projects/...` worker is therefore recognized as the same repository already stored by Next as `/home/<operator>/projects/...`, rather than being offered as a second worker.
 
 ## Live deployed proof — 2026-08-18
 
@@ -71,6 +72,7 @@ This is the working product audit for the first real developer week. It records 
 - Release `0.1.0-6c91a005b0a1` removed the clipped mobile Settings seam, kept long worker repository paths readable in the editor, and described the separately versioned worker engine as compatible rather than falsely identical. Apiary membership briefly showed its explicit refresh state and then settled to Lead Hive without intervention.
 - On the same release, the phone task board presented one coherent work entry surface (**Write task**, **Claim Jira work**, and **Use email**), two readable active-work cards, source/worker/status filters, and no duplicate Apiary task-creation form.
 - Release `0.1.0-91f589d4ddc6` preserved the terminal host and Queen session, then proved at 1440 × 1000 and 412 × 915 that a new local task starts at **Choose a worker** and cannot be created until the operator deliberately selects repository ownership. No task was created during proof.
+- Release `0.1.0-c2fed38c91cd` preserved the terminal host and Queen session. The terminal-session disclosure rendered above the live Queen terminal with its purpose, provider-conversation distinction, raw diagnostic identity, and copy action. Crew editing, Diagnostics, and the Legacy migration entry point were rechecked at desktop and phone widths without changing Hive records.
 
 ## Verified existing capabilities
 
@@ -112,6 +114,7 @@ These are product choices rather than obvious repairs:
 4. **Night Watch deployment rules.** Approve the first exact durable deployment scopes Queen may use; Queen should delegate execution to Scout/repository workers rather than becoming a coding worker.
 5. **Apiary activity density.** Choose the default Keeper/Member time window for completed-work rollups once more than one real Hive is connected.
 6. **Queen approval granularity.** The current Queen can correctly group eight related Ready records into one durable decision, but that produces one large approval with coupled action buttons. The next contract should create task- or worker-scoped decision records, with an optional summary above them, instead of asking the UI to parse a model-written blob into actions.
+7. **Legacy tasks that only look Jira-backed.** At least one Legacy row starts with a valid Jira key in its title but has an empty `jira_key` field and no other Jira provenance. Decide whether migration should leave all such title-only records in Legacy, offer them behind a separate warning, or query connected Jira for an exact issue before excluding them. Title shape alone is not safe enough to discard local work automatically.
 
 ## Not reproduced or intentionally deferred
 

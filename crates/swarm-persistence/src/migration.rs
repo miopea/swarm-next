@@ -1028,6 +1028,7 @@ impl TaskStore {
         bundle: &LegacyMigrationBundle,
     ) -> Result<Vec<NormalizedWorker>, TaskStoreError> {
         let existing = self.list_worker_profiles()?;
+        let home = migration_home_directory();
         let connection = self.connection()?;
         let mut output = Vec::with_capacity(bundle.workers.len());
         for source in &bundle.workers {
@@ -1099,7 +1100,9 @@ impl TaskStore {
                 |row| row.get::<_, bool>(0),
             )?;
             let duplicate = existing.iter().find(|worker| {
-                worker.name.eq_ignore_ascii_case(&name) || worker.workspace == workspace
+                worker.name.eq_ignore_ascii_case(&name)
+                    || workspace_identity(&worker.workspace, home.as_deref())
+                        == workspace_identity(&workspace, home.as_deref())
             });
             if selectable && (already_imported || duplicate.is_some()) {
                 disposition = LegacyWorkerImportDisposition::Duplicate;
@@ -1129,6 +1132,32 @@ impl TaskStore {
         }
         Ok(output)
     }
+}
+
+fn migration_home_directory() -> Option<String> {
+    std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .map(|home| home.replace('\\', "/").trim_end_matches('/').to_owned())
+        .filter(|home| !home.is_empty())
+}
+
+fn workspace_identity(workspace: &str, home: Option<&str>) -> String {
+    let normalized = workspace.trim().replace('\\', "/");
+    let mut expanded = match (normalized.strip_prefix("~/"), home) {
+        (Some(relative), Some(home)) => format!("{home}/{relative}"),
+        _ => normalized,
+    };
+    while expanded.contains("//") {
+        expanded = expanded.replace("//", "/");
+    }
+    if expanded.len() > 1 {
+        expanded = expanded.trim_end_matches('/').to_owned();
+    }
+    if expanded.as_bytes().get(1) == Some(&b':') {
+        expanded.make_ascii_lowercase();
+    }
+    expanded
 }
 
 fn worker_profile_digest(
@@ -1512,6 +1541,37 @@ mod tests {
             preview.records[2].disposition,
             LegacyWorkerImportDisposition::Duplicate
         );
+    }
+
+    #[test]
+    fn worker_preview_treats_tilde_and_absolute_home_repositories_as_duplicates() {
+        let store = store();
+        let home = migration_home_directory().expect("test process has a home directory");
+        store
+            .create_worker(
+                "Daisy",
+                ProviderKind::ClaudeCode,
+                &format!("{home}/projects/daisy"),
+                false,
+                3,
+            )
+            .unwrap();
+
+        let preview = store
+            .preview_legacy_worker_migration(&worker_bundle(vec![worker(
+                "daisy",
+                "Legacy Daisy",
+                "~/projects/daisy/",
+            )]))
+            .unwrap();
+
+        assert_eq!(preview.selectable, 0);
+        assert_eq!(preview.skipped, 1);
+        assert_eq!(
+            preview.records[0].disposition,
+            LegacyWorkerImportDisposition::Duplicate
+        );
+        assert!(preview.records[0].warnings[0].contains("Daisy"));
     }
 
     #[test]
