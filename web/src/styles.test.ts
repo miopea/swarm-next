@@ -53,6 +53,9 @@ test("keeps persistent phone navigation controls comfortably touchable", () => {
   expect(stylesheet).toContain(".task-project-row > a { display: grid; width: 44px; min-height: 44px;");
   expect(stylesheet).toContain(".task-jira-origin a { min-height: 44px; }");
   expect(stylesheet).toContain(".worker-order-actions button { width: 44px; min-height: 44px; }");
+  expect(stylesheet).toContain(".mobile-terminal-keys button { min-width: 44px; min-height: 44px;");
+  expect(stylesheet).toContain('.settings-workspace input:not([type="checkbox"]):not([type="radio"]),');
+  expect(stylesheet).toContain(".settings-workspace textarea { min-height: 44px; }");
   expect(stylesheet).toContain(".task-mobile-controls summary { display: flex; min-height: 44px;");
   expect(stylesheet).toContain(".task-mobile-controls input, .task-mobile-controls select { width: 100%; min-height: 44px;");
 });
