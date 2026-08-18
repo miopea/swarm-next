@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 export type MenuPoint = { x: number; y: number };
@@ -30,8 +30,23 @@ export default function CursorMenu({ label, point, onClose, children, className 
       x: Math.max(VIEWPORT_GUTTER, Math.min(point.x, window.innerWidth - bounds.width - VIEWPORT_GUTTER)),
       y: Math.max(VIEWPORT_GUTTER, Math.min(point.y, window.innerHeight - bounds.height - VIEWPORT_GUTTER)),
     });
-    menu.focus();
+    const firstAction = menu.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])');
+    (firstAction ?? menu).focus();
   }, [point]);
+
+  function moveFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const actions = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
+    if (!actions.length) return;
+    const current = actions.indexOf(document.activeElement as HTMLElement);
+    let target: number | undefined;
+    if (event.key === "ArrowDown") target = current < 0 || current === actions.length - 1 ? 0 : current + 1;
+    if (event.key === "ArrowUp") target = current <= 0 ? actions.length - 1 : current - 1;
+    if (event.key === "Home") target = 0;
+    if (event.key === "End") target = actions.length - 1;
+    if (target === undefined) return;
+    event.preventDefault();
+    actions[target].focus();
+  }
 
   useLayoutEffect(() => {
     function dismiss(event: PointerEvent) {
@@ -61,6 +76,7 @@ export default function CursorMenu({ label, point, onClose, children, className 
       aria-label={label}
       tabIndex={-1}
       style={{ left: position.x, top: position.y }}
+      onKeyDown={moveFocus}
     >
       {children}
     </div>,
