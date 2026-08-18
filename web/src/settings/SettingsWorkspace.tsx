@@ -102,6 +102,25 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
     };
   }, []);
   useEffect(() => {
+    const responsiveBoundary = window.matchMedia?.("(max-width: 680px)");
+    if (!responsiveBoundary) return;
+    let frame: number | undefined;
+    let settleTimer: number | undefined;
+    const preserveSelectedSection = () => {
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer);
+      const restore = () => document.getElementById(activeSettingsSection)?.scrollIntoView?.({ behavior: "auto", block: "start" });
+      frame = window.requestAnimationFrame(restore);
+      settleTimer = window.setTimeout(restore, 150);
+    };
+    responsiveBoundary.addEventListener("change", preserveSelectedSection);
+    return () => {
+      responsiveBoundary.removeEventListener("change", preserveSelectedSection);
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer);
+    };
+  }, [activeSettingsSection]);
+  useEffect(() => {
     let cancelled = false;
     setTerminalHostLoaded(false);
     void fetchTerminalHostStatus(operatorToken)

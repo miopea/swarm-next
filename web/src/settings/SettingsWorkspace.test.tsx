@@ -218,6 +218,42 @@ test("restores a linked settings section after its responsive layout settles", a
   await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
 });
 
+test("keeps the selected settings section when the layout crosses phone width", async () => {
+  const scrollIntoView = vi.fn();
+  let responsiveChange: (() => void) | undefined;
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+  vi.stubGlobal("matchMedia", vi.fn(() => ({
+    matches: true,
+    media: "(max-width: 680px)",
+    onchange: null,
+    addEventListener: (_type: string, listener: () => void) => { responsiveChange = listener; },
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })));
+  window.history.replaceState({}, "", "/#settings-queen");
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("integrations/jira/bindings") || url.includes("feedback/reports")) return ok([]);
+    if (url.includes("integrations/email/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("runtime/resources")) return ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 1, critical_bytes: 2 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" } });
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 7, host_version: "0.1.0", draining: false, running_sessions: 0, retained_sessions: 0 } });
+    if (url.includes("runtime/development")) return ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false });
+    return ok({ type: "history_diagnostics", diagnostics: null });
+  }));
+
+  render(<SettingsWorkspace {...minimalProps()} />);
+  expect(screen.getByRole("button", { name: "Queen" })).toHaveAttribute("aria-current", "location");
+  await waitFor(() => expect(responsiveChange).toBeTypeOf("function"));
+  scrollIntoView.mockClear();
+  responsiveChange?.();
+
+  await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+  expect(scrollIntoView.mock.instances.every((element) => (element as HTMLElement).id === "settings-queen")).toBe(true);
+});
+
 test("downloads a consistent Hive database snapshot", async () => {
   const createObjectURL = vi.fn().mockReturnValue("blob:hive-backup");
   const revokeObjectURL = vi.fn();
