@@ -24,7 +24,7 @@ Read and review these documents in order:
 20. [M1 minimal task workflow](18-minimal-task-workflow.md)
 21. [Visual design system](19-visual-design-system.md)
 22. [Daily-driver readiness](20-daily-driver-readiness.md)
-23. [Apiary and Hive architecture](21-apiary-hive-architecture.md)
+23. [Apiary and Hive product contract](21-apiary-hive-product-contract.md)
 24. [Live control-room events](22-live-control-room-events.md)
 25. [Privacy-safe diagnostics](23-privacy-safe-diagnostics.md)
 26. [Browser dogfood acceptance](24-browser-dogfood-acceptance.md)
