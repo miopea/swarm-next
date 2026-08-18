@@ -248,6 +248,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .mobile-worker-dialog-toolbar { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; }
 .mobile-worker-search { width: 100%; min-height: 44px; }
 .mobile-worker-dialog-list { display: grid; min-height: 0; overflow-y: auto; gap: 5px; overscroll-behavior: contain; }
+.mobile-worker-empty { display: grid; justify-items: start; gap: 6px; padding: 18px 12px; color: var(--muted); font-size: .84rem; line-height: 1.45; }
+.mobile-worker-empty strong { color: var(--text); font-size: .94rem; }
+.mobile-worker-empty button { min-height: 44px; margin-top: 5px; }
 .mobile-worker-choice { display: grid; width: 100%; min-height: 66px; grid-template-columns: 42px minmax(0, 1fr) 9px; align-items: center; gap: 10px; padding: 8px 10px; border-color: var(--line); color: var(--text); background: var(--panel); text-align: left; }
 .mobile-worker-choice[aria-current="page"] { border-color: var(--good); background: var(--good-soft); box-shadow: inset 3px 0 var(--good); }
 .mobile-worker-choice .worker-avatar { width: 42px; height: 42px; }

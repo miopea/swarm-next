@@ -471,6 +471,12 @@ test("searches a large worker roster by worker or repository in the mobile switc
   expect(within(dialog).getByRole("button", { name: /Platform API/ })).toBeInTheDocument();
   expect(within(dialog).queryByRole("button", { name: /Sculpt Studio/ })).not.toBeInTheDocument();
   expect(within(dialog).queryByRole("button", { name: /^Queen/ })).not.toBeInTheDocument();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Awake" }));
+  fireEvent.change(within(dialog).getByRole("searchbox", { name: "Find a worker" }), { target: { value: "sculpt" } });
+  expect(within(dialog).getByText("That worker is sleeping")).toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Show all workers" }));
+  expect(within(dialog).getByRole("button", { name: /Sculpt Studio/ })).toBeInTheDocument();
 });
 
 test("switching workers releases only the previously selected engagement", async () => {

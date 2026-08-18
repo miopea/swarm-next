@@ -808,6 +808,12 @@ export function App() {
       : orphanSessions,
     [normalizedMobileWorkerQuery, orphanSessions],
   );
+  const sleepingWorkerMatchesMobileQuery = useMemo(
+    () => workerVisibility === "awake" && normalizedMobileWorkerQuery
+      ? workers.some((worker) => !worker.running && `${worker.name} ${repositoryName(worker.workspace)} ${worker.workspace}`.toLocaleLowerCase().includes(normalizedMobileWorkerQuery))
+      : false,
+    [normalizedMobileWorkerQuery, workerVisibility, workers],
+  );
   const liveWorkerCount = workers.filter((worker) => worker.running).length
     + orphanSessions.filter((session) => session.running).length;
   const rosterWorkerCount = workers.length + orphanSessions.length;
@@ -1037,7 +1043,15 @@ export function App() {
               />
               <div className="mobile-worker-dialog-list">
                 {mobileVisibleWorkers.length === 0 && mobileVisibleOrphanSessions.length === 0 ? (
-                  <p className="empty-rail">{normalizedMobileWorkerQuery ? `No workers match “${mobileWorkerQuery.trim()}”.` : `All ${workers.length} workers are sleeping. Choose All to wake one.`}</p>
+                  workers.length === 0 && orphanSessions.length === 0 ? (
+                    <div className="mobile-worker-empty"><strong>No workers configured yet</strong><span>Add a repository worker in Settings, then return here to wake her.</span><button type="button" onClick={() => { setShowMobileWorkers(false); openSettings("settings-crew"); }}>Manage workers</button></div>
+                  ) : sleepingWorkerMatchesMobileQuery ? (
+                    <div className="mobile-worker-empty"><strong>That worker is sleeping</strong><span>Show the full roster to wake the matching worker.</span><button type="button" onClick={() => changeWorkerVisibility("all")}>Show all workers</button></div>
+                  ) : normalizedMobileWorkerQuery ? (
+                    <div className="mobile-worker-empty"><strong>No worker matches “{mobileWorkerQuery.trim()}”</strong><span>Try a worker name, repository name, or path.</span></div>
+                  ) : (
+                    <div className="mobile-worker-empty"><strong>All {workers.length} workers are sleeping</strong><span>Show the full roster to wake one.</span><button type="button" onClick={() => changeWorkerVisibility("all")}>Show all workers</button></div>
+                  )
                 ) : null}
                 {mobileVisibleWorkers.map((worker) => {
                   const sessionId = worker.active_session_id;
