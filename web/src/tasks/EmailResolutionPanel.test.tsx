@@ -95,6 +95,29 @@ test("never silently retries an uncertain Outlook result", async () => {
   expect(screen.getByRole("button", { name: "I checked uncertain threads · retry" })).toBeInTheDocument();
 });
 
+test("blocks duplicate completion actions until both deployment and reply history are verified", async () => {
+  let replyAttempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/deployments")) return ok([{ id: "deployment-1", task_id: task.id, environment: "production", reference: "release-42", deployed_at: 3, recorded_at: 3 }]);
+    if (url.endsWith("/email/reply")) {
+      replyAttempts += 1;
+      if (replyAttempts === 1) throw new Error("Runtime request returned 502");
+      return ok(reply("draft"));
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+
+  render(<EmailResolutionPanel operatorToken="operator-token" task={task} sources={[source]} />);
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("could not verify the complete email history");
+  expect(screen.queryByText("Confirm the fix is live")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText(/Plain-language resolution/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry completion details" }));
+  expect(await screen.findByLabelText(/Plain-language resolution/)).toHaveValue("Thank you. The form now saves correctly.");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }

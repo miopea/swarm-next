@@ -89,6 +89,7 @@ This is the working product audit for the first real developer week. It records 
 64. **An unavailable join snapshot no longer looks like an empty personal Hive.** Saved Keeper links and signed invitations now update independently, preserve their last-known values when one request fails, and show a direct retry. Swarm only says no invitation is saved after the relevant state was actually read.
 65. **Migration rollback history is no longer silently assumed absent.** A transient failure while recovering active task or worker receipts now warns that undo availability could not be verified and offers a narrow retry. A true older-runtime 404 remains compatible, while persistence still enforces one active batch per exact Legacy snapshot.
 66. **A Jira discussion outage no longer looks empty or invites a duplicate comment.** Failed loads keep an explicit recovery action beside the task. If Jira accepts an update but the follow-up refresh fails, Swarm confirms that the update was saved and tells the operator to retry the discussion rather than posting the same update again; a failed save keeps the typed update in place.
+67. **Partial email history can no longer expose a duplicate deployment or reply action.** Deployment evidence and Outlook reply state load independently and preserve any successful result, but Swarm withholds completion actions until both are verified. A direct retry recovers only that history instead of asking the operator to refresh the task or guess what Outlook already received.
 
 ## Live deployed proof — 2026-08-18
 

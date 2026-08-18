@@ -23,24 +23,33 @@ export default function EmailResolutionPanel({ operatorToken, task, sources }: P
   const [reference, setReference] = useState("");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
+  const [detailsState, setDetailsState] = useState<"checking" | "ready" | "partial">("checking");
   const [confirmingSend, setConfirmingSend] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
     if (task.state !== "completed") return;
     let cancelled = false;
-    setBusy(true);
-    void Promise.all([fetchTaskDeployments(operatorToken, task.id), fetchEmailReply(operatorToken, task.id)])
-      .then(([nextDeployments, nextReply]) => {
-        if (cancelled) return;
-        setDeployments(nextDeployments);
-        setReply(nextReply);
-        setBody(nextReply?.body ?? "");
-      })
-      .catch((error: unknown) => { if (!cancelled) setMessage(error instanceof Error ? error.message : "Email completion details could not be loaded."); })
-      .finally(() => { if (!cancelled) setBusy(false); });
+    void loadDetails(() => cancelled);
     return () => { cancelled = true; };
   }, [operatorToken, task.id, task.state]);
+
+  async function loadDetails(cancelled: () => boolean = () => false) {
+    setBusy(true);
+    setDetailsState("checking");
+    const [deploymentResult, replyResult] = await Promise.allSettled([
+      fetchTaskDeployments(operatorToken, task.id),
+      fetchEmailReply(operatorToken, task.id),
+    ]);
+    if (cancelled()) return;
+    if (deploymentResult.status === "fulfilled") setDeployments(deploymentResult.value);
+    if (replyResult.status === "fulfilled") {
+      setReply(replyResult.value);
+      setBody(replyResult.value?.body ?? "");
+    }
+    setDetailsState(deploymentResult.status === "fulfilled" && replyResult.status === "fulfilled" ? "ready" : "partial");
+    setBusy(false);
+  }
 
   async function recordDeployment(event: FormEvent) {
     event.preventDefault();
@@ -128,6 +137,10 @@ export default function EmailResolutionPanel({ operatorToken, task, sources }: P
       ) : null}
       {task.state !== "completed" ? (
         <p className="email-resolution-note">The original thread stays linked. A reply becomes available only after this task is completed and its deployment is recorded.</p>
+      ) : detailsState === "checking" ? (
+        <p className="email-resolution-note" role="status">Checking deployment and reply history…</p>
+      ) : detailsState === "partial" ? (
+        <div className="settings-error" role="alert"><span>Swarm could not verify the complete email history. No deployment or reply action is available until both records are known.</span> <button className="text-button" type="button" disabled={busy} onClick={() => void loadDetails()}>Retry completion details</button></div>
       ) : deployments.length === 0 ? (
         <form className="email-deployment-form" onSubmit={(event) => void recordDeployment(event)}>
           <div><span className="field-caption">Step 1 of 2</span><strong>Confirm the fix is live</strong><small>Deployment evidence prevents a completion status from emailing someone before the change is actually available.</small></div>
