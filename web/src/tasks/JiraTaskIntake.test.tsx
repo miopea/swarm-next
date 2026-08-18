@@ -50,6 +50,24 @@ test("claims explicitly selected unassigned open Jira work onto the task board",
   expect(await screen.findByText("1 Jira issue added or refreshed on this board.")).toBeInTheDocument();
 });
 
+test("shows a retryable Jira error instead of an empty task source", async () => {
+  let attempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (attempts++ === 0) return new Response("temporary gateway failure", { status: 502 });
+    if (url.endsWith("/readiness")) return ok({ configured: true, connection: "ready", account_name: "Bradford" });
+    if (url.endsWith("/bindings")) return ok([]);
+    throw new Error(`Unexpected request: ${url}`);
+  }));
+
+  render(<JiraTaskIntake operatorToken="operator-token" onImported={vi.fn()} />);
+
+  expect(await screen.findByRole("heading", { name: "Jira work could not be loaded" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("heading", { name: "No Jira projects are ready" })).toBeInTheDocument();
+  expect(screen.getByText(/Settings → Integrations/)).toBeInTheDocument();
+});
+
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
