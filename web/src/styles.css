@@ -810,6 +810,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .migration-section { display: grid; gap: 12px; padding-block: 16px; border-block-start: 1px solid var(--line); }
 .migration-section > p { margin: 0; color: var(--muted); line-height: 1.5; }
 .worker-settings { grid-column: 1 / -1; }
+.worker-roster-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 4px 12px; }
+.worker-roster-search > span { grid-column: 1 / -1; color: var(--muted); font-size: .72rem; font-weight: 700; }
+.worker-roster-search input { min-width: 0; }
+.worker-roster-search small { padding-bottom: 10px; color: var(--text-muted); white-space: nowrap; }
 .configured-workers { display: grid; gap: 7px; }
 .configured-worker { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto auto; min-height: 58px; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-soft); }
 .configured-worker[draggable="true"] { cursor: grab; }
@@ -1256,6 +1260,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 }
 @media (max-width: 680px) {
   body { overflow: hidden; }
+  .worker-roster-search { grid-template-columns: minmax(0, 1fr); }
+  .worker-roster-search small { padding-bottom: 0; white-space: normal; }
   .app-shell { grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); height: 100dvh; min-height: 0; }
   .control-rail { min-width: 0; max-height: none; padding: 9px 12px 0; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
   .rail-resize-handle { display: none; }

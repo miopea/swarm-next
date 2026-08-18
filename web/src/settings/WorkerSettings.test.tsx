@@ -197,6 +197,30 @@ test("drafts private repository context into an editable unsaved description", a
   );
 });
 
+test("filters a large roster without making hidden ordering ambiguous", () => {
+  const onReorder = vi.fn().mockResolvedValue(undefined);
+  render(
+    <WorkerSettings
+      workers={[queen, budget, studio]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
+      onReorder={onReorder}
+    />,
+  );
+
+  fireEvent.change(screen.getByLabelText("Find a worker"), { target: { value: "sculpt" } });
+  expect(screen.getByText("Poppy")).toBeInTheDocument();
+  expect(screen.queryByText("Daisy")).not.toBeInTheDocument();
+  expect(screen.getByText("1 matching · clear the search to reorder")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Move Poppy earlier" })).not.toBeInTheDocument();
+  expect(onReorder).not.toHaveBeenCalled();
+});
+
 test("shows the real Claude improvement failure instead of appearing inert", async () => {
   const onImproveDescription = vi.fn().mockRejectedValue(new Error("Runtime request returned 503: Claude Code is not available"));
   render(

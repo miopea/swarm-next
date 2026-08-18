@@ -30,6 +30,7 @@ This is the working product audit for the first real developer week. It records 
 7. **Legacy history no longer buries migration work.** Closed Legacy tasks, malformed records, and records staying in Legacy are hidden from the actionable preview by default, each with its own counted disclosure control.
 8. **A normal provider runtime is no longer a critical alert.** Loaded Claude and Codex process trees use the same 2/4 GiB pressure bands as automatic worker admission instead of the Rust service's smaller 256/512 MiB thresholds.
 9. **Runtime identities stay useful without consuming the card.** App/API and worker-engine surfaces share one version presenter that keeps the release and short revision while dropping development timestamps and process suffixes.
+10. **Large Crew settings are searchable.** A 30+ worker roster can be filtered by worker, repository, provider, or Queen-routing description. Reordering is deliberately paused while results are filtered so hidden positions cannot move unexpectedly.
 
 ## Live deployed proof — 2026-08-18
 
@@ -65,7 +66,6 @@ This is the working product audit for the first real developer week. It records 
 
 ## Catalogued refinements after dogfood blockers
 
-- Add search/filtering to the Crew settings roster once worker editing, removal, and reordering can retain an unambiguous position in a filtered 30+ worker list.
 - Split the main browser bundle by workspace after the functional milestone; the current production build is healthy but its shared entry chunk is about 522 kB before gzip.
 - Give compute load a user-facing interpretation only after observing real Hive baselines. Do not invent a warning threshold from one four-CPU machine.
 - Keep desktop and Android PWA persistence on the real-device acceptance list; a responsive browser viewport cannot prove installed-app storage behavior.

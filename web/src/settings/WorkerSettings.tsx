@@ -28,6 +28,12 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [allowOutsideRoots, setAllowOutsideRoots] = useState(false);
   const [highlightedWorkspace, setHighlightedWorkspace] = useState(0);
+  const [workerQuery, setWorkerQuery] = useState("");
+  const normalizedWorkerQuery = workerQuery.trim().toLowerCase();
+  const filteredRoster = normalizedWorkerQuery
+    ? roster.filter((worker) => workerMatches(worker, normalizedWorkerQuery))
+    : roster;
+  const scoutMatches = !normalizedWorkerQuery || Boolean(scout && workerMatches(scout, normalizedWorkerQuery));
   const workerReorder = useReorderDrag(roster.map((worker) => worker.id), (workerIds) => void onReorder(workerIds));
   const matchingWorkspaces = workspaceMatches(available, workspace).slice(0, 8);
   const customWorkspace = Boolean(workspace.trim()) && !workspaces.some((choice) => normalizePath(choice.path) === normalizePath(workspace.trim()));
@@ -83,6 +89,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
     <section id="settings-crew" className="settings-card worker-settings" aria-labelledby="worker-settings-heading">
       <div><p className="eyebrow">Worker roster</p><h3 id="worker-settings-heading">Your familiar crew</h3></div>
       <p>Workers remember their repository and provider conversation across stops, updates, and reboots. Reorder them to match how you work.</p>
+      <label className="worker-roster-search" htmlFor="worker-roster-search"><span>Find a worker</span><input id="worker-roster-search" type="search" aria-label="Find a worker" value={workerQuery} onChange={(event) => setWorkerQuery(event.target.value)} placeholder="Name, repository, provider, or description" /><small>{normalizedWorkerQuery ? `${filteredRoster.length + (scoutMatches && scout ? 1 : 0)} matching` : `${roster.length + (scout ? 1 : 0)} repository workers`}{normalizedWorkerQuery ? " · clear the search to reorder" : ""}</small></label>
       <div className="configured-workers">
         {workers.find((worker) => worker.role === "queen") && (
           <div className="configured-worker queen-worker">
@@ -90,13 +97,14 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             <span><strong>Queen</strong><small>Pinned · always active</small></span>
           </div>
         )}
-        {scout && (
+        {scout && scoutMatches && (
           <WorkerPreferenceRow
             worker={scout}
             busy={busy}
             first
             last
             managed
+            orderingDisabled
             dragging={false}
             dropTarget={false}
             onMove={() => undefined}
@@ -112,7 +120,9 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             onDrop={() => undefined}
           />
         )}
-        {roster.map((worker, index) => (
+        {filteredRoster.map((worker) => {
+          const index = roster.findIndex((candidate) => candidate.id === worker.id);
+          return (
           <WorkerPreferenceRow
             key={worker.id}
             worker={worker}
@@ -120,6 +130,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             first={index === 0}
             last={index === roster.length - 1}
             managed={false}
+            orderingDisabled={Boolean(normalizedWorkerQuery)}
             dragging={workerReorder.draggedId === worker.id}
             dropTarget={workerReorder.dropTargetId === worker.id && workerReorder.draggedId !== worker.id}
             onMove={(offset) => move(index, offset)}
@@ -134,8 +145,10 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             onDragLeave={() => workerReorder.leave(worker.id)}
             onDrop={(event) => dropBefore(worker.id, event)}
           />
-        ))}
+          );
+        })}
         {roster.length === 0 && <p className="empty-worker-settings">No repository workers configured yet.</p>}
+        {roster.length > 0 && filteredRoster.length === 0 && !scoutMatches && <p className="empty-worker-settings">No workers match “{workerQuery.trim()}”.</p>}
       </div>
       <form className="configure-worker-form" onSubmit={(event) => void submit(event)}>
         <div className="field-stack">
@@ -215,6 +228,7 @@ type WorkerPreferenceRowProps = {
   first: boolean;
   last: boolean;
   managed: boolean;
+  orderingDisabled: boolean;
   dragging: boolean;
   dropTarget: boolean;
   onMove: (offset: -1 | 1) => void;
@@ -230,7 +244,7 @@ type WorkerPreferenceRowProps = {
   onDrop: (event: DragEvent) => void;
 };
 
-function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dropTarget, onMove, onUpdate, onRemove, onDraftDescription, onImproveDescription, providers, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
+function WorkerPreferenceRow({ worker, busy, first, last, managed, orderingDisabled, dragging, dropTarget, onMove, onUpdate, onRemove, onDraftDescription, onImproveDescription, providers, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(worker.name);
   const [description, setDescription] = useState(worker.description ?? "");
@@ -302,7 +316,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dro
   return (
     <div
       className={`configured-worker${dragging ? " configured-worker-dragging" : ""}${dropTarget ? " drop-target-before" : ""}`}
-      draggable={!managed && !busy && !editing}
+      draggable={!managed && !orderingDisabled && !busy && !editing}
       onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", worker.id); onDragStart(); }}
       onDragEnd={onDragEnd}
       onDragEnter={() => { if (!editing) onDragTarget(); }}
@@ -331,7 +345,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, dragging, dro
         <>
           <span className="configured-worker-summary"><strong>{worker.name}</strong><small>{repositoryName(worker.workspace)} · {providerLabel(worker.provider)} · {attention.label}{worker.autostart ? " · always active" : ""}</small>{worker.description && <small className="worker-routing-summary">{worker.description}</small>}</span>
           <button type="button" className="worker-edit-button secondary-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
-          {!managed && <span className="worker-order-actions">
+          {!managed && !orderingDisabled && <span className="worker-order-actions">
             <button type="button" className="secondary-button" aria-label={`Move ${worker.name} earlier`} disabled={busy || first} onClick={() => onMove(-1)}>↑</button>
             <button type="button" className="secondary-button" aria-label={`Move ${worker.name} later`} disabled={busy || last} onClick={() => onMove(1)}>↓</button>
           </span>}
@@ -347,6 +361,11 @@ function repositoryName(workspace: string): string {
 
 function providerLabel(provider: ProviderKind): string {
   return provider === "codex" ? "Codex" : "Claude";
+}
+
+function workerMatches(worker: Worker, query: string): boolean {
+  return [worker.name, worker.workspace, worker.description ?? "", providerLabel(worker.provider)]
+    .some((value) => value.toLowerCase().includes(query));
 }
 
 function workspaceMatches(choices: WorkspaceChoice[], query: string): WorkspaceChoice[] {
