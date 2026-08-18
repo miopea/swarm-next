@@ -9,6 +9,7 @@ import {
   type JiraProjectBinding,
   type JiraReadiness,
 } from "../api";
+import IntegrationSourceState from "../shared/IntegrationSourceState";
 
 type Props = {
   operatorToken: string;
@@ -56,10 +57,10 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
       .some((value) => value.toLocaleLowerCase().includes(normalized)));
   }, [issues, query]);
 
-  if (!loaded) return <JiraSourceState title="Checking Jira…" detail="Confirming your connection and mapped projects." />;
-  if (loadError) return <JiraSourceState title="Jira work could not be loaded" detail={loadError} action="Try again" onAction={() => setLoadAttempt((current) => current + 1)} />;
-  if (readiness?.connection !== "ready") return <JiraSourceState title="Connect Jira first" detail="Open Settings → Integrations to connect your Jira identity, then return here." />;
-  if (bindings.length === 0) return <JiraSourceState title="No Jira projects are ready" detail="Connect and map at least one project in Settings → Integrations before claiming work." />;
+  if (!loaded) return <IntegrationSourceState source="Jira" className="jira-task-source jira-task-source-state" title="Checking Jira…" detail="Confirming your connection and mapped projects." />;
+  if (loadError) return <IntegrationSourceState source="Jira" className="jira-task-source jira-task-source-state" title="Jira work could not be loaded" detail={loadError} action="Try again" onAction={() => setLoadAttempt((current) => current + 1)} />;
+  if (readiness?.connection !== "ready") return <IntegrationSourceState source="Jira" className="jira-task-source jira-task-source-state" title="Connect Jira first" detail="Open Settings → Integrations to connect your Jira identity, then return here." />;
+  if (bindings.length === 0) return <IntegrationSourceState source="Jira" className="jira-task-source jira-task-source-state" title="No Jira projects are ready" detail="Connect and map at least one project in Settings → Integrations before claiming work." />;
 
   async function browse(binding: JiraProjectBinding) {
     setBusy(true);
@@ -160,12 +161,4 @@ export default function JiraTaskIntake({ operatorToken, onImported }: Props) {
       {message ? <p className="settings-message" role="status">{message}</p> : null}
     </section>
   );
-}
-
-function JiraSourceState({ title, detail, action, onAction }: { title: string; detail: string; action?: string; onAction?: () => void }) {
-  return <section className="jira-task-source jira-task-source-state" aria-label="Jira work status">
-    <div><p className="eyebrow">Jira work</p><h3>{title}</h3></div>
-    <p>{detail}</p>
-    {action && onAction ? <button type="button" className="secondary-button" onClick={onAction}>{action}</button> : null}
-  </section>;
 }

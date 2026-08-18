@@ -13,6 +13,7 @@ import {
   type TaskPriority,
   type Worker,
 } from "../api";
+import IntegrationSourceState from "../shared/IntegrationSourceState";
 
 type Props = {
   operatorToken: string;
@@ -185,16 +186,16 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
   }
 
   if (!readinessLoaded) {
-    return <EmailSourceState title="Checking Outlook…" detail="Confirming the issue-intake mailbox connection." />;
+    return <IntegrationSourceState source="Email" className="email-task-source email-not-connected" title="Checking Outlook…" detail="Confirming the issue-intake mailbox connection." />;
   }
 
   if (readinessError) {
-    return <EmailSourceState title="Outlook could not be loaded" detail={readinessError} action="Try again" onAction={() => setReadinessAttempt((current) => current + 1)} />;
+    return <IntegrationSourceState source="Email" className="email-task-source email-not-connected" title="Outlook could not be loaded" detail={readinessError} action="Try again" onAction={() => setReadinessAttempt((current) => current + 1)} />;
   }
 
   if (readiness?.connection !== "ready") {
     return (
-      <EmailSourceState title="Connect Outlook first" detail="Link the one issue-intake account in Settings → Integrations, then return here to choose Inbox messages." />
+      <IntegrationSourceState source="Email" className="email-task-source email-not-connected" title="Connect Outlook first" detail="Link the one issue-intake account in Settings → Integrations, then return here to choose Inbox messages." />
     );
   }
 
@@ -266,14 +267,6 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
       {message ? <p className="settings-message" role="status">{message}</p> : null}
     </section>
   );
-}
-
-function EmailSourceState({ title, detail, action, onAction }: { title: string; detail: string; action?: string; onAction?: () => void }) {
-  return <section className="email-task-source email-not-connected" aria-label="Email work status">
-    <div><p className="eyebrow">Email work</p><h3>{title}</h3></div>
-    <p>{detail}</p>
-    {action && onAction ? <button type="button" className="secondary-button" onClick={onAction}>{action}</button> : null}
-  </section>;
 }
 
 function formatReceived(timestamp: number) {

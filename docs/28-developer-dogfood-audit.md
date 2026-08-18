@@ -72,6 +72,7 @@ This is the working product audit for the first real developer week. It records 
 47. **Hiding linked communication does not erase a draft.** Jira discussion and email-resolution workspaces load only when first opened, then stay mounted while hidden. Checking another part of a task and returning preserves an unsent Jira update, deployment reference, or customer-facing reply instead of silently starting over.
 48. **Claiming Jira work cannot fail as an empty panel.** The entry workspace now distinguishes connection checking, a disconnected identity, projects that still need mapping, and a transient runtime error with a direct retry. A highlighted **Claim Jira work** action therefore always leads to a useful explanation or the actual project chooser.
 49. **Inbox intake does not blame configuration for a runtime failure.** The email workspace now shows a checking state, distinguishes an unavailable Outlook request from a disconnected account, and offers an in-place retry. A transient gateway failure no longer flashes or settles on the false instruction to reconnect Outlook.
+50. **Integration source states share one interaction contract.** Jira and Outlook checking, configuration, failure, and retry surfaces now use one small component rather than two copies. The consolidation keeps new task sources consistent without turning their domain-specific loading logic into a premature framework.
 
 ## Live deployed proof — 2026-08-18
 
