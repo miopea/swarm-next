@@ -136,7 +136,7 @@ afterEach(() => {
 test("founds only a reviewed Jira-backed Apiary and refreshes Hive identity", async () => {
   const onHiveIdentityChange = vi.fn();
   const federated = keeperIdentity();
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/v1/apiary") {
       expect(init?.method).toBe("POST");
@@ -148,7 +148,8 @@ test("founds only a reviewed Jira-backed Apiary and refreshes Hive identity", as
     }
     if (url === "/api/v1/hive") return ok(federated);
     throw new Error(`unexpected request ${url}`);
-  }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
 
   render(<ApiarySettings busy={false} hiveIdentity={personalIdentity()} operatorToken="secret" onHiveIdentityChange={onHiveIdentityChange} />);
 
@@ -163,6 +164,7 @@ test("founds only a reviewed Jira-backed Apiary and refreshes Hive identity", as
   fireEvent.click(screen.getByRole("button", { name: "Found Jira-backed Apiary" }));
 
   await vi.waitFor(() => expect(onHiveIdentityChange).toHaveBeenCalledWith(federated));
+  expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/v1/hive")).toBe(false);
 });
 
 test("Keeper creates one private invitation link for an outbound member connection", async () => {
@@ -281,7 +283,7 @@ test("does not present a failed Apiary roster refresh as missing membership", as
 test("collapses a ready sole-Keeper Apiary only after inline confirmation", async () => {
   const personal = personalIdentity();
   const onHiveIdentityChange = vi.fn();
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/v1/apiary/collapse-readiness") {
       return ok({ active_hive_count: 1, pending_invitation_count: 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
@@ -293,7 +295,8 @@ test("collapses a ready sole-Keeper Apiary only after inline confirmation", asyn
     if (url === "/api/v1/apiary/hive-candidates") return ok([]);
     if (url === "/api/v1/hive") return ok(personal);
     throw new Error(`unexpected request ${url}`);
-  }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
 
   render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={onHiveIdentityChange} />);
   const review = await screen.findByRole("button", { name: "Review return to personal Hive" });
@@ -303,6 +306,7 @@ test("collapses a ready sole-Keeper Apiary only after inline confirmation", asyn
   fireEvent.click(screen.getByRole("button", { name: "Return to personal Hive" }));
 
   await vi.waitFor(() => expect(onHiveIdentityChange).toHaveBeenCalledWith(personal));
+  expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/v1/hive")).toBe(false);
 });
 
 test("promotes only a ready Hive Jira project and then shows it as Apiary owned", async () => {

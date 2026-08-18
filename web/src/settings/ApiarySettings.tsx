@@ -25,6 +25,7 @@ import {
   type FederationSyncHealth,
   type HiveIdentity,
   type JiraProjectBinding,
+  type LocalApiaryContext,
   type StewardCapability,
   type Stewardship,
 } from "../api";
@@ -170,6 +171,18 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     onHiveIdentityChange(identity);
   }
 
+  function applyApiaryContext(nextContext: LocalApiaryContext) {
+    if (!hiveIdentity) return;
+    onHiveIdentityChange({
+      ...hiveIdentity,
+      hive: {
+        ...hiveIdentity.hive,
+        apiary_id: nextContext.mode === "federated" ? nextContext.apiary.id : null,
+      },
+      apiary_context: nextContext,
+    });
+  }
+
   async function saveHiveName() {
     const nextName = hiveName.trim();
     if (!nextName) return;
@@ -195,10 +208,11 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     setError("");
     setMessage("");
     try {
-      await renameApiary(operatorToken, nextName);
-      await refreshIdentity();
-      setApiaryName(nextName);
-      setMessage(`This Apiary is now named ${nextName}.`);
+      const nextContext = await renameApiary(operatorToken, nextName);
+      applyApiaryContext(nextContext);
+      const savedName = nextContext.mode === "federated" ? nextContext.apiary.name : nextName;
+      setApiaryName(savedName);
+      setMessage(`This Apiary is now named ${savedName}.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Apiary name could not be saved.");
     } finally {
@@ -281,10 +295,11 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     setError("");
     setMessage("");
     try {
-      await createApiary(operatorToken, name.trim(), "jira");
-      await refreshIdentity();
+      const nextContext = await createApiary(operatorToken, name.trim(), "jira");
+      applyApiaryContext(nextContext);
       setConfirmCreate(false);
-      setMessage(`${name.trim()} is now a Jira-backed Apiary.`);
+      const createdName = nextContext.mode === "federated" ? nextContext.apiary.name : name.trim();
+      setMessage(`${createdName} is now a Jira-backed Apiary.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Apiary could not be created.");
     } finally {
@@ -297,8 +312,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     setError("");
     setMessage("");
     try {
-      await collapseApiary(operatorToken);
-      await refreshIdentity();
+      const nextContext = await collapseApiary(operatorToken);
+      applyApiaryContext(nextContext);
       setConfirmCollapse(false);
       setMessage("This installation is a personal Hive again.");
     } catch (cause) {
