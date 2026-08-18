@@ -1679,10 +1679,12 @@ mod tests {
             preview.records[0].disposition,
             LegacyWorkerImportDisposition::Duplicate
         );
-        assert!(preview.records[0]
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("Daisy")));
+        assert!(
+            preview.records[0]
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Daisy"))
+        );
     }
 
     #[test]
