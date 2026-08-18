@@ -319,13 +319,24 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     setMessage("");
     try {
       const project = await promoteApiaryJiraProject(operatorToken, binding.id);
-      const [projects, bindings] = await Promise.all([
+      setPromotedProjects((current) => [
+        ...current.filter((item) => item.project_id !== project.project_id),
+        project,
+      ]);
+      setJiraBindings((current) => current.map((item) => item.id === binding.id
+        ? { ...item, scope: "apiary", apiary_id: project.apiary_id }
+        : item));
+      setMessage(`${project.project_key} is now in the Apiary project catalog.`);
+      const [projects, bindings] = await Promise.allSettled([
         fetchApiaryJiraProjects(operatorToken),
         fetchJiraBindings(operatorToken),
       ]);
-      setPromotedProjects(projects);
-      setJiraBindings(bindings);
-      setMessage(`${project.project_key} is now in the Apiary project catalog.`);
+      if (projects.status === "fulfilled") setPromotedProjects(projects.value);
+      if (bindings.status === "fulfilled") setJiraBindings(bindings.value);
+      setProjectLoadError(projects.status === "rejected" || bindings.status === "rejected");
+      if (projects.status === "rejected" || bindings.status === "rejected") {
+        setError(`${project.project_key} was promoted successfully, but the project lists could not be fully refreshed. Do not promote it again; retry the project status instead.`);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Jira project could not be promoted.");
     } finally {
