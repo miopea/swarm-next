@@ -152,12 +152,12 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
     ])
       .then(([projects, bindings, claims, delegations]) => {
         if (cancelled) return;
-        setPromotedProjects(projects.status === "fulfilled" ? projects.value : []);
-        setJiraBindings(bindings.status === "fulfilled" ? bindings.value : []);
+        if (projects.status === "fulfilled") setPromotedProjects(projects.value);
+        if (bindings.status === "fulfilled") setJiraBindings(bindings.value);
         setProjectLoadError(projects.status === "rejected" || bindings.status === "rejected");
-        setSharedWork(claims.status === "fulfilled" ? claims.value : []);
+        if (claims.status === "fulfilled") setSharedWork(claims.value);
         setSharedWorkLoadError(claims.status === "rejected");
-        setStewardships(delegations.status === "fulfilled" ? delegations.value : []);
+        if (delegations.status === "fulfilled") setStewardships(delegations.value);
         setStewardshipLoadError(delegations.status === "rejected");
       });
     return () => { cancelled = true; };

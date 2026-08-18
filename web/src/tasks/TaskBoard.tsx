@@ -171,8 +171,13 @@ export default function TaskBoard({
   const [jiraMounted, setJiraMounted] = useState(false);
   const [emailMounted, setEmailMounted] = useState(false);
   const [emailTaskSources, setEmailTaskSources] = useState<EmailTaskSource[]>([]);
+  const [emailSourcesLoadError, setEmailSourcesLoadError] = useState(false);
+  const [emailSourcesAttempt, setEmailSourcesAttempt] = useState(0);
   const [removedTasks, setRemovedTasks] = useState<Task[]>([]);
+  const [removedTasksLoadError, setRemovedTasksLoadError] = useState(false);
+  const [removedTasksAttempt, setRemovedTasksAttempt] = useState(0);
   const [restoringTaskId, setRestoringTaskId] = useState<string>();
+  const [restoreError, setRestoreError] = useState<string>();
   const titleInput = useRef<HTMLInputElement>(null);
   const completedTasksPanel = useRef<HTMLDetailsElement>(null);
 
@@ -275,17 +280,25 @@ export default function TaskBoard({
   useEffect(() => {
     let cancelled = false;
     void fetchEmailTaskSources(operatorToken)
-      .then((sources) => { if (!cancelled) setEmailTaskSources(Array.isArray(sources) ? sources : []); })
-      .catch(() => { if (!cancelled) setEmailTaskSources([]); });
+      .then((sources) => {
+        if (cancelled) return;
+        setEmailTaskSources(Array.isArray(sources) ? sources : []);
+        setEmailSourcesLoadError(false);
+      })
+      .catch(() => { if (!cancelled) setEmailSourcesLoadError(true); });
     return () => { cancelled = true; };
-  }, [operatorToken, tasks]);
+  }, [emailSourcesAttempt, operatorToken, tasks]);
   useEffect(() => {
     let cancelled = false;
     void fetchRemovedTasks(operatorToken)
-      .then((removed) => { if (!cancelled) setRemovedTasks(Array.isArray(removed) ? removed : []); })
-      .catch(() => { if (!cancelled) setRemovedTasks([]); });
+      .then((removed) => {
+        if (cancelled) return;
+        setRemovedTasks(Array.isArray(removed) ? removed : []);
+        setRemovedTasksLoadError(false);
+      })
+      .catch(() => { if (!cancelled) setRemovedTasksLoadError(true); });
     return () => { cancelled = true; };
-  }, [operatorToken, tasks]);
+  }, [operatorToken, removedTasksAttempt, tasks]);
   useEffect(() => {
     void refreshApiaryWork().catch(() => {
       setApiaryTasks([]);
@@ -465,6 +478,13 @@ export default function TaskBoard({
         <TaskBoardControls query={query} filter={filter} source={source} sort={sort} project={project} worker={worker} workers={workers} projects={projects} openCount={taskView.allOpenCount} busy={busy} onQueryChange={(value) => onQueryChange?.(value)} onFilterChange={(value) => onFilterChange?.(value)} onSourceChange={(value) => onSourceChange?.(value)} onSortChange={(value) => onSortChange?.(value)} onProjectChange={(value) => onProjectChange?.(value)} onWorkerChange={(value) => onWorkerChange?.(value)} onSync={onJiraSync} />
       </details>
 
+      {emailSourcesLoadError ? (
+        <div className="form-error task-board-retry" role="alert">
+          <span>Linked email details could not be refreshed. Task content is unchanged, but email source filters may be incomplete.</span>
+          <button className="secondary-button" type="button" onClick={() => setEmailSourcesAttempt((attempt) => attempt + 1)}>Retry email details</button>
+        </div>
+      ) : null}
+
       <section className="task-section" aria-labelledby="active-work-heading">
         <div className="section-heading">
           <div><p className="eyebrow">Queue</p><h3 id="active-work-heading">Active work</h3></div>
@@ -603,16 +623,24 @@ export default function TaskBoard({
               className="secondary-button"
               disabled={busy || restoringTaskId === task.id}
               onClick={() => {
+                setRestoreError(undefined);
                 setRestoringTaskId(task.id);
                 void onRestore(task)
                   .then(() => setRemovedTasks((current) => current.filter((candidate) => candidate.id !== task.id)))
-                  .catch(() => undefined)
+                  .catch(() => setRestoreError(`“${task.title}” could not be restored. It remains available here.`))
                   .finally(() => setRestoringTaskId(undefined));
               }}
             >{restoringTaskId === task.id ? "Restoring…" : "Restore to board"}</button>
           </article>)}
         </div>
       </details>}
+      {restoreError ? <p className="form-error" role="alert">{restoreError}</p> : null}
+      {removedTasksLoadError ? (
+        <div className="form-error task-board-retry" role="alert">
+          <span>Removed local work could not be refreshed. No task was changed.</span>
+          <button className="secondary-button" type="button" onClick={() => setRemovedTasksAttempt((attempt) => attempt + 1)}>Retry removed work</button>
+        </div>
+      ) : null}
     </div>
   );
 }

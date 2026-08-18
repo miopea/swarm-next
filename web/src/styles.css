@@ -1099,6 +1099,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-readiness dd { margin: 0; font-size: .9rem; font-weight: 700; }
 .apiary-blockers, .form-error, .form-message { margin: 0; padding: 9px 11px; border-radius: var(--radius-sm); font-size: .75rem; line-height: 1.4; }
 .apiary-blockers, .form-error { color: var(--bad); background: var(--bad-soft); }
+.task-board-retry { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .form-message { color: var(--good); background: var(--good-soft); }
 .diagnostic-list, .shortcut-list { display: grid; gap: 0; margin: 0; }
 .diagnostic-live-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }

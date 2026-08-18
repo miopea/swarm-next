@@ -210,6 +210,43 @@ test("keeps removed work recoverable when restoration fails", async () => {
   await waitFor(() => expect(onRestore).toHaveBeenCalledWith(removed));
   await waitFor(() => expect(screen.getByRole("button", { name: "Restore to board" })).toBeEnabled());
   expect(screen.getByText(removed.title)).toBeInTheDocument();
+  expect(screen.getByText(`“${removed.title}” could not be restored. It remains available here.`)).toBeInTheDocument();
+});
+
+test("distinguishes unavailable removed work from an empty recovery list", async () => {
+  let attempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/tasks/removed")) {
+      attempts += 1;
+      if (attempts === 1) return new Response("temporarily unavailable", { status: 502 });
+      return ok([]);
+    }
+    return ok([]);
+  }));
+  renderBoard({ tasks: [] });
+
+  expect(await screen.findByText("Removed local work could not be refreshed. No task was changed.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry removed work" }));
+  await waitFor(() => expect(screen.queryByText("Removed local work could not be refreshed. No task was changed.")).not.toBeInTheDocument());
+});
+
+test("warns when email source metadata cannot support reliable board filtering", async () => {
+  let attempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/integrations/email/task-links")) {
+      attempts += 1;
+      if (attempts === 1) return new Response("temporarily unavailable", { status: 502 });
+      return ok([]);
+    }
+    return ok([]);
+  }));
+  renderBoard();
+
+  expect(await screen.findByText(/email source filters may be incomplete/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry email details" }));
+  await waitFor(() => expect(screen.queryByText(/email source filters may be incomplete/)).not.toBeInTheDocument());
 });
 
 test("creates Apiary work from Tasks instead of the supervisory Apiary view", async () => {
