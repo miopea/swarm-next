@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { downloadDatabaseBackup, draftWorkerDescription, fetchCoordinatorStatus, fetchEmailReadiness, fetchJiraReadiness, fetchQueenAutomationStatus, fetchTerminalHostStatus, improveWorkerDescription, runQueenAutomation, setQueenAutomationEnabled, type ControlRoomEvent, type CoordinatorStatus, type EmailReadiness, type Health, type HiveIdentity, type JiraReadiness, type NotificationPolicy, type NotificationSettings, type OperatorPresence, type PresenceMode, type ProviderCapabilities, type ProviderKind, type QueenAutomationStatus, type QueenAutonomyLevel, type QueenAutonomyPolicy, type SessionSummary, type TerminalHostStatus, type Worker, type WorkspaceChoice } from "../api";
 import { downloadBlob } from "../shared/download";
@@ -48,6 +48,7 @@ type Props = {
   onNotificationPolicyChange: (policy: NotificationPolicy) => Promise<void>;
   onQueenPolicyChange: (policy: QueenAutonomyPolicy) => Promise<void>;
   onOpenQueenDecisions?: () => void;
+  onOpenTasks?: () => void;
   onEnableNotifications: () => Promise<void>;
   onDisableNotifications: () => Promise<void>;
   onTestNotification: () => Promise<void>;
@@ -60,10 +61,11 @@ type Props = {
   onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
-export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
+export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
+  const terminalHostLoadedRef = useRef(false);
   const [terminalHostAttempt, setTerminalHostAttempt] = useState(0);
   const [backupState, setBackupState] = useState<"idle" | "downloading" | "downloaded" | "error">("idle");
   const developmentRuntime = useDevelopmentRuntime(operatorToken, health?.version);
@@ -127,12 +129,23 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
   }, [activeSettingsSection]);
   useEffect(() => {
     let cancelled = false;
-    setTerminalHostLoaded(false);
     void fetchTerminalHostStatus(operatorToken)
-      .then((status) => { if (!cancelled) { setTerminalHostStatus(status); setTerminalHostLoaded(true); } })
-      .catch(() => { if (!cancelled) { setTerminalHostStatus(undefined); setTerminalHostLoaded(true); } });
+      .then((status) => {
+        if (!cancelled) {
+          setTerminalHostStatus(status);
+          terminalHostLoadedRef.current = true;
+          setTerminalHostLoaded(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled && !terminalHostLoadedRef.current) {
+          setTerminalHostStatus(undefined);
+          terminalHostLoadedRef.current = true;
+          setTerminalHostLoaded(true);
+        }
+      });
     return () => { cancelled = true; };
-  }, [operatorToken, providers, terminalHostAttempt, workerEngineProgress]);
+  }, [operatorToken, terminalHostAttempt, workerEngineProgress]);
   useEffect(() => {
     let cancelled = false;
     void fetchJiraReadiness(operatorToken)
@@ -450,7 +463,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
       <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} onRetryReadiness={() => setJiraReadinessAttempt((attempt) => attempt + 1)} />
       <EmailSettings operatorToken={operatorToken} readiness={emailReadiness} unavailable={emailUnavailable} onRetryReadiness={() => setEmailReadinessAttempt((attempt) => attempt + 1)} />
 
-      <LegacyMigrationSettings busy={busy} operatorToken={operatorToken} />
+      <LegacyMigrationSettings busy={busy} operatorToken={operatorToken} onOpenTasks={onOpenTasks} />
 
       <section id="settings-backup" className="settings-card" aria-labelledby="backup-heading">
         <div><p className="eyebrow">Backup</p><h3 id="backup-heading">Carry your Hive safely</h3></div>

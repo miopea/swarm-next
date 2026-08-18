@@ -35,7 +35,7 @@ test("discovers the normal local Legacy install without a file picker", async ()
 
   expect(await screen.findByText("Continue local work")).toBeInTheDocument();
   expect(requests.some((url) => url.endsWith("/local"))).toBe(true);
-  expect(screen.getByRole("button", { name: "Review import of 1" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Continue to task import confirmation" })).toBeEnabled();
 });
 
 test("previews before importing and selects only server-approved records", async () => {
@@ -121,11 +121,11 @@ test("previews before importing and selects only server-approved records", async
   fireEvent.click(screen.getByRole("button", { name: "Show 1 staying in Legacy" }));
   expect(screen.getByText("Jira work").closest("label")?.querySelector("input")).toBeDisabled();
   await waitFor(() => expect(requests).toHaveLength(4));
-  expect(screen.getByRole("button", { name: "Review import of 1" })).toBeEnabled();
-  fireEvent.click(screen.getByRole("button", { name: "Review import of 1" }));
+  expect(screen.getByRole("button", { name: "Continue to task import confirmation" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Continue to task import confirmation" }));
   expect(requests).toHaveLength(4);
-  expect(screen.getByText(/Existing workers stay asleep and Legacy is not changed/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Import selected tasks" }));
+  expect(screen.getByText(/This is the step that changes Swarm Next/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Import 1 task" }));
 
   await waitFor(() => expect(requests).toHaveLength(5));
   expect(requests[4].body).toMatchObject({
@@ -199,6 +199,42 @@ test("recovers an active migration receipt after reopening settings", async () =
 
   expect(await screen.findByText("Imported safely")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Undo this untouched import" })).toBeEnabled();
+});
+
+test("shows one completed migration outcome and opens imported tasks", async () => {
+  const onOpenTasks = vi.fn();
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/workers")) return ok([{
+      batch_id: "workers-recovered",
+      bundle_digest: "digest",
+      source_installation_id: "legacy-hive",
+      source_snapshot_digest: "snapshot",
+      imported_worker_ids: ["worker-1"],
+      updated_worker_ids: [],
+      imported_source_ids: ["legacy-worker-1"],
+      resumed_source_ids: ["legacy-worker-1"],
+      prior_conversations: [],
+      imported_at: 123,
+    }]);
+    return ok([{
+      batch_id: "tasks-recovered",
+      bundle_digest: "digest",
+      source_installation_id: "legacy-hive",
+      source_snapshot_digest: "snapshot",
+      imported_task_ids: ["task-1", "task-2"],
+      imported_source_ids: ["legacy-task-1", "legacy-task-2"],
+      imported_at: 123,
+    }]);
+  }));
+
+  render(<LegacyMigrationSettings busy={false} operatorToken="token" onOpenTasks={onOpenTasks} />);
+
+  expect(await screen.findByText("Migration complete")).toBeInTheDocument();
+  expect(screen.queryByText("Familiar crew added safely")).not.toBeInTheDocument();
+  expect(screen.queryByText("Imported safely")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Review imported tasks" }));
+  expect(onOpenTasks).toHaveBeenCalledOnce();
 });
 
 test("retries migration history without describing an unavailable receipt as absent", async () => {
@@ -285,9 +321,9 @@ test("previews selected Legacy workers as sleeping before adding them", async ()
   fireEvent.click(replace);
   fireEvent.click(screen.getByText("Clover").closest("label")!.querySelector("input")!);
   expect(screen.getByText("Project Root").closest("label")?.querySelector("input")).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "Review 2 workers" }));
-  expect(screen.getByText(/No Claude or Codex process starts/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Add selected workers" }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue to worker import confirmation" }));
+  expect(screen.getByText(/no Claude or Codex process starts/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Import 2 workers" }));
 
   expect(await screen.findByText("Familiar crew added safely")).toBeInTheDocument();
   expect(await screen.findByText("Work now matched to Daisy")).toBeInTheDocument();

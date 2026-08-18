@@ -175,6 +175,7 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .worker-copy strong { color: var(--text); font-size: .81rem; }
 .worker-button:disabled { opacity: 1; }
 .worker-copy small { color: var(--muted); font-size: .68rem; }
+.worker-work-summary { overflow: hidden; color: var(--good); font-size: .61rem; font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .worker-menu-trigger { min-height: 30px; padding: 0; border-color: transparent; color: var(--quiet); background: transparent; letter-spacing: 1px; }
 .worker-menu-trigger:hover:not(:disabled) { border-color: transparent; color: var(--text); background: var(--panel); }
 .cursor-menu { position: fixed; z-index: 80; display: grid; min-width: 175px; padding: 5px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel-raised); box-shadow: var(--shadow); }
@@ -260,6 +261,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .mobile-worker-choice-copy strong, .mobile-worker-choice-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-worker-choice-copy > span small { color: var(--quiet); }
 .mobile-worker-choice-copy > small { color: var(--muted); }
+.mobile-worker-choice-copy > .worker-work-summary { color: var(--good); }
 .mobile-manage-workers { width: 100%; }
 
 .keeper-control-room { width: 100%; min-height: 0; padding: 28px; overflow-y: auto; }
@@ -834,6 +836,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .migration-conversation-choice small { color: var(--muted); line-height: 1.45; }
 .migration-confirmation, .migration-receipt { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--accent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
 .migration-confirmation span, .migration-receipt p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.5; }
+.migration-complete > .primary-action { justify-self: start; }
+.migration-complete details { display: grid; gap: 10px; padding-top: 4px; }
+.migration-complete details[open] summary { margin-bottom: 10px; }
+.migration-confirm-dialog { display: grid; width: min(560px, 100%); gap: 14px; padding: 24px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); color: var(--text); background: var(--panel-raised); box-shadow: var(--shadow); }
+.migration-confirm-dialog h3, .migration-confirm-dialog p { margin: 0; }
+.migration-confirm-dialog > p:not(.eyebrow) { color: var(--muted); line-height: 1.55; }
 .migration-message { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--panel-soft); color: var(--text) !important; }
 .migration-section { display: grid; gap: 12px; padding-block: 16px; border-block-start: 1px solid var(--line); }
 .migration-section > p { margin: 0; color: var(--muted); line-height: 1.5; }

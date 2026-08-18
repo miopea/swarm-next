@@ -1457,8 +1457,12 @@ async fn submit_terminal_message(
             running: true,
             ..
         } => {
-            if provider_activity::classify_observed_activity(provider, &snapshot)
-                == ProviderActivity::AwaitingOperator
+            let activity = provider_activity::classify_observed_activity(provider, &snapshot);
+            // Coordination owns only a truly empty resting prompt. Active
+            // turns, provider questions, unknown screens, and resting prompts
+            // with typed text all defer durably instead of appending messages.
+            if activity != ProviderActivity::Resting
+                || provider_activity::has_open_provider_input(provider, &snapshot)
             {
                 return Ok(TerminalSubmission::Deferred);
             }
@@ -1599,7 +1603,7 @@ async fn observe_stable_marker(
             && rendered_stability.observe(
                 snapshot.sequence,
                 Instant::now(),
-                Duration::from_millis(300),
+                Duration::from_millis(750),
             )
         {
             return Ok(MarkerObservation::Rendered {
@@ -1666,7 +1670,7 @@ async fn observe_terminal_submission(
             if resting_stability.observe(
                 snapshot.sequence,
                 Instant::now(),
-                Duration::from_millis(300),
+                Duration::from_millis(1_500),
             ) {
                 return Ok(SubmissionObservation::RetryAfter(snapshot.sequence));
             }
@@ -1690,7 +1694,7 @@ async fn observe_terminal_submission(
                 if resting_stability.observe(
                     snapshot.sequence,
                     Instant::now(),
-                    Duration::from_millis(300),
+                    Duration::from_millis(1_500),
                 ) {
                     return Ok(SubmissionObservation::RetryAfter(snapshot.sequence));
                 }
@@ -12364,7 +12368,7 @@ mod tests {
             executable: PathBuf::from("/bin/sh"),
             arguments: vec![
                 "-lc".into(),
-                "while IFS= read -r line; do printf 'received:%s\n' \"$line\"; done".into(),
+                "printf '❯ \\nauto mode on\\n'; while IFS= read -r line; do printf 'received:%s\\n❯ \\nauto mode on\\n' \"$line\"; done".into(),
             ],
             working_directory: workspace.clone(),
         };
@@ -12621,7 +12625,8 @@ mod tests {
             executable: PathBuf::from("/bin/sh"),
             arguments: vec![
                 "-lc".into(),
-                "read value; printf 'received:%s' \"$value\"; sleep 5".into(),
+                "printf '❯ \\nauto mode on\\n'; read value; printf 'received:%s\\n❯ \\nauto mode on\\n' \"$value\"; sleep 5"
+                    .into(),
             ],
             working_directory: workspace.clone(),
         };
@@ -13675,7 +13680,8 @@ mod tests {
             executable: PathBuf::from("/bin/sh"),
             arguments: vec![
                 "-lc".into(),
-                "read value; printf 'received:%s' \"$value\"; sleep 5".into(),
+                "printf '❯ \\nauto mode on\\n'; read value; printf 'received:%s\\n❯ \\nauto mode on\\n' \"$value\"; sleep 5"
+                    .into(),
             ],
             working_directory: workspace.clone(),
         };

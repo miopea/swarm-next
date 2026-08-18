@@ -20,15 +20,17 @@ import {
   type LegacyWorkerPreview,
 } from "../api/migration";
 import { downloadJson } from "../shared/download";
+import { useModalFocus } from "../shared/useModalFocus";
 
 type Props = {
   busy: boolean;
   operatorToken: string;
+  onOpenTasks?: () => void;
 };
 
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
-export default function LegacyMigrationSettings({ busy, operatorToken }: Props) {
+export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTasks = () => window.location.assign("?surface=tasks") }: Props) {
   const [bundle, setBundle] = useState<LegacyMigrationBundle>();
   const [preview, setPreview] = useState<LegacyMigrationPreview>();
   const [workerPreview, setWorkerPreview] = useState<LegacyWorkerMigrationPreview>();
@@ -59,6 +61,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
     || (record.disposition === "skipped_closed" && showClosedHistory)
     || (!record.selectable && record.disposition !== "invalid" && record.disposition !== "skipped_closed" && showExcludedRecords)
   )) ?? [];
+  const migrationComplete = Boolean(receipt && workerReceipt);
 
   useEffect(() => {
     let cancelled = false;
@@ -335,22 +338,11 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
             />
             <span><strong>Replace conversations on matching workers</strong><small>Optional. Use this when the roster already exists but Legacy has the conversations you want. Selected matching workers must be sleeping; Swarm preserves the current conversation so an untouched migration can be undone.</small></span>
           </label>
-          {!confirmWorkerImport ? (
-            <button type="button" className="primary-action" disabled={disabled || selectedWorkers.size === 0} onClick={() => setConfirmWorkerImport(true)}>Review {selectedWorkers.size} worker{selectedWorkers.size === 1 ? "" : "s"}</button>
-          ) : (
-            <div className="migration-confirmation" role="group" aria-label="Confirm Legacy worker import">
-              <strong>Add {selectedWorkers.size} sleeping worker{selectedWorkers.size === 1 ? "" : "s"}?</strong>
-              <span>Swarm adds missing roster entries{replaceExistingConversations ? " and replaces selected matching workers’ conversations" : " only"}. {resumeLegacyConversations ? "Eligible workers remember their exact Legacy conversation for first wake." : "Every worker starts a fresh provider conversation."} No Claude or Codex process starts now.</span>
-              <div className="settings-actions">
-                <button type="button" className="secondary-button" disabled={disabled} onClick={() => setConfirmWorkerImport(false)}>Keep reviewing</button>
-                <button type="button" className="primary-action" disabled={disabled} onClick={() => void importSelectedWorkers()}>{working ? "Adding…" : "Add selected workers"}</button>
-              </div>
-            </div>
-          )}
+          <button type="button" className="primary-action" disabled={disabled || selectedWorkers.size === 0} onClick={() => setConfirmWorkerImport(true)}>Continue to worker import confirmation</button>
         </div>
       )}
 
-      {workerReceipt && (
+      {workerReceipt && !migrationComplete && (
         <div className="migration-receipt" role="status">
           <strong>Familiar crew added safely</strong>
           <p>{workerReceipt.imported_worker_ids.length} worker{workerReceipt.imported_worker_ids.length === 1 ? " is" : "s are"} newly sleeping in the roster, and {workerReceipt.updated_worker_ids?.length ?? 0} matching worker conversation{(workerReceipt.updated_worker_ids?.length ?? 0) === 1 ? " was" : "s were"} replaced. {workerReceipt.resumed_source_ids?.length ?? 0} will resume {(workerReceipt.resumed_source_ids?.length ?? 0) === 1 ? "its" : "their"} exact Legacy conversation on first wake. Review names, repositories, providers, and descriptions before waking anyone.</p>
@@ -413,22 +405,11 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
               </label>
             ))}
           </div>
-          {!confirmImport ? (
-            <button type="button" className="primary-action" disabled={disabled || selected.size === 0} onClick={() => setConfirmImport(true)}>Review import of {selected.size}</button>
-          ) : (
-            <div className="migration-confirmation" role="group" aria-label="Confirm Legacy task import">
-              <strong>Import {selected.size} selected task{selected.size === 1 ? "" : "s"}?</strong>
-              <span>They will appear as Drafts on the task board. Existing workers stay asleep and Legacy is not changed.</span>
-              <div className="settings-actions">
-                <button type="button" className="secondary-button" disabled={disabled} onClick={() => setConfirmImport(false)}>Keep reviewing</button>
-                <button type="button" className="primary-action" disabled={disabled} onClick={() => void importSelected()}>{working ? "Importing…" : "Import selected tasks"}</button>
-              </div>
-            </div>
-          )}
+          <button type="button" className="primary-action" disabled={disabled || selected.size === 0} onClick={() => setConfirmImport(true)}>Continue to task import confirmation</button>
         </>
       )}
 
-      {receipt && (
+      {receipt && !migrationComplete && (
         <div className="migration-receipt" role="status">
           <strong>Imported safely</strong>
           <p>Review these Drafts on the task board before approving normal work or finishing the handoff from Legacy. They remain visible and actionable in Legacy.</p>
@@ -447,9 +428,92 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
           )}
         </div>
       )}
+      {migrationComplete && receipt && workerReceipt && (
+        <div className="migration-receipt migration-complete" role="status">
+          <strong>Migration complete</strong>
+          <p><b>{workerReceipt.imported_worker_ids.length + (workerReceipt.updated_worker_ids?.length ?? 0)}</b> worker{workerReceipt.imported_worker_ids.length + (workerReceipt.updated_worker_ids?.length ?? 0) === 1 ? "" : "s"} and <b>{receipt.imported_task_ids.length}</b> task{receipt.imported_task_ids.length === 1 ? "" : "s"} were brought forward. Workers remain sleeping; imported work remains Draft until you approve it.</p>
+          <button type="button" className="primary-action" onClick={onOpenTasks}>Review imported tasks</button>
+          <details>
+            <summary>Migration details and rollback</summary>
+            <p>{workerReceipt.resumed_source_ids?.length ?? 0} worker{(workerReceipt.resumed_source_ids?.length ?? 0) === 1 ? " will" : "s will"} resume an exact Legacy conversation on first wake. Legacy remains unchanged until you explicitly finish its handoff.</p>
+            <div className="settings-actions">
+              <button type="button" className="secondary-button" onClick={() => downloadJson(receipt, `swarm-next-migration-receipt-${receipt.batch_id}.json`)}>Download migration receipt</button>
+              <button type="button" className="secondary-button" disabled={disabled} onClick={() => setConfirmWorkerRollback(true)}>Undo untouched worker import</button>
+              <button type="button" className="secondary-button" disabled={disabled} onClick={() => setConfirmRollback(true)}>Undo untouched task import</button>
+            </div>
+          </details>
+        </div>
+      )}
+      {confirmWorkerImport && (
+        <MigrationConfirmationDialog
+          title={`Import ${selectedWorkers.size} worker${selectedWorkers.size === 1 ? "" : "s"}?`}
+          detail={`Swarm will add the selected roster entries${replaceExistingConversations ? " and replace selected matching conversations" : ""}. Workers remain sleeping; no Claude or Codex process starts. ${resumeLegacyConversations ? "Eligible workers resume their exact Legacy conversation on first wake." : "Workers start fresh."}`}
+          confirmLabel={working ? "Importing workers…" : `Import ${selectedWorkers.size} worker${selectedWorkers.size === 1 ? "" : "s"}`}
+          disabled={disabled}
+          onCancel={() => setConfirmWorkerImport(false)}
+          onConfirm={() => void importSelectedWorkers()}
+        />
+      )}
+      {confirmImport && (
+        <MigrationConfirmationDialog
+          title={`Import ${selected.size} task${selected.size === 1 ? "" : "s"}?`}
+          detail="This is the step that changes Swarm Next. The selected work will appear as Drafts on the task board. No worker starts, and Legacy remains unchanged."
+          confirmLabel={working ? "Importing tasks…" : `Import ${selected.size} task${selected.size === 1 ? "" : "s"}`}
+          disabled={disabled}
+          onCancel={() => setConfirmImport(false)}
+          onConfirm={() => void importSelected()}
+        />
+      )}
+      {confirmWorkerRollback && migrationComplete && (
+        <MigrationConfirmationDialog
+          title="Undo the untouched worker import?"
+          detail="Swarm removes untouched imported workers and restores replaced conversations. It refuses if an affected worker was edited or awakened."
+          confirmLabel={working ? "Checking…" : "Undo worker import"}
+          danger
+          disabled={disabled}
+          onCancel={() => setConfirmWorkerRollback(false)}
+          onConfirm={() => void rollbackWorkers()}
+        />
+      )}
+      {confirmRollback && migrationComplete && (
+        <MigrationConfirmationDialog
+          title="Undo the untouched task import?"
+          detail="Swarm removes only tasks from this import batch that have not changed."
+          confirmLabel={working ? "Checking…" : "Undo task import"}
+          danger
+          disabled={disabled}
+          onCancel={() => setConfirmRollback(false)}
+          onConfirm={() => void rollback()}
+        />
+      )}
       {message && <p className="migration-message" role="status">{message}</p>}
       <small className="privacy-note">Migration reads the Legacy crew, open local tasks, and provider conversation identities needed for this preview. Conversation content, credentials, terminal output, identity files, and Jira records are never included.</small>
     </section>
+  );
+}
+
+function MigrationConfirmationDialog({ title, detail, confirmLabel, disabled, danger = false, onCancel, onConfirm }: {
+  title: string;
+  detail: string;
+  confirmLabel: string;
+  disabled: boolean;
+  danger?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialog = useModalFocus<HTMLElement>(onCancel);
+  return (
+    <div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+      <section ref={dialog} tabIndex={-1} className="migration-confirm-dialog" role="dialog" aria-modal="true" aria-label="Confirm Legacy migration">
+        <p className="eyebrow">Final confirmation</p>
+        <h3>{title}</h3>
+        <p>{detail}</p>
+        <div className="settings-actions">
+          <button type="button" className="secondary-button" disabled={disabled} onClick={onCancel}>Go back</button>
+          <button type="button" className={danger ? "danger-button" : "primary-action"} disabled={disabled} onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </section>
+    </div>
   );
 }
 

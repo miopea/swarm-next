@@ -45,6 +45,13 @@ test("shows operator engagement as a distinct scannable state", () => {
   expect(screen.getByTitle("With you")).toHaveClass("engaged");
 });
 
+test("shows terminal state separately from assigned work state", () => {
+  render(<WorkerRosterItem worker={{ ...queen, attention_state: "resting" }} selected detail="Repair the release" workSummary="1 active · 2 ready" busy={false} onOpen={vi.fn()} onStart={vi.fn()} onStop={vi.fn()} />);
+
+  expect(screen.getByText("Resting")).toBeInTheDocument();
+  expect(screen.getByText("1 active · 2 ready")).toHaveAttribute("title", "Open work: 1 active · 2 ready");
+});
+
 test("shows a durable operator decision as awaiting you", () => {
   render(<WorkerRosterItem worker={{ ...queen, attention_state: "awaiting_operator" }} selected={false} detail="Decision requested" busy={false} onOpen={vi.fn()} onStart={vi.fn()} onStop={vi.fn()} />);
 

@@ -84,6 +84,7 @@ import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./terminal/MobileTerminalComposer";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 import WorkerRosterItem from "./workers/WorkerRosterItem";
+import { workerWork } from "./workers/workerWork";
 import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 import { useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
@@ -839,6 +840,16 @@ export function App() {
     ),
     [tasks],
   );
+  const workByWorker = useMemo(() => {
+    const grouped = new Map<string, Task[]>();
+    tasks.forEach((task) => {
+      if (!task.assigned_worker_id || task.state === "completed") return;
+      const assigned = grouped.get(task.assigned_worker_id) ?? [];
+      assigned.push(task);
+      grouped.set(task.assigned_worker_id, assigned);
+    });
+    return new Map([...grouped].map(([workerId, assigned]) => [workerId, workerWork(assigned)]));
+  }, [tasks]);
   const taskProjects = useMemo(() => [...new Map(jiraTaskLinks.map((link) => [link.project_key, {
     key: link.project_key,
     name: link.project_name,
@@ -955,13 +966,15 @@ export function App() {
                 <div className="worker-list">
                   {visibleWorkers.map((worker) => {
                     const sessionId = worker.active_session_id;
-                    const task = sessionId ? tasksBySession.get(sessionId) : undefined;
+                    const work = workByWorker.get(worker.id);
+                    const task = work?.current ?? (sessionId ? tasksBySession.get(sessionId) : undefined);
                     return (
                       <WorkerRosterItem
                         key={worker.id}
                         worker={worker}
                         selected={sessionId === activeSessionId}
                         detail={worker.runtime_error ?? task?.title ?? (worker.role === "queen" ? "Always-active command terminal" : worker.running ? `${repositoryName(worker.workspace)} · Ready for work` : `${repositoryName(worker.workspace)} · Sleeping`)}
+                        workSummary={work?.summary}
                         busy={busy}
                         onOpen={() => sessionId && openWorker(sessionId)}
                         onStart={() => void startExistingWorker(worker)}
@@ -1063,7 +1076,8 @@ export function App() {
                 ) : null}
                 {mobileVisibleWorkers.map((worker) => {
                   const sessionId = worker.active_session_id;
-                  const assignedTask = sessionId ? tasksBySession.get(sessionId) : undefined;
+                  const work = workByWorker.get(worker.id);
+                  const assignedTask = work?.current ?? (sessionId ? tasksBySession.get(sessionId) : undefined);
                   return (
                     <button
                       type="button"
@@ -1081,6 +1095,7 @@ export function App() {
                       <span className="mobile-worker-choice-copy">
                         <span><strong>{worker.name}</strong><small>{worker.role === "queen" ? "Queen" : repositoryName(worker.workspace)}</small></span>
                         <small>{worker.runtime_error ?? workerSwitcherDetail(worker, assignedTask?.title)}</small>
+                        {work?.summary ? <span className="worker-work-summary">{work.summary}</span> : null}
                       </span>
                       <span className={`presence ${worker.running ? "online" : "offline"}`} aria-label={worker.running ? workerAttentionLabel(worker) : "Sleeping"} />
                     </button>
@@ -1189,6 +1204,7 @@ export function App() {
               onNotificationPolicyChange={changeNotificationPolicy}
               onQueenPolicyChange={changeQueenPolicy}
               onOpenQueenDecisions={() => setSurface("decisions")}
+              onOpenTasks={() => setSurface("tasks")}
               onEnableNotifications={enableNotifications}
               onDisableNotifications={disableNotifications}
               onTestNotification={testNotification}

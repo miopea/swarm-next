@@ -9,13 +9,14 @@ type Props = {
   worker: Worker;
   selected: boolean;
   detail: string;
+  workSummary?: string;
   busy: boolean;
   onOpen: () => void;
   onStart: () => void;
   onStop: () => void;
 };
 
-export default function WorkerRosterItem({ worker, selected, detail, busy, onOpen, onStart, onStop }: Props) {
+export default function WorkerRosterItem({ worker, selected, detail, workSummary, busy, onOpen, onStart, onStop }: Props) {
   const [menuPoint, setMenuPoint] = useState<MenuPoint>();
   const [, refreshAttention] = useState(0);
   const primaryAction = worker.running ? onOpen : onStart;
@@ -56,6 +57,7 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
         <span className="worker-copy">
           <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.label}</span></span>
           <small title={detail}>{detail}</small>
+          {workSummary ? <span className="worker-work-summary" title={`Open work: ${workSummary}`}>{workSummary}</span> : null}
         </span>
         <span className={`presence ${attention.presence}`} title={attention.label} aria-hidden="true" />
       </button>

@@ -99,6 +99,30 @@ pub(super) fn classify_observed_activity(
     }
 }
 
+/// Returns true when the provider is idle but its current prompt already owns
+/// unsubmitted text. A resting footer is not permission to append another
+/// coordination message: doing so merges independent tasks and decisions into
+/// one prompt and makes a later Enter ambiguous.
+pub(super) fn has_open_provider_input(provider: ProviderKind, snapshot: &TerminalSnapshot) -> bool {
+    let mut parser = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
+    parser.process(&snapshot.bytes);
+    parser
+        .screen()
+        .contents()
+        .lines()
+        .rev()
+        .map(str::trim)
+        .take(12)
+        .any(|line| match provider {
+            ProviderKind::ClaudeCode => line
+                .strip_prefix('❯')
+                .is_some_and(|tail| !tail.trim().is_empty()),
+            ProviderKind::Codex => line
+                .strip_prefix('›')
+                .is_some_and(|tail| !tail.trim().is_empty()),
+        })
+}
+
 fn input_palette_is_resting(provider: ProviderKind, visible: &str) -> bool {
     let lines = visible.lines().map(str::trim).collect::<Vec<_>>();
     let Some(prompt_index) = lines.iter().rposition(|line| match provider {
@@ -190,6 +214,18 @@ mod tests {
             classify_observed_activity(ProviderKind::ClaudeCode, &snapshot),
             ProviderActivity::Resting
         );
+    }
+
+    #[test]
+    fn typed_provider_input_is_not_an_idle_delivery_target() {
+        assert!(has_open_provider_input(
+            ProviderKind::ClaudeCode,
+            &snapshot("❯ [Swarm decision 01ab23cd resolved]\r\nauto mode on"),
+        ));
+        assert!(!has_open_provider_input(
+            ProviderKind::ClaudeCode,
+            &snapshot("✻ Finished\r\n❯ \r\nauto mode on"),
+        ));
     }
 
     #[test]
