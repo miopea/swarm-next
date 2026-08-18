@@ -201,6 +201,25 @@ test("recovers an active migration receipt after reopening settings", async () =
   expect(screen.getByRole("button", { name: "Undo this untouched import" })).toBeEnabled();
 });
 
+test("retries migration history without describing an unavailable receipt as absent", async () => {
+  let taskAttempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/tasks")) {
+      taskAttempts += 1;
+      if (taskAttempts === 1) return new Response("unavailable", { status: 502 });
+    }
+    return ok([]);
+  }));
+
+  render(<LegacyMigrationSettings busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText(/could not verify whether an earlier import can still be undone/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry migration history" }));
+  await waitFor(() => expect(screen.queryByText(/could not verify whether an earlier import can still be undone/)).not.toBeInTheDocument());
+  expect(taskAttempts).toBe(2);
+});
+
 test("previews selected Legacy workers as sleeping before adding them", async () => {
   const requests: Array<{ url: string; body: unknown }> = [];
   let taskPreviewCount = 0;

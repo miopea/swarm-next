@@ -87,6 +87,7 @@ This is the working product audit for the first real developer week. It records 
 62. **A recovered Keeper invitation poll no longer leaves a false permanent failure.** Background membership status has its own warning rather than overwriting create, approve, or cancel outcomes. A successful poll clears only that warning, and the operator can recheck immediately without recreating an invitation.
 63. **Saved dogfood evidence is retryable from Diagnostics.** A temporary report-history failure no longer becomes a dead-end status. The operator can retry only that private evidence list without refreshing live metrics, losing a diagnostic preview, or leaving Settings.
 64. **An unavailable join snapshot no longer looks like an empty personal Hive.** Saved Keeper links and signed invitations now update independently, preserve their last-known values when one request fails, and show a direct retry. Swarm only says no invitation is saved after the relevant state was actually read.
+65. **Migration rollback history is no longer silently assumed absent.** A transient failure while recovering active task or worker receipts now warns that undo availability could not be verified and offers a narrow retry. A true older-runtime 404 remains compatible, while persistence still enforces one active batch per exact Legacy snapshot.
 
 ## Live deployed proof — 2026-08-18
 

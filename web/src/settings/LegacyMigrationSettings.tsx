@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { RuntimeRequestError } from "../api";
 import {
   commitLegacyTaskMigration,
   commitLegacyWorkerMigration,
@@ -44,6 +45,8 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
   const [showInvalidRecords, setShowInvalidRecords] = useState(false);
   const [showExcludedRecords, setShowExcludedRecords] = useState(false);
   const [message, setMessage] = useState<string>();
+  const [receiptRecoveryUnavailable, setReceiptRecoveryUnavailable] = useState(false);
+  const [receiptRecoveryAttempt, setReceiptRecoveryAttempt] = useState(0);
   const disabled = busy || working;
   const closedHistoryCount = preview?.records.filter((record) => record.disposition === "skipped_closed").length ?? 0;
   const invalidRecordCount = preview?.records.filter((record) => record.disposition === "invalid").length ?? 0;
@@ -57,22 +60,20 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
 
   useEffect(() => {
     let cancelled = false;
-    void listActiveLegacyTaskMigrations(operatorToken)
-      .then((receipts) => {
-        if (!cancelled && receipts.length > 0) setReceipt(receipts[0]);
-      })
-      .catch(() => {
-        // Import remains available if older daemons do not expose receipt recovery yet.
-      });
-    void listActiveLegacyWorkerMigrations(operatorToken)
-      .then((receipts) => {
-        if (!cancelled && receipts.length > 0) setWorkerReceipt(receipts[0]);
-      })
-      .catch(() => {
-        // Older daemons may not have the worker migration slice yet.
+    void Promise.allSettled([
+      listActiveLegacyTaskMigrations(operatorToken),
+      listActiveLegacyWorkerMigrations(operatorToken),
+    ]).then(([tasks, workers]) => {
+      if (cancelled) return;
+      if (tasks.status === "fulfilled" && tasks.value.length > 0) setReceipt(tasks.value[0]);
+      if (workers.status === "fulfilled" && workers.value.length > 0) setWorkerReceipt(workers.value[0]);
+      setReceiptRecoveryUnavailable(
+        (tasks.status === "rejected" && !isMissingReceiptEndpoint(tasks.reason))
+        || (workers.status === "rejected" && !isMissingReceiptEndpoint(workers.reason)),
+      );
       });
     return () => { cancelled = true; };
-  }, [operatorToken]);
+  }, [operatorToken, receiptRecoveryAttempt]);
 
   async function previewBundle(parsed: LegacyMigrationBundle) {
     const [nextPreview, nextWorkerPreview] = await Promise.all([
@@ -237,6 +238,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
     <section id="settings-migration" className="settings-card migration-settings" aria-labelledby="migration-heading">
       <div><p className="eyebrow">Migration</p><h3 id="migration-heading">Bring your Legacy Hive forward</h3></div>
       <p>Preview the familiar crew and open local work before anything changes. Workers arrive sleeping; tasks remain Draft until you approve them. Jira work stays in Jira.</p>
+      {receiptRecoveryUnavailable ? <div className="form-error migration-recovery-error" role="alert"><span>Swarm could not verify whether an earlier import can still be undone. Existing workers and tasks are unchanged.</span><button className="secondary-button" type="button" onClick={() => setReceiptRecoveryAttempt((attempt) => attempt + 1)}>Retry migration history</button></div> : null}
 
       {!preview && !workerPreview && !receipt && !workerReceipt && (
         <div className="migration-discovery">
@@ -407,6 +409,10 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
       <small className="privacy-note">Migration reads only the Legacy crew and open local tasks needed for this preview. Credentials, terminal sessions, provider conversations, identity files, and Jira records are never included.</small>
     </section>
   );
+}
+
+function isMissingReceiptEndpoint(error: unknown) {
+  return error instanceof RuntimeRequestError && error.status === 404;
 }
 
 function migrationRecordSummary(record: LegacyTaskPreview) {
