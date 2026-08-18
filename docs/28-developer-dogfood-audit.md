@@ -85,6 +85,7 @@ This is the working product audit for the first real developer week. It records 
 60. **Apiary ownership actions no longer fail silently.** Offering, accepting, declining, or cancelling a Jira handoff now leaves a specific, visible outcome when Keeper or Jira cannot complete the request. The message states whether this Hive still owns the work or the offer remains actionable, and the controls recover without implying that ownership changed.
 61. **The task board no longer presents stale Apiary work as current.** Its five independent shared-work requests preserve successful and last-known slices during a partial failure, but now expose that degraded state and offer a direct retry. Local Hive tasks remain available while claiming and cross-Hive routing are explicitly described as potentially out of date.
 62. **A recovered Keeper invitation poll no longer leaves a false permanent failure.** Background membership status has its own warning rather than overwriting create, approve, or cancel outcomes. A successful poll clears only that warning, and the operator can recheck immediately without recreating an invitation.
+63. **Saved dogfood evidence is retryable from Diagnostics.** A temporary report-history failure no longer becomes a dead-end status. The operator can retry only that private evidence list without refreshing live metrics, losing a diagnostic preview, or leaving Settings.
 
 ## Live deployed proof — 2026-08-18
 
