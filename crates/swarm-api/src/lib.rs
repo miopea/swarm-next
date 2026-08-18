@@ -1439,7 +1439,7 @@ async fn submit_terminal_message(
     if submit {
         bytes.pop();
     }
-    let baseline = match client
+    let (baseline, baseline_paste_placeholder) = match client
         .request(&HostRequest::Read {
             session_id,
             after_sequence: None,
@@ -1456,9 +1456,12 @@ async fn submit_terminal_message(
             {
                 return Ok(TerminalSubmission::Deferred);
             }
-            snapshot.sequence
+            (
+                snapshot.sequence,
+                latest_claude_paste_placeholder(&snapshot.bytes).map(<[u8]>::to_vec),
+            )
         }
-        HostResponse::Output { resume, .. } => resume_sequence(&resume),
+        HostResponse::Output { resume, .. } => (resume_sequence(&resume), None),
         HostResponse::Error { code, message } => {
             return Ok(TerminalSubmission::Rejected { code, message });
         }
@@ -1482,14 +1485,22 @@ async fn submit_terminal_message(
     // Claude can redraw a long paste dozens of times before the bounded marker
     // reaches the canonical screen. Observe elapsed time rather than frame
     // count, then require a short stable render window before sending Enter.
-    let rendered_sequence =
-        match observe_stable_marker(client, session_id, marker, baseline).await? {
-            MarkerObservation::Rendered(sequence) => sequence,
-            MarkerObservation::Rejected { code, message } => {
-                return Ok(TerminalSubmission::Rejected { code, message });
-            }
-            MarkerObservation::Uncertain => return Ok(TerminalSubmission::Uncertain),
-        };
+    let rendered_sequence = match observe_stable_marker(
+        client,
+        session_id,
+        provider,
+        marker,
+        baseline,
+        baseline_paste_placeholder.as_deref(),
+    )
+    .await?
+    {
+        MarkerObservation::Rendered(sequence) => sequence,
+        MarkerObservation::Rejected { code, message } => {
+            return Ok(TerminalSubmission::Rejected { code, message });
+        }
+        MarkerObservation::Uncertain => return Ok(TerminalSubmission::Uncertain),
+    };
     // Claude may acknowledge Enter while it is still finalizing a long
     // bracketed-paste placeholder. Wait for an actually unchanged resting
     // render before retrying; a host acknowledgement alone is not proof that
@@ -1525,8 +1536,10 @@ async fn submit_terminal_message(
 async fn observe_stable_marker(
     client: &HostClient,
     session_id: WorkerSessionId,
+    provider: ProviderKind,
     marker: &[u8],
     baseline: u64,
+    baseline_paste_placeholder: Option<&[u8]>,
 ) -> Result<MarkerObservation, swarm_terminal::IpcError> {
     let render_deadline = Instant::now() + Duration::from_secs(10);
     let mut rendered_stability = SequenceStability::default();
@@ -1554,7 +1567,17 @@ async fn observe_stable_marker(
                 .bytes
                 .windows(marker.len())
                 .any(|part| part == marker);
-        if marker_is_visible
+        // Claude deliberately collapses a long paste into a numbered
+        // `[Pasted text #N]` chip, hiding the delivery marker from the
+        // canonical screen. A newly numbered, stable chip is equally strong
+        // proof that this exact PTY write finished rendering. Comparing it to
+        // the baseline prevents an older, operator-owned paste from being
+        // mistaken for the current coordination message.
+        let new_claude_paste_is_visible = provider == ProviderKind::ClaudeCode
+            && snapshot.sequence > baseline
+            && latest_claude_paste_placeholder(&snapshot.bytes)
+                .is_some_and(|placeholder| Some(placeholder) != baseline_paste_placeholder);
+        if (marker_is_visible || new_claude_paste_is_visible)
             && rendered_stability.observe(
                 snapshot.sequence,
                 Instant::now(),
@@ -1563,13 +1586,23 @@ async fn observe_stable_marker(
         {
             return Ok(MarkerObservation::Rendered(snapshot.sequence));
         }
-        if !marker_is_visible {
+        if !marker_is_visible && !new_claude_paste_is_visible {
             rendered_stability.reset();
         }
         if Instant::now() >= render_deadline {
             return Ok(MarkerObservation::Uncertain);
         }
     }
+}
+
+fn latest_claude_paste_placeholder(snapshot: &[u8]) -> Option<&[u8]> {
+    const PREFIX: &[u8] = b"[Pasted text #";
+    let start = snapshot
+        .windows(PREFIX.len())
+        .rposition(|part| part == PREFIX)?;
+    let suffix = &snapshot[start..];
+    let end = suffix.iter().position(|byte| *byte == b']')?;
+    Some(&suffix[..=end])
 }
 
 async fn observe_terminal_submission(
@@ -7356,6 +7389,20 @@ mod tests {
             b"manual mode\n\xe2\x9d\xaf [Pasted text #1]",
             marker,
         ));
+    }
+
+    #[test]
+    fn claude_paste_placeholder_identity_distinguishes_a_new_rendered_paste() {
+        assert_eq!(
+            latest_claude_paste_placeholder(b"manual mode\n\xe2\x9d\xaf [Pasted text #4]"),
+            Some(&b"[Pasted text #4]"[..])
+        );
+        assert_eq!(
+            latest_claude_paste_placeholder(b"old [Pasted text #3]\nnew prompt [Pasted text #4]"),
+            Some(&b"[Pasted text #4]"[..])
+        );
+        assert_eq!(latest_claude_paste_placeholder(b"ordinary prompt"), None);
+        assert_eq!(latest_claude_paste_placeholder(b"[Pasted text #4"), None);
     }
 
     #[test]

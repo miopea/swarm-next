@@ -56,6 +56,7 @@ This is the working product audit for the first real developer week. It records 
 31. **The touch target rule follows the developer workflow.** Queen mode/status, decision actions, worker switching and ordering, task assignment/actions, Settings sections, image intake, and terminal-key controls now use the same 44 px minimum on phones. The fix is shared at the responsive component boundary rather than repeated per screen.
 32. **A worker has one current task and an unlimited visible queue.** The persistence transaction now refuses a second assigned task entering **In progress** while that worker already owns active work. Additional tasks remain assigned and **Ready**, so Queen and the operator share one unambiguous definition of what the worker is doing now. Unassigned tasks and Jira issues without a Swarm worker are unaffected.
 33. **The phone task board no longer mixes large navigation with precision-only controls.** Entry actions, the filter disclosure and fields, Jira project/sync controls, and task actions now share the 44 px mobile target contract. The compact desktop board keeps its information density.
+34. **A collapsed Claude paste is a rendered automation prompt, not a failed marker.** Claude replaces long terminal input with a numbered `[Pasted text #N]` chip, so the literal run marker is no longer visible. Swarm now compares the stable chip with the pre-write prompt and submits only a newly rendered chip; an older operator paste cannot satisfy the check. This closes the path that left Queen automation waiting for a manual Enter.
 
 ## Live deployed proof — 2026-08-18
 
@@ -95,7 +96,7 @@ This is the working product audit for the first real developer week. It records 
 - Apiary pages show organization, public work rollups, claims, and delegation; private worker/repository/session data remains owned by each Hive.
 - Task removal is available for local work with stronger guards for Jira-backed work.
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
-- The full Rust workspace is green: 460 unit/integration tests plus all crate documentation tests passed on the release checkout.
+- The full Rust workspace is green: 461 unit/integration tests plus all crate documentation tests passed on the release checkout.
 - Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
 - The web workspace is green: 58 test files with 291 tests, TypeScript project checking, and the production Vite build all pass.
 
