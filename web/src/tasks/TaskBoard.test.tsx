@@ -152,6 +152,31 @@ test("offers one clear recovery action when filters hide every open task", () =>
   expect(onWorkerChange).toHaveBeenCalledWith("all");
 });
 
+test("preserves selected email work while the operator switches task entry paths", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/integrations/email/readiness")) return ok({ configured: true, connection: "ready", account_name: "Bea", account_address: "bea@example.com" });
+    if (url.includes("/integrations/email/inbox")) return ok([{
+      id: "message-1", conversation_id: "thread-1", internet_message_id: null, subject: "Broken form",
+      sender_name: "Alex", sender_address: "alex@example.com", received_at: 1_786_000_000,
+      web_url: "https://outlook.test/message-1", has_attachments: false, preview: "The form does not submit.",
+    }]);
+    return ok([]);
+  }));
+  renderBoard();
+
+  fireEvent.click(screen.getByRole("button", { name: "Use email" }));
+  const message = await screen.findByRole("checkbox");
+  fireEvent.click(message);
+  expect(message).toBeChecked();
+
+  fireEvent.click(screen.getByRole("button", { name: "Write task" }));
+  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Use email" }));
+
+  expect(screen.getByRole("checkbox")).toBeChecked();
+});
+
 test("lets the operator recover removed local work without mixing in Jira work", async () => {
   const removed = { ...task, id: "removed-1", title: "Recover this idea", removed_at: 2 };
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {

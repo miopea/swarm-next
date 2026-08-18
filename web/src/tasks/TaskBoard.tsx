@@ -168,6 +168,8 @@ export default function TaskBoard({
   const [composeOpen, setComposeOpen] = useState(false);
   const [jiraOpen, setJiraOpen] = useState(false);
   const [emailOpen, setEmailOpen] = useState(false);
+  const [jiraMounted, setJiraMounted] = useState(false);
+  const [emailMounted, setEmailMounted] = useState(false);
   const [emailTaskSources, setEmailTaskSources] = useState<EmailTaskSource[]>([]);
   const [removedTasks, setRemovedTasks] = useState<Task[]>([]);
   const [restoringTaskId, setRestoringTaskId] = useState<string>();
@@ -375,7 +377,12 @@ export default function TaskBoard({
             className={jiraOpen ? "primary-action" : "secondary-button"}
             aria-expanded={jiraOpen}
             aria-controls="jira-work-source"
-            onClick={() => { setJiraOpen((current) => !current); setComposeOpen(false); setEmailOpen(false); }}
+            onClick={() => {
+              setJiraMounted(true);
+              setJiraOpen((current) => !current);
+              setComposeOpen(false);
+              setEmailOpen(false);
+            }}
           >
             {jiraOpen ? "Close Jira work" : "Claim Jira work"}
           </button>
@@ -384,7 +391,12 @@ export default function TaskBoard({
             className={emailOpen ? "primary-action" : "secondary-button"}
             aria-expanded={emailOpen}
             aria-controls="email-work-source"
-            onClick={() => { setEmailOpen((current) => !current); setComposeOpen(false); setJiraOpen(false); }}
+            onClick={() => {
+              setEmailMounted(true);
+              setEmailOpen((current) => !current);
+              setComposeOpen(false);
+              setJiraOpen(false);
+            }}
           >
             {emailOpen ? "Close email" : "Use email"}
           </button>
@@ -444,8 +456,8 @@ export default function TaskBoard({
           <button disabled={busy || creating || !title.trim() || (workScope === "hive" && !workerId) || (workScope === "apiary" && isStewardCreator && !targetHiveId)}>{creating ? "Creating…" : workScope === "apiary" ? isStewardCreator ? "Route through Keeper" : "Create for Apiary" : "Create draft"}</button>
           {createError ? <p className="form-error task-create-error" role="alert">{createError}</p> : null}
         </form>}
-        {jiraOpen ? <div id="jira-work-source"><JiraTaskIntake operatorToken={operatorToken} onImported={onJiraImported} /></div> : null}
-        {emailOpen ? <div id="email-work-source"><EmailTaskIntake operatorToken={operatorToken} workers={workers} onImported={onEmailImported} /></div> : null}
+        {jiraMounted ? <div id="jira-work-source" hidden={!jiraOpen}><JiraTaskIntake operatorToken={operatorToken} onImported={onJiraImported} /></div> : null}
+        {emailMounted ? <div id="email-work-source" hidden={!emailOpen}><EmailTaskIntake operatorToken={operatorToken} workers={workers} onImported={onEmailImported} /></div> : null}
       </section>
 
       <details className="task-mobile-controls">
