@@ -1154,6 +1154,31 @@ impl TaskStore {
                 .or_default()
                 .push(worker);
         }
+        let home = migration_home_directory();
+        let mut workers_by_legacy_assignment: HashMap<String, Vec<WorkerId>> = HashMap::new();
+        for source_worker in &bundle.workers {
+            let matches = workers
+                .iter()
+                .filter(|worker| {
+                    worker.role == WorkerRole::Worker
+                        && (worker.name.eq_ignore_ascii_case(source_worker.name.trim())
+                            || workspace_identity(&worker.workspace, home.as_deref())
+                                == workspace_identity(&source_worker.workspace, home.as_deref()))
+                })
+                .collect::<Vec<_>>();
+            if matches.len() != 1 {
+                continue;
+            }
+            for alias in [&source_worker.source_id, &source_worker.name] {
+                let alias = alias.trim().to_lowercase();
+                if !alias.is_empty() {
+                    let assignments = workers_by_legacy_assignment.entry(alias).or_default();
+                    if !assignments.contains(&matches[0].id) {
+                        assignments.push(matches[0].id);
+                    }
+                }
+            }
+        }
         let connection = self.connection()?;
         let mut output = Vec::with_capacity(bundle.tasks.len());
         for source in &bundle.tasks {
@@ -1163,13 +1188,24 @@ impl TaskStore {
             let mut warnings = Vec::new();
             let priority = map_priority(&source.priority, &mut warnings);
             let (state, mut disposition, mut selectable) = map_state(&source_status);
-            let worker = source
+            let worker_id = source
                 .assigned_worker
                 .as_deref()
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
-                .and_then(|name| workers_by_name.get(&name.to_lowercase()))
-                .and_then(|matches| (matches.len() == 1).then_some(matches[0]));
+                .and_then(|name| {
+                    let key = name.to_lowercase();
+                    workers_by_name
+                        .get(&key)
+                        .and_then(|matches| (matches.len() == 1).then_some(matches[0].id))
+                        .or_else(|| {
+                            workers_by_legacy_assignment
+                                .get(&key)
+                                .and_then(|matches| (matches.len() == 1).then_some(matches[0]))
+                        })
+                });
+            let worker = worker_id
+                .and_then(|worker_id| workers.iter().find(|worker| worker.id == worker_id));
             if source.assigned_worker.is_some() && worker.is_none() {
                 warnings.push(
                     "Legacy worker could not be matched exactly; task will be unassigned.".into(),
@@ -1785,6 +1821,42 @@ mod tests {
         assert_eq!(
             preview.records[1].disposition,
             LegacyImportDisposition::SkippedJira
+        );
+    }
+
+    #[test]
+    fn task_preview_maps_legacy_worker_ids_through_repository_identity() {
+        let store = store();
+        let home = migration_home_directory().expect("test process has a home directory");
+        store
+            .create_worker(
+                "Platform (Data)",
+                ProviderKind::ClaudeCode,
+                &format!("{home}/projects/rcg/rcg-platform-data"),
+                false,
+                3,
+            )
+            .unwrap();
+        let mut legacy_task = task("platform-data-task", "assigned");
+        legacy_task.assigned_worker = Some("platform-data".into());
+        let mut source = bundle(vec![legacy_task]);
+        source.workers.push(worker(
+            "platform-data",
+            "platform-data",
+            "~/projects/rcg/rcg-platform-data",
+        ));
+
+        let preview = store.preview_legacy_task_migration(&source).unwrap();
+
+        assert_eq!(
+            preview.records[0].matched_worker_name.as_deref(),
+            Some("Platform (Data)")
+        );
+        assert!(
+            !preview.records[0]
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("could not be matched"))
         );
     }
 

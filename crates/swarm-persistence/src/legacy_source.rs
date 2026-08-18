@@ -125,11 +125,24 @@ pub fn read_legacy_migration_bundle(
 }
 
 fn discover_provider_conversation(provider: &str, workspace: &str) -> Option<String> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    let workspace = expand_workspace_home(workspace, &home);
     match provider.trim().to_ascii_lowercase().as_str() {
-        "" | "claude" | "claude_code" => discover_claude_conversation(workspace),
-        "codex" => discover_codex_conversation(workspace),
+        "" | "claude" | "claude_code" => discover_claude_conversation(&workspace),
+        "codex" => discover_codex_conversation(&workspace),
         _ => None,
     }
+}
+
+fn expand_workspace_home(workspace: &str, home: &Path) -> String {
+    let workspace = workspace.trim();
+    if workspace == "~" {
+        return home.to_string_lossy().into_owned();
+    }
+    workspace.strip_prefix("~/").map_or_else(
+        || workspace.to_owned(),
+        |relative| home.join(relative).to_string_lossy().into_owned(),
+    )
 }
 
 fn discover_claude_conversation(workspace: &str) -> Option<String> {
@@ -403,6 +416,20 @@ mod tests {
         assert_eq!(
             discover_codex_conversation_in(&codex_root, workspace),
             Some(codex_id)
+        );
+    }
+
+    #[test]
+    fn expands_legacy_tilde_workspaces_before_provider_discovery() {
+        let home = Path::new("/home/operator");
+
+        assert_eq!(
+            expand_workspace_home("~/projects/rcg/rcg-hub", home),
+            "/home/operator/projects/rcg/rcg-hub"
+        );
+        assert_eq!(
+            expand_workspace_home("/srv/projects/platform", home),
+            "/srv/projects/platform"
         );
     }
 }
