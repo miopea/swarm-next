@@ -1345,6 +1345,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .queen-autonomy-chip, .queen-automation-chip,
   .mobile-terminal-key-heading button,
   .settings-section-nav button, .worker-edit-button,
+  .task-entry-actions button, .task-control-heading button,
+  .task-project-controls > button, .task-project-row > button,
   .task-actions button, .task-assignment-cell > button,
   .task-assignment-cell select { min-height: 44px; }
   .worker-order-actions button { width: 44px; min-height: 44px; }
@@ -1412,12 +1414,12 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-task-worker-route { min-width: 0; width: 100%; }
   .apiary-work-boundary { align-items: stretch; flex-direction: column; }
   .task-mobile-controls { display: block; max-width: 1600px; margin: 0 auto 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
-  .task-mobile-controls summary { display: flex; min-height: 42px; cursor: pointer; align-items: center; justify-content: space-between; padding: 8px 11px; color: var(--text); font-size: .78rem; font-weight: 650; list-style: none; }
+  .task-mobile-controls summary { display: flex; min-height: 44px; cursor: pointer; align-items: center; justify-content: space-between; padding: 8px 11px; color: var(--text); font-size: .78rem; font-weight: 650; list-style: none; }
   .task-mobile-controls summary::-webkit-details-marker { display: none; }
   .task-mobile-controls summary span { color: var(--muted); }
   .task-mobile-controls > div { display: grid; padding: 0 11px 11px; gap: 9px; }
   .task-mobile-controls label { display: grid; gap: 5px; color: var(--muted); font-size: .72rem; }
-  .task-mobile-controls input, .task-mobile-controls select { width: 100%; min-height: 40px; }
+  .task-mobile-controls input, .task-mobile-controls select { width: 100%; min-height: 44px; }
   .empty-card { flex-direction: column; padding: 20px; text-align: center; }
   .settings-workspace { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); padding: 0 12px 12px; overflow-x: hidden; }
   .settings-section-nav { top: 0; margin-inline: -4px; padding: 7px; }

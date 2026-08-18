@@ -55,9 +55,11 @@ This is the working product audit for the first real developer week. It records 
 30. **Persistent phone controls meet a practical touch target.** Primary navigation, presence, quick navigation, theme, and Lock controls now expose at least a 44 px target instead of requiring precise taps on 36–39 px buttons.
 31. **The touch target rule follows the developer workflow.** Queen mode/status, decision actions, worker switching and ordering, task assignment/actions, Settings sections, image intake, and terminal-key controls now use the same 44 px minimum on phones. The fix is shared at the responsive component boundary rather than repeated per screen.
 32. **A worker has one current task and an unlimited visible queue.** The persistence transaction now refuses a second assigned task entering **In progress** while that worker already owns active work. Additional tasks remain assigned and **Ready**, so Queen and the operator share one unambiguous definition of what the worker is doing now. Unassigned tasks and Jira issues without a Swarm worker are unaffected.
+33. **The phone task board no longer mixes large navigation with precision-only controls.** Entry actions, the filter disclosure and fields, Jira project/sync controls, and task actions now share the 44 px mobile target contract. The compact desktop board keeps its information density.
 
 ## Live deployed proof — 2026-08-18
 
+- Release `0.1.0-1b91a87f32dc` preserved terminal-host PID `1832378` while updating App/API. Both services remained active with zero restarts, `/health` reported the exact App/API and worker-engine identities, and the two-task board rendered without browser errors at desktop and phone widths. The one-active-task invariant was proven by the full persistence suite rather than by mutating live operator work.
 - Release `0.1.0-ae4a9a47cafc` preserved terminal-host PID `1832378` and its loaded provider session while updating only App/API. Both services were active, `/health` returned the exact App/API and worker-engine identities, and the deployment produced no warning-level API entries.
 - The same release rendered the two-task board without horizontal overflow or browser warnings at 1440 × 900 and 412 × 915. Jira and merged-email cards, worker assignment controls, source filters, and completed-work disclosure remained readable. The live Hive had no removed local records, so recovery's empty path was proven without creating, removing, restoring, assigning, or resolving operator work.
 - Desktop and 412 × 915 phone layouts were exercised against `swarm2.bfgsolutions.net` on App/API `0.1.0-5a8a14b7d9ca`.
@@ -93,7 +95,7 @@ This is the working product audit for the first real developer week. It records 
 - Apiary pages show organization, public work rollups, claims, and delegation; private worker/repository/session data remains owned by each Hive.
 - Task removal is available for local work with stronger guards for Jira-backed work.
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
-- The full Rust workspace is green: 459 unit/integration tests plus all crate documentation tests passed on the release checkout.
+- The full Rust workspace is green: 460 unit/integration tests plus all crate documentation tests passed on the release checkout.
 - Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
 - The web workspace is green: 58 test files with 291 tests, TypeScript project checking, and the production Vite build all pass.
 
