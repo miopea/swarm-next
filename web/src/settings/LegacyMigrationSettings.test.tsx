@@ -118,6 +118,7 @@ test("previews before importing and selects only server-approved records", async
   fireEvent.change(container.querySelector("input[type=file]")!, { target: { files: [file] } });
 
   expect(await screen.findByText("Finish local work")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 staying in Legacy" }));
   expect(screen.getByText("Jira work").closest("label")?.querySelector("input")).toBeDisabled();
   await waitFor(() => expect(requests).toHaveLength(4));
   expect(screen.getByRole("button", { name: "Review import of 1" })).toBeEnabled();
@@ -150,10 +151,12 @@ test("keeps closed Legacy history out of the migration work list until requested
       bundle_digest: "digest",
       source_installation_id: "legacy",
       selectable: 1,
-      skipped: 2,
-      invalid: 0,
+      skipped: 3,
+      invalid: 1,
       records: [
         { source_id: "open", title: "Carry this forward", source_status: "assigned", target_state: "ready", priority: "normal", disposition: "ready", selectable: true, warnings: [] },
+        { source_id: "jira", title: "Canonical Jira work", source_status: "assigned", priority: "normal", disposition: "skipped_jira", selectable: false, warnings: [] },
+        { source_id: "invalid", title: "Damaged Legacy task", source_status: "unknown", priority: "normal", disposition: "invalid", selectable: false, warnings: ["The source task is incomplete."] },
         { source_id: "closed-1", title: "Old completed work", source_status: "completed", priority: "normal", disposition: "skipped_closed", selectable: false, warnings: [] },
         { source_id: "closed-2", title: "Another closed task", source_status: "removed", priority: "normal", disposition: "skipped_closed", selectable: false, warnings: [] },
       ],
@@ -166,6 +169,12 @@ test("keeps closed Legacy history out of the migration work list until requested
 
   expect(await screen.findByText("Carry this forward")).toBeInTheDocument();
   expect(screen.queryByText("Old completed work")).not.toBeInTheDocument();
+  expect(screen.queryByText("Canonical Jira work")).not.toBeInTheDocument();
+  expect(screen.queryByText("Damaged Legacy task")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 needing attention" }));
+  expect(screen.getByText("Damaged Legacy task")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show 1 staying in Legacy" }));
+  expect(screen.getByText("Canonical Jira work")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Show 2 closed Legacy tasks" }));
   expect(screen.getByText("Old completed work")).toBeInTheDocument();
   expect(screen.getByText("Another closed task")).toBeInTheDocument();

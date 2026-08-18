@@ -41,10 +41,19 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
   const [confirmWorkerImport, setConfirmWorkerImport] = useState(false);
   const [confirmWorkerRollback, setConfirmWorkerRollback] = useState(false);
   const [showClosedHistory, setShowClosedHistory] = useState(false);
+  const [showInvalidRecords, setShowInvalidRecords] = useState(false);
+  const [showExcludedRecords, setShowExcludedRecords] = useState(false);
   const [message, setMessage] = useState<string>();
   const disabled = busy || working;
   const closedHistoryCount = preview?.records.filter((record) => record.disposition === "skipped_closed").length ?? 0;
-  const visibleTaskRecords = preview?.records.filter((record) => showClosedHistory || record.disposition !== "skipped_closed") ?? [];
+  const invalidRecordCount = preview?.records.filter((record) => record.disposition === "invalid").length ?? 0;
+  const excludedRecordCount = preview?.records.filter((record) => !record.selectable && record.disposition !== "invalid" && record.disposition !== "skipped_closed").length ?? 0;
+  const visibleTaskRecords = preview?.records.filter((record) => (
+    record.selectable
+    || (record.disposition === "invalid" && showInvalidRecords)
+    || (record.disposition === "skipped_closed" && showClosedHistory)
+    || (!record.selectable && record.disposition !== "invalid" && record.disposition !== "skipped_closed" && showExcludedRecords)
+  )) ?? [];
 
   useEffect(() => {
     let cancelled = false;
@@ -327,6 +336,16 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
             <button type="button" className="text-button" onClick={() => setSelected(new Set(preview.records.filter((record) => record.selectable).map((record) => record.source_id)))}>Select recommended</button>
             <button type="button" className="text-button" onClick={() => setSelected(new Set())}>Clear</button>
             <button type="button" className="text-button" onClick={() => { setBundle(undefined); setPreview(undefined); setWorkerPreview(undefined); setSelected(new Set()); setSelectedWorkers(new Set()); }}>Start over</button>
+            {invalidRecordCount > 0 ? (
+              <button type="button" className="text-button" aria-pressed={showInvalidRecords} onClick={() => setShowInvalidRecords((current) => !current)}>
+                {showInvalidRecords ? "Hide records needing attention" : `Show ${invalidRecordCount} needing attention`}
+              </button>
+            ) : null}
+            {excludedRecordCount > 0 ? (
+              <button type="button" className="text-button" aria-pressed={showExcludedRecords} onClick={() => setShowExcludedRecords((current) => !current)}>
+                {showExcludedRecords ? "Hide records staying in Legacy" : `Show ${excludedRecordCount} staying in Legacy`}
+              </button>
+            ) : null}
             {closedHistoryCount > 0 ? (
               <button type="button" className="text-button" aria-pressed={showClosedHistory} onClick={() => setShowClosedHistory((current) => !current)}>
                 {showClosedHistory ? "Hide closed history" : `Show ${closedHistoryCount} closed Legacy task${closedHistoryCount === 1 ? "" : "s"}`}
