@@ -125,12 +125,21 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .surface-nav button.selected { border-color: color-mix(in srgb, var(--good) 38%, transparent); color: var(--text); background: color-mix(in srgb, var(--good-soft) 68%, transparent); }
 .surface-nav button.selected small { color: var(--text); background: var(--panel-raised); }
 
-.rail-context { min-height: 0; flex: 1; padding-top: 17px; overflow-y: auto; }
+.rail-context { display: flex; min-height: 0; flex: 1; flex-direction: column; padding-top: 17px; overflow: hidden; }
+.rail-controls { flex: 0 0 auto; }
+.control-rail.surface-tasks .rail-controls { min-height: 0; flex: 1; overflow-y: auto; }
+.rail-context .worker-list, .rail-context .empty-rail { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.worker-search { position: relative; margin: 0 7px 10px; }
+.worker-search input { width: 100%; min-height: 32px; padding: 5px 26px 5px 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--panel-soft); font-size: .82rem; }
+.worker-search input::-webkit-search-cancel-button { display: none; }
+.worker-search-clear { position: absolute; top: 50%; right: 4px; display: flex; width: 22px; height: 22px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 999px; color: var(--quiet); background: transparent; font-size: 1rem; line-height: 1; transform: translateY(-50%); }
+.worker-search-clear:hover { color: var(--text); background: var(--panel-raised); }
 .rail-heading { display: flex; min-height: 28px; align-items: center; justify-content: space-between; gap: 8px; margin: 0 7px 10px; color: var(--quiet); font-size: .69rem; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; }
 .worker-visibility-toggle { display: inline-flex; flex: 0 0 auto; padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); }
 .worker-visibility-toggle button { min-height: 24px; padding: 2px 8px; border: 0; border-radius: 999px; color: var(--quiet); background: transparent; font-size: .65rem; letter-spacing: 0; text-transform: none; }
 .worker-visibility-toggle button[aria-pressed="true"] { color: var(--text); background: var(--panel-raised); box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 10%, transparent); }
-.empty-rail { padding: 13px 12px; color: var(--muted); font-size: .84rem; line-height: 1.5; }
+.empty-rail { display: grid; gap: 6px; padding: 13px 12px; color: var(--muted); font-size: .84rem; line-height: 1.5; justify-items: start; }
+.empty-rail strong { color: var(--text); font-weight: 600; }
 .task-board-controls { display: grid; gap: 12px; padding: 3px 7px; }
 .task-board-controls label { display: grid; gap: 5px; color: var(--quiet); font-size: .7rem; font-weight: 650; }
 .task-board-controls input, .task-board-controls select { width: 100%; min-height: 38px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-raised); color: var(--text); font: inherit; }

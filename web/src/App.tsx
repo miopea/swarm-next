@@ -85,6 +85,7 @@ import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./ter
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 import WorkerRosterItem from "./workers/WorkerRosterItem";
 import { workerWork } from "./workers/workerWork";
+import { normalizeRosterQuery, orphanSessionMatchesRosterQuery, repositoryName, workerMatchesRosterQuery } from "./workers/workerRoster";
 import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 import { useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
@@ -131,6 +132,7 @@ export function App() {
   const mobileWorkerSearch = useRef<HTMLInputElement>(null);
   const mobileWorkerDialog = useModalFocus<HTMLElement>(() => setShowMobileWorkers(false), showMobileWorkers, mobileWorkerSearch);
   const [workerVisibility, setWorkerVisibility] = useState<WorkerVisibility>(readWorkerVisibility);
+  const [workerQuery, setWorkerQuery] = useState("");
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
@@ -810,22 +812,33 @@ export function App() {
     () => workerVisibility === "awake" ? workers.filter((worker) => worker.running) : workers,
     [workerVisibility, workers],
   );
-  const normalizedMobileWorkerQuery = mobileWorkerQuery.trim().toLocaleLowerCase();
+  const normalizedWorkerQuery = normalizeRosterQuery(workerQuery);
+  const railVisibleWorkers = useMemo(
+    () => visibleWorkers.filter((worker) => workerMatchesRosterQuery(worker, normalizedWorkerQuery)),
+    [normalizedWorkerQuery, visibleWorkers],
+  );
+  const railVisibleOrphanSessions = useMemo(
+    () => orphanSessions.filter((session) => orphanSessionMatchesRosterQuery(workerName(session.session_id), normalizedWorkerQuery)),
+    [normalizedWorkerQuery, orphanSessions],
+  );
+  const sleepingWorkerMatchesRailQuery = useMemo(
+    () => workerVisibility === "awake" && normalizedWorkerQuery
+      ? workers.some((worker) => !worker.running && workerMatchesRosterQuery(worker, normalizedWorkerQuery))
+      : false,
+    [normalizedWorkerQuery, workerVisibility, workers],
+  );
+  const normalizedMobileWorkerQuery = normalizeRosterQuery(mobileWorkerQuery);
   const mobileVisibleWorkers = useMemo(
-    () => normalizedMobileWorkerQuery
-      ? visibleWorkers.filter((worker) => `${worker.name} ${repositoryName(worker.workspace)} ${worker.workspace}`.toLocaleLowerCase().includes(normalizedMobileWorkerQuery))
-      : visibleWorkers,
+    () => visibleWorkers.filter((worker) => workerMatchesRosterQuery(worker, normalizedMobileWorkerQuery)),
     [normalizedMobileWorkerQuery, visibleWorkers],
   );
   const mobileVisibleOrphanSessions = useMemo(
-    () => normalizedMobileWorkerQuery
-      ? orphanSessions.filter((session) => `${workerName(session.session_id)} unconfigured session`.toLocaleLowerCase().includes(normalizedMobileWorkerQuery))
-      : orphanSessions,
+    () => orphanSessions.filter((session) => orphanSessionMatchesRosterQuery(workerName(session.session_id), normalizedMobileWorkerQuery)),
     [normalizedMobileWorkerQuery, orphanSessions],
   );
   const sleepingWorkerMatchesMobileQuery = useMemo(
     () => workerVisibility === "awake" && normalizedMobileWorkerQuery
-      ? workers.some((worker) => !worker.running && `${worker.name} ${repositoryName(worker.workspace)} ${worker.workspace}`.toLocaleLowerCase().includes(normalizedMobileWorkerQuery))
+      ? workers.some((worker) => !worker.running && workerMatchesRosterQuery(worker, normalizedMobileWorkerQuery))
       : false,
     [normalizedMobileWorkerQuery, workerVisibility, workers],
   );
@@ -947,24 +960,52 @@ export function App() {
             </nav>
 
             {(surface === "tasks" || surface === "workers") && <div className="rail-context">
-              <div className="rail-heading">
-                <span>{surface === "tasks" ? "Board view" : "Workers"}</span>
-                {surface === "workers" ? (
-                  <div className="worker-visibility-toggle" role="group" aria-label="Workers shown">
-                    <button type="button" aria-pressed={workerVisibility === "all"} onClick={() => changeWorkerVisibility("all")}>All</button>
-                    <button type="button" aria-pressed={workerVisibility === "awake"} onClick={() => changeWorkerVisibility("awake")}>Awake</button>
+              <div className="rail-controls">
+                <div className="rail-heading">
+                  <span>{surface === "tasks" ? "Board view" : "Workers"}</span>
+                  {surface === "workers" ? (
+                    <div className="worker-visibility-toggle" role="group" aria-label="Workers shown">
+                      <button type="button" aria-pressed={workerVisibility === "all"} onClick={() => changeWorkerVisibility("all")}>All</button>
+                      <button type="button" aria-pressed={workerVisibility === "awake"} onClick={() => changeWorkerVisibility("awake")}>Awake</button>
+                    </div>
+                  ) : null}
+                </div>
+                {surface === "workers" && workers.length > 0 ? (
+                  <div className="worker-search">
+                    <label className="sr-only" htmlFor="worker-search">Find a worker by name, repository, or path</label>
+                    <input
+                      id="worker-search"
+                      type="search"
+                      placeholder="Find a worker…"
+                      autoComplete="off"
+                      value={workerQuery}
+                      onChange={(event) => setWorkerQuery(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Escape" && workerQuery) { event.stopPropagation(); setWorkerQuery(""); } }}
+                    />
+                    {workerQuery ? (
+                      <button type="button" className="worker-search-clear" aria-label="Clear worker search" onClick={() => setWorkerQuery("")}>×</button>
+                    ) : null}
                   </div>
                 ) : null}
+                {surface === "tasks" ? (
+                  <TaskBoardControls query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} workers={workers} projects={taskProjects} openCount={openTaskCount} busy={busy} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onSync={() => void syncJiraBoard()} />
+                ) : null}
               </div>
-              {surface === "tasks" ? (
-                <TaskBoardControls query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} workers={workers} projects={taskProjects} openCount={openTaskCount} busy={busy} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onSync={() => void syncJiraBoard()} />
-              ) : workers.length === 0 && orphanSessions.length === 0 ? (
+              {surface === "tasks" ? null : workers.length === 0 && orphanSessions.length === 0 ? (
                 <p className="empty-rail">No workers configured.</p>
               ) : visibleWorkers.length === 0 && orphanSessions.length === 0 ? (
                 <p className="empty-rail">All {workers.length} workers are sleeping. Choose All to wake one.</p>
+              ) : railVisibleWorkers.length === 0 && railVisibleOrphanSessions.length === 0 ? (
+                <p className="empty-rail">
+                  <strong>No worker matches “{workerQuery.trim()}”</strong>
+                  <span>Try a worker name, repository name, or path.</span>
+                  {sleepingWorkerMatchesRailQuery ? (
+                    <button type="button" className="secondary-button" onClick={() => changeWorkerVisibility("all")}>Show sleeping workers</button>
+                  ) : null}
+                </p>
               ) : (
                 <div className="worker-list">
-                  {visibleWorkers.map((worker) => {
+                  {railVisibleWorkers.map((worker) => {
                     const sessionId = worker.active_session_id;
                     const work = workByWorker.get(worker.id);
                     const task = work?.current ?? (sessionId ? tasksBySession.get(sessionId) : undefined);
@@ -982,7 +1023,7 @@ export function App() {
                       />
                     );
                   })}
-                  {orphanSessions.map((session) => {
+                  {railVisibleOrphanSessions.map((session) => {
                     const task = tasksBySession.get(session.session_id);
                     return (
                       <button className="worker-button" aria-current={session.session_id === activeSessionId ? "page" : undefined} key={session.session_id} onClick={() => openWorker(session.session_id)}>
@@ -1283,10 +1324,6 @@ function CommandIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><cir
 function requireActiveSession(worker: Worker): string {
   if (!worker.active_session_id) throw new Error(`${worker.name} did not receive a terminal session`);
   return worker.active_session_id;
-}
-
-function repositoryName(workspace: string): string {
-  return workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? workspace;
 }
 
 function jiraProjectUrl(link: JiraTaskLink): string | undefined {
