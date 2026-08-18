@@ -96,6 +96,40 @@ test("keeps local work usable when part of the Member rollup is unavailable", as
   expect(screen.getByRole("list", { name: "Shared work blockers" })).toHaveTextContent("Keeper catalog has not arrived");
 });
 
+test("keeps a Jira handoff actionable and explains when acceptance fails", async () => {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/handoffs/handoff-1/acceptance") && init?.method === "POST") {
+      return Promise.resolve(new Response(JSON.stringify({ message: "keeper unavailable" }), { status: 502, headers: { "Content-Type": "application/json" } }));
+    }
+    if (url.endsWith("/members")) return Promise.resolve(ok([
+      { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: false },
+      { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: true },
+      { hive_id: "hive-3", hive_name: "Fern Hive", operator_id: "operator-3", operator_display_name: "Faye", role: "member", is_local: false },
+    ]));
+    if (url.endsWith("/handoffs")) return Promise.resolve(ok([{
+      id: "handoff-1", apiary_id: "apiary-1", claim_id: "claim-1", source_node_id: "node-3", source_hive_id: "hive-3", source_operator_id: "operator-3",
+      target_node_id: "node-2", target_hive_id: "hive-2", target_operator_id: "operator-2", issue_key: "WWD-101", reason: "Please continue the fix", state: "offered", offered_at: 1,
+    }]));
+    if (url.endsWith("/sync-health")) return Promise.resolve(ok({ condition: "current", last_attempt_at: 1, last_success_at: 1, consecutive_failures: 0, next_attempt_at: null }));
+    if (url.endsWith("/task-sync-status")) return Promise.resolve(ok({ cursor: 0, task_count: 0, last_applied_at: 1 }));
+    if (url.endsWith("/task-outbox-status")) return Promise.resolve(ok({ queued_count: 0, conflict_count: 0, rejected_count: 0, last_attempt_at: null }));
+    if (url.endsWith("/catalog-readiness")) return Promise.resolve(ok({ acknowledgement: null, jira_connection: "ready", projects: [], blockers: [] }));
+    if (url.endsWith("/my-stewardship")) return Promise.resolve(ok(null));
+    if (url.endsWith("/steward/assists")) return Promise.resolve(ok({ incoming: [], outbox: [] }));
+    if (url.endsWith("/shared-work") || url.endsWith("/handoff-targets") || url.endsWith("/task-outbox") || url.endsWith("/local-executions") || url.endsWith("/steward/tasks") || url.endsWith("/tasks")) return Promise.resolve(ok([]));
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(<MemberControlRoom identity={memberIdentity()} operatorToken="secret" onManage={() => undefined} onOpenTasks={() => undefined} />);
+
+  const accept = await screen.findByRole("button", { name: "Accept work" });
+  fireEvent.click(accept);
+  expect(await screen.findByText("This handoff could not be accepted. Jira ownership and both Hives are unchanged.")).toHaveAttribute("role", "alert");
+  expect(accept).toBeEnabled();
+  expect(screen.getByRole("list", { name: "Active Jira work handoffs" })).toHaveTextContent("WWD-101");
+});
+
 test("keeps Steward work routing in Tasks without exposing the target Hive's workers", async () => {
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);

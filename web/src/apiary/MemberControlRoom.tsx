@@ -138,13 +138,21 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
   const [actingAssist, setActingAssist] = useState<string>();
   const [assistError, setAssistError] = useState<string>();
   const [actingHandoff, setActingHandoff] = useState<string>();
+  const [handoffError, setHandoffError] = useState<string>();
   const transitionHandoff = useCallback(async (handoff: FederationClaimHandoff, action: "accept" | "decline" | "cancel") => {
     setActingHandoff(handoff.id);
+    setHandoffError(undefined);
     try {
       if (action === "accept") await acceptApiaryClaimHandoff(operatorToken, handoff.id);
       else if (action === "decline") await declineApiaryClaimHandoff(operatorToken, handoff.id);
       else await cancelApiaryClaimHandoff(operatorToken, handoff.id);
       await refresh();
+    } catch {
+      setHandoffError(action === "accept"
+        ? "This handoff could not be accepted. Jira ownership and both Hives are unchanged."
+        : action === "decline"
+          ? "This handoff could not be declined. The offer is still waiting for your decision."
+          : "This handoff could not be cancelled. The receiving Hive may still accept it.");
     } finally { setActingHandoff(undefined); }
   }, [operatorToken, refresh]);
   const requestStewardAssist = useCallback(async () => {
@@ -214,6 +222,7 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
               {handoff.state === "offered" ? <button className="secondary-button" disabled={actingHandoff === handoff.id} onClick={() => void transitionHandoff(handoff, "cancel")}>Cancel offer</button> : <span className="member-handoff-progress"><strong>Accepted</strong><small>You remain responsible until Jira confirms the transfer</small></span>}
             </li>)}
           </ul>
+          {handoffError && incomingHandoffs.length === 0 && outgoingHandoffs.length === 0 ? <p className="member-command-attention" role="alert">{handoffError}</p> : null}
         </article> : null}
         {stewardship ? <article className="keeper-panel member-stewardship-panel">
           <header><div><p className="eyebrow">My Stewardship</p><h4>Trusted support for {managedHives.length} Hive{managedHives.length === 1 ? "" : "s"}</h4></div><span className="keeper-role-badge steward">Steward</span></header>
@@ -307,7 +316,8 @@ export default function MemberControlRoom({ identity, operatorToken, onManage, o
         </article>
         <article className="keeper-panel">
           <header><div><p className="eyebrow">Shared work</p><h4>Owned by this Hive</h4></div><small>Reservations and confirmed homes only</small></header>
-          {localClaims.length ? <ul className="keeper-work-list member-claim-list" aria-label="Member shared work ownership">{localClaims.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_name}</small></span><span><strong>{claim.state === "confirmed" ? "Owned" : "Reserved"}</strong><small>{claim.home_operator_display_name}</small></span>{claim.state === "confirmed" ? <ClaimHandoffControl claim={claim} existing={activeHandoffByClaim.get(claim.id)} targets={snapshot.handoffTargets} busy={Boolean(actingHandoff)} onOffer={async (target, reason) => { setActingHandoff(claim.id); try { await offerApiaryClaimHandoff(operatorToken, claim.id, target, reason); await refresh(); } finally { setActingHandoff(undefined); } }} /> : null}</li>)}</ul> : <p className="keeper-empty">This Hive does not currently own shared Apiary work.</p>}
+          {localClaims.length ? <ul className="keeper-work-list member-claim-list" aria-label="Member shared work ownership">{localClaims.map((claim) => <li key={claim.id}><span><strong>{claim.issue_key}</strong><small>{claim.project_name}</small></span><span><strong>{claim.state === "confirmed" ? "Owned" : "Reserved"}</strong><small>{claim.home_operator_display_name}</small></span>{claim.state === "confirmed" ? <ClaimHandoffControl claim={claim} existing={activeHandoffByClaim.get(claim.id)} targets={snapshot.handoffTargets} busy={Boolean(actingHandoff)} onOffer={async (target, reason) => { setActingHandoff(claim.id); setHandoffError(undefined); try { await offerApiaryClaimHandoff(operatorToken, claim.id, target, reason); await refresh(); } catch { setHandoffError("This handoff offer could not be sent. This Hive still owns the Jira work."); } finally { setActingHandoff(undefined); } }} /> : null}</li>)}</ul> : <p className="keeper-empty">This Hive does not currently own shared Apiary work.</p>}
+          {handoffError ? <p className="member-command-attention" role="alert">{handoffError}</p> : null}
         </article>
       </div>
     </section>
