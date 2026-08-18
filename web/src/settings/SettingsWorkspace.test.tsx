@@ -389,6 +389,35 @@ test("routes an existing Queen decision to Needs you instead of repeating the re
   expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/orchestration/queen-automation/run"))).toBe(false);
 });
 
+test("does not label an unreachable worker engine as current", async () => {
+  let hostAvailable = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("terminal-host")) {
+      if (!hostAvailable) return new Response("host unavailable", { status: 502 });
+      return ok({ type: "host_status", status: { protocol_version: 7, host_version: "0.1.0", draining: false, running_sessions: 1, retained_sessions: 1 } });
+    }
+    if (url.endsWith("/orchestration/queen-automation")) return ok(queenAutomation());
+    if (url.endsWith("/orchestration/coordinator")) return ok({ completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0, stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0, last_action_at: null, automatic_start_admission: "available", automatic_start_batch_limit: 1 });
+    if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("integrations/email/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("runtime/development")) return ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false });
+    if (url.includes("runtime/resources")) return ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 1, critical_bytes: 2 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: null, pressure: "unavailable" } });
+    if (url.includes("bindings") || url.includes("feedback/reports")) return ok([]);
+    return ok({ type: "history_diagnostics", diagnostics: null });
+  }));
+
+  render(<SettingsWorkspace {...minimalProps()} />);
+
+  const engine = await screen.findByLabelText("Worker engine status");
+  expect(engine).toHaveTextContent("Unavailable");
+  expect(engine).toHaveTextContent("No restart or update has been attempted.");
+  expect(engine).not.toHaveTextContent("compatible with this App/API release");
+  hostAvailable = true;
+  fireEvent.click(screen.getByRole("button", { name: "Retry worker engine status" }));
+  await waitFor(() => expect(engine).toHaveTextContent("Current · 1 active"));
+});
+
 function minimalProps() {
   return {
     busy: false, colorTheme: "light" as const, feedbackRevision: 0, liveFeedState: "connected" as const, operatorToken: "secret-token",

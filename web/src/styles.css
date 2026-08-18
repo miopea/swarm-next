@@ -1730,9 +1730,13 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .runtime-subsystem-card > button { justify-self: start; margin-top: auto; }
 .runtime-subsystem-restart { border-color: color-mix(in srgb, var(--danger) 48%, var(--line)); background: color-mix(in srgb, var(--bad-soft) 40%, var(--panel)); }
 .runtime-subsystem-safe, .runtime-subsystem-current { border-color: color-mix(in srgb, var(--good) 40%, var(--line)); background: color-mix(in srgb, var(--good-soft) 34%, var(--panel)); }
+.runtime-subsystem-unavailable { border-color: color-mix(in srgb, var(--danger) 42%, var(--line)); background: color-mix(in srgb, var(--bad-soft) 28%, var(--panel)); }
+.runtime-subsystem-checking { border-color: var(--line); background: var(--panel); }
 .runtime-status-badge { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; font-size: .66rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
 .runtime-status-badge.restart { color: var(--danger); background: var(--bad-soft); }
 .runtime-status-badge.safe, .runtime-status-badge.current { color: var(--good); background: var(--good-soft); }
+.runtime-status-badge.unavailable { color: var(--danger); background: var(--bad-soft); }
+.runtime-status-badge.checking { color: var(--muted); background: var(--panel-soft); }
 .runtime-update-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
 .runtime-impact-card { display: grid; align-content: start; gap: .35rem; padding: .8rem; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
 .runtime-impact-card strong { font-size: .88rem; }

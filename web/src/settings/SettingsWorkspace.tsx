@@ -63,6 +63,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
+  const [terminalHostAttempt, setTerminalHostAttempt] = useState(0);
   const developmentRuntime = useDevelopmentRuntime(operatorToken, health?.version);
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
@@ -127,7 +128,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
       .then((status) => { if (!cancelled) { setTerminalHostStatus(status); setTerminalHostLoaded(true); } })
       .catch(() => { if (!cancelled) { setTerminalHostStatus(undefined); setTerminalHostLoaded(true); } });
     return () => { cancelled = true; };
-  }, [operatorToken, providers, workerEngineProgress]);
+  }, [operatorToken, providers, terminalHostAttempt, workerEngineProgress]);
   useEffect(() => {
     let cancelled = false;
     void fetchJiraReadiness(operatorToken)
@@ -163,6 +164,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
     downloadBlob(blob, `swarm-next-hive-${new Date().toISOString().slice(0, 10)}.sqlite3`);
   }
   const workerEngineNeedsUpdate = workerEngineUpdateRequired(health, terminalHostStatus);
+  const workerEngineState = !terminalHostLoaded ? "checking" : !terminalHostStatus ? "unavailable" : workerEngineNeedsUpdate ? "restart" : "current";
   const activeWorkerCount = terminalHostStatus?.running_sessions ?? 0;
   const hasPendingQueenDecision = pendingQueenDecisionCount > 0;
   const queenReviewLabel = hasPendingQueenDecision ? "Queen needs you" : queenAutomationStateLabel(queenAutomation);
@@ -403,10 +405,14 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
           <div><dt>Retained sessions</dt><dd>{sessions.length}</dd></div>
         </dl>
         <div className="runtime-subsystem-grid">
-          <article className={`runtime-subsystem-card ${workerEngineNeedsUpdate ? "runtime-subsystem-restart" : "runtime-subsystem-current"}`} aria-label="Worker engine status">
-            <header><div><span className="runtime-component-name">Worker engine</span><strong>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</strong></div><span className={`runtime-status-badge ${workerEngineNeedsUpdate ? "restart" : "current"}`}>{workerEngineNeedsUpdate ? "Restart required" : "Current"}</span></header>
+          <article className={`runtime-subsystem-card runtime-subsystem-${workerEngineState}`} aria-label="Worker engine status">
+            <header><div><span className="runtime-component-name">Worker engine</span><strong>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</strong></div><span className={`runtime-status-badge ${workerEngineState}`}>{workerEngineState === "restart" ? "Restart required" : workerEngineState === "unavailable" ? "Unavailable" : workerEngineState === "checking" ? "Checking" : "Current"}</span></header>
             <p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(terminalHostStatus?.host_version)}</p>
-            {workerEngineNeedsUpdate ? <>
+            {workerEngineState === "checking" ? <p>Checking the separate worker engine without interrupting any terminal.</p> : workerEngineState === "unavailable" ? <>
+              <p>Swarm could not confirm the worker engine’s health or installed version. Existing worker processes may still be running.</p>
+              <small>No restart or update has been attempted.</small>
+              <button className="secondary-button" type="button" onClick={() => setTerminalHostAttempt((attempt) => attempt + 1)}>Retry worker engine status</button>
+            </> : workerEngineNeedsUpdate ? <>
               <p>Updating this layer briefly stops {activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"}, then revives Queen and configured always-active workers from their saved conversations.</p>
               <small><strong>Active commands can be interrupted.</strong> Wait for workers to rest when practical. Identities, provider conversations, tasks, ownership, and terminal history remain durable.</small>
             {workerEngineProgress ? (
