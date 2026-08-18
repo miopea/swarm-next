@@ -38,7 +38,10 @@ This is the working product audit for the first real developer week. It records 
 - The normal Legacy database was found read-only, previewed, and cancelled. Release `0.1.0-ca4d9ff2ff0e` showed 16 actionable tasks initially, with 33 malformed records, 62 records staying in Legacy, and 1,708 closed tasks behind separate disclosures. No import was committed.
 - Runtime diagnostics were rechecked on `0.1.0-7d9538977d9c`: one loaded provider tree at 474.6 MiB remained **Normal**, machine memory remained separately visible, and the terminal-host service stayed at 43.9 MiB.
 - Release `0.1.0-90c3ee6a20cc` kept the existing terminal-host process and Queen session attached, rendered concise App/API and worker-engine identities, and filtered the 31-worker Crew roster at 412 × 915 without horizontal overflow or hidden reorder actions.
+- The same release restored the authenticated workspace in a fresh browser tab without another login, preserved the Tasks workspace across a full reload, and reattached the loaded Queen terminal. Installed-PWA process closure remains a separate real-device proof.
+- Since-midnight service evidence contained zero warning-level API or terminal-host entries; both user services were active and `/health` reported the deployed App/API and worker-engine build identities.
 - A merged Outlook task opened directly into its single review/edit dialog. Both images appeared, both attachment records were present, and guarded removal stayed visible without changing the task.
+- The phone-sized task board filtered cleanly across Jira, email, and Swarm-created sources, showed a useful zero-result state, and kept the 17-message Inbox chooser bounded and readable.
 - A long Queen terminal moved into scrollback with Shift+PageUp, exposed **Jump to latest**, and returned to the live prompt when selected.
 - Quick navigation opened from its toolbar action and Alt+K, filtered a 31-worker roster down to the requested Codex workers, and kept the result list scrollable at phone size.
 - **Generate with Claude** showed bounded progress, completed in roughly 30 seconds, and returned an editable routing draft with a clear save requirement. The draft was cancelled so the live worker profile was not changed.
@@ -55,6 +58,7 @@ This is the working product audit for the first real developer week. It records 
 - Task removal is available for local work with stronger guards for Jira-backed work.
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
 - The full Rust workspace is green: 455 unit/integration tests plus all crate documentation tests passed on the release checkout.
+- Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
 
 ## Release re-proofs required
 
