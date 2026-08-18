@@ -25,6 +25,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
   onRemove: () => Promise<void>;
 }) {
   const titleId = useId();
+  const formId = useId();
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
   const [sourceDescription, setSourceDescription] = useState("");
@@ -131,7 +132,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
           {jiraLink && <span><small>Project</small><strong>{jiraLink.project_name}</strong></span>}
           {jiraLink && <span><small>Jira assignee</small><strong>{jiraLink.jira_assignee_name || "Unassigned"}</strong></span>}
         </div>
-        <form className="task-detail-content task-detail-editor" onSubmit={(event) => void submit(event)}>
+        <form id={formId} className="task-detail-content task-detail-editor" onSubmit={(event) => void submit(event)}>
           <section>
             <label htmlFor={`detail-title-${task.id}`}>Title</label>
             <input id={`detail-title-${task.id}`} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} />
@@ -162,21 +163,23 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
             </section>
           )}
           {saveFailed && <p className="task-detail-save-error" role="alert">Changes were not saved. Your edits are still here—try again when the connection is ready.</p>}
-          <div className="task-detail-editor-actions"><button disabled={busy || !title.trim()}>{busy ? "Saving…" : "Save changes"}</button></div>
         </form>
         <footer>
-          {jiraLink?.issue_url && <a className="button-link" href={jiraLink.issue_url} target="_blank" rel="noreferrer">Open in Jira</a>}
-          {!removeConfirm ? (
-            <button type="button" className="danger-text" disabled={busy || task.state === "active" || task.state === "review"} onClick={() => setRemoveConfirm(true)}>Remove from Hive</button>
-          ) : (
-            <div className="task-remove-confirm" role="alertdialog" aria-label="Confirm task removal">
-              <p><strong>{jiraLink ? `Remove ${jiraLink.issue_key} from Swarm?` : "Remove this task from the Hive?"}</strong><span>{jiraLink ? "The Jira issue will not be deleted or changed. Its source link and Swarm audit history stay retained." : "The task leaves the board, but its source, attachments, and audit history stay retained."}</span></p>
-              <button type="button" className="danger-button" disabled={busy} onClick={() => void remove()}>{busy ? "Removing…" : "Remove from Hive"}</button>
-              <button type="button" disabled={busy} onClick={() => setRemoveConfirm(false)}>Keep task</button>
-            </div>
-          )}
-          {(task.state === "active" || task.state === "review") && <small>Finish or move this work out of progress before removing it.</small>}
-          {removeFailed && <small className="task-detail-save-error" role="alert">The task was not removed. Nothing changed—try again when the connection is ready.</small>}
+          <div className="task-detail-footer-secondary">
+            {jiraLink?.issue_url && <a className="button-link" href={jiraLink.issue_url} target="_blank" rel="noreferrer">Open in Jira</a>}
+            {!removeConfirm ? (
+              <button type="button" className="danger-text" disabled={busy || task.state === "active" || task.state === "review"} onClick={() => setRemoveConfirm(true)}>Remove from Hive</button>
+            ) : (
+              <div className="task-remove-confirm" role="alertdialog" aria-label="Confirm task removal">
+                <p><strong>{jiraLink ? `Remove ${jiraLink.issue_key} from Swarm?` : "Remove this task from the Hive?"}</strong><span>{jiraLink ? "The Jira issue will not be deleted or changed. Its source link and Swarm audit history stay retained." : "The task leaves the board, but its source, attachments, and audit history stay retained."}</span></p>
+                <button type="button" className="danger-button" disabled={busy} onClick={() => void remove()}>{busy ? "Removing…" : "Remove from Hive"}</button>
+                <button type="button" disabled={busy} onClick={() => setRemoveConfirm(false)}>Keep task</button>
+              </div>
+            )}
+            {(task.state === "active" || task.state === "review") && <small>Finish or move this work out of progress before removing it.</small>}
+            {removeFailed && <small className="task-detail-save-error" role="alert">The task was not removed. Nothing changed—try again when the connection is ready.</small>}
+          </div>
+          <button form={formId} disabled={busy || !title.trim()}>{busy ? "Saving…" : "Save changes"}</button>
         </footer>
       </section>
     </div>

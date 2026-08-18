@@ -361,7 +361,8 @@ test("opens an editable task detail with Jira description and image on double cl
   const image = await within(dialog).findByRole("img", { name: "evidence.png" });
   expect(image).toHaveAttribute("src", "blob:jira-image");
   expect(within(dialog).getByRole("link", { name: "Open in Jira" })).toHaveAttribute("href", jiraTaskLink.issue_url);
-  expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeInTheDocument();
+  const save = within(dialog).getByRole("button", { name: "Save changes" });
+  expect(save.closest("footer")).toBe(dialog.querySelector("footer"));
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:jira-image"));
 });
