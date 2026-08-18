@@ -34,6 +34,8 @@ workers and Scout remain the implementation actors; Queen coordinates them.
 Delivery and completion are durable:
 
 - operator engagement or Steward takeover defers delivery;
+- the conductor waits for the injected marker to stop redrawing, then requires
+  provider output or a fresh resting prompt to prove that Enter was consumed;
 - a crash before confirmed delivery becomes **uncertain** and is never silently
   replayed;
 - a running marker expires to **uncertain** after one hour rather than assuming

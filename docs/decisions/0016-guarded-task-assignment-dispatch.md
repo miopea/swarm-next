@@ -37,14 +37,15 @@ sleeping, her next session binding creates the first dispatch atomically.
 - The one-line terminal payload contains task identity, title, priority,
   workspace, bounded description, and an MCP retrieval hint. Control characters
   are replaced before the single terminal submission. The PTY transport writes
-  the prompt, follows at most 64 actual host-output advances until its bounded
-  task marker appears in canonical output, and only then sends Enter. A stalled
-  or unverified render becomes Uncertain. Provider line editors therefore
-  cannot render a brief without accepting it while the ledger reports
-  Delivered.
-- A terminal-host acknowledgement marks the brief Delivered. A definitive host
-  rejection retries at most three times. Unexpected or transport outcomes are
-  Uncertain immediately.
+  the prompt, waits up to ten seconds for its bounded task marker to remain at
+  the same canonical output sequence for 300 milliseconds, and only then sends
+  Enter. It observes provider output for up to ten seconds after each of at
+  most three Enter attempts. Active output, an operator question, or a new
+  resting prompt after the marker proves acceptance. A stalled, still-editing,
+  or otherwise unverified submission becomes Uncertain.
+- A terminal-host write acknowledgement is necessary but not sufficient for
+  Delivered. A definitive host rejection retries at most three times;
+  unexpected or transport outcomes are Uncertain immediately.
 - API startup converts interrupted Dispatching rows to Uncertain and never
   automatically replays them. `swarm_list_tasks` remains the recovery source.
 - HTTP assignment and the MCP request wrapper attempt delivery immediately.

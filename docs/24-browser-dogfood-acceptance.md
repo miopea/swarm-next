@@ -1526,3 +1526,15 @@ the independently updated terminal host through the API to worker settings:
   overflow and the browser emitted no warnings or errors. No Jira, email, task,
   or Apiary mutation occurred; the viewport override was reset and the proof
   tab was closed.
+- Ring 1 automation evidence showed a Queen review rendered as bracketed pasted
+  text but remained in Claude's input until the operator pressed Enter. The
+  terminal host had acknowledged the write, so delivery was being overstated.
+  The guarded submission path now resets its 300-millisecond stability window
+  on every canonical output advance, sends Enter only after the marker stops
+  redrawing, and makes at most three bounded attempts. It marks delivery only
+  after active provider output, an operator question, or a fresh resting prompt
+  appears after the marker. Real-PTY regressions cover long redraws, a provider
+  question that defers delivery, and a Queen automation handoff that consumes
+  the prompt. All 157 API tests and warnings-denied production-code Clippy pass;
+  the current Rust 1.97 incremental compiler cache required a package-local
+  clean, after which non-incremental verification was stable.

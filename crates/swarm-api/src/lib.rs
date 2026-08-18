@@ -1358,6 +1358,41 @@ enum TerminalSubmission {
     Uncertain,
 }
 
+enum SubmissionObservation {
+    Accepted,
+    RetryAfter(u64),
+    Uncertain,
+}
+
+enum MarkerObservation {
+    Rendered(u64),
+    Rejected { code: String, message: String },
+    Uncertain,
+}
+
+#[derive(Debug, Default)]
+struct SequenceStability {
+    sequence: Option<u64>,
+    unchanged_since: Option<Instant>,
+}
+
+impl SequenceStability {
+    fn observe(&mut self, sequence: u64, now: Instant, required: Duration) -> bool {
+        if self.sequence != Some(sequence) {
+            self.sequence = Some(sequence);
+            self.unchanged_since = Some(now);
+            return false;
+        }
+        self.unchanged_since
+            .is_some_and(|unchanged_since| now.duration_since(unchanged_since) >= required)
+    }
+
+    fn reset(&mut self) {
+        self.sequence = None;
+        self.unchanged_since = None;
+    }
+}
+
 /// Submits a coordination prompt after observing it in host-owned output.
 ///
 /// Claude's interactive input can render a carriage return that arrives in the
@@ -1438,59 +1473,54 @@ async fn submit_terminal_message(
     // Claude can redraw a long paste dozens of times before the bounded marker
     // reaches the canonical screen. Observe elapsed time rather than frame
     // count, then require a short stable render window before sending Enter.
-    let render_deadline = Instant::now() + Duration::from_secs(10);
-    let mut rendered_since = None;
-    let rendered_sequence = loop {
-        sleep(Duration::from_millis(50)).await;
-        let snapshot = match client
-            .request(&HostRequest::Read {
-                session_id,
-                after_sequence: None,
-            })
-            .await?
-        {
-            HostResponse::Output {
-                resume: swarm_terminal::Resume::Snapshot { snapshot },
-                running: true,
-                ..
-            } => snapshot,
-            HostResponse::Error { code, message } => {
+    let rendered_sequence =
+        match observe_stable_marker(client, session_id, marker, baseline).await? {
+            MarkerObservation::Rendered(sequence) => sequence,
+            MarkerObservation::Rejected { code, message } => {
                 return Ok(TerminalSubmission::Rejected { code, message });
             }
-            _ => return Ok(TerminalSubmission::Uncertain),
+            MarkerObservation::Uncertain => return Ok(TerminalSubmission::Uncertain),
         };
-        if snapshot.sequence > baseline
-            && snapshot
-                .bytes
-                .windows(marker.len())
-                .any(|part| part == marker)
-        {
-            let first_seen = rendered_since.get_or_insert_with(Instant::now);
-            if first_seen.elapsed() >= Duration::from_millis(300) {
-                break snapshot.sequence;
-            }
-        } else {
-            rendered_since = None;
-        }
-        if Instant::now() >= render_deadline {
+    // Claude may acknowledge Enter while it is still finalizing a long
+    // bracketed-paste placeholder. Wait for an actually unchanged resting
+    // render before retrying; a host acknowledgement alone is not proof that
+    // the provider accepted the prompt. Three bounded Enter attempts cover the
+    // observed placeholder behavior without creating an unowned retry loop.
+    let mut observed_sequence = rendered_sequence;
+    for attempt in 0..3 {
+        let submit_response = client
+            .request(&HostRequest::Write {
+                session_id,
+                bytes: vec![b'\r'],
+                provenance: TerminalWriteProvenance::coordination(),
+            })
+            .await;
+        if !matches!(submit_response, Ok(HostResponse::Acknowledged)) {
             return Ok(TerminalSubmission::Uncertain);
         }
-    };
-    let submit_response = client
-        .request(&HostRequest::Write {
-            session_id,
-            bytes: vec![b'\r'],
-            provenance: TerminalWriteProvenance::coordination(),
-        })
-        .await;
-    if !matches!(submit_response, Ok(HostResponse::Acknowledged)) {
-        return Ok(TerminalSubmission::Uncertain);
-    }
 
-    // Claude may acknowledge that first Enter while still finalizing its
-    // bracketed-paste placeholder. If the exact resting prompt remains, one
-    // bounded second submit prevents text from being stranded in Queen's input.
-    let acceptance_deadline = Instant::now() + Duration::from_millis(750);
+        match observe_terminal_submission(client, session_id, provider, marker, observed_sequence)
+            .await?
+        {
+            SubmissionObservation::Accepted => return Ok(TerminalSubmission::Acknowledged),
+            SubmissionObservation::RetryAfter(sequence) => observed_sequence = sequence,
+            SubmissionObservation::Uncertain => return Ok(TerminalSubmission::Uncertain),
+        }
+        if attempt == 2 {
+            return Ok(TerminalSubmission::Uncertain);
+        }
+    }
+    Ok(TerminalSubmission::Uncertain)
+}
+
+async fn observe_stable_marker(
+    client: &HostClient,
+    session_id: WorkerSessionId,
+    marker: &[u8],
+    baseline: u64,
+) -> Result<MarkerObservation, swarm_terminal::IpcError> {
+    let render_deadline = Instant::now() + Duration::from_secs(10);
+    let mut rendered_stability = SequenceStability::default();
     loop {
         sleep(Duration::from_millis(50)).await;
         let snapshot = match client
@@ -1505,31 +1535,85 @@ async fn submit_terminal_message(
                 running: true,
                 ..
             } => snapshot,
-            _ => return Ok(TerminalSubmission::Uncertain),
+            HostResponse::Error { code, message } => {
+                return Ok(MarkerObservation::Rejected { code, message });
+            }
+            _ => return Ok(MarkerObservation::Uncertain),
+        };
+        let marker_is_visible = snapshot.sequence > baseline
+            && snapshot
+                .bytes
+                .windows(marker.len())
+                .any(|part| part == marker);
+        if marker_is_visible
+            && rendered_stability.observe(
+                snapshot.sequence,
+                Instant::now(),
+                Duration::from_millis(300),
+            )
+        {
+            return Ok(MarkerObservation::Rendered(snapshot.sequence));
+        }
+        if !marker_is_visible {
+            rendered_stability.reset();
+        }
+        if Instant::now() >= render_deadline {
+            return Ok(MarkerObservation::Uncertain);
+        }
+    }
+}
+
+async fn observe_terminal_submission(
+    client: &HostClient,
+    session_id: WorkerSessionId,
+    provider: ProviderKind,
+    marker: &[u8],
+    observed_sequence: u64,
+) -> Result<SubmissionObservation, swarm_terminal::IpcError> {
+    let acceptance_deadline = Instant::now() + Duration::from_secs(10);
+    let mut resting_stability = SequenceStability::default();
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        let HostResponse::Output {
+            resume: swarm_terminal::Resume::Snapshot { snapshot },
+            running: true,
+            ..
+        } = client
+            .request(&HostRequest::Read {
+                session_id,
+                after_sequence: None,
+            })
+            .await?
+        else {
+            return Ok(SubmissionObservation::Uncertain);
         };
         match provider_activity::classify_observed_activity(provider, &snapshot) {
             ProviderActivity::Active | ProviderActivity::AwaitingOperator => {
-                return Ok(TerminalSubmission::Acknowledged);
+                return Ok(SubmissionObservation::Accepted);
             }
-            ProviderActivity::Unknown if snapshot.sequence > rendered_sequence => {
-                return Ok(TerminalSubmission::Acknowledged);
+            ProviderActivity::Unknown if snapshot.sequence > observed_sequence => {
+                return Ok(SubmissionObservation::Accepted);
             }
-            ProviderActivity::Resting | ProviderActivity::Unknown => {}
+            ProviderActivity::Resting
+                if snapshot.sequence > observed_sequence
+                    && resting_prompt_follows_marker(&snapshot.bytes, marker) =>
+            {
+                return Ok(SubmissionObservation::Accepted);
+            }
+            ProviderActivity::Resting => {
+                if resting_stability.observe(
+                    snapshot.sequence,
+                    Instant::now(),
+                    Duration::from_millis(300),
+                ) {
+                    return Ok(SubmissionObservation::RetryAfter(snapshot.sequence));
+                }
+            }
+            ProviderActivity::Unknown => resting_stability.reset(),
         }
         if Instant::now() >= acceptance_deadline {
-            break;
+            return Ok(SubmissionObservation::Uncertain);
         }
-    }
-    match client
-        .request(&HostRequest::Write {
-            session_id,
-            bytes: vec![b'\r'],
-            provenance: TerminalWriteProvenance::coordination(),
-        })
-        .await
-    {
-        Ok(HostResponse::Acknowledged) => Ok(TerminalSubmission::Acknowledged),
-        Ok(_) | Err(_) => Ok(TerminalSubmission::Uncertain),
     }
 }
 
@@ -1540,6 +1624,24 @@ fn resume_sequence(resume: &swarm_terminal::Resume) -> u64 {
             frames.last().map_or(0, |frame| frame.sequence)
         }
     }
+}
+
+fn resting_prompt_follows_marker(snapshot: &[u8], marker: &[u8]) -> bool {
+    let Some(marker_position) = snapshot
+        .windows(marker.len())
+        .rposition(|part| part == marker)
+    else {
+        return false;
+    };
+    ["❯".as_bytes(), "›".as_bytes()]
+        .into_iter()
+        .filter_map(|prompt| {
+            snapshot
+                .windows(prompt.len())
+                .rposition(|part| part == prompt)
+        })
+        .max()
+        .is_some_and(|prompt_position| prompt_position > marker_position)
 }
 
 fn delivery_marker(id: impl std::fmt::Display) -> Vec<u8> {
@@ -7207,6 +7309,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn terminal_render_stability_resets_on_every_output_advance() {
+        let started = Instant::now();
+        let required = Duration::from_millis(300);
+        let mut stability = SequenceStability::default();
+
+        assert!(!stability.observe(10, started, required));
+        assert!(!stability.observe(11, started + Duration::from_millis(500), required));
+        assert!(!stability.observe(11, started + Duration::from_millis(799), required));
+        assert!(stability.observe(11, started + Duration::from_millis(800), required));
+
+        assert!(!stability.observe(12, started + Duration::from_secs(2), required));
+        stability.reset();
+        assert!(!stability.observe(12, started + Duration::from_secs(3), required));
+    }
+
+    #[test]
+    fn a_new_resting_prompt_proves_the_submitted_marker_left_input() {
+        let marker = b"01ab23cd";
+        assert!(resting_prompt_follows_marker(
+            b"manual mode\n\xe2\x9d\xaf [Swarm automation 01ab23cd]\nworked\n\xe2\x9d\xaf ",
+            marker,
+        ));
+        assert!(!resting_prompt_follows_marker(
+            b"manual mode\n\xe2\x9d\xaf [Swarm automation 01ab23cd]",
+            marker,
+        ));
+        assert!(!resting_prompt_follows_marker(
+            b"manual mode\n\xe2\x9d\xaf [Pasted text #1]",
+            marker,
+        ));
+    }
+
+    #[test]
     fn decision_delivery_is_one_sanitized_terminal_submission() {
         let delivery = DecisionDispatch {
             decision_id: DecisionRequestId::new(),
@@ -12131,7 +12266,7 @@ mod tests {
                     "  3. Cancel\nEsc to cancel\n'; ",
                     "IFS= read -r answer; ",
                     "printf '\\033[2J\\033[H❯ \nmanual mode on · ? for shortcuts · ← for agents\n'; ",
-                    "while IFS= read -r line; do printf 'received:%s\\n' \"$line\"; done",
+                    "while IFS= read -r line; do printf 'received:%s\\n❯ \\nmanual mode on · ? for shortcuts · ← for agents\\n' \"$line\"; done",
                 )
                 .into(),
             ],
@@ -12436,7 +12571,7 @@ mod tests {
             executable: PathBuf::from("/bin/sh"),
             arguments: vec![
                 "-lc".into(),
-                "printf 'manual mode on · ? for shortcuts · ← for agents\\n❯ \\n'; while IFS= read -r value; do printf 'received:%s\\n' \"$value\"; done".into(),
+                "printf 'manual mode on · ? for shortcuts · ← for agents\\n❯ \\n'; while IFS= read -r value; do printf 'received:%s\\n❯ \\nmanual mode on · ? for shortcuts · ← for agents\\n' \"$value\"; done".into(),
             ],
             working_directory: workspace.clone(),
         };
