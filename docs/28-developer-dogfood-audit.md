@@ -43,6 +43,7 @@ This is the working product audit for the first real developer week. It records 
 19. **Settings keeps its selected section across responsive layout changes.** Crossing the phone breakpoint now restores the selected anchor after layout settles instead of leaving the Queen tab selected while an old pixel offset shows Apiary content.
 20. **Task edits keep their primary action reachable.** Attachment images may make the detail view long, but **Save changes** now stays in the fixed dialog footer instead of scrolling away. The guarded removal entry point is visually secondary and dangerous instead of competing with Save as another amber primary action.
 21. **Opening a terminal no longer downloads every management workspace first.** Tasks, Settings, and Keeper/Member Apiary views now load as bounded route chunks with an explicit in-app opening state. The shared initial JavaScript fell from roughly 522 kB to 304 kB before gzip, while each deferred surface remains independently testable and cached after first use.
+22. **Leaving a terminal replaces its accelerated paint boundary.** Chromium could detach xterm in the accessibility tree while continuing to paint its old GPU layer over Tasks or Settings. Top-level workspace changes now replace the workspace container atomically, so the next surface is not asked to reuse xterm's compositor boundary.
 
 ## Live deployed proof — 2026-08-18
 

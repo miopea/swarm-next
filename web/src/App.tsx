@@ -955,7 +955,9 @@ export function App() {
         <div className="rail-resize-handle" role="separator" aria-label="Resize worker area" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={480} aria-valuenow={workerRail.width} tabIndex={0} onPointerDown={workerRail.start} onPointerMove={workerRail.move} onPointerUp={workerRail.finish} onPointerCancel={workerRail.finish} onKeyDown={workerRail.resizeWithKeyboard} />
       </aside>
 
-      <section className="workspace">
+      {/* Replacing the paint boundary on a workspace change prevents Chromium
+          from retaining xterm's detached accelerated layer over the next view. */}
+      <section className="workspace" key={surface}>
         <header className="workspace-header">
           <div>
             <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "tasks" ? "Plan and dispatch" : surface === "apiary" ? "Organization without noise" : surface === "settings" ? "Preferences and diagnostics" : activeTask?.title ?? "Persistent terminal"}</p>
