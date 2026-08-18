@@ -14,8 +14,9 @@ import {
 import { useModalFocus } from "../shared/useModalFocus";
 
 type LoadedImage = JiraTaskAttachment & { url: string };
+const noEmailSources: EmailTaskSource[] = [];
 
-export default function TaskDetailDialog({ task, jiraLink, emailSources = [], operatorToken, busy, onClose, onSave, onRemove }: {
+export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmailSources, operatorToken, busy, onClose, onSave, onRemove }: {
   task: Task;
   jiraLink?: JiraTaskLink;
   emailSources?: EmailTaskSource[];
@@ -38,9 +39,17 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
   const [saveFailed, setSaveFailed] = useState(false);
   const [removeConfirm, setRemoveConfirm] = useState(false);
   const [removeFailed, setRemoveFailed] = useState(false);
+  const [closeConfirm, setCloseConfirm] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const titleInput = useRef<HTMLInputElement>(null);
-  const dialog = useModalFocus<HTMLElement>(onClose, true, titleInput);
+  const dirty = title !== task.title || description !== task.description || priority !== task.priority;
+  function requestClose() {
+    if (removeConfirm) return setRemoveConfirm(false);
+    if (closeConfirm) return setCloseConfirm(false);
+    if (dirty) return setCloseConfirm(true);
+    onClose();
+  }
+  const dialog = useModalFocus<HTMLElement>(requestClose, true, titleInput);
 
   useEffect(() => {
     let active = true;
@@ -110,14 +119,14 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
   }
 
   return (
-    <div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
       <section ref={dialog} tabIndex={-1} className="task-detail-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header>
           <div>
             <span className="eyebrow">Task details</span>
             <h2 id={titleId}>Review and edit task</h2>
           </div>
-          <button type="button" onClick={onClose}>Close</button>
+          <button type="button" onClick={requestClose}>Close</button>
         </header>
         <div className="task-detail-summary" aria-label="Task summary">
           <span><small>Swarm status</small><strong>{task.state}</strong></span>
@@ -160,7 +169,11 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
           {saveFailed && <p className="task-detail-save-error" role="alert">Changes were not saved. Your edits are still here—try again when the connection is ready.</p>}
         </form>
         <footer>
-          <div className="task-detail-footer-secondary">
+          {closeConfirm ? <div className="task-close-confirm" role="alertdialog" aria-label="Unsaved task changes">
+            <p><strong>Discard unsaved changes?</strong><span>Your edits have not joined the task history.</span></p>
+            <button type="button" className="danger-button" onClick={onClose}>Discard changes</button>
+            <button type="button" onClick={() => setCloseConfirm(false)}>Keep editing</button>
+          </div> : <><div className="task-detail-footer-secondary">
             {jiraLink?.issue_url && <a className="button-link" href={jiraLink.issue_url} target="_blank" rel="noreferrer">Open in Jira</a>}
             {!removeConfirm ? (
               <button type="button" className="secondary-button danger-text" disabled={busy || task.state === "active" || task.state === "review"} onClick={() => setRemoveConfirm(true)}>Remove from Hive</button>
@@ -174,7 +187,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
             {(task.state === "active" || task.state === "review") && <small>Finish or move this work out of progress before removing it.</small>}
             {removeFailed && <small className="task-detail-save-error" role="alert">The task was not removed. Nothing changed—try again when the connection is ready.</small>}
           </div>
-          <button form={formId} disabled={busy || !title.trim()}>{busy ? "Saving…" : "Save changes"}</button>
+          <button form={formId} disabled={busy || !title.trim()}>{busy ? "Saving…" : "Save changes"}</button></>}
         </footer>
       </section>
     </div>
