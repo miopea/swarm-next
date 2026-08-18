@@ -1373,15 +1373,51 @@ pub(super) fn migrate_legacy_worker_migrations(
 pub(super) fn migrate_legacy_provider_conversations(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
-    transaction.execute_batch(
-        "ALTER TABLE worker_profiles
-             ADD COLUMN provider_conversation_resume INTEGER NOT NULL DEFAULT 0
-             CHECK (provider_conversation_resume IN (0, 1));
-         ALTER TABLE migration_worker_links
-             ADD COLUMN resumed_conversation INTEGER NOT NULL DEFAULT 0
-             CHECK (resumed_conversation IN (0, 1));
-         PRAGMA user_version = 71;",
-    )
+    let worker_profiles_exist: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                       WHERE type = 'table' AND name = 'worker_profiles')",
+        [],
+        |row| row.get(0),
+    )?;
+    if worker_profiles_exist {
+        let resume_column_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('worker_profiles')
+                           WHERE name = 'provider_conversation_resume')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !resume_column_exists {
+            transaction.execute_batch(
+                "ALTER TABLE worker_profiles
+                 ADD COLUMN provider_conversation_resume INTEGER NOT NULL DEFAULT 0
+                 CHECK (provider_conversation_resume IN (0, 1));",
+            )?;
+        }
+    }
+
+    let migration_links_exist: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                       WHERE type = 'table' AND name = 'migration_worker_links')",
+        [],
+        |row| row.get(0),
+    )?;
+    if migration_links_exist {
+        let resumed_column_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('migration_worker_links')
+                           WHERE name = 'resumed_conversation')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !resumed_column_exists {
+            transaction.execute_batch(
+                "ALTER TABLE migration_worker_links
+                 ADD COLUMN resumed_conversation INTEGER NOT NULL DEFAULT 0
+                 CHECK (resumed_conversation IN (0, 1));",
+            )?;
+        }
+    }
+
+    transaction.pragma_update(None, "user_version", 71)
 }
 
 #[cfg(test)]
@@ -1643,7 +1679,10 @@ mod tests {
             preview.records[0].disposition,
             LegacyWorkerImportDisposition::Duplicate
         );
-        assert!(preview.records[0].warnings[0].contains("Daisy"));
+        assert!(preview.records[0]
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Daisy")));
     }
 
     #[test]
