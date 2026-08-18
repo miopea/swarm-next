@@ -258,7 +258,8 @@ impl TaskStore {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         let mut receipts = Vec::<LegacyWorkerMigrationReceipt>::new();
-        for (batch_id, digest, installation_id, imported_at, worker_id, source_id, resumed) in rows {
+        for (batch_id, digest, installation_id, imported_at, worker_id, source_id, resumed) in rows
+        {
             if receipts
                 .last()
                 .is_none_or(|receipt| receipt.batch_id != batch_id)
@@ -1728,9 +1729,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(receipt.resumed_source_ids, ["daisy"]);
-        let imported = store.get_worker_profile(receipt.imported_worker_ids[0]).unwrap();
+        let imported = store
+            .get_worker_profile(receipt.imported_worker_ids[0])
+            .unwrap();
         assert_eq!(
-            imported.provider_conversation_id.map(|value| value.to_string()),
+            imported
+                .provider_conversation_id
+                .map(|value| value.to_string()),
             Some(conversation_id)
         );
         assert!(imported.has_session_history);

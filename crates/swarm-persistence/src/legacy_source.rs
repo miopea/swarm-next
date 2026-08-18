@@ -379,7 +379,9 @@ mod tests {
         let encoded = workspace.replace(['/', '.'], "-");
         std::fs::create_dir_all(claude_root.join(encoded)).unwrap();
         std::fs::write(
-            claude_root.join(workspace.replace(['/', '.'], "-")).join(format!("{claude_id}.jsonl")),
+            claude_root
+                .join(workspace.replace(['/', '.'], "-"))
+                .join(format!("{claude_id}.jsonl")),
             "private transcript content\n",
         )
         .unwrap();
