@@ -617,6 +617,22 @@ test("shows Queen handoff state and its durable history note", async () => {
   await waitFor(() => expect(screen.getByText("Android voice and shortcuts verified.")).toBeInTheDocument());
 });
 
+test("keeps an unsent Jira update when discussion is hidden and reopened", async () => {
+  renderBoard({
+    jiraTaskLinks: [jiraTaskLink],
+    onFetchJiraComments: vi.fn().mockResolvedValue([]),
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "Discussion" }));
+  const update = await screen.findByLabelText("Add an update");
+  fireEvent.change(update, { target: { value: "Waiting for the reporter to confirm." } });
+  fireEvent.click(screen.getByRole("button", { name: "Hide discussion" }));
+  expect(screen.queryByRole("textbox", { name: "Add an update" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Discussion" }));
+  expect(screen.getByRole("textbox", { name: "Add an update" })).toHaveValue("Waiting for the reporter to confirm.");
+});
+
 function keeperIdentity(): HiveIdentity {
   return {
     operator: { id: "operator-1", display_name: "Bea" },

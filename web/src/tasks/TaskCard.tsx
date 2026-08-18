@@ -57,7 +57,9 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
   const [historyLoading, setHistoryLoading] = useState(false);
   const [menuPoint, setMenuPoint] = useState<MenuPoint>();
   const [discussionOpen, setDiscussionOpen] = useState(false);
+  const [discussionMounted, setDiscussionMounted] = useState(false);
   const [emailDetailsOpen, setEmailDetailsOpen] = useState(false);
+  const [emailDetailsMounted, setEmailDetailsMounted] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   function runMenuAction(action: () => void) {
@@ -87,7 +89,13 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
   }
 
   function toggleDiscussion() {
+    setDiscussionMounted(true);
     setDiscussionOpen((current) => !current);
+  }
+
+  function toggleEmailDetails() {
+    setEmailDetailsMounted(true);
+    setEmailDetailsOpen((current) => !current);
   }
 
   function openDetailsFromEvent(target: EventTarget | null) {
@@ -121,7 +129,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
       <div className="task-actions">
         <button className="text-button" disabled={busy} onClick={() => setDetailsOpen(true)}>Edit</button>
         {jiraLink && <button className="text-button" disabled={busy} onClick={toggleDiscussion}>{discussionOpen ? "Hide discussion" : "Discussion"}</button>}
-        {emailSources.length > 0 && <button className="text-button" disabled={busy} onClick={() => setEmailDetailsOpen((current) => !current)}>{emailDetailsOpen ? "Hide email" : task.state === "completed" ? "Close email loop" : emailSources.length === 1 ? "Email source" : `${emailSources.length} email sources`}</button>}
+        {emailSources.length > 0 && <button className="text-button" disabled={busy} onClick={toggleEmailDetails}>{emailDetailsOpen ? "Hide email" : task.state === "completed" ? "Close email loop" : emailSources.length === 1 ? "Email source" : `${emailSources.length} email sources`}</button>}
         <button className="task-menu-trigger" aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={Boolean(menuPoint)} onClick={(event) => {
           const point = pointFromElement(event.currentTarget);
           setMenuPoint((current) => current ? undefined : point);
@@ -140,8 +148,8 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
         </CursorMenu>
       )}
       {historyOpen && <TaskActivityPanel activity={activity} loading={historyLoading} failed={historyError} onRetry={() => void loadActivity()} />}
-      {discussionOpen && jiraLink && <JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} />}
-      {emailDetailsOpen && emailSources.length > 0 && <EmailResolutionPanel operatorToken={operatorToken} task={task} sources={emailSources} />}
+      {discussionMounted && jiraLink && <div hidden={!discussionOpen}><JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} /></div>}
+      {emailDetailsMounted && emailSources.length > 0 && <div hidden={!emailDetailsOpen}><EmailResolutionPanel operatorToken={operatorToken} task={task} sources={emailSources} /></div>}
       {detailsOpen && <TaskDetailDialog task={task} jiraLink={jiraLink} emailSources={emailSources} operatorToken={operatorToken} busy={busy} onClose={() => setDetailsOpen(false)} onSave={(input) => onUpdate(task, input)} onRemove={() => onRemove(task)} />}
     </article>
   );

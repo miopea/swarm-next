@@ -69,6 +69,7 @@ This is the working product audit for the first real developer week. It records 
 44. **Switching task-entry paths no longer discards intake work.** Jira and Inbox workspaces mount only after their first use, then remain privately suspended while the operator writes a local task or checks the other source. Reopening a source restores its search, selections, previews, and task draft instead of fetching and rebuilding everything from scratch.
 45. **Task and worker action menus behave like menus.** The shared cursor menu now focuses its first available action, skips disabled choices, wraps through actions with Up/Down, and supports Home/End. Keyboard users no longer land on a silent container or have to Tab through unavailable commands after opening any task or worker menu.
 46. **Generated worker guidance is protected before it is saved.** Cancelling a worker edit after changing its name, provider, activity preference, or Queen-routing description now shows the same safe discard pattern as task editing. An operator cannot accidentally throw away a paid Claude draft with one imprecise tap.
+47. **Hiding linked communication does not erase a draft.** Jira discussion and email-resolution workspaces load only when first opened, then stay mounted while hidden. Checking another part of a task and returning preserves an unsent Jira update, deployment reference, or customer-facing reply instead of silently starting over.
 
 ## Live deployed proof — 2026-08-18
 
