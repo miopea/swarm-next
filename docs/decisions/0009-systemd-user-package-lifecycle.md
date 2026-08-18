@@ -40,12 +40,15 @@ update. The current release remains the fallback source, unknown asset names
 remain 404s, and release directories stay immutable and checksum-verifiable.
 
 The terminal host gets write access only to the configured workspace
-root and application state; the remainder of home is read-only. Claude's
-documented `CLAUDE_CONFIG_DIR` redirects its credentials, settings, session
-history, and plugins into an isolated provider directory within that state.
-The service PATH explicitly includes the user's local binary directory so a
-user-scoped Claude installation is available without depending on login-shell
-initialization.
+root, application state, and the operator's Claude configuration; the remainder
+of home is read-only. The service PATH explicitly includes the user's local
+binary directory so a user-scoped Claude installation is available without
+depending on login-shell initialization.
+
+This record originally redirected Claude's credentials, settings, session
+history, and plugins into an isolated provider directory using the documented
+`CLAUDE_CONFIG_DIR`. [ADR 0048](0048-default-claude-configuration-location.md)
+reverses that redirect; the write grant above replaces it.
 The API has a read-only home and system view. Both use a private temporary
 directory, `NoNewPrivileges`, a restrictive umask, bounded restart delay, and
 journald.

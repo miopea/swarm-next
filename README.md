@@ -123,16 +123,17 @@ run `swarm-next-package migrate-protocol RELEASE_DIR`. The migration drains the
 old host, refuses active sessions, switches the API and sidecar together, and
 restores both previous pointers if health verification fails.
 
-Claude runs with an isolated profile at
-`~/.local/state/swarm-next/providers/claude`, keeping credentials and durable
-conversation state separate. Swarm layers the operator's read-only
-`~/.claude/settings.json` onto every Claude worker, so machine-wide permissions,
-hooks, and auto-mode policy remain consistent without moving session history.
-Authenticate the isolated profile once before dogfooding:
+Claude runs with the operator's ordinary `~/.claude` profile. Workers therefore
+inherit the same credentials, custom slash commands, skills, hooks, plugins, and
+conversation history the operator already uses at the terminal, and any shared
+configuration installer that writes to the documented default location applies
+to Swarm workers without extra steps. Swarm additionally points every Claude
+worker at `~/.claude/settings.json` explicitly, so permissions and auto-mode
+policy stay consistent even when a worker is started by the service rather than
+a login shell.
 
-```sh
-CLAUDE_CONFIG_DIR="$HOME/.local/state/swarm-next/providers/claude" claude
-```
+No separate profile authentication step is required: if `claude` works in the
+operator's terminal, it works for a worker.
 
 The user service runs while the user manager is active. A remote host that must
 keep running after logout may require an administrator to enable user lingering;

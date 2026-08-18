@@ -8,7 +8,6 @@ EnvironmentFile=@CONFIG_ROOT@/swarm-next.env
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=SWARM_TERMINAL_SOCKET=%t/swarm-next/terminal.sock
 Environment=SWARM_TERMINAL_HISTORY_DIR=@STATE_ROOT@/terminal-history
-Environment=CLAUDE_CONFIG_DIR=@STATE_ROOT@/providers/claude
 Environment=SWARM_CLAUDE_SETTINGS_PATH=%h/.claude/settings.json
 ExecStart=@INSTALL_ROOT@/host-current/bin/swarm-terminal-host
 Restart=on-failure
@@ -22,6 +21,8 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=@STATE_ROOT@
 ReadWritePaths=@WORKSPACE_ROOT@
+ReadWritePaths=%h/.claude
+ReadWritePaths=%h/.claude.json
 UMask=0077
 
 [Install]
