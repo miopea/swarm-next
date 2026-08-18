@@ -197,6 +197,31 @@ test("drafts private repository context into an editable unsaved description", a
   );
 });
 
+test("does not guess provider availability when the worker engine cannot be checked", () => {
+  const onCreate = vi.fn();
+  render(
+    <WorkerSettings
+      workers={[queen, budget]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: false }}
+      providerCapabilitiesUnavailable
+      onCreate={onCreate}
+      onUpdate={vi.fn()}
+      onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
+      onReorder={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByRole("alert")).toHaveTextContent("Coding providers could not be checked");
+  expect(screen.getByLabelText("Coding provider")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Add sleeping worker" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  expect(screen.getByRole("combobox", { name: "Default coding provider" })).toBeDisabled();
+  expect(onCreate).not.toHaveBeenCalled();
+});
+
 test("protects a generated routing draft from an accidental cancel", async () => {
   render(
     <WorkerSettings

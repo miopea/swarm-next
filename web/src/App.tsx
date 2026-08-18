@@ -154,6 +154,7 @@ export function App() {
   const [queenPolicy, setQueenPolicy] = useState<QueenAutonomyPolicy>();
   const [queenAutomation, setQueenAutomation] = useState<QueenAutomationStatus>();
   const [providers, setProviders] = useState<ProviderCapabilities>({ claude_code: true, codex: false });
+  const [providerCapabilitiesUnavailable, setProviderCapabilitiesUnavailable] = useState(false);
   const [notificationState, setNotificationState] = useState<NotificationCapabilityState>("unsupported");
   const presenceController = useMemo(() => new PresenceController(), []);
   const notificationController = useMemo(() => new NotificationController(), []);
@@ -210,8 +211,11 @@ export function App() {
   useEffect(() => {
     if (!operatorToken) return;
     void fetchProviderCapabilities(operatorToken)
-      .then(setProviders)
-      .catch(() => setProviders({ claude_code: true, codex: false }));
+      .then((nextProviders) => {
+        setProviders(nextProviders);
+        setProviderCapabilitiesUnavailable(false);
+      })
+      .catch(() => setProviderCapabilitiesUnavailable(true));
   }, [operatorToken]);
 
   useEffect(() => {
@@ -300,7 +304,10 @@ export function App() {
             ? fetchPresentationPreferences(operatorToken, presentationDevice)
             : Promise.resolve(undefined),
           runtimeChanged
-            ? fetchProviderCapabilities(operatorToken)
+            ? fetchProviderCapabilities(operatorToken).catch(() => {
+                setProviderCapabilitiesUnavailable(true);
+                return undefined;
+              })
             : Promise.resolve(undefined),
         ]);
         if (controller.signal.aborted || !controlRoom) return;
@@ -308,7 +315,10 @@ export function App() {
         if (refreshedNotifications) setNotificationSettings(refreshedNotifications);
         if (refreshedQueenPolicy) setQueenPolicy(refreshedQueenPolicy);
         if (refreshedQueenAutomation) setQueenAutomation(refreshedQueenAutomation);
-        if (refreshedProviders) setProviders(refreshedProviders);
+        if (refreshedProviders) {
+          setProviders(refreshedProviders);
+          setProviderCapabilitiesUnavailable(false);
+        }
         if (refreshedPresentation?.configured) {
           setColorTheme(refreshedPresentation.color_theme);
           setMobileKeysVisible(refreshedPresentation.terminal_keys_visible);
@@ -704,6 +714,7 @@ export function App() {
         ]);
         controlRoomModel.replace(controlRoom);
         setProviders(nextProviders);
+        setProviderCapabilitiesUnavailable(false);
         setActiveSessionId(preferredSessionId(controlRoom.workers, controlRoom.sessions));
       }, "Restarting worker engine…");
     } finally {
@@ -1167,6 +1178,7 @@ export function App() {
               queenPolicy={queenPolicy}
               pendingQueenDecisionCount={pendingQueenDecisionCount}
               providers={providers}
+              providerCapabilitiesUnavailable={providerCapabilitiesUnavailable}
               notificationState={notificationState}
               sessions={sessions}
               workers={workers}

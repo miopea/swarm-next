@@ -11,6 +11,7 @@ type Props = {
   workspaces: WorkspaceChoice[];
   busy: boolean;
   providers: ProviderCapabilities;
+  providerCapabilitiesUnavailable?: boolean;
   onCreate: (name: string, workspace: string, provider: ProviderKind, allowOutsideRoots: boolean) => Promise<void>;
   onUpdate: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean) => Promise<void>;
   onRemove: (workerId: string) => Promise<void>;
@@ -19,7 +20,7 @@ type Props = {
   onReorder: (workerIds: string[]) => Promise<void>;
 };
 
-export default function WorkerSettings({ workers, workspaces, busy, providers, onCreate, onUpdate, onRemove, onDraftDescription, onImproveDescription, onReorder }: Props) {
+export default function WorkerSettings({ workers, workspaces, busy, providers, providerCapabilitiesUnavailable = false, onCreate, onUpdate, onRemove, onDraftDescription, onImproveDescription, onReorder }: Props) {
   const scout = workers.find((worker) => worker.system_role === "scout");
   const roster = workers.filter((worker) => worker.role !== "queen" && worker.system_role !== "scout");
   const available = workspaces.filter((workspace) => !workspace.configured_worker_id);
@@ -114,6 +115,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             onDraftDescription={onDraftDescription}
             onImproveDescription={onImproveDescription}
             providers={providers}
+            providerCapabilitiesUnavailable={providerCapabilitiesUnavailable}
             onDragStart={() => undefined}
             onDragEnd={() => undefined}
             onDragTarget={() => undefined}
@@ -140,6 +142,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
             onDraftDescription={onDraftDescription}
             onImproveDescription={onImproveDescription}
             providers={providers}
+            providerCapabilitiesUnavailable={providerCapabilitiesUnavailable}
             onDragStart={() => workerReorder.start(worker.id)}
             onDragEnd={workerReorder.end}
             onDragTarget={() => workerReorder.target(worker.id)}
@@ -152,13 +155,14 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
         {roster.length > 0 && filteredRoster.length === 0 && !scoutMatches && <p className="empty-worker-settings">No workers match “{workerQuery.trim()}”.</p>}
       </div>
       <form className="configure-worker-form" onSubmit={(event) => void submit(event)}>
+        {providerCapabilitiesUnavailable && <div className="integration-state is-error" role="alert"><strong>Coding providers could not be checked</strong><span>Existing workers are unchanged. Refresh Swarm before adding a worker or changing her provider.</span></div>}
         <div className="field-stack">
           <label htmlFor="configured-worker-name">Worker name</label>
           <input id="configured-worker-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Daisy" maxLength={80} />
         </div>
         <div className="field-stack provider-field">
           <label htmlFor="configured-worker-provider">Coding provider</label>
-          <select id="configured-worker-provider" value={provider} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
+          <select id="configured-worker-provider" value={provider} disabled={providerCapabilitiesUnavailable} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
             <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · waiting for maintenance"}</option>
           </select>
@@ -215,7 +219,7 @@ export default function WorkerSettings({ workers, workspaces, busy, providers, o
           <small>Start with a repository name and Swarm completes the path. Full paths still work.</small>
           {customWorkspace && <label className="outside-workspace-warning"><input type="checkbox" checked={allowOutsideRoots} onChange={(event) => setAllowOutsideRoots(event.target.checked)} /><span><strong>Use this path outside discovered project folders</strong><small>Only continue if you recognize and trust this folder. Swarm still requires an existing real directory and blocks files, symlinks, and filesystem roots.</small></span></label>}
         </div>
-        <button disabled={busy || !name.trim() || !workspace || (customWorkspace && !allowOutsideRoots)}>Add sleeping worker</button>
+        <button disabled={busy || providerCapabilitiesUnavailable || !name.trim() || !workspace || (customWorkspace && !allowOutsideRoots)}>Add sleeping worker</button>
       </form>
       <small className="privacy-note">New workers receive a private Queen-routing draft from local README and project metadata. Review or refresh it from Edit whenever the repository changes.</small>
       {available.length === 0 && <small className="privacy-note">Every discovered repository already has a worker. Advanced repository-root configuration will live in backup and installation settings.</small>}
@@ -238,6 +242,7 @@ type WorkerPreferenceRowProps = {
   onDraftDescription: Props["onDraftDescription"];
   onImproveDescription: Props["onImproveDescription"];
   providers: ProviderCapabilities;
+  providerCapabilitiesUnavailable: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
   onDragTarget: () => void;
@@ -245,7 +250,7 @@ type WorkerPreferenceRowProps = {
   onDrop: (event: DragEvent) => void;
 };
 
-function WorkerPreferenceRow({ worker, busy, first, last, managed, orderingDisabled, dragging, dropTarget, onMove, onUpdate, onRemove, onDraftDescription, onImproveDescription, providers, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
+function WorkerPreferenceRow({ worker, busy, first, last, managed, orderingDisabled, dragging, dropTarget, onMove, onUpdate, onRemove, onDraftDescription, onImproveDescription, providers, providerCapabilitiesUnavailable, onDragStart, onDragEnd, onDragTarget, onDragLeave, onDrop }: WorkerPreferenceRowProps) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(worker.name);
   const [description, setDescription] = useState(worker.description ?? "");
@@ -340,10 +345,10 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, orderingDisab
           {managed && <small className="privacy-note">Scout is pinned after Queen and keeps ordinary worker authority for deliberate cross-repository work.</small>}
           <small className="worker-repository-path"><span>Repository</span><code>{worker.workspace}</code></small>
           <div className="worker-description-field"><span className="worker-description-heading"><label htmlFor={`worker-description-${worker.id}`}>Queen routing description</label><span className="worker-description-actions"><button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void draftDescription()}>{draftingDescription ? "Reading repository…" : description ? "Refresh local draft" : "Draft locally"}</button>{onImproveDescription && <button type="button" className="secondary-button" disabled={busy || draftingDescription || improvingDescription} onClick={() => void improveDescription()}>{improvingDescription ? "Claude is generating…" : draftSource === "claude" ? "Generate again with Claude" : "Generate with Claude"}</button>}</span></span><textarea className={draftSource ? "worker-description-generated" : undefined} id={`worker-description-${worker.id}`} value={description} onChange={(event) => { setDescription(event.target.value); setDraftSource(undefined); setDraftStatus(""); }} maxLength={2000} rows={3} placeholder="What this repository owns and when Queen should route work here" />{improvingDescription && <div className="worker-description-progress" role="status" aria-live="polite"><span aria-hidden="true" /><p><strong>Claude is generating a routing draft</strong><small>This usually takes 10–30 seconds. Keep this worker editor open.</small></p></div>}{draftStatus && <div className={`worker-description-result ${draftSource === "claude" ? "claude-result" : ""}`} role="status" aria-live="polite"><strong>{draftStatus}</strong><span>Review the editable text, then choose <b>Save description to worker</b>. Queen cannot use this draft until it is saved.</span></div>}<small>Claude receives only bounded README and manifest metadata in one tool-free turn (up to $0.10). Saving makes the description visible on this worker and available to Queen for routing.</small>{draftError && <small className="field-error" role="alert">{draftError}</small>}</div>
-          <div className="worker-provider-field"><label htmlFor={`worker-provider-${worker.id}`}>Default coding provider</label><select id={`worker-provider-${worker.id}`} value={provider} disabled={worker.running} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
+          <div className="worker-provider-field"><label htmlFor={`worker-provider-${worker.id}`}>Default coding provider</label><select id={`worker-provider-${worker.id}`} value={provider} disabled={worker.running || providerCapabilitiesUnavailable} onChange={(event) => setProvider(event.target.value as ProviderKind)}>
             <option value="claude_code" disabled={!providers.claude_code}>Claude Code{providers.claude_code ? "" : " · unavailable"}</option>
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · unavailable"}</option>
-          </select><small>{worker.running ? "Put this worker to sleep before changing provider." : "Used the next time this worker wakes. Existing history remains available."}</small></div>
+          </select><small>{worker.running ? "Put this worker to sleep before changing provider." : providerCapabilitiesUnavailable ? "Provider availability could not be checked. Refresh Swarm before changing this setting." : "Used the next time this worker wakes. Existing history remains available."}</small></div>
           <label className="worker-autostart"><input type="checkbox" checked={autostart} onChange={(event) => setAutostart(event.target.checked)} />Keep this worker active automatically</label>
           {confirmingCancel ? <UnsavedChangesPrompt label="Discard worker changes?" description="The worker name, provider, activity preference, or routing description has not been saved." onDiscard={discardEdits} onKeep={() => setConfirmingCancel(false)} /> : <span className="worker-edit-actions"><button disabled={busy || !name.trim()}>{descriptionChanged ? "Save description to worker" : "Save worker"}</button><button type="button" className="secondary-button" disabled={busy} onClick={requestCancel}>Cancel</button></span>}
           {!managed && <div className="worker-remove-zone">
