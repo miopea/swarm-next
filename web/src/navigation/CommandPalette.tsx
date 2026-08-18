@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useModalFocus } from "../shared/useModalFocus";
 
 export type CommandChoice = { id: string; label: string; detail: string; group: "Go to" | "Workers" | "Work" | "Attention"; run: () => void };
 
 export default function CommandPalette({ choices, onClose }: { choices: CommandChoice[]; onClose: () => void }) {
+  const search = useRef<HTMLInputElement>(null);
+  const dialog = useModalFocus<HTMLElement>(onClose, true, search);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const filtered = useMemo(() => {
@@ -17,13 +20,8 @@ export default function CommandPalette({ choices, onClose }: { choices: CommandC
     const choice = filtered[activeIndex];
     if (choice) document.getElementById(`command-${choice.id}`)?.scrollIntoView?.({ block: "nearest" });
   }, [activeIndex, filtered]);
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
   return <div className="command-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-heading">
+    <section ref={dialog} tabIndex={-1} className="command-palette" role="dialog" aria-modal="true" aria-labelledby="command-heading">
       <header className="command-header">
         <div><p className="eyebrow">Quick navigation</p><h2 id="command-heading">Where would you like to go?</h2></div>
         <button type="button" className="secondary-button" onClick={onClose}>Close</button>
@@ -31,7 +29,7 @@ export default function CommandPalette({ choices, onClose }: { choices: CommandC
       <label className="sr-only" htmlFor="command-query">Find work, decisions, or workers</label>
       <input
         id="command-query"
-        autoFocus
+        ref={search}
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         onKeyDown={(event) => {

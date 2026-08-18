@@ -13,6 +13,7 @@ import {
   type Worker,
 } from "../api";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
+import { useModalFocus } from "../shared/useModalFocus";
 import { serializeDiagnosticReport, type RuntimeDiagnostics } from "../settings/diagnosticReport";
 
 const MAX_FEEDBACK_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -42,18 +43,14 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   const [screenshotUrl, setScreenshotUrl] = useState<string>();
   const [imageError, setImageError] = useState<string>();
   const fileInput = useRef<HTMLInputElement>(null);
+  const expectationInput = useRef<HTMLTextAreaElement>(null);
+  const dialog = useModalFocus<HTMLElement>(onClose, true, expectationInput);
 
   function markChanged() {
     setPreview(undefined);
     setCopyState("idle");
     setSaveState("idle");
   }
-
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,7 +161,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
 
   return (
     <div className="feedback-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-heading" onPaste={pastedImage} onDragOver={(event) => event.preventDefault()} onDrop={droppedImage}>
+      <section ref={dialog} tabIndex={-1} className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-heading" onPaste={pastedImage} onDragOver={(event) => event.preventDefault()} onDrop={droppedImage}>
         <header>
           <div><p className="eyebrow">Dogfood feedback</p><h2 id="feedback-heading">Capture what felt wrong</h2></div>
           <button className="secondary-button" type="button" onClick={onClose}>Close</button>
@@ -172,7 +169,7 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
         <p>Describe the outcome in your words. Swarm adds content-free runtime evidence, then shows the complete bundle before anything is copied.</p>
         <div className="feedback-fields">
           <label htmlFor="feedback-expectation">What did you expect?
-            <textarea id="feedback-expectation" value={expectation} onChange={(event) => { setExpectation(event.target.value); markChanged(); }} placeholder="The worker should have stayed visible after reload." />
+            <textarea ref={expectationInput} id="feedback-expectation" value={expectation} onChange={(event) => { setExpectation(event.target.value); markChanged(); }} placeholder="The worker should have stayed visible after reload." />
           </label>
           <label htmlFor="feedback-observation">What happened instead?
             <textarea id="feedback-observation" value={observation} onChange={(event) => { setObservation(event.target.value); markChanged(); }} placeholder="The terminal area became blank until I refreshed again." />

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 import {
   fetchJiraTaskAttachment,
@@ -11,6 +11,7 @@ import {
   type TaskPriority,
   type TaskUpdateInput,
 } from "../api";
+import { useModalFocus } from "../shared/useModalFocus";
 
 type LoadedImage = JiraTaskAttachment & { url: string };
 
@@ -38,14 +39,8 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
   const [removeConfirm, setRemoveConfirm] = useState(false);
   const [removeFailed, setRemoveFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => {
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
+  const titleInput = useRef<HTMLInputElement>(null);
+  const dialog = useModalFocus<HTMLElement>(onClose, true, titleInput);
 
   useEffect(() => {
     let active = true;
@@ -116,13 +111,13 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
 
   return (
     <div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="task-detail-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <section ref={dialog} tabIndex={-1} className="task-detail-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header>
           <div>
             <span className="eyebrow">Task details</span>
             <h2 id={titleId}>Review and edit task</h2>
           </div>
-          <button type="button" autoFocus onClick={onClose}>Close</button>
+          <button type="button" onClick={onClose}>Close</button>
         </header>
         <div className="task-detail-summary" aria-label="Task summary">
           <span><small>Swarm status</small><strong>{task.state}</strong></span>
@@ -135,7 +130,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
         <form id={formId} className="task-detail-content task-detail-editor" onSubmit={(event) => void submit(event)}>
           <section>
             <label htmlFor={`detail-title-${task.id}`}>Title</label>
-            <input id={`detail-title-${task.id}`} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} />
+            <input ref={titleInput} id={`detail-title-${task.id}`} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} />
             <label htmlFor={`detail-description-${task.id}`}>Work brief</label>
             <textarea id={`detail-description-${task.id}`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={10000} rows={6} placeholder="Add the outcome, context, and what done looks like" />
             <label htmlFor={`detail-priority-${task.id}`}>Priority</label>

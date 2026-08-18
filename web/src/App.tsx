@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 
 import {
   assignTask,
@@ -85,6 +85,7 @@ import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./ter
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 import WorkerRosterItem from "./workers/WorkerRosterItem";
 import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
+import { useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
 import { workerEngineMatches } from "./runtime/workerEngine";
 
@@ -126,6 +127,8 @@ export function App() {
   const [showCommands, setShowCommands] = useState(false);
   const [showMobileWorkers, setShowMobileWorkers] = useState(false);
   const [mobileWorkerQuery, setMobileWorkerQuery] = useState("");
+  const mobileWorkerSearch = useRef<HTMLInputElement>(null);
+  const mobileWorkerDialog = useModalFocus<HTMLElement>(() => setShowMobileWorkers(false), showMobileWorkers, mobileWorkerSearch);
   const [workerVisibility, setWorkerVisibility] = useState<WorkerVisibility>(readWorkerVisibility);
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
@@ -895,13 +898,6 @@ export function App() {
     return () => cancelAnimationFrame(frame);
   }, [surface, activeSessionId]);
 
-  useEffect(() => {
-    if (!showMobileWorkers) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setShowMobileWorkers(false); };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [showMobileWorkers]);
-
   return (
     <main className={`app-shell${workerRail.resizing ? " resizing-rail" : ""}`} style={{ "--rail-width": `${workerRail.width}px` } as CSSProperties}>
       <aside className={`control-rail surface-${surface}`} aria-label="Swarm navigation">
@@ -1020,7 +1016,7 @@ export function App() {
         {operationError && <div className="operation-error" role="alert">{operationError}</div>}
         {showMobileWorkers ? (
           <div className="mobile-worker-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowMobileWorkers(false); }}>
-            <section className="mobile-worker-dialog" role="dialog" aria-modal="true" aria-labelledby="mobile-worker-heading">
+            <section ref={mobileWorkerDialog} tabIndex={-1} className="mobile-worker-dialog" role="dialog" aria-modal="true" aria-labelledby="mobile-worker-heading">
               <div className="mobile-worker-dialog-heading">
                 <div><p className="eyebrow">Worker switcher</p><h3 id="mobile-worker-heading">Where do you want to work?</h3></div>
                 <button type="button" onClick={() => setShowMobileWorkers(false)}>Close</button>
@@ -1033,6 +1029,7 @@ export function App() {
                 </div>
               </div>
               <input
+                ref={mobileWorkerSearch}
                 className="mobile-worker-search"
                 type="search"
                 aria-label="Find a worker"

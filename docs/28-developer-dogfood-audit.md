@@ -61,6 +61,7 @@ This is the working product audit for the first real developer week. It records 
 36. **Settings is not a precision-tap exception.** Phone-sized text fields, selects, text areas, project results, theme choices, and actions now inherit one late 44 px Settings rule. Checkboxes and radio controls retain their native geometry and labelled hit areas.
 37. **A large phone roster can be searched instead of scrolled.** The mobile worker switcher now filters immediately by worker name, repository name, or repository path while preserving the existing All/Awake choice. Thirty sleeping workers no longer turn waking one known repository into a long-scroll exercise.
 38. **Worker search explains filters instead of denying a known worker exists.** Searching while **Awake** is selected now distinguishes a sleeping match from a true miss and offers **Show all workers** in place. A Hive with no configured workers routes directly to Crew settings instead of claiming that zero workers are sleeping.
+39. **Modal keyboard behavior is one shared contract.** Quick navigation, worker switching, task review/edit, and dogfood feedback now move focus to the useful first control, keep Tab navigation inside the open surface, close on Escape, and return focus to the control that launched them. Task review opens on the title rather than the unrelated Close button.
 
 ## Live deployed proof — 2026-08-18
 
