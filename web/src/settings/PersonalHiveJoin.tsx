@@ -40,6 +40,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   const [working, setWorking] = useState(false);
   const [confirmingDismissal, setConfirmingDismissal] = useState<string>();
   const [savedStateUnavailable, setSavedStateUnavailable] = useState(false);
+  const [keeperPollingUnavailable, setKeeperPollingUnavailable] = useState(false);
 
   const refreshSavedState = useCallback(async () => {
     const [links, invitations] = await Promise.allSettled([
@@ -70,6 +71,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
     let cancelled = false;
     const poll = async () => {
       let refreshed = false;
+      let unavailable = false;
       for (const link of keeperLinks.filter((candidate) => !isResolvedKeeperLink(candidate.state))) {
         try {
           const result = await pollApiaryKeeperLink(operatorToken, link.link_id);
@@ -80,10 +82,17 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
             onMessage(`Invitation from ${result.link.apiary_name} received. Review its policy and Jira readiness below.`);
           }
         } catch {
-          // Pending links remain durable. Temporary Keeper outages are expected.
+          unavailable = true;
         }
       }
-      if (refreshed && !cancelled) setKeeperLinks(await fetchApiaryKeeperLinks(operatorToken));
+      if (refreshed && !cancelled) {
+        try {
+          setKeeperLinks(await fetchApiaryKeeperLinks(operatorToken));
+        } catch {
+          unavailable = true;
+        }
+      }
+      if (!cancelled) setKeeperPollingUnavailable(unavailable);
     };
     const timer = window.setInterval(() => void poll(), 5_000);
     return () => { cancelled = true; window.clearInterval(timer); };
@@ -223,6 +232,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
         </div>
       </div>
       {savedStateUnavailable ? <div className="form-error apiary-refresh-error" role="alert"><span>Saved Keeper invitations could not be fully refreshed. Last-known links remain unchanged.</span><button className="secondary-button" type="button" disabled={working} onClick={() => void refreshSavedState()}>Retry saved invitations</button></div> : null}
+      {keeperPollingUnavailable ? <div className="form-error apiary-refresh-error" role="status"><span>The Keeper was not reachable on the last check. This Hive keeps the invitation safely and retries every five seconds.</span></div> : null}
       {keeperLinks.length > 0 ? (
         <ul className="apiary-link-status" aria-label="Pending Keeper invitations">
           {keeperLinks.map((link) => <li key={link.link_id}>
