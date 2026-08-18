@@ -24,11 +24,9 @@ test("adapts task rows to the board width left by the resizable worker rail", ()
 
 test("keeps the mobile settings section rail flush with its scroll viewport", () => {
   expect(stylesheet).toContain(
-    ".settings-section-nav { top: 0; margin-block-start: -12px; margin-inline: -4px; padding: 7px; }",
+    ".settings-workspace { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); padding: 0 12px 12px; overflow-x: hidden; }",
   );
-  expect(stylesheet).toContain(
-    '.settings-section-nav::before { position: absolute; z-index: 2; top: -24px; right: -4px; left: -4px; height: 24px; background: var(--bg); content: ""; }',
-  );
+  expect(stylesheet).toContain(".settings-section-nav { top: 0; margin-inline: -4px; padding: 7px; }");
 });
 
 test("lets repository paths wrap inside the worker editor", () => {
