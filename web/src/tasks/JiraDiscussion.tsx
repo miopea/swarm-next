@@ -23,8 +23,8 @@ export default function JiraDiscussion({ taskId, issueKey, onFetch, onAdd }: {
     setError("");
     try {
       setComments(await onFetch(taskId));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Jira discussion is unavailable.");
+    } catch {
+      setError("Jira discussion could not be loaded. Your task and any typed update are still safe.");
     } finally {
       setLoading(false);
     }
@@ -39,10 +39,14 @@ export default function JiraDiscussion({ taskId, issueKey, onFetch, onAdd }: {
     try {
       const result = await onAdd(taskId, body);
       setCommentBody("");
-      setComments(await onFetch(taskId));
       setMessage(result.state === "delivered" ? "Shared to Jira." : "Saved safely; Jira delivery is pending.");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The Jira update could not be sent.");
+      try {
+        setComments(await onFetch(taskId));
+      } catch {
+        setError("Your update was saved, but the discussion could not refresh. Retry the discussion instead of posting it again.");
+      }
+    } catch {
+      setError("The Jira update could not be saved. It remains in the editor so you can retry.");
     } finally {
       setLoading(false);
     }
@@ -52,7 +56,7 @@ export default function JiraDiscussion({ taskId, issueKey, onFetch, onAdd }: {
     <section className="jira-discussion" aria-label={`Jira discussion for ${issueKey}`}>
       <div className="jira-discussion-heading"><strong>Jira discussion</strong><small>Two-way · shared with everyone on the issue</small></div>
       {loading && comments.length === 0 ? <p>Loading discussion…</p> : null}
-      {error ? <p className="settings-error" role="alert">{error}</p> : null}
+      {error ? <div className="settings-error" role="alert"><span>{error}</span> <button className="text-button" type="button" disabled={loading} onClick={() => void loadComments()}>Retry discussion</button></div> : null}
       {message ? <p className="settings-message" role="status">{message}</p> : null}
       {comments.length > 0 ? (
         <ol>
@@ -60,7 +64,7 @@ export default function JiraDiscussion({ taskId, issueKey, onFetch, onAdd }: {
             <li key={comment.id}><span><strong>{comment.author_name}</strong><small>{comment.body}</small></span><time>{new Date(comment.created_at).toLocaleString()}</time></li>
           ))}
         </ol>
-      ) : !loading ? <p>No Jira comments yet.</p> : null}
+      ) : !loading && !error ? <p>No Jira comments yet.</p> : null}
       <form onSubmit={(event) => void submit(event)}>
         <label htmlFor={`jira-comment-${taskId}`}>Add an update</label>
         <textarea id={`jira-comment-${taskId}`} value={commentBody} maxLength={4000} placeholder="Progress, a question, evidence, or a handoff" onChange={(event) => setCommentBody(event.target.value)} />
