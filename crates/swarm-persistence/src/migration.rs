@@ -355,22 +355,7 @@ impl TaskStore {
         if digest != commit.bundle_digest {
             return Err(TaskStoreError::MigrationBundleChanged);
         }
-        let selected = commit
-            .selected_source_ids
-            .iter()
-            .map(|id| id.trim().to_owned())
-            .collect::<HashSet<_>>();
-        if selected.is_empty() || selected.len() != commit.selected_source_ids.len() {
-            return Err(TaskStoreError::InvalidMigrationSelection);
-        }
-        let workers = self
-            .normalize_legacy_workers(bundle)?
-            .into_iter()
-            .filter(|worker| selected.contains(&worker.source_id))
-            .collect::<Vec<_>>();
-        if workers.len() != selected.len() || workers.iter().any(|worker| !worker.selectable) {
-            return Err(TaskStoreError::InvalidMigrationSelection);
-        }
+        let workers = self.selected_legacy_workers(bundle, commit)?;
 
         let identity = self.local_hive_identity()?;
         let batch_id = Uuid::now_v7().to_string();
@@ -467,6 +452,30 @@ impl TaskStore {
             resumed_source_ids,
             imported_at,
         })
+    }
+
+    fn selected_legacy_workers(
+        &self,
+        bundle: &LegacyMigrationBundle,
+        commit: &LegacyWorkerMigrationCommit,
+    ) -> Result<Vec<NormalizedWorker>, TaskStoreError> {
+        let selected = commit
+            .selected_source_ids
+            .iter()
+            .map(|id| id.trim().to_owned())
+            .collect::<HashSet<_>>();
+        if selected.is_empty() || selected.len() != commit.selected_source_ids.len() {
+            return Err(TaskStoreError::InvalidMigrationSelection);
+        }
+        let workers = self
+            .normalize_legacy_workers(bundle)?
+            .into_iter()
+            .filter(|worker| selected.contains(&worker.source_id))
+            .collect::<Vec<_>>();
+        if workers.len() != selected.len() || workers.iter().any(|worker| !worker.selectable) {
+            return Err(TaskStoreError::InvalidMigrationSelection);
+        }
+        Ok(workers)
     }
 
     /// Removes an untouched worker-import batch. Any profile edit, session, or
