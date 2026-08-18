@@ -126,7 +126,10 @@ export class XtermSurface implements TerminalSurface {
 
   restore(snapshot: TerminalSnapshot): Promise<void> {
     this.#restorePending = true;
-    if (this.#element) this.#element.style.visibility = "hidden";
+    if (this.#element) {
+      this.#element.dataset.terminalRestoring = "true";
+      this.#element.setAttribute("aria-busy", "true");
+    }
     this.#terminal.reset();
     this.#terminal.resize(snapshot.columns, snapshot.rows);
     return this.write(snapshot.bytes).catch((error: unknown) => {
@@ -300,7 +303,10 @@ export class XtermSurface implements TerminalSurface {
   #finishRestore(): void {
     if (!this.#restorePending) return;
     this.#restorePending = false;
-    if (this.#element) this.#element.style.visibility = "";
+    if (this.#element) {
+      delete this.#element.dataset.terminalRestoring;
+      this.#element.removeAttribute("aria-busy");
+    }
     // Chromium can retain a blank canvas when xterm writes a canonical
     // snapshot while its surface is hidden. Paint again on the first visible
     // frame instead of relying on the browser to invalidate the canvas.

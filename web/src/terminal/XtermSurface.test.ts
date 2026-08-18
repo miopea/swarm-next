@@ -476,7 +476,7 @@ test("resize events publish the settled renderer geometry and coalesce stale eve
   expect(listener).toHaveBeenCalledWith({ rows: 41, columns: 154 });
 });
 
-test("snapshot geometry stays hidden until the visible renderer is refitted", async () => {
+test("snapshot geometry exposes a bounded recovery state until the visible renderer is refitted", async () => {
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     frames.push(callback);
@@ -503,7 +503,8 @@ test("snapshot geometry stays hidden until the visible renderer is refitted", as
     truncated: false,
     bytes: new TextEncoder().encode("snapshot"),
   });
-  expect(element.style.visibility).toBe("hidden");
+  expect(element.dataset.terminalRestoring).toBe("true");
+  expect(element).toHaveAttribute("aria-busy", "true");
   expect(element.dataset.terminalScrollbackRows).toBe("48");
   expect(element.dataset.terminalBufferLines).toBe("24");
 
@@ -513,7 +514,8 @@ test("snapshot geometry stays hidden until the visible renderer is refitted", as
   await Promise.resolve();
   frames.shift()?.(16);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
-  expect(element.style.visibility).toBe("");
+  expect(element.dataset.terminalRestoring).toBeUndefined();
+  expect(element).not.toHaveAttribute("aria-busy");
   xterm.refresh.mockClear();
   frames.shift()?.(16);
   expect(xterm.refresh).toHaveBeenCalledWith(0, 37);
