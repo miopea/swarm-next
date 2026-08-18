@@ -35,6 +35,7 @@ export type LegacyWorkerPreview = {
   provider: "claude_code" | "codex";
   disposition: LegacyWorkerImportDisposition;
   selectable: boolean;
+  conversation_available: boolean;
   warnings: string[];
 };
 
@@ -53,6 +54,7 @@ export type LegacyWorkerMigrationReceipt = {
   source_installation_id: string;
   imported_worker_ids: string[];
   imported_source_ids: string[];
+  resumed_source_ids: string[];
   imported_at: number;
 };
 
@@ -173,6 +175,7 @@ export async function commitLegacyWorkerMigration(
   bundle: LegacyMigrationBundle,
   preview: LegacyWorkerMigrationPreview,
   selectedSourceIds: string[],
+  resumeLegacyConversations: boolean,
 ): Promise<LegacyWorkerMigrationReceipt> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/migrations/legacy/workers/commit", {
     method: "POST",
@@ -182,6 +185,7 @@ export async function commitLegacyWorkerMigration(
       commit: {
         bundle_digest: preview.bundle_digest,
         selected_source_ids: selectedSourceIds,
+        resume_legacy_conversations: resumeLegacyConversations,
       },
     }),
   });

@@ -2504,7 +2504,8 @@ pub struct WorkerProfile {
     /// Provider-owned conversation identity used for exact process recovery.
     #[serde(skip)]
     pub provider_conversation_id: Option<ProviderConversationId>,
-    /// Whether this profile has previously launched a provider process.
+    /// Whether this profile should resume a provider conversation, because it
+    /// previously launched here or imported an exact provider-owned identity.
     #[serde(skip)]
     pub has_session_history: bool,
     /// Expiry of the active operator engagement lease, when one exists.

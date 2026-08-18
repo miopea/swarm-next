@@ -80,10 +80,13 @@ pub(super) async fn start_worker_process(
         ProviderKind::Codex => HostRequest::StartCodex {
             workspace: worker_workspace,
             size,
-            conversation: if profile.has_session_history {
-                CodexConversationStart::Continue
-            } else {
-                CodexConversationStart::New
+            conversation: match (
+                profile.provider_conversation_id,
+                profile.has_session_history,
+            ) {
+                (Some(session_id), true) => CodexConversationStart::Resume { session_id },
+                (None, true) => CodexConversationStart::Continue,
+                _ => CodexConversationStart::New,
             },
             allow_outside_roots,
         },

@@ -381,7 +381,8 @@ impl TaskStore {
             "
             SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
                    p.position, s.session_id, p.provider_conversation_id,
-                   EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
+                   (EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id)
+                    OR p.provider_conversation_resume = 1),
                    e.expires_at,
                    p.created_at, p.updated_at, p.description
             FROM worker_profiles p
@@ -416,7 +417,8 @@ impl TaskStore {
                 "
                 SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
                        p.position, s.session_id, p.provider_conversation_id,
-                       EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
+                       (EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id)
+                        OR p.provider_conversation_resume = 1),
                        e.expires_at,
                        p.created_at, p.updated_at, p.description
                 FROM worker_profiles p
@@ -964,7 +966,8 @@ impl TaskStore {
                 "
                 SELECT p.id, p.hive_id, p.name, p.role, p.provider, p.workspace, p.autostart,
                        p.position, s.session_id, p.provider_conversation_id,
-                       EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id),
+                       (EXISTS(SELECT 1 FROM worker_sessions history WHERE history.worker_id = p.id)
+                        OR p.provider_conversation_resume = 1),
                        e.expires_at,
                        p.created_at, p.updated_at, p.description
                 FROM worker_profiles p

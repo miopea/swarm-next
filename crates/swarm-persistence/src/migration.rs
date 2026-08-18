@@ -43,6 +43,10 @@ pub struct LegacyWorkerRecord {
     pub has_identity_file: bool,
     #[serde(default)]
     pub isolation: String,
+    /// Exact provider-owned conversation discovered from the local provider
+    /// transcript store. The transcript itself is never included.
+    #[serde(default)]
+    pub provider_conversation_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -103,6 +107,7 @@ pub struct LegacyWorkerPreview {
     pub provider: ProviderKind,
     pub disposition: LegacyWorkerImportDisposition,
     pub selectable: bool,
+    pub conversation_available: bool,
     pub warnings: Vec<String>,
 }
 
@@ -120,6 +125,8 @@ pub struct LegacyWorkerMigrationPreview {
 pub struct LegacyWorkerMigrationCommit {
     pub bundle_digest: String,
     pub selected_source_ids: Vec<String>,
+    #[serde(default)]
+    pub resume_legacy_conversations: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -129,6 +136,7 @@ pub struct LegacyWorkerMigrationReceipt {
     pub source_installation_id: String,
     pub imported_worker_ids: Vec<WorkerId>,
     pub imported_source_ids: Vec<String>,
+    pub resumed_source_ids: Vec<String>,
     pub imported_at: i64,
 }
 
@@ -210,6 +218,7 @@ struct NormalizedWorker {
     workspace: String,
     description: String,
     provider: ProviderKind,
+    provider_conversation_id: Option<swarm_domain::ProviderConversationId>,
     disposition: LegacyWorkerImportDisposition,
     selectable: bool,
     warnings: Vec<String>,
@@ -228,7 +237,8 @@ impl TaskStore {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT batch.id, batch.source_digest, batch.source_installation_id,
-                    batch.imported_at, link.worker_id, link.source_worker_id
+                    batch.imported_at, link.worker_id, link.source_worker_id,
+                    link.resumed_conversation
              FROM migration_worker_batches batch
              JOIN migration_worker_links link ON link.batch_id = batch.id
              WHERE batch.rolled_back_at IS NULL
@@ -243,11 +253,12 @@ impl TaskStore {
                     row.get::<_, i64>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
+                    row.get::<_, bool>(6)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         let mut receipts = Vec::<LegacyWorkerMigrationReceipt>::new();
-        for (batch_id, digest, installation_id, imported_at, worker_id, source_id) in rows {
+        for (batch_id, digest, installation_id, imported_at, worker_id, source_id, resumed) in rows {
             if receipts
                 .last()
                 .is_none_or(|receipt| receipt.batch_id != batch_id)
@@ -258,6 +269,7 @@ impl TaskStore {
                     source_installation_id: installation_id,
                     imported_worker_ids: Vec::new(),
                     imported_source_ids: Vec::new(),
+                    resumed_source_ids: Vec::new(),
                     imported_at,
                 });
             }
@@ -269,6 +281,9 @@ impl TaskStore {
                     .parse()
                     .map_err(|_| TaskStoreError::InvalidMigrationBundle)?,
             );
+            if resumed {
+                receipt.resumed_source_ids.push(source_id.clone());
+            }
             receipt.imported_source_ids.push(source_id);
         }
         Ok(receipts)
@@ -296,6 +311,7 @@ impl TaskStore {
                 provider: worker.provider,
                 disposition: worker.disposition,
                 selectable: worker.selectable,
+                conversation_available: worker.provider_conversation_id.is_some(),
                 warnings: worker.warnings,
             })
             .collect::<Vec<_>>();
@@ -322,7 +338,8 @@ impl TaskStore {
     }
 
     /// Imports an explicit worker selection as sleeping durable profiles.
-    /// No provider process is started and no Legacy provider conversation is attached.
+    /// No provider process is started. Exact provider conversations are attached
+    /// only when the operator explicitly selected that migration option.
     ///
     /// # Errors
     ///
@@ -373,6 +390,7 @@ impl TaskStore {
         )?;
         let mut imported_worker_ids = Vec::with_capacity(workers.len());
         let mut imported_source_ids = Vec::with_capacity(workers.len());
+        let mut resumed_source_ids = Vec::with_capacity(workers.len());
         for (offset, worker) in workers.into_iter().enumerate() {
             let position = first_position
                 + i64::try_from(offset).map_err(|_| TaskStoreError::InvalidMigrationSelection)?;
@@ -387,11 +405,16 @@ impl TaskStore {
                 return Err(TaskStoreError::MigrationBundleChanged);
             }
             let worker_id = WorkerId::new();
+            let provider_conversation_id = commit
+                .resume_legacy_conversations
+                .then_some(worker.provider_conversation_id)
+                .flatten();
             transaction.execute(
                 "INSERT INTO worker_profiles
                  (id, hive_id, name, description, role, provider, workspace,
-                  autostart, position, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, 'worker', ?5, ?6, 0, ?7, ?8, ?8)",
+                  autostart, position, created_at, updated_at,
+                  provider_conversation_id, provider_conversation_resume)
+                 VALUES (?1, ?2, ?3, ?4, 'worker', ?5, ?6, 0, ?7, ?8, ?8, ?9, ?10)",
                 params![
                     worker_id.to_string(),
                     identity.hive.id.to_string(),
@@ -401,6 +424,8 @@ impl TaskStore {
                     worker.workspace,
                     position,
                     imported_at,
+                    provider_conversation_id.map(|value| value.to_string()),
+                    i64::from(provider_conversation_id.is_some()),
                 ],
             )?;
             let digest = worker_profile_digest(
@@ -413,11 +438,21 @@ impl TaskStore {
             );
             transaction.execute(
                 "INSERT INTO migration_worker_links
-                 (batch_id, source_worker_id, worker_id, imported_profile_digest)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![batch_id, worker.source_id, worker_id.to_string(), digest],
+                 (batch_id, source_worker_id, worker_id, imported_profile_digest,
+                  resumed_conversation)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    batch_id,
+                    worker.source_id,
+                    worker_id.to_string(),
+                    digest,
+                    i64::from(provider_conversation_id.is_some()),
+                ],
             )?;
             imported_worker_ids.push(worker_id);
+            if provider_conversation_id.is_some() {
+                resumed_source_ids.push(worker.source_id.clone());
+            }
             imported_source_ids.push(worker.source_id);
         }
         insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
@@ -428,6 +463,7 @@ impl TaskStore {
             source_installation_id: bundle.source.installation_id.clone(),
             imported_worker_ids,
             imported_source_ids,
+            resumed_source_ids,
             imported_at,
         })
     }
@@ -1050,6 +1086,25 @@ impl TaskStore {
                     ProviderKind::ClaudeCode
                 }
             };
+            let provider_conversation_id = source
+                .provider_conversation_id
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .ok()
+                .flatten();
+            if source.provider_conversation_id.is_some() && provider_conversation_id.is_none() {
+                warnings.push(
+                    "Legacy reported a provider conversation with an invalid identity; this worker will start fresh."
+                        .into(),
+                );
+                disposition = LegacyWorkerImportDisposition::Transformed;
+            } else if provider_conversation_id.is_none() {
+                warnings.push(
+                    "No exact Legacy conversation was found for this repository; this worker will start fresh."
+                        .into(),
+                );
+            }
             if source.has_identity_file {
                 warnings.push(
                     "Legacy identity-file content is private and is not imported; use the reviewed worker description instead."
@@ -1125,6 +1180,7 @@ impl TaskStore {
                 workspace,
                 description,
                 provider,
+                provider_conversation_id,
                 disposition,
                 selectable,
                 warnings,
@@ -1313,6 +1369,20 @@ pub(super) fn migrate_legacy_worker_migrations(
     )
 }
 
+pub(super) fn migrate_legacy_provider_conversations(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "ALTER TABLE worker_profiles
+             ADD COLUMN provider_conversation_resume INTEGER NOT NULL DEFAULT 0
+             CHECK (provider_conversation_resume IN (0, 1));
+         ALTER TABLE migration_worker_links
+             ADD COLUMN resumed_conversation INTEGER NOT NULL DEFAULT 0
+             CHECK (resumed_conversation IN (0, 1));
+         PRAGMA user_version = 71;",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1361,6 +1431,7 @@ mod tests {
             position: 4,
             has_identity_file: false,
             isolation: String::new(),
+            provider_conversation_id: None,
         }
     }
 
@@ -1597,6 +1668,7 @@ mod tests {
                 &LegacyWorkerMigrationCommit {
                     bundle_digest: preview.bundle_digest.clone(),
                     selected_source_ids: vec!["daisy".into(), "poppy".into()],
+                    resume_legacy_conversations: false,
                 },
             )
             .unwrap();
@@ -1635,6 +1707,37 @@ mod tests {
     }
 
     #[test]
+    fn worker_import_option_preserves_exact_provider_conversation_for_first_wake() {
+        let store = store();
+        let conversation_id = uuid::Uuid::now_v7().to_string();
+        let bundle = worker_bundle(vec![LegacyWorkerRecord {
+            provider_conversation_id: Some(conversation_id.clone()),
+            ..worker("daisy", "Daisy", "/projects/daisy")
+        }]);
+        let preview = store.preview_legacy_worker_migration(&bundle).unwrap();
+        assert!(preview.records[0].conversation_available);
+
+        let receipt = store
+            .commit_legacy_worker_migration(
+                &bundle,
+                &LegacyWorkerMigrationCommit {
+                    bundle_digest: preview.bundle_digest,
+                    selected_source_ids: vec!["daisy".into()],
+                    resume_legacy_conversations: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(receipt.resumed_source_ids, ["daisy"]);
+        let imported = store.get_worker_profile(receipt.imported_worker_ids[0]).unwrap();
+        assert_eq!(
+            imported.provider_conversation_id.map(|value| value.to_string()),
+            Some(conversation_id)
+        );
+        assert!(imported.has_session_history);
+        assert!(imported.active_session_id.is_none());
+    }
+
+    #[test]
     fn worker_rollback_refuses_profile_changes_or_use() {
         let store = store();
         let bundle = worker_bundle(vec![worker("daisy", "Daisy", "/projects/daisy")]);
@@ -1645,6 +1748,7 @@ mod tests {
                 &LegacyWorkerMigrationCommit {
                     bundle_digest: preview.bundle_digest,
                     selected_source_ids: vec!["daisy".into()],
+                    resume_legacy_conversations: false,
                 },
             )
             .unwrap();

@@ -15,6 +15,7 @@ pub enum ClaudeConversationStart {
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum CodexConversationStart {
     New,
+    Resume { session_id: ProviderConversationId },
     Continue,
 }
 
@@ -134,8 +135,8 @@ pub struct CodexAdapter;
 
 impl CodexAdapter {
     /// Builds the interactive Codex CLI command for a repository-owned worker.
-    /// Codex owns its thread identifier; recovery therefore uses its cwd-scoped
-    /// `resume --last` contract instead of manufacturing an external UUID.
+    /// Codex owns its thread identifier. Exact imported identities are resumed
+    /// directly; ordinary recovery uses its cwd-scoped `resume --last` contract.
     /// # Errors
     /// Returns an error when the workspace is not an allowed absolute path.
     pub fn command_for(
@@ -148,6 +149,9 @@ impl CodexAdapter {
         }
         let arguments = match conversation {
             CodexConversationStart::New => Vec::new(),
+            CodexConversationStart::Resume { session_id } => {
+                vec!["resume".into(), session_id.to_string()]
+            }
             CodexConversationStart::Continue => vec!["resume".into(), "--last".into()],
         };
         Ok(ProviderCommand {
@@ -273,5 +277,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(recovered.arguments, ["resume", "--last"]);
+        let session_id = ProviderConversationId::new();
+        let imported = adapter
+            .command_for(
+                Path::new("/workspaces/example"),
+                CodexConversationStart::Resume { session_id },
+            )
+            .unwrap();
+        assert_eq!(imported.arguments, ["resume", &session_id.to_string()]);
     }
 }

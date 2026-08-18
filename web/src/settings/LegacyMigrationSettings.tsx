@@ -34,6 +34,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
   const [workerPreview, setWorkerPreview] = useState<LegacyWorkerMigrationPreview>();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedWorkers, setSelectedWorkers] = useState<Set<string>>(new Set());
+  const [resumeLegacyConversations, setResumeLegacyConversations] = useState(true);
   const [receipt, setReceipt] = useState<LegacyMigrationReceipt>();
   const [workerReceipt, setWorkerReceipt] = useState<LegacyWorkerMigrationReceipt>();
   const [working, setWorking] = useState(false);
@@ -163,6 +164,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
         bundle,
         workerPreview,
         [...selectedWorkers],
+        resumeLegacyConversations,
       );
       setWorkerReceipt(nextReceipt);
       setConfirmWorkerImport(false);
@@ -170,7 +172,8 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
         const refreshedTaskPreview = await previewLegacyTaskMigration(operatorToken, bundle);
         setPreview(refreshedTaskPreview);
         setSelected(new Set(refreshedTaskPreview.records.filter((record) => record.selectable).map((record) => record.source_id)));
-        setMessage(`${nextReceipt.imported_worker_ids.length} sleeping worker${nextReceipt.imported_worker_ids.length === 1 ? " was" : "s were"} added. Task matches were refreshed; no provider process was started.`);
+        const resumedCount = nextReceipt.resumed_source_ids?.length ?? 0;
+        setMessage(`${nextReceipt.imported_worker_ids.length} sleeping worker${nextReceipt.imported_worker_ids.length === 1 ? " was" : "s were"} added. ${resumedCount} will resume ${resumedCount === 1 ? "its" : "their"} exact Legacy conversation when first awakened. Task matches were refreshed; no provider process was started.`);
       } catch {
         setMessage(`${nextReceipt.imported_worker_ids.length} sleeping worker${nextReceipt.imported_worker_ids.length === 1 ? " was" : "s were"} added. Reopen this package before importing tasks so worker matches are current.`);
       }
@@ -265,7 +268,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
       {workerPreview && !workerReceipt && workerPreview.records.length > 0 && (
         <div className="migration-section" aria-labelledby="migration-workers-heading">
           <div><p className="eyebrow">Crew</p><h4 id="migration-workers-heading">Review familiar workers</h4></div>
-          <p>Repository paths and reviewed descriptions come across. Workers stay sleeping, and provider conversations, identity files, groups, and approval rules stay behind.</p>
+          <p>Repository paths and reviewed descriptions come across. Workers stay sleeping. You can also preserve exact Claude or Codex conversations found for their repositories; identity files, groups, and approval rules stay behind.</p>
           <div className="migration-summary" aria-label="Worker migration preview summary">
             <span><strong>{workerPreview.selectable}</strong><small>Ready to add</small></span>
             <span><strong>{workerPreview.skipped}</strong><small>Already represented</small></span>
@@ -288,17 +291,27 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
                 <span className="migration-record-copy">
                   <strong>{record.name || "Unnamed Legacy worker"}</strong>
                   <small>{record.workspace} · {record.provider === "codex" ? "Codex" : "Claude Code"} · Sleeping</small>
+                  <small className={record.conversation_available ? "migration-conversation-found" : "migration-warning"}>{record.conversation_available ? "Exact Legacy conversation found" : "Starts with a fresh conversation"}</small>
                   {record.warnings.map((warning) => <small key={warning} className="migration-warning">{warning}</small>)}
                 </span>
               </label>
             ))}
           </div>
+          <label className="migration-conversation-choice">
+            <input
+              type="checkbox"
+              checked={resumeLegacyConversations}
+              disabled={disabled || !workerPreview.records.some((record) => selectedWorkers.has(record.source_id) && record.conversation_available)}
+              onChange={(event) => setResumeLegacyConversations(event.target.checked)}
+            />
+            <span><strong>Resume exact Legacy conversations</strong><small>Recommended. On first wake, each eligible worker continues the latest provider conversation for her exact repository. Turn this off to start every imported worker fresh.</small></span>
+          </label>
           {!confirmWorkerImport ? (
             <button type="button" className="primary-action" disabled={disabled || selectedWorkers.size === 0} onClick={() => setConfirmWorkerImport(true)}>Review {selectedWorkers.size} worker{selectedWorkers.size === 1 ? "" : "s"}</button>
           ) : (
             <div className="migration-confirmation" role="group" aria-label="Confirm Legacy worker import">
               <strong>Add {selectedWorkers.size} sleeping worker{selectedWorkers.size === 1 ? "" : "s"}?</strong>
-              <span>Swarm creates durable roster entries only. No Claude or Codex process starts.</span>
+              <span>Swarm creates durable roster entries only. {resumeLegacyConversations ? "Eligible workers remember their exact Legacy conversation for first wake." : "Every worker starts a fresh provider conversation."} No Claude or Codex process starts now.</span>
               <div className="settings-actions">
                 <button type="button" className="secondary-button" disabled={disabled} onClick={() => setConfirmWorkerImport(false)}>Keep reviewing</button>
                 <button type="button" className="primary-action" disabled={disabled} onClick={() => void importSelectedWorkers()}>{working ? "Adding…" : "Add selected workers"}</button>
@@ -311,7 +324,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
       {workerReceipt && (
         <div className="migration-receipt" role="status">
           <strong>Familiar crew added safely</strong>
-          <p>{workerReceipt.imported_worker_ids.length} worker{workerReceipt.imported_worker_ids.length === 1 ? " is" : "s are"} sleeping in the roster. Review names, repositories, providers, and descriptions before waking anyone.</p>
+          <p>{workerReceipt.imported_worker_ids.length} worker{workerReceipt.imported_worker_ids.length === 1 ? " is" : "s are"} sleeping in the roster. {workerReceipt.resumed_source_ids?.length ?? 0} will resume {(workerReceipt.resumed_source_ids?.length ?? 0) === 1 ? "its" : "their"} exact Legacy conversation on first wake. Review names, repositories, providers, and descriptions before waking anyone.</p>
           {!confirmWorkerRollback ? (
             <button type="button" className="secondary-button" disabled={disabled} onClick={() => setConfirmWorkerRollback(true)}>Undo untouched worker import</button>
           ) : (
@@ -406,7 +419,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
         </div>
       )}
       {message && <p className="migration-message" role="status">{message}</p>}
-      <small className="privacy-note">Migration reads only the Legacy crew and open local tasks needed for this preview. Credentials, terminal sessions, provider conversations, identity files, and Jira records are never included.</small>
+      <small className="privacy-note">Migration reads the Legacy crew, open local tasks, and provider conversation identities needed for this preview. Conversation content, credentials, terminal output, identity files, and Jira records are never included.</small>
     </section>
   );
 }

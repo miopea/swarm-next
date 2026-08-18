@@ -101,6 +101,10 @@ pub fn read_legacy_migration_bundle(
                 position: row.get(5)?,
                 has_identity_file: row.get(6)?,
                 isolation: row.get(7)?,
+                provider_conversation_id: discover_provider_conversation(
+                    &row.get::<_, String>(4)?,
+                    &row.get::<_, String>(2)?,
+                ),
             })
         })
         .map_err(LegacySourceError::from)?
@@ -118,6 +122,122 @@ pub fn read_legacy_migration_bundle(
         tasks,
         workers,
     })
+}
+
+fn discover_provider_conversation(provider: &str, workspace: &str) -> Option<String> {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "" | "claude" | "claude_code" => discover_claude_conversation(workspace),
+        "codex" => discover_codex_conversation(workspace),
+        _ => None,
+    }
+}
+
+fn discover_claude_conversation(workspace: &str) -> Option<String> {
+    let root = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)?
+        .join(".claude")
+        .join("projects");
+    discover_claude_conversation_in(&root, workspace)
+}
+
+fn discover_claude_conversation_in(root: &Path, workspace: &str) -> Option<String> {
+    let encoded_current = workspace.replace(['/', '.'], "-");
+    let encoded_older = workspace.replace('/', "-");
+    let mut candidates = Vec::new();
+    for encoded in [encoded_current, encoded_older] {
+        let directory = root.join(encoded);
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten().take(2_000) {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if uuid::Uuid::parse_str(id).is_err() {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |value| value.as_secs());
+            candidates.push((modified, id.to_owned()));
+        }
+    }
+    candidates.sort_unstable_by(|left, right| right.cmp(left));
+    candidates.into_iter().next().map(|(_, id)| id)
+}
+
+fn discover_codex_conversation(workspace: &str) -> Option<String> {
+    let root = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)?
+        .join(".codex")
+        .join("sessions");
+    discover_codex_conversation_in(&root, workspace)
+}
+
+fn discover_codex_conversation_in(root: &Path, workspace: &str) -> Option<String> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut candidates = Vec::new();
+    let mut visited = 0_usize;
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > 20_000 {
+                break;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Ok(file) = std::fs::File::open(&path) else {
+                continue;
+            };
+            let mut lines = std::io::BufRead::lines(std::io::BufReader::new(file));
+            let Some(Ok(line)) = lines.next() else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            let payload = &value["payload"];
+            if value["type"].as_str() != Some("session_meta")
+                || payload["cwd"].as_str() != Some(workspace)
+            {
+                continue;
+            }
+            let Some(id) = payload["id"].as_str() else {
+                continue;
+            };
+            if uuid::Uuid::parse_str(id).is_err() {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |value| value.as_secs());
+            candidates.push((modified, id.to_owned()));
+        }
+        if visited > 20_000 {
+            break;
+        }
+    }
+    candidates.sort_unstable_by(|left, right| right.cmp(left));
+    candidates.into_iter().next().map(|(_, id)| id)
 }
 
 fn open_legacy_read_only(path: &Path) -> Result<Connection, LegacySourceError> {
@@ -248,5 +368,39 @@ mod tests {
             read_legacy_migration_bundle(source),
             Err(LegacySourceError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn finds_exact_provider_conversations_without_reading_transcript_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let claude_root = directory.path().join("claude-projects");
+        let workspace = "/projects/daisy";
+        let claude_id = uuid::Uuid::now_v7().to_string();
+        let encoded = workspace.replace(['/', '.'], "-");
+        std::fs::create_dir_all(claude_root.join(encoded)).unwrap();
+        std::fs::write(
+            claude_root.join(workspace.replace(['/', '.'], "-")).join(format!("{claude_id}.jsonl")),
+            "private transcript content\n",
+        )
+        .unwrap();
+        assert_eq!(
+            discover_claude_conversation_in(&claude_root, workspace),
+            Some(claude_id)
+        );
+
+        let codex_root = directory.path().join("codex-sessions");
+        std::fs::create_dir_all(codex_root.join("2026/08/18")).unwrap();
+        let codex_id = uuid::Uuid::now_v7().to_string();
+        std::fs::write(
+            codex_root.join("2026/08/18/session.jsonl"),
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{codex_id}\",\"cwd\":\"{workspace}\"}}}}\nprivate transcript content\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            discover_codex_conversation_in(&codex_root, workspace),
+            Some(codex_id)
+        );
     }
 }

@@ -259,13 +259,13 @@ test("previews selected Legacy workers as sleeping before adding them", async ()
         skipped: 1,
         invalid: 0,
         records: [
-          { source_id: "daisy", name: "Daisy", workspace: "/projects/daisy", provider: "claude_code", disposition: "ready", selectable: true, warnings: [] },
-          { source_id: "root", name: "Project Root", workspace: "/projects", provider: "claude_code", disposition: "managed_by_next", selectable: false, warnings: ["Swarm Next Scout owns cross-repository work; Project Root is not duplicated."] },
+          { source_id: "daisy", name: "Daisy", workspace: "/projects/daisy", provider: "claude_code", disposition: "ready", selectable: true, conversation_available: true, warnings: [] },
+          { source_id: "root", name: "Project Root", workspace: "/projects", provider: "claude_code", disposition: "managed_by_next", selectable: false, conversation_available: false, warnings: ["Swarm Next Scout owns cross-repository work; Project Root is not duplicated."] },
         ],
       });
     }
     if (url.endsWith("/workers/commit")) {
-      return ok({ batch_id: "workers-1", bundle_digest: "digest", source_installation_id: "legacy", imported_worker_ids: ["next-daisy"], imported_source_ids: ["daisy"], imported_at: 123 }, 201);
+      return ok({ batch_id: "workers-1", bundle_digest: "digest", source_installation_id: "legacy", imported_worker_ids: ["next-daisy"], imported_source_ids: ["daisy"], resumed_source_ids: ["daisy"], imported_at: 123 }, 201);
     }
     throw new Error(`unexpected ${url}`);
   }));
@@ -276,6 +276,8 @@ test("previews selected Legacy workers as sleeping before adding them", async ()
   fireEvent.change(container.querySelector("input[type=file]")!, { target: { files: [file] } });
 
   expect(await screen.findByText("Daisy")).toBeInTheDocument();
+  expect(screen.getByText("Exact Legacy conversation found")).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: /Resume exact Legacy conversations/ })).toBeChecked();
   expect(screen.getByText("Project Root").closest("label")?.querySelector("input")).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Review 1 worker" }));
   expect(screen.getByText(/No Claude or Codex process starts/)).toBeInTheDocument();
@@ -286,7 +288,7 @@ test("previews selected Legacy workers as sleeping before adding them", async ()
   expect(screen.getByText(/Task matches were refreshed/)).toBeInTheDocument();
   expect(taskPreviewCount).toBe(2);
   const commit = requests.find((request) => request.url.endsWith("/workers/commit"));
-  expect(commit?.body).toMatchObject({ commit: { selected_source_ids: ["daisy"] } });
+  expect(commit?.body).toMatchObject({ commit: { selected_source_ids: ["daisy"], resume_legacy_conversations: true } });
 });
 
 function ok(body: unknown, status = 200) {
