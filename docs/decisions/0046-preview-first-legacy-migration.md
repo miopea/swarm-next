@@ -37,7 +37,11 @@ and can be disabled to start every imported worker fresh. Retaining an identifie
 does not wake a worker, read transcript content, or copy terminal history. On the
 worker's first later wake, Next asks the matching provider to resume that exact
 conversation. If no valid matching identifier is available, preview says so and
-the worker starts fresh. Existing
+the worker starts fresh. When the same repository worker already exists in
+Next, the wizard offers a separate opt-in replacement choice. It requires the
+worker to be sleeping, preserves the prior Next conversation for rollback, and
+changes only the provider conversation identity. Names, descriptions,
+providers, paths, tasks, and running workers are never overwritten. Existing
 workers match by name or repository, and the managed Queen, Scout, and Legacy
 Project Root identities are never duplicated. Any later section requires its
 own normalization and review policy rather than inheriting task behavior.

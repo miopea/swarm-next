@@ -112,7 +112,8 @@ const LEGACY_WORKER_MIGRATION_SCHEMA_VERSION: i64 = 68;
 const TASK_REMOVAL_SCHEMA_VERSION: i64 = 69;
 const DEPLOYMENT_GRANT_SCHEMA_VERSION: i64 = 70;
 const LEGACY_PROVIDER_CONVERSATION_SCHEMA_VERSION: i64 = 71;
-const CURRENT_SCHEMA_VERSION: i64 = LEGACY_PROVIDER_CONVERSATION_SCHEMA_VERSION;
+const LEGACY_EXISTING_CONVERSATION_SCHEMA_VERSION: i64 = 72;
+const CURRENT_SCHEMA_VERSION: i64 = LEGACY_EXISTING_CONVERSATION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1867,6 +1868,9 @@ fn migrate_recent_schema(
     }
     if schema_version < LEGACY_PROVIDER_CONVERSATION_SCHEMA_VERSION {
         migration::migrate_legacy_provider_conversations(transaction)?;
+    }
+    if schema_version < LEGACY_EXISTING_CONVERSATION_SCHEMA_VERSION {
+        migration::migrate_legacy_existing_conversations(transaction)?;
     }
     Ok(())
 }
@@ -4529,8 +4533,12 @@ mod tests {
                 .connection()
                 .unwrap()
                 .execute_batch(&format!(
-                    "ALTER TABLE worker_profiles DROP COLUMN provider_conversation_resume;
-                     ALTER TABLE migration_worker_links DROP COLUMN resumed_conversation;
+                    "ALTER TABLE migration_worker_links DROP COLUMN previous_session_count;
+                     ALTER TABLE migration_worker_links DROP COLUMN imported_provider_conversation_id;
+                     ALTER TABLE migration_worker_links DROP COLUMN previous_updated_at;
+                     ALTER TABLE migration_worker_links DROP COLUMN previous_provider_conversation_resume;
+                     ALTER TABLE migration_worker_links DROP COLUMN previous_provider_conversation_id;
+                     ALTER TABLE migration_worker_links DROP COLUMN adopted_existing;
                      PRAGMA user_version = {};",
                     CURRENT_SCHEMA_VERSION - 1
                 ))
@@ -4557,6 +4565,19 @@ mod tests {
             )
             .unwrap();
         assert!(provider_resume_exists);
+        let replacement_provenance_exists: bool = connection
+            .query_row(
+                "SELECT COUNT(*) = 6 FROM pragma_table_info('migration_worker_links')
+                 WHERE name IN (
+                    'adopted_existing', 'previous_provider_conversation_id',
+                    'previous_provider_conversation_resume', 'previous_updated_at',
+                    'imported_provider_conversation_id', 'previous_session_count'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(replacement_provenance_exists);
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))

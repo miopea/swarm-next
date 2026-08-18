@@ -59,7 +59,7 @@ test("previews before importing and selects only server-approved records", async
         bundle_digest: "preview-digest",
         source_installation_id: "legacy-hive",
         selectable: 1,
-        skipped: 1,
+        skipped: 2,
         invalid: 0,
         records: [
           {
@@ -260,12 +260,13 @@ test("previews selected Legacy workers as sleeping before adding them", async ()
         invalid: 0,
         records: [
           { source_id: "daisy", name: "Daisy", workspace: "/projects/daisy", provider: "claude_code", disposition: "ready", selectable: true, conversation_available: true, warnings: [] },
+          { source_id: "clover", name: "Clover", workspace: "/projects/clover", provider: "claude_code", disposition: "duplicate", selectable: false, conversation_available: true, existing_worker_id: "next-clover", warnings: ["Swarm Next already has worker 'Clover' for this name or repository."] },
           { source_id: "root", name: "Project Root", workspace: "/projects", provider: "claude_code", disposition: "managed_by_next", selectable: false, conversation_available: false, warnings: ["Swarm Next Scout owns cross-repository work; Project Root is not duplicated."] },
         ],
       });
     }
     if (url.endsWith("/workers/commit")) {
-      return ok({ batch_id: "workers-1", bundle_digest: "digest", source_installation_id: "legacy", imported_worker_ids: ["next-daisy"], imported_source_ids: ["daisy"], resumed_source_ids: ["daisy"], imported_at: 123 }, 201);
+      return ok({ batch_id: "workers-1", bundle_digest: "digest", source_installation_id: "legacy", imported_worker_ids: ["next-daisy"], updated_worker_ids: ["next-clover"], imported_source_ids: ["daisy", "clover"], resumed_source_ids: ["daisy", "clover"], imported_at: 123 }, 201);
     }
     throw new Error(`unexpected ${url}`);
   }));
@@ -278,8 +279,13 @@ test("previews selected Legacy workers as sleeping before adding them", async ()
   expect(await screen.findByText("Daisy")).toBeInTheDocument();
   expect(screen.getByText("Exact Legacy conversation found")).toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: /Resume exact Legacy conversations/ })).toBeChecked();
+  const replace = screen.getByRole("checkbox", { name: /Replace conversations on matching workers/ });
+  expect(replace).not.toBeChecked();
+  expect(screen.getByText("Clover").closest("label")?.querySelector("input")).toBeDisabled();
+  fireEvent.click(replace);
+  fireEvent.click(screen.getByText("Clover").closest("label")!.querySelector("input")!);
   expect(screen.getByText("Project Root").closest("label")?.querySelector("input")).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "Review 1 worker" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review 2 workers" }));
   expect(screen.getByText(/No Claude or Codex process starts/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Add selected workers" }));
 
@@ -288,7 +294,7 @@ test("previews selected Legacy workers as sleeping before adding them", async ()
   expect(screen.getByText(/Task matches were refreshed/)).toBeInTheDocument();
   expect(taskPreviewCount).toBe(2);
   const commit = requests.find((request) => request.url.endsWith("/workers/commit"));
-  expect(commit?.body).toMatchObject({ commit: { selected_source_ids: ["daisy"], resume_legacy_conversations: true } });
+  expect(commit?.body).toMatchObject({ commit: { selected_source_ids: expect.arrayContaining(["daisy", "clover"]), resume_legacy_conversations: true, replace_existing_conversations: true } });
 });
 
 function ok(body: unknown, status = 200) {

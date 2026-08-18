@@ -36,6 +36,7 @@ export type LegacyWorkerPreview = {
   disposition: LegacyWorkerImportDisposition;
   selectable: boolean;
   conversation_available: boolean;
+  existing_worker_id?: string;
   warnings: string[];
 };
 
@@ -53,6 +54,7 @@ export type LegacyWorkerMigrationReceipt = {
   bundle_digest: string;
   source_installation_id: string;
   imported_worker_ids: string[];
+  updated_worker_ids: string[];
   imported_source_ids: string[];
   resumed_source_ids: string[];
   imported_at: number;
@@ -176,6 +178,7 @@ export async function commitLegacyWorkerMigration(
   preview: LegacyWorkerMigrationPreview,
   selectedSourceIds: string[],
   resumeLegacyConversations: boolean,
+  replaceExistingConversations: boolean,
 ): Promise<LegacyWorkerMigrationReceipt> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/migrations/legacy/workers/commit", {
     method: "POST",
@@ -186,6 +189,7 @@ export async function commitLegacyWorkerMigration(
         bundle_digest: preview.bundle_digest,
         selected_source_ids: selectedSourceIds,
         resume_legacy_conversations: resumeLegacyConversations,
+        replace_existing_conversations: replaceExistingConversations,
       },
     }),
   });
@@ -195,11 +199,11 @@ export async function commitLegacyWorkerMigration(
 export async function rollbackLegacyWorkerMigration(
   operatorToken: string,
   receipt: LegacyWorkerMigrationReceipt,
-): Promise<{ batch_id: string; removed_workers: number; rolled_back_at: number }> {
+): Promise<{ batch_id: string; removed_workers: number; restored_workers: number; rolled_back_at: number }> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/migrations/legacy/workers/rollback", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ batch_id: receipt.batch_id, bundle_digest: receipt.bundle_digest }),
   });
-  return response.json() as Promise<{ batch_id: string; removed_workers: number; rolled_back_at: number }>;
+  return response.json() as Promise<{ batch_id: string; removed_workers: number; restored_workers: number; rolled_back_at: number }>;
 }
