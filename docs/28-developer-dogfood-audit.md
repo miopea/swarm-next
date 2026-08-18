@@ -15,6 +15,7 @@ This is the working product audit for the first real developer week. It records 
 | Inspect Keeper/Member Apiary state | Pass | Pass | Apiary is supervisory; work creation remains on Tasks. Member Hives can see public Apiary structure without routine terminal noise. |
 | Resize and use a terminal | Pass in current code | Pass in current code | Terminal owns the remaining viewport, touch scrolling follows the content gesture, and a Jump to latest control appears away from the bottom. Re-prove after the next live release. |
 | Recover Queen automation submission | Test pass; live release pending | Same | Submission now waits for stable output, retries Enter, and proves the marker left the input instead of trusting a host acknowledgement. |
+| Open an existing Queen decision from Settings | Pass | Pass | Settings recognizes the durable decision, removes the retry action, and routes to the one calm queue without starting another Queen review. |
 | Find Legacy data for migration | Pass | Pass | Primary path discovers the normal local Legacy database read-only. File selection remains an advanced fallback. |
 | Understand runtime updates | Pass in current UI | Pass | Worker engine and App/API are separate cards with versions, risk, and action state. Re-prove progress across a real update after release. |
 | Find one worker or command in a 31-worker Hive | Pass | Pass | The Awake filter keeps the rail calm; quick navigation filters sleeping workers by name and scrolls inside its bounded dialog. Alt+K opens it from ordinary desktop controls. |
@@ -31,6 +32,8 @@ This is the working product audit for the first real developer week. It records 
 8. **A normal provider runtime is no longer a critical alert.** Loaded Claude and Codex process trees use the same 2/4 GiB pressure bands as automatic worker admission instead of the Rust service's smaller 256/512 MiB thresholds.
 9. **Runtime identities stay useful without consuming the card.** App/API and worker-engine surfaces share one version presenter that keeps the release and short revision while dropping development timestamps and process suffixes.
 10. **Large Crew settings are searchable.** A 30+ worker roster can be filtered by worker, repository, provider, or Queen-routing description. Reordering is deliberately paused while results are filtered so hidden positions cannot move unexpectedly.
+11. **A pending Queen decision is not mistaken for a failed review.** Settings now presents the durable decision count and opens **Needs you** instead of offering to rerun Queen and creating a review loop.
+12. **Release packaging refuses a stale browser build.** The guarded packaging path now fails when web source is newer than `web/dist`, preventing an updated API from silently shipping an older UI.
 
 ## Live deployed proof — 2026-08-18
 
@@ -46,6 +49,8 @@ This is the working product audit for the first real developer week. It records 
 - Quick navigation opened from its toolbar action and Alt+K, filtered a 31-worker roster down to the requested Codex workers, and kept the result list scrollable at phone size.
 - **Generate with Claude** showed bounded progress, completed in roughly 30 seconds, and returned an editable routing draft with a clear save requirement. The draft was cancelled so the live worker profile was not changed.
 - Repeated Tasks → Workers route changes painted the mobile terminal immediately during the re-proof. One earlier delayed compositor frame remains intermittent rather than a reproducible application failure; it is not being masked with an arbitrary delay.
+- Release `0.1.0-e1ca5f59155d` displayed **Queen needs you** and one **Review decision** action in Settings, with no **Retry Queen review** action. Selecting it opened the existing approval in **Needs you** without creating or resolving any work.
+- The first `8a2ba9e3` package exposed a stale-browser-build hazard during live proof: the API revision changed while the installed browser bundle did not. Packaging now rejects that condition, and the uniquely versioned `e1ca5f59` package proved the corrected browser and API together while preserving the terminal-host process.
 
 ## Verified existing capabilities
 
