@@ -1349,37 +1349,7 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let current: Option<String> = if let Some(session_id) = reporting_session_id {
-            transaction
-                .query_row(
-                    "SELECT task.state FROM tasks task
-                     JOIN task_assignments assignment ON assignment.task_id = task.id
-                         AND assignment.released_at IS NULL
-                     JOIN worker_sessions session ON session.session_id = assignment.worker_session_id
-                         AND session.ended_at IS NULL
-                     WHERE task.id = ?1 AND task.removed_at IS NULL AND session.session_id = ?2",
-                    params![id.to_string(), session_id.to_string()],
-                    |row| row.get(0),
-                )
-                .optional()?
-        } else {
-            transaction
-                .query_row(
-                    "SELECT state FROM tasks WHERE id = ?1 AND removed_at IS NULL",
-                    [id.to_string()],
-                    |row| row.get(0),
-                )
-                .optional()?
-        };
-        let current = current.ok_or_else(|| {
-            if reporting_session_id.is_some() {
-                TaskStoreError::WorkerSessionNotActive
-            } else {
-                TaskStoreError::NotFound
-            }
-        })?;
-        let current = TaskState::from_str(&current)
-            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?;
+        let current = reportable_task_state(&transaction, id, reporting_session_id)?;
         if !current.can_transition_to(target) {
             return Err(TaskStoreError::InvalidTransition {
                 from: current,
@@ -2849,6 +2819,46 @@ fn ensure_worker_has_no_other_active_task(
         return Err(TaskStoreError::WorkerAlreadyHasActiveTask);
     }
     Ok(())
+}
+
+/// Reads the state a caller is allowed to transition from. A worker-reported
+/// transition must name the exact live session still holding the assignment, so
+/// a concurrent worker exit leaves the task unchanged for a later guarded retry.
+fn reportable_task_state(
+    transaction: &rusqlite::Transaction<'_>,
+    id: TaskId,
+    reporting_session_id: Option<WorkerSessionId>,
+) -> Result<TaskState, TaskStoreError> {
+    let current: Option<String> = if let Some(session_id) = reporting_session_id {
+        transaction
+            .query_row(
+                "SELECT task.state FROM tasks task
+                 JOIN task_assignments assignment ON assignment.task_id = task.id
+                     AND assignment.released_at IS NULL
+                 JOIN worker_sessions session ON session.session_id = assignment.worker_session_id
+                     AND session.ended_at IS NULL
+                 WHERE task.id = ?1 AND task.removed_at IS NULL AND session.session_id = ?2",
+                params![id.to_string(), session_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+    } else {
+        transaction
+            .query_row(
+                "SELECT state FROM tasks WHERE id = ?1 AND removed_at IS NULL",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+    };
+    let current = current.ok_or_else(|| {
+        if reporting_session_id.is_some() {
+            TaskStoreError::WorkerSessionNotActive
+        } else {
+            TaskStoreError::NotFound
+        }
+    })?;
+    TaskState::from_str(&current).map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
 }
 
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {

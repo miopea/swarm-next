@@ -146,9 +146,8 @@ fn ensure_claude_resume_history(profile: &WorkerProfile) -> Result<(), ApiError>
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| unavailable_conversation(&profile.name))?;
-    let target = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".claude"));
+    let target =
+        std::env::var_os("CLAUDE_CONFIG_DIR").map_or_else(|| home.join(".claude"), PathBuf::from);
     ensure_claude_resume_history_between(
         &profile.workspace,
         &conversation_id.to_string(),

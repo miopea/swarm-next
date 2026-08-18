@@ -192,9 +192,8 @@ fn stage_legacy_conversations(
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "Swarm could not locate this operator's home folder".to_owned())?;
-    let target = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".claude"));
+    let target =
+        std::env::var_os("CLAUDE_CONFIG_DIR").map_or_else(|| home.join(".claude"), PathBuf::from);
     stage_legacy_conversations_between(
         bundle,
         commit,

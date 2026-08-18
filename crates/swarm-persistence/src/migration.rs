@@ -407,85 +407,15 @@ impl TaskStore {
         let mut imported_source_ids = Vec::with_capacity(workers.len());
         let mut resumed_source_ids = Vec::with_capacity(workers.len());
         for (offset, worker) in workers.into_iter().enumerate() {
+            let hive_id = identity.hive.id.to_string();
             if let Some(worker_id) = worker.existing_worker_id {
-                let provider_conversation_id = worker
-                    .provider_conversation_id
-                    .ok_or(TaskStoreError::InvalidMigrationSelection)?;
-                let existing = transaction
-                    .query_row(
-                        "SELECT provider_conversation_id, provider_conversation_resume,
-                                updated_at, provider, workspace,
-                                EXISTS(SELECT 1 FROM worker_sessions session
-                                       WHERE session.worker_id = worker_profiles.id
-                                         AND session.ended_at IS NULL),
-                                (SELECT COUNT(*) FROM worker_sessions session
-                                 WHERE session.worker_id = worker_profiles.id)
-                         FROM worker_profiles
-                         WHERE id = ?1 AND hive_id = ?2 AND archived_at IS NULL",
-                        params![worker_id.to_string(), identity.hive.id.to_string()],
-                        |row| {
-                            Ok((
-                                row.get::<_, Option<String>>(0)?,
-                                row.get::<_, bool>(1)?,
-                                row.get::<_, i64>(2)?,
-                                row.get::<_, String>(3)?,
-                                row.get::<_, String>(4)?,
-                                row.get::<_, bool>(5)?,
-                                row.get::<_, i64>(6)?,
-                            ))
-                        },
-                    )
-                    .optional()?
-                    .ok_or(TaskStoreError::MigrationBundleChanged)?;
-                let (
-                    previous_conversation,
-                    previous_resume,
-                    previous_updated_at,
-                    provider,
-                    workspace,
-                    active,
-                    previous_session_count,
-                ) = existing;
-                if active
-                    || provider.parse::<ProviderKind>().ok() != Some(worker.provider)
-                    || workspace_identity(&workspace, migration_home_directory().as_deref())
-                        != workspace_identity(
-                            &worker.workspace,
-                            migration_home_directory().as_deref(),
-                        )
-                {
-                    return Err(TaskStoreError::MigrationBundleChanged);
-                }
-                transaction.execute(
-                    "UPDATE worker_profiles
-                     SET provider_conversation_id = ?2,
-                         provider_conversation_resume = 1,
-                         updated_at = ?3
-                     WHERE id = ?1",
-                    params![
-                        worker_id.to_string(),
-                        provider_conversation_id.to_string(),
-                        imported_at
-                    ],
-                )?;
-                transaction.execute(
-                    "INSERT INTO migration_worker_links
-                     (batch_id, source_worker_id, worker_id, imported_profile_digest,
-                      resumed_conversation, adopted_existing,
-                      previous_provider_conversation_id,
-                      previous_provider_conversation_resume, previous_updated_at,
-                      imported_provider_conversation_id, previous_session_count)
-                     VALUES (?1, ?2, ?3, 'adopted-existing', 1, 1, ?4, ?5, ?6, ?7, ?8)",
-                    params![
-                        batch_id,
-                        worker.source_id,
-                        worker_id.to_string(),
-                        previous_conversation,
-                        i64::from(previous_resume),
-                        previous_updated_at,
-                        provider_conversation_id.to_string(),
-                        previous_session_count,
-                    ],
+                adopt_existing_legacy_conversation(
+                    &transaction,
+                    &hive_id,
+                    &batch_id,
+                    imported_at,
+                    worker_id,
+                    &worker,
                 )?;
                 updated_worker_ids.push(worker_id);
                 resumed_source_ids.push(worker.source_id.clone());
@@ -494,63 +424,17 @@ impl TaskStore {
             }
             let position = first_position
                 + i64::try_from(offset).map_err(|_| TaskStoreError::InvalidMigrationSelection)?;
-            let duplicate_exists: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM worker_profiles
-                 WHERE hive_id = ?1 AND archived_at IS NULL
-                   AND (lower(trim(name)) = lower(trim(?2)) OR workspace = ?3))",
-                params![identity.hive.id.to_string(), worker.name, worker.workspace],
-                |row| row.get(0),
-            )?;
-            if duplicate_exists {
-                return Err(TaskStoreError::MigrationBundleChanged);
-            }
-            let worker_id = WorkerId::new();
-            let provider_conversation_id = commit
-                .resume_legacy_conversations
-                .then_some(worker.provider_conversation_id)
-                .flatten();
-            transaction.execute(
-                "INSERT INTO worker_profiles
-                 (id, hive_id, name, description, role, provider, workspace,
-                  autostart, position, created_at, updated_at,
-                  provider_conversation_id, provider_conversation_resume)
-                 VALUES (?1, ?2, ?3, ?4, 'worker', ?5, ?6, 0, ?7, ?8, ?8, ?9, ?10)",
-                params![
-                    worker_id.to_string(),
-                    identity.hive.id.to_string(),
-                    worker.name,
-                    worker.description,
-                    worker.provider.to_string(),
-                    worker.workspace,
-                    position,
-                    imported_at,
-                    provider_conversation_id.map(|value| value.to_string()),
-                    i64::from(provider_conversation_id.is_some()),
-                ],
-            )?;
-            let digest = worker_profile_digest(
-                &worker.name,
-                &worker.description,
-                worker.provider,
-                &worker.workspace,
-                position,
+            let (worker_id, resumed_conversation) = import_new_legacy_worker(
+                &transaction,
+                &hive_id,
+                &batch_id,
                 imported_at,
-            );
-            transaction.execute(
-                "INSERT INTO migration_worker_links
-                 (batch_id, source_worker_id, worker_id, imported_profile_digest,
-                  resumed_conversation)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    batch_id,
-                    worker.source_id,
-                    worker_id.to_string(),
-                    digest,
-                    i64::from(provider_conversation_id.is_some()),
-                ],
+                position,
+                &worker,
+                commit.resume_legacy_conversations,
             )?;
             imported_worker_ids.push(worker_id);
-            if provider_conversation_id.is_some() {
+            if resumed_conversation {
                 resumed_source_ids.push(worker.source_id.clone());
             }
             imported_source_ids.push(worker.source_id);
@@ -589,10 +473,10 @@ impl TaskStore {
             .collect::<Vec<_>>();
         if workers.len() != selected.len()
             || workers.iter().any(|worker| {
-                !worker.selectable
-                    && !(commit.replace_existing_conversations
-                        && worker.existing_worker_id.is_some()
-                        && worker.provider_conversation_id.is_some())
+                let replaces_existing_conversation = commit.replace_existing_conversations
+                    && worker.existing_worker_id.is_some()
+                    && worker.provider_conversation_id.is_some();
+                !(worker.selectable || replaces_existing_conversation)
             })
         {
             return Err(TaskStoreError::InvalidMigrationSelection);
@@ -1426,19 +1310,19 @@ impl TaskStore {
                 } else {
                     "Swarm Next already has this worker.".into()
                 });
-                if !already_imported {
-                    if let Some(duplicate) = duplicate.filter(|duplicate| {
+                if !already_imported
+                    && let Some(duplicate) = duplicate.filter(|duplicate| {
                         duplicate.provider == provider
                             && workspace_identity(&duplicate.workspace, home.as_deref())
                                 == workspace_identity(&workspace, home.as_deref())
                             && provider_conversation_id.is_some()
-                    }) {
-                        existing_worker_id = Some(duplicate.id);
-                        warnings.push(
-                            "The migration wizard can explicitly replace this matching worker's current conversation after the worker is put to sleep."
-                                .into(),
-                        );
-                    }
+                    })
+                {
+                    existing_worker_id = Some(duplicate.id);
+                    warnings.push(
+                        "The migration wizard can explicitly replace this matching worker's current conversation after the worker is put to sleep."
+                            .into(),
+                    );
                 }
             }
             output.push(NormalizedWorker {
@@ -1725,6 +1609,162 @@ pub(super) fn migrate_legacy_existing_conversations(
         }
     }
     transaction.pragma_update(None, "user_version", 72)
+}
+
+/// Points an existing Swarm Next worker at the Legacy conversation the operator
+/// explicitly chose to adopt, recording what that profile carried beforehand.
+fn adopt_existing_legacy_conversation(
+    transaction: &rusqlite::Transaction<'_>,
+    hive_id: &str,
+    batch_id: &str,
+    imported_at: i64,
+    worker_id: WorkerId,
+    worker: &NormalizedWorker,
+) -> Result<(), TaskStoreError> {
+    let provider_conversation_id = worker
+        .provider_conversation_id
+        .ok_or(TaskStoreError::InvalidMigrationSelection)?;
+    let (
+        previous_conversation,
+        previous_resume,
+        previous_updated_at,
+        provider,
+        workspace,
+        active,
+        previous_session_count,
+    ) = transaction
+        .query_row(
+            "SELECT provider_conversation_id, provider_conversation_resume,
+                    updated_at, provider, workspace,
+                    EXISTS(SELECT 1 FROM worker_sessions session
+                           WHERE session.worker_id = worker_profiles.id
+                             AND session.ended_at IS NULL),
+                    (SELECT COUNT(*) FROM worker_sessions session
+                     WHERE session.worker_id = worker_profiles.id)
+             FROM worker_profiles
+             WHERE id = ?1 AND hive_id = ?2 AND archived_at IS NULL",
+            params![worker_id.to_string(), hive_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, bool>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(TaskStoreError::MigrationBundleChanged)?;
+    if active
+        || provider.parse::<ProviderKind>().ok() != Some(worker.provider)
+        || workspace_identity(&workspace, migration_home_directory().as_deref())
+            != workspace_identity(&worker.workspace, migration_home_directory().as_deref())
+    {
+        return Err(TaskStoreError::MigrationBundleChanged);
+    }
+    transaction.execute(
+        "UPDATE worker_profiles
+         SET provider_conversation_id = ?2,
+             provider_conversation_resume = 1,
+             updated_at = ?3
+         WHERE id = ?1",
+        params![
+            worker_id.to_string(),
+            provider_conversation_id.to_string(),
+            imported_at
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO migration_worker_links
+         (batch_id, source_worker_id, worker_id, imported_profile_digest,
+          resumed_conversation, adopted_existing,
+          previous_provider_conversation_id,
+          previous_provider_conversation_resume, previous_updated_at,
+          imported_provider_conversation_id, previous_session_count)
+         VALUES (?1, ?2, ?3, 'adopted-existing', 1, 1, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            batch_id,
+            worker.source_id,
+            worker_id.to_string(),
+            previous_conversation,
+            i64::from(previous_resume),
+            previous_updated_at,
+            provider_conversation_id.to_string(),
+            previous_session_count,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Creates one sleeping Swarm Next profile for a selected Legacy worker and
+/// reports whether it kept the Legacy conversation for its first wake.
+fn import_new_legacy_worker(
+    transaction: &rusqlite::Transaction<'_>,
+    hive_id: &str,
+    batch_id: &str,
+    imported_at: i64,
+    position: i64,
+    worker: &NormalizedWorker,
+    resume_legacy_conversations: bool,
+) -> Result<(WorkerId, bool), TaskStoreError> {
+    let duplicate_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM worker_profiles
+         WHERE hive_id = ?1 AND archived_at IS NULL
+           AND (lower(trim(name)) = lower(trim(?2)) OR workspace = ?3))",
+        params![hive_id, worker.name, worker.workspace],
+        |row| row.get(0),
+    )?;
+    if duplicate_exists {
+        return Err(TaskStoreError::MigrationBundleChanged);
+    }
+    let worker_id = WorkerId::new();
+    let provider_conversation_id = resume_legacy_conversations
+        .then_some(worker.provider_conversation_id)
+        .flatten();
+    transaction.execute(
+        "INSERT INTO worker_profiles
+         (id, hive_id, name, description, role, provider, workspace,
+          autostart, position, created_at, updated_at,
+          provider_conversation_id, provider_conversation_resume)
+         VALUES (?1, ?2, ?3, ?4, 'worker', ?5, ?6, 0, ?7, ?8, ?8, ?9, ?10)",
+        params![
+            worker_id.to_string(),
+            hive_id,
+            worker.name,
+            worker.description,
+            worker.provider.to_string(),
+            worker.workspace,
+            position,
+            imported_at,
+            provider_conversation_id.map(|value| value.to_string()),
+            i64::from(provider_conversation_id.is_some()),
+        ],
+    )?;
+    let digest = worker_profile_digest(
+        &worker.name,
+        &worker.description,
+        worker.provider,
+        &worker.workspace,
+        position,
+        imported_at,
+    );
+    transaction.execute(
+        "INSERT INTO migration_worker_links
+         (batch_id, source_worker_id, worker_id, imported_profile_digest,
+          resumed_conversation)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            batch_id,
+            worker.source_id,
+            worker_id.to_string(),
+            digest,
+            i64::from(provider_conversation_id.is_some()),
+        ],
+    )?;
+    Ok((worker_id, provider_conversation_id.is_some()))
 }
 
 #[cfg(test)]
