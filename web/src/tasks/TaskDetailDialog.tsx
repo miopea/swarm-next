@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 
 import {
   fetchJiraTaskAttachment,
@@ -8,24 +8,31 @@ import {
   type JiraTaskAttachment,
   type JiraTaskLink,
   type Task,
+  type TaskPriority,
+  type TaskUpdateInput,
 } from "../api";
 
 type LoadedImage = JiraTaskAttachment & { url: string };
 
-export default function TaskDetailDialog({ task, jiraLink, emailSources = [], operatorToken, onClose, onEdit }: {
+export default function TaskDetailDialog({ task, jiraLink, emailSources = [], operatorToken, busy, onClose, onSave }: {
   task: Task;
   jiraLink?: JiraTaskLink;
   emailSources?: EmailTaskSource[];
   operatorToken: string;
+  busy: boolean;
   onClose: () => void;
-  onEdit: () => void;
+  onSave: (input: TaskUpdateInput) => Promise<void>;
 }) {
   const titleId = useId();
+  const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
+  const [sourceDescription, setSourceDescription] = useState("");
+  const [priority, setPriority] = useState(task.priority);
   const [attachments, setAttachments] = useState<JiraTaskAttachment[]>([]);
   const [images, setImages] = useState<LoadedImage[]>([]);
   const [loading, setLoading] = useState(Boolean(jiraLink || emailSources.length));
   const [failed, setFailed] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -52,7 +59,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
         })));
         const detail = jiraLink ? await fetchJiraTaskDetail(operatorToken, task.id) : undefined;
         if (!active) return;
-        setDescription(detail?.description || task.description);
+        setSourceDescription(detail?.description || "");
         const allAttachments = [...(detail?.attachments ?? []), ...emailAttachments];
         setAttachments(allAttachments);
         const loaded = (await Promise.all(allAttachments.filter((attachment) => attachment.is_image).map(async (attachment) => {
@@ -81,13 +88,25 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
     };
   }, [attempt, emailSources, jiraLink, operatorToken, task.description, task.id]);
 
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!title.trim()) return;
+    setSaveFailed(false);
+    try {
+      await onSave({ title, description, priority });
+      onClose();
+    } catch {
+      setSaveFailed(true);
+    }
+  }
+
   return (
     <div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="task-detail-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header>
           <div>
             <span className="eyebrow">Task details</span>
-            <h2 id={titleId}>{task.title}</h2>
+            <h2 id={titleId}>Review and edit task</h2>
           </div>
           <button type="button" autoFocus onClick={onClose}>Close</button>
         </header>
@@ -99,11 +118,18 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
           {jiraLink && <span><small>Project</small><strong>{jiraLink.project_name}</strong></span>}
           {jiraLink && <span><small>Jira assignee</small><strong>{jiraLink.jira_assignee_name || "Unassigned"}</strong></span>}
         </div>
-        <div className="task-detail-content">
+        <form className="task-detail-content task-detail-editor" onSubmit={(event) => void submit(event)}>
           <section>
-            <h3>Description</h3>
-            {description ? <p className="task-detail-description">{description}</p> : <p className="empty-note">No description was provided.</p>}
+            <label htmlFor={`detail-title-${task.id}`}>Title</label>
+            <input id={`detail-title-${task.id}`} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} />
+            <label htmlFor={`detail-description-${task.id}`}>Work brief</label>
+            <textarea id={`detail-description-${task.id}`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={10000} rows={6} placeholder="Add the outcome, context, and what done looks like" />
+            <label htmlFor={`detail-priority-${task.id}`}>Priority</label>
+            <select id={`detail-priority-${task.id}`} value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
+              <option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option>
+            </select>
           </section>
+          {sourceDescription && sourceDescription !== description && <section><h3>Source description</h3><p className="task-detail-description">{sourceDescription}</p></section>}
           {loading && <p className="task-detail-loading">Loading task details and images…</p>}
           {failed && <div className="task-detail-error"><span>Some linked details could not be loaded. The saved Swarm description is still shown.</span><button type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></div>}
           {images.length > 0 && (
@@ -122,10 +148,11 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
               </ul>
             </section>
           )}
-        </div>
+          {saveFailed && <p className="task-detail-save-error" role="alert">Changes were not saved. Your edits are still here—try again when the connection is ready.</p>}
+          <div className="task-detail-editor-actions"><button disabled={busy || !title.trim()}>{busy ? "Saving…" : "Save changes"}</button></div>
+        </form>
         <footer>
           {jiraLink?.issue_url && <a className="button-link" href={jiraLink.issue_url} target="_blank" rel="noreferrer">Open in Jira</a>}
-          <button type="button" onClick={onEdit}>Edit Swarm task</button>
         </footer>
       </section>
     </div>

@@ -8,6 +8,7 @@ import type { LockDetectionState } from "../presence/PresenceController";
 import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
 import { queenAutomationStateDetail, queenAutomationStateLabel, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
+import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
 import { workerEngineUpdateRequired } from "../runtime/workerEngine";
 import ApiarySettings from "./ApiarySettings";
 import DevelopmentReloadAction from "./DevelopmentReloadAction";
@@ -199,10 +200,15 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
                 onChange={(event) => void onQueenPolicyChange({ ...queenPolicy!, [mode]: event.target.value as QueenAutonomyLevel })}
               >
                 <option value="advisory">Advise only</option>
-                <option value="coordinate">Coordinate workers</option>
-                <option value="local_execution">Allow local execution</option>
+                <option value="coordinate">Coordinate the Hive</option>
+                <option value="local_execution">Run approved work</option>
               </select>
             </label>
+          ))}
+        </div>
+        <div className="queen-policy-explainer" aria-label="Queen autonomy levels">
+          {(["advisory", "coordinate", "local_execution"] as const).map((level) => (
+            <div key={level}><strong>{queenAutonomyLabel(level)}</strong><small>{queenAutonomyDetail(level)}</small></div>
           ))}
         </div>
         <div className="queen-conductor" aria-labelledby="queen-conductor-heading">

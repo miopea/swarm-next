@@ -6,7 +6,8 @@ import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
 import { clipboardImage, terminalAttachmentPaste, terminalTextPaste, uploadTerminalImage } from "./TerminalAttachments";
-import type { QueenAutomationStatus } from "../api";
+import type { QueenAutonomyLevel, QueenAutomationStatus } from "../api";
+import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
 import { queenAutomationCompactLabel, queenAutomationStateDetail, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
 
 export interface TerminalViewProps {
@@ -18,10 +19,11 @@ export interface TerminalViewProps {
   mobileKeysVisible?: boolean;
   onMobileKeysVisibleChange?: (visible: boolean) => void;
   queenAutomation?: QueenAutomationStatus;
+  queenAutonomy?: QueenAutonomyLevel;
   onOpenQueenSettings?: () => void;
 }
 
-export default function TerminalView({ session, operatorToken, onStop, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, queenAutomation, onOpenQueenSettings }: TerminalViewProps) {
+export default function TerminalView({ session, operatorToken, onStop, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, queenAutomation, queenAutonomy, onOpenQueenSettings }: TerminalViewProps) {
   const mount = useRef<HTMLDivElement>(null);
   const controller = useMemo<TerminalController>(() => {
     terminalWorkspace.authenticate(operatorToken);
@@ -84,9 +86,12 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
       onPasteCapture={(event) => void handlePaste(event)}
     >
       <div className="terminal-toolbar">
-        <div>
-          <strong>{session.session_id}</strong>
+        <div className="terminal-connection-summary">
           <span className={`connection-state connection-${connectionState}`}>{connectionState.replace("_", " ")}</span>
+          <details className="terminal-session-details">
+            <summary>Session details</summary>
+            <code>{session.session_id}</code>
+          </details>
           {detail && <small>{detail}</small>}
           {attachmentState !== "idle" && (
             <small className={`attachment-state attachment-${attachmentState}`} role="status">
@@ -97,6 +102,11 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
         {canStop ? (
           <button className="danger-button" onClick={onStop} disabled={busy}>Put worker to sleep</button>
         ) : <div className="terminal-worker-controls">
+          {queenAutonomy && onOpenQueenSettings ? (
+            <button type="button" className="queen-autonomy-chip" title={queenAutonomyDetail(queenAutonomy)} onClick={onOpenQueenSettings}>
+              {queenAutonomyLabel(queenAutonomy)}
+            </button>
+          ) : null}
           {queenAutomation && onOpenQueenSettings ? (
             <button
               type="button"

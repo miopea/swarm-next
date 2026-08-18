@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type FormEvent } from "react";
+import { useState, type DragEvent } from "react";
 
 import {
   type EmailTaskSource,
@@ -7,7 +7,6 @@ import {
   type SessionSummary,
   type Task,
   type TaskActivityPage,
-  type TaskPriority,
   type TaskState,
   type TaskUpdateInput,
   type Worker,
@@ -49,16 +48,8 @@ export type TaskCardProps = {
   onDragEnd: () => void;
 };
 
-const priorityLabels: Record<TaskPriority, string> = {
-  low: "Low",
-  normal: "Normal",
-  high: "High",
-  urgent: "Urgent",
-};
-
 export default function TaskCard({ task, jiraLink, emailSources, operatorToken, sessions, workers, busy, onUpdate, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: TaskCardProps) {
   const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
-  const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activity, setActivity] = useState<TaskActivityPage>();
   const [historyError, setHistoryError] = useState(false);
@@ -109,7 +100,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
       tabIndex={-1}
       className={`task-card state-${task.state}${dropTarget ? " drop-target-before" : ""}`}
       aria-label={task.title}
-      draggable={!busy && !editing && task.state !== "completed" && (canMoveEarlier || canMoveLater)}
+      draggable={!busy && task.state !== "completed" && (canMoveEarlier || canMoveLater)}
       onDragStart={(event: DragEvent<HTMLElement>) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", task.id); onDragStart(task.id); }}
       onDragEnd={onDragEnd}
       onDragEnter={onDragTarget}
@@ -122,29 +113,24 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
     >
       <TaskMetadata task={task} jiraLink={jiraLink} busy={busy} onRetryJira={onRetryJira} />
       <h4>{task.title}</h4>
-      {task.description && !editing && <p className="task-description">{task.description}</p>}
-      {editing ? (
-        <TaskEditForm task={task} busy={busy} onUpdate={onUpdate} onCancel={() => setEditing(false)} />
-      ) : task.state !== "completed" && (
+      {task.description && <p className="task-description">{task.description}</p>}
+      {task.state !== "completed" && (
         <TaskAssignment task={task} workers={workers} workerRunning={Boolean(assigned?.running)} busy={busy} onAssign={onAssign} onOpenWorker={onOpenWorker} onTransition={onTransition} onStartWorker={onStartWorker} />
       )}
       <div className="task-actions">
-        {!editing && <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>Edit</button>}
-        {!editing && jiraLink && <button className="text-button" disabled={busy} onClick={toggleDiscussion}>{discussionOpen ? "Hide discussion" : "Discussion"}</button>}
-        {!editing && emailSources.length > 0 && <button className="text-button" disabled={busy} onClick={() => setEmailDetailsOpen((current) => !current)}>{emailDetailsOpen ? "Hide email" : task.state === "completed" ? "Close email loop" : emailSources.length === 1 ? "Email source" : `${emailSources.length} email sources`}</button>}
-        {!editing && (
-          <button className="task-menu-trigger" aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={Boolean(menuPoint)} onClick={(event) => {
-            const point = pointFromElement(event.currentTarget);
-            setMenuPoint((current) => current ? undefined : point);
-          }}>
-            <span aria-hidden="true">•••</span>
-          </button>
-        )}
+        <button className="text-button" disabled={busy} onClick={() => setDetailsOpen(true)}>Edit</button>
+        {jiraLink && <button className="text-button" disabled={busy} onClick={toggleDiscussion}>{discussionOpen ? "Hide discussion" : "Discussion"}</button>}
+        {emailSources.length > 0 && <button className="text-button" disabled={busy} onClick={() => setEmailDetailsOpen((current) => !current)}>{emailDetailsOpen ? "Hide email" : task.state === "completed" ? "Close email loop" : emailSources.length === 1 ? "Email source" : `${emailSources.length} email sources`}</button>}
+        <button className="task-menu-trigger" aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={Boolean(menuPoint)} onClick={(event) => {
+          const point = pointFromElement(event.currentTarget);
+          setMenuPoint((current) => current ? undefined : point);
+        }}>
+          <span aria-hidden="true">•••</span>
+        </button>
       </div>
       {menuPoint && (
         <CursorMenu className="task-menu" point={menuPoint} onClose={() => setMenuPoint(undefined)} label={`${task.title} actions`}>
-          <button role="menuitem" onClick={() => runMenuAction(() => setDetailsOpen(true))}>View details</button>
-          <button role="menuitem" onClick={() => runMenuAction(() => setEditing(true))}>Edit task</button>
+          <button role="menuitem" onClick={() => runMenuAction(() => setDetailsOpen(true))}>Review and edit</button>
           <button role="menuitem" onClick={() => runMenuAction(toggleHistory)}>{historyOpen ? "Hide history" : "Show history"}</button>
           {task.state !== "completed" && <button role="menuitem" disabled={busy || !canMoveEarlier} onClick={() => runMenuAction(onMoveEarlier)}>Move earlier</button>}
           {task.state !== "completed" && <button role="menuitem" disabled={busy || !canMoveLater} onClick={() => runMenuAction(onMoveLater)}>Move later</button>}
@@ -155,50 +141,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
       {historyOpen && <TaskActivityPanel activity={activity} loading={historyLoading} failed={historyError} onRetry={() => void loadActivity()} />}
       {discussionOpen && jiraLink && <JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} />}
       {emailDetailsOpen && emailSources.length > 0 && <EmailResolutionPanel operatorToken={operatorToken} task={task} sources={emailSources} />}
-      {detailsOpen && <TaskDetailDialog task={task} jiraLink={jiraLink} emailSources={emailSources} operatorToken={operatorToken} onClose={() => setDetailsOpen(false)} onEdit={() => { setDetailsOpen(false); setEditing(true); }} />}
+      {detailsOpen && <TaskDetailDialog task={task} jiraLink={jiraLink} emailSources={emailSources} operatorToken={operatorToken} busy={busy} onClose={() => setDetailsOpen(false)} onSave={(input) => onUpdate(task, input)} />}
     </article>
-  );
-}
-
-function TaskEditForm({ task, busy, onUpdate, onCancel }: {
-  task: Task;
-  busy: boolean;
-  onUpdate: TaskCardProps["onUpdate"];
-  onCancel: () => void;
-}) {
-  const [title, setTitle] = useState(task.title);
-  const [description, setDescription] = useState(task.description);
-  const [priority, setPriority] = useState(task.priority);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!title.trim()) return;
-    try {
-      await onUpdate(task, { title, description, priority });
-      onCancel();
-    } catch {
-      // The app-level alert explains the failure; retain this form for correction and retry.
-    }
-  }
-
-  return (
-    <form className="task-edit-form" aria-label={`Edit ${task.title}`} onSubmit={(event) => void submit(event)}>
-      <label htmlFor={`edit-title-${task.id}`}>Title</label>
-      <input id={`edit-title-${task.id}`} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} />
-      <label htmlFor={`edit-description-${task.id}`}>Description</label>
-      <textarea id={`edit-description-${task.id}`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={10000} rows={4} />
-      <div className="task-edit-row">
-        <div className="field-stack">
-          <label htmlFor={`edit-priority-${task.id}`}>Priority</label>
-          <select id={`edit-priority-${task.id}`} value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
-            {Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select>
-        </div>
-      </div>
-      <div className="task-edit-actions">
-        <button disabled={busy || !title.trim()}>Save changes</button>
-        <button className="text-button" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
-      </div>
-    </form>
   );
 }

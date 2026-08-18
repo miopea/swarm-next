@@ -235,7 +235,7 @@ test("keeps Jira identity and remote status visible while routing work", () => {
   expect(within(card).getByText("Assigned", { selector: ".task-state" })).toBeInTheDocument();
 });
 
-test("opens a read-only task detail with Jira description and image on double click", async () => {
+test("opens an editable task detail with Jira description and image on double click", async () => {
   const createObjectURL = vi.fn().mockReturnValue("blob:jira-image");
   const revokeObjectURL = vi.fn();
   Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
@@ -254,12 +254,14 @@ test("opens a read-only task detail with Jira description and image on double cl
 
   fireEvent.doubleClick(screen.getByRole("article", { name: task.title }));
 
-  const dialog = await screen.findByRole("dialog", { name: task.title });
+  const dialog = await screen.findByRole("dialog", { name: "Review and edit task" });
+  expect(within(dialog).getByLabelText("Title")).toHaveValue(task.title);
+  expect(within(dialog).getByLabelText("Work brief")).toHaveValue(task.description);
   expect(within(dialog).getByText(/Full Jira description/)).toBeInTheDocument();
   const image = await within(dialog).findByRole("img", { name: "evidence.png" });
   expect(image).toHaveAttribute("src", "blob:jira-image");
   expect(within(dialog).getByRole("link", { name: "Open in Jira" })).toHaveAttribute("href", jiraTaskLink.issue_url);
-  expect(screen.queryByRole("form", { name: `Edit ${task.title}` })).not.toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeInTheDocument();
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:jira-image"));
 });
@@ -270,9 +272,9 @@ test("keeps edit explicit and ignores double clicks on interactive task controls
 
   const edit = within(card).getByRole("button", { name: "Edit" });
   fireEvent.doubleClick(edit);
-  expect(screen.queryByRole("dialog", { name: task.title })).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "Review and edit task" })).not.toBeInTheDocument();
   fireEvent.click(edit);
-  expect(within(card).getByRole("form", { name: `Edit ${task.title}` })).toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "Review and edit task" })).toBeInTheDocument();
 });
 
 test("reads and posts Jira discussion without leaving the task", async () => {
@@ -321,17 +323,17 @@ test("edits task details and retains a failed form for retry", async () => {
   renderBoard({ onUpdate });
 
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  const editForm = screen.getByRole("form", { name: `Edit ${task.title}` });
-  fireEvent.change(within(editForm).getByLabelText("Title"), { target: { value: "Make every reload stable" } });
-  fireEvent.change(within(editForm).getByLabelText("Priority"), { target: { value: "urgent" } });
-  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  const dialog = screen.getByRole("dialog", { name: "Review and edit task" });
+  fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "Make every reload stable" } });
+  fireEvent.change(within(dialog).getByLabelText("Priority"), { target: { value: "urgent" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save changes" }));
 
   await waitFor(() => expect(onUpdate).toHaveBeenCalledWith(task, {
     title: "Make every reload stable",
     description: task.description,
     priority: "urgent",
   }));
-  expect(screen.getByRole("form", { name: `Edit ${task.title}` })).toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "Review and edit task" })).toBeInTheDocument();
 });
 
 test("loads task history only when the operator opens it", async () => {

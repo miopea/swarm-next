@@ -94,6 +94,7 @@ test("keeps Queen automation visible beside her terminal without changing it", (
         outcome: null,
         waiting_reason: null,
       }}
+      queenAutonomy="coordinate"
       session={{ session_id: "queen-session", running: true }}
     />,
   );
@@ -101,5 +102,12 @@ test("keeps Queen automation visible beside her terminal without changing it", (
   fireEvent.click(screen.getByRole("button", { name: "Reviewing work" }));
 
   expect(onOpenQueenSettings).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "Coordinate the Hive" })).toHaveAttribute("title", expect.stringContaining("Scout"));
   expect(screen.getByText("Always active")).toBeInTheDocument();
+});
+
+test("keeps the internal terminal id behind session details", () => {
+  render(<TerminalView busy={false} onStop={vi.fn()} operatorToken="browser-session-cookie" session={{ session_id: "private-session-id", running: true }} />);
+  expect(screen.getByText("Session details")).toBeInTheDocument();
+  expect(screen.getByText("private-session-id").closest("details")).not.toHaveAttribute("open");
 });
