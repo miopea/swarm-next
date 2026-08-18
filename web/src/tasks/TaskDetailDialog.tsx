@@ -42,6 +42,8 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
   const [closeConfirm, setCloseConfirm] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const titleInput = useRef<HTMLInputElement>(null);
+  const keepEditingButton = useRef<HTMLButtonElement>(null);
+  const keepTaskButton = useRef<HTMLButtonElement>(null);
   const dirty = title !== task.title || description !== task.description || priority !== task.priority;
   function requestClose() {
     if (removeConfirm) return setRemoveConfirm(false);
@@ -50,6 +52,11 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
     onClose();
   }
   const dialog = useModalFocus<HTMLElement>(requestClose, true, titleInput);
+
+  useEffect(() => {
+    if (closeConfirm) keepEditingButton.current?.focus();
+    else if (removeConfirm) keepTaskButton.current?.focus();
+  }, [closeConfirm, removeConfirm]);
 
   useEffect(() => {
     let active = true;
@@ -172,7 +179,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
           {closeConfirm ? <div className="task-close-confirm" role="alertdialog" aria-label="Unsaved task changes">
             <p><strong>Discard unsaved changes?</strong><span>Your edits have not joined the task history.</span></p>
             <button type="button" className="danger-button" onClick={onClose}>Discard changes</button>
-            <button type="button" onClick={() => setCloseConfirm(false)}>Keep editing</button>
+            <button ref={keepEditingButton} type="button" onClick={() => setCloseConfirm(false)}>Keep editing</button>
           </div> : <><div className="task-detail-footer-secondary">
             {jiraLink?.issue_url && <a className="button-link" href={jiraLink.issue_url} target="_blank" rel="noreferrer">Open in Jira</a>}
             {!removeConfirm ? (
@@ -181,7 +188,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
               <div className="task-remove-confirm" role="alertdialog" aria-label="Confirm task removal">
                 <p><strong>{jiraLink ? `Remove ${jiraLink.issue_key} from Swarm?` : "Remove this task from the Hive?"}</strong><span>{jiraLink ? "The Jira issue will not be deleted or changed. Its source link and Swarm audit history stay retained." : "The task leaves the board, but its source, attachments, and audit history stay retained."}</span></p>
                 <button type="button" className="danger-button" disabled={busy} onClick={() => void remove()}>{busy ? "Removing…" : "Remove from Hive"}</button>
-                <button type="button" disabled={busy} onClick={() => setRemoveConfirm(false)}>Keep task</button>
+                <button ref={keepTaskButton} type="button" disabled={busy} onClick={() => setRemoveConfirm(false)}>Keep task</button>
               </div>
             )}
             {(task.state === "active" || task.state === "review") && <small>Finish or move this work out of progress before removing it.</small>}

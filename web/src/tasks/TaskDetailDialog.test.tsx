@@ -24,7 +24,9 @@ test("guards edits from close, backdrop, and Escape until the operator chooses",
 
   expect(onClose).not.toHaveBeenCalled();
   expect(screen.getByRole("alertdialog", { name: "Unsaved task changes" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  const keepEditing = screen.getByRole("button", { name: "Keep editing" });
+  expect(keepEditing).toHaveFocus();
+  fireEvent.click(keepEditing);
   expect(screen.getByLabelText("Title")).toHaveValue("Repair every worker picker");
 
   fireEvent.keyDown(window, { key: "Escape" });
