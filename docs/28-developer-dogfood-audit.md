@@ -86,6 +86,7 @@ This is the working product audit for the first real developer week. It records 
 61. **The task board no longer presents stale Apiary work as current.** Its five independent shared-work requests preserve successful and last-known slices during a partial failure, but now expose that degraded state and offer a direct retry. Local Hive tasks remain available while claiming and cross-Hive routing are explicitly described as potentially out of date.
 62. **A recovered Keeper invitation poll no longer leaves a false permanent failure.** Background membership status has its own warning rather than overwriting create, approve, or cancel outcomes. A successful poll clears only that warning, and the operator can recheck immediately without recreating an invitation.
 63. **Saved dogfood evidence is retryable from Diagnostics.** A temporary report-history failure no longer becomes a dead-end status. The operator can retry only that private evidence list without refreshing live metrics, losing a diagnostic preview, or leaving Settings.
+64. **An unavailable join snapshot no longer looks like an empty personal Hive.** Saved Keeper links and signed invitations now update independently, preserve their last-known values when one request fails, and show a direct retry. Swarm only says no invitation is saved after the relevant state was actually read.
 
 ## Live deployed proof — 2026-08-18
 

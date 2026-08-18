@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   acceptFederationJoinPolicy,
@@ -39,6 +39,17 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
   const [invitationLink, setInvitationLink] = useState("");
   const [working, setWorking] = useState(false);
   const [confirmingDismissal, setConfirmingDismissal] = useState<string>();
+  const [savedStateUnavailable, setSavedStateUnavailable] = useState(false);
+
+  const refreshSavedState = useCallback(async () => {
+    const [links, invitations] = await Promise.allSettled([
+      fetchApiaryKeeperLinks(operatorToken),
+      fetchFederationJoinInvitations(operatorToken),
+    ]);
+    if (links.status === "fulfilled") setKeeperLinks(links.value);
+    if (invitations.status === "fulfilled") setJoinInvitations(invitations.value);
+    setSavedStateUnavailable(links.status === "rejected" || invitations.status === "rejected");
+  }, [operatorToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,8 +58,9 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
       fetchFederationJoinInvitations(operatorToken),
     ]).then(([links, invitations]) => {
       if (cancelled) return;
-      setKeeperLinks(links.status === "fulfilled" ? links.value : []);
-      setJoinInvitations(invitations.status === "fulfilled" ? invitations.value : []);
+      if (links.status === "fulfilled") setKeeperLinks(links.value);
+      if (invitations.status === "fulfilled") setJoinInvitations(invitations.value);
+      setSavedStateUnavailable(links.status === "rejected" || invitations.status === "rejected");
     });
     return () => { cancelled = true; };
   }, [operatorToken]);
@@ -210,6 +222,7 @@ export default function PersonalHiveJoin({ busy, operatorToken, onError, onMessa
           <span><strong>Swarm work</strong><small>This Hive polls the Keeper for shared Apiary tasks and coordination.</small></span>
         </div>
       </div>
+      {savedStateUnavailable ? <div className="form-error apiary-refresh-error" role="alert"><span>Saved Keeper invitations could not be fully refreshed. Last-known links remain unchanged.</span><button className="secondary-button" type="button" disabled={working} onClick={() => void refreshSavedState()}>Retry saved invitations</button></div> : null}
       {keeperLinks.length > 0 ? (
         <ul className="apiary-link-status" aria-label="Pending Keeper invitations">
           {keeperLinks.map((link) => <li key={link.link_id}>
