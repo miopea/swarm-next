@@ -35,6 +35,7 @@ type Props = {
   lockDetectionState: LockDetectionState;
   notificationSettings: NotificationSettings | undefined;
   queenPolicy: QueenAutonomyPolicy | undefined;
+  pendingQueenDecisionCount?: number;
   notificationState: NotificationCapabilityState;
   recentEvents: ControlRoomEvent[];
   sessions: SessionSummary[];
@@ -45,6 +46,7 @@ type Props = {
   onEnableLockDetection: () => Promise<void>;
   onNotificationPolicyChange: (policy: NotificationPolicy) => Promise<void>;
   onQueenPolicyChange: (policy: QueenAutonomyPolicy) => Promise<void>;
+  onOpenQueenDecisions?: () => void;
   onEnableNotifications: () => Promise<void>;
   onDisableNotifications: () => Promise<void>;
   onTestNotification: () => Promise<void>;
@@ -57,7 +59,7 @@ type Props = {
   onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
-export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
+export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -143,6 +145,12 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
   }
   const workerEngineNeedsUpdate = workerEngineUpdateRequired(health, terminalHostStatus);
   const activeWorkerCount = terminalHostStatus?.running_sessions ?? 0;
+  const hasPendingQueenDecision = pendingQueenDecisionCount > 0;
+  const queenReviewLabel = hasPendingQueenDecision ? "Queen needs you" : queenAutomationStateLabel(queenAutomation);
+  const queenReviewDetail = hasPendingQueenDecision
+    ? `${pendingQueenDecisionCount} specific Queen decision${pendingQueenDecisionCount === 1 ? " is" : "s are"} waiting in Needs you. Resolve ${pendingQueenDecisionCount === 1 ? "it" : "them"} there; Swarm will not repeat the review.`
+    : queenAutomationStateDetail(queenAutomation);
+  const queenReviewTone = hasPendingQueenDecision ? "offline" : queenAutomationStateTone(queenAutomation);
   return (
     <div className="settings-workspace">
       <nav className="settings-section-nav" aria-label="Settings sections">
@@ -239,10 +247,10 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
             </label>
           </div>
           <div className={`queen-automation-status ${queenAutomation?.state ?? "idle"}`} role="status">
-            <span className={`presence ${queenAutomationStateTone(queenAutomation)}`} />
+            <span className={`presence ${queenReviewTone}`} />
             <span>
-              <strong>{queenAutomationStateLabel(queenAutomation)}</strong>
-              <small>{queenAutomationStateDetail(queenAutomation)}</small>
+              <strong>{queenReviewLabel}</strong>
+              <small>{queenReviewDetail}</small>
             </span>
           </div>
           <div className={`coordinator-status ${coordinatorStatus?.uncertain_actions ? "needs-attention" : ""}`} aria-label="Deterministic coordinator status">
@@ -273,8 +281,12 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
             <button
               type="button"
               className="secondary-button"
-              disabled={busy || queenAutomationBusy || !queenAutomation || ["queued", "delivering", "running"].includes(queenAutomation.state)}
+              disabled={busy || queenAutomationBusy || (!hasPendingQueenDecision && (!queenAutomation || ["queued", "delivering", "running"].includes(queenAutomation.state)))}
               onClick={async () => {
+                if (hasPendingQueenDecision) {
+                  onOpenQueenDecisions?.();
+                  return;
+                }
                 setQueenAutomationBusy(true);
                 setQueenAutomationError(undefined);
                 try {
@@ -285,8 +297,8 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
                   setQueenAutomationBusy(false);
                 }
               }}
-            >{queenAutomationBusy ? "Checking…" : queenAutomation?.state === "uncertain" ? "Retry Queen review" : "Run Queen now"}</button>
-            <small>Manual review works even when automatic review is off.</small>
+            >{hasPendingQueenDecision ? `Review ${pendingQueenDecisionCount === 1 ? "decision" : "decisions"}` : queenAutomationBusy ? "Checking…" : queenAutomation?.state === "uncertain" ? "Retry Queen review" : "Run Queen now"}</button>
+            <small>{hasPendingQueenDecision ? "The existing request is the authoritative next step." : "Manual review works even when automatic review is off."}</small>
           </div>
           <p className="queen-conductor-boundary">She pauses while you are working with her. External effects remain blocked unless an exact action is covered by a durable operator-approved rule; Queen cannot create or widen that authority.</p>
         </div>

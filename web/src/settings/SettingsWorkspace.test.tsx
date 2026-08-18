@@ -324,6 +324,35 @@ test("makes Queen automation observable, opt-in, and manually runnable", async (
   expect(screen.getByRole("button", { name: "Run Queen now" })).toBeDisabled();
 });
 
+test("routes an existing Queen decision to Needs you instead of repeating the review", async () => {
+  const onOpenQueenDecisions = vi.fn();
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/orchestration/queen-automation")) {
+      return ok(queenAutomation({ enabled: true, state: "uncertain", actionable_count: 8, run_id: "run-covered" }));
+    }
+    if (url.endsWith("/orchestration/coordinator")) {
+      return ok({ completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0, stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0, last_action_at: null, automatic_start_admission: "available", automatic_start_batch_limit: 1 });
+    }
+    if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("integrations/jira/bindings") || url.includes("feedback/reports")) return ok([]);
+    if (url.includes("integrations/email/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("runtime/resources")) return ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 1, critical_bytes: 2 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" } });
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 7, host_version: "0.1.0", draining: false, running_sessions: 0, retained_sessions: 0 } });
+    if (url.includes("runtime/development")) return ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false });
+    return ok({ type: "history_diagnostics", diagnostics: null });
+  }));
+
+  render(<SettingsWorkspace {...minimalProps()} pendingQueenDecisionCount={1} onOpenQueenDecisions={onOpenQueenDecisions} />);
+
+  expect(await screen.findByText("Queen needs you")).toBeInTheDocument();
+  expect(screen.getByText(/1 specific Queen decision is waiting in Needs you/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry Queen review" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Review decision" }));
+  expect(onOpenQueenDecisions).toHaveBeenCalledOnce();
+  expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/orchestration/queen-automation/run"))).toBe(false);
+});
+
 function minimalProps() {
   return {
     busy: false, colorTheme: "light" as const, feedbackRevision: 0, liveFeedState: "connected" as const, operatorToken: "secret-token",

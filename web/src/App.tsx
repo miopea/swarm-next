@@ -1100,6 +1100,7 @@ export function App() {
             lockDetectionState={lockDetectionState}
             notificationSettings={notificationSettings}
             queenPolicy={queenPolicy}
+            pendingQueenDecisionCount={pendingQueenDecisionCount}
             providers={providers}
             notificationState={notificationState}
             sessions={sessions}
@@ -1110,6 +1111,7 @@ export function App() {
             onEnableLockDetection={enableLockDetection}
             onNotificationPolicyChange={changeNotificationPolicy}
             onQueenPolicyChange={changeQueenPolicy}
+            onOpenQueenDecisions={() => setSurface("decisions")}
             onEnableNotifications={enableNotifications}
             onDisableNotifications={disableNotifications}
             onTestNotification={testNotification}
