@@ -159,6 +159,7 @@ export default function TaskBoard({
   const [apiaryExecutions, setApiaryExecutions] = useState<LocalApiaryTaskExecution[]>([]);
   const [apiaryOutbox, setApiaryOutbox] = useState<FederationTaskOutboxEntry[]>([]);
   const [stewardship, setStewardship] = useState<FederationStewardshipSnapshot | null>(null);
+  const [apiaryRefreshState, setApiaryRefreshState] = useState<"idle" | "loading" | "ready" | "partial">("idle");
   const [apiaryWorkerChoices, setApiaryWorkerChoices] = useState<Record<string, string>>({});
   const [actingApiaryTask, setActingApiaryTask] = useState<string>();
   const [creating, setCreating] = useState(false);
@@ -227,8 +228,10 @@ export default function TaskBoard({
       setApiaryExecutions([]);
       setApiaryOutbox([]);
       setStewardship(null);
+      setApiaryRefreshState("idle");
       return;
     }
+    setApiaryRefreshState("loading");
     const [shared, members, executions, outbox, stewardshipResult] = await Promise.allSettled([
       fetchApiaryTasks(operatorToken),
       fetchApiaryMembers(operatorToken),
@@ -241,6 +244,7 @@ export default function TaskBoard({
     if (executions.status === "fulfilled") setApiaryExecutions(Array.isArray(executions.value) ? executions.value : []);
     if (outbox.status === "fulfilled") setApiaryOutbox(Array.isArray(outbox.value) ? outbox.value : []);
     if (stewardshipResult.status === "fulfilled") setStewardship(stewardshipResult.value);
+    setApiaryRefreshState([shared, members, executions, outbox, stewardshipResult].some((result) => result.status === "rejected") ? "partial" : "ready");
   }
 
   async function claimSharedTask(task: ApiaryTask) {
@@ -300,10 +304,7 @@ export default function TaskBoard({
     return () => { cancelled = true; };
   }, [operatorToken, removedTasksAttempt, tasks]);
   useEffect(() => {
-    void refreshApiaryWork().catch(() => {
-      setApiaryTasks([]);
-      setApiaryMembers([]);
-    });
+    void refreshApiaryWork();
   }, [operatorToken, inApiary]);
   useEffect(() => {
     if (!canCreateApiaryWork && workScope === "apiary") setWorkScope("hive");
@@ -482,6 +483,13 @@ export default function TaskBoard({
         <div className="form-error task-board-retry" role="alert">
           <span>Linked email details could not be refreshed. Task content is unchanged, but email source filters may be incomplete.</span>
           <button className="secondary-button" type="button" onClick={() => setEmailSourcesAttempt((attempt) => attempt + 1)}>Retry email details</button>
+        </div>
+      ) : null}
+
+      {inApiary && apiaryRefreshState === "partial" ? (
+        <div className="form-error task-board-retry" role="alert">
+          <span>Shared Apiary work could not be fully refreshed. Last-known tasks and ownership remain visible, but claiming or routing may be out of date.</span>
+          <button className="secondary-button" type="button" onClick={() => void refreshApiaryWork()}>Retry Apiary work</button>
         </div>
       ) : null}
 

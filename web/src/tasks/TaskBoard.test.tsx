@@ -281,6 +281,27 @@ test("creates Apiary work from Tasks instead of the supervisory Apiary view", as
   expect(JSON.parse(String(request?.init?.body))).toEqual({ title: "Coordinate release", description: "Across both Hives", priority: "high", home_hive_id: "hive-2" });
 });
 
+test("keeps local tasks usable and retries a partial Apiary work refresh", async () => {
+  let taskAttempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/apiary/tasks")) {
+      taskAttempts += 1;
+      if (taskAttempts === 1) return new Response("keeper unavailable", { status: 502 });
+      return ok([]);
+    }
+    if (url.endsWith("/api/v1/apiary/my-stewardship")) return ok(null);
+    return ok([]);
+  }));
+  renderBoard({ hiveIdentity: memberIdentity() });
+
+  expect(screen.getByRole("article", { name: task.title })).toBeInTheDocument();
+  expect((await screen.findByText(/Shared Apiary work could not be fully refreshed/)).closest('[role="alert"]')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry Apiary work" }));
+  await waitFor(() => expect(screen.queryByText(/Shared Apiary work could not be fully refreshed/)).not.toBeInTheDocument());
+  expect(taskAttempts).toBe(2);
+});
+
 test("lets a Member claim shared work from Tasks", async () => {
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
