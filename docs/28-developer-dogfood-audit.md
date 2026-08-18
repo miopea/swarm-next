@@ -133,7 +133,7 @@ This is the working product audit for the first real developer week. It records 
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
 - The full Rust workspace is green: 461 unit/integration tests plus all crate documentation tests passed on the release checkout.
 - Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
-- The web workspace is green: 60 test files with 312 tests, TypeScript project checking, and the production Vite build all pass.
+- The web workspace is green: 64 test files with 322 tests, TypeScript project checking, and the production Vite build all pass.
 
 ## Release re-proofs required
 
