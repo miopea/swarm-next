@@ -1398,6 +1398,45 @@ impl TaskStore {
             "UPDATE tasks SET state = ?2, updated_at = unixepoch() WHERE id = ?1",
             params![id.to_string(), target.to_string()],
         )?;
+        if target == TaskState::Ready {
+            let queued: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
+                [],
+                |row| row.get(0),
+            )?;
+            if queued >= 256 {
+                return Err(TaskStoreError::TaskDispatchQueueFull);
+            }
+            transaction.execute(
+                "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
+                 SELECT assignment.id, assignment.task_id, session.worker_id, 'queued'
+                 FROM task_assignments assignment
+                 JOIN worker_sessions session
+                   ON session.session_id = assignment.worker_session_id
+                  AND session.ended_at IS NULL
+                 WHERE assignment.task_id = ?1 AND assignment.released_at IS NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_dispatches dispatch
+                       WHERE dispatch.assignment_id = assignment.id
+                   )",
+                [id.to_string()],
+            )?;
+        }
+        // A transition from the assigned worker is stronger acknowledgement
+        // than an ambiguous PTY submit receipt: she could only advance this
+        // task after retrieving its authoritative assignment through MCP.
+        if reporting_session_id.is_some() {
+            transaction.execute(
+                "UPDATE task_dispatches
+                 SET state = 'delivered', delivered_at = COALESCE(delivered_at, unixepoch()),
+                     updated_at = unixepoch()
+                 WHERE assignment_id IN (
+                     SELECT assignment.id FROM task_assignments assignment
+                     WHERE assignment.task_id = ?1 AND assignment.released_at IS NULL
+                 ) AND state IN ('queued', 'dispatching', 'uncertain')",
+                [id.to_string()],
+            )?;
+        }
         federation_tasks::record_local_apiary_task_lifecycle_intent(&transaction, id, target)?;
         transaction.execute(
             "INSERT INTO task_activity (
@@ -1525,25 +1564,27 @@ impl TaskStore {
             params![id.to_string(), worker_id.to_string()],
         )?;
         if let Some(session_id) = session_id {
-            let queued: i64 = transaction.query_row(
-                "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
-                [],
-                |row| row.get(0),
-            )?;
-            if queued >= 256 {
-                return Err(TaskStoreError::TaskDispatchQueueFull);
-            }
             let assignment_id = Uuid::now_v7().to_string();
             transaction.execute(
                 "INSERT INTO task_assignments (id, task_id, worker_session_id)
                  VALUES (?1, ?2, ?3)",
                 params![assignment_id, id.to_string(), session_id],
             )?;
-            transaction.execute(
-                "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
-                 VALUES (?1, ?2, ?3, 'queued')",
-                params![assignment_id, id.to_string(), worker_id.to_string()],
-            )?;
+            if state == TaskState::Ready.to_string() {
+                let queued: i64 = transaction.query_row(
+                    "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if queued >= 256 {
+                    return Err(TaskStoreError::TaskDispatchQueueFull);
+                }
+                transaction.execute(
+                    "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
+                     VALUES (?1, ?2, ?3, 'queued')",
+                    params![assignment_id, id.to_string(), worker_id.to_string()],
+                )?;
+            }
         }
         transaction.execute(
             "DELETE FROM task_dispatches WHERE assignment_id IN (
@@ -3162,6 +3203,7 @@ mod tests {
         let session_id = WorkerSessionId::new();
         store.bind_worker_session(worker.id, session_id).unwrap();
         let task = store.create_task("Return this work", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
         let assigned = store.assign_task_to_worker(task.id, worker.id).unwrap();
         assert_eq!(assigned.dispatch_state, Some(TaskDispatchState::Queued));
 
@@ -3193,6 +3235,7 @@ mod tests {
         let task = store
             .create_task("Resume durable work", "/workspace/clover")
             .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
 
         let sleeping = store.assign_task_to_worker(task.id, worker.id).unwrap();
         assert_eq!(sleeping.assigned_worker_id, Some(worker.id));

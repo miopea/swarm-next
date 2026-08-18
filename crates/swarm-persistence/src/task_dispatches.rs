@@ -44,12 +44,24 @@ impl TaskStore {
                  JOIN tasks t ON t.id = td.task_id
                  JOIN worker_sessions ws ON ws.session_id = a.worker_session_id
                      AND ws.worker_id = td.worker_id AND ws.ended_at IS NULL
-                 WHERE td.state = 'queued' AND t.removed_at IS NULL
+                 WHERE td.state = 'queued' AND t.removed_at IS NULL AND t.state = 'ready'
                    AND NOT EXISTS (
                        SELECT 1 FROM worker_engagements e
                        WHERE e.worker_id = td.worker_id AND e.expires_at > ?1
                    )
-                 ORDER BY td.updated_at, td.assignment_id
+                   AND NOT EXISTS (
+                       SELECT 1 FROM tasks active
+                       WHERE active.assigned_worker_id = td.worker_id
+                         AND active.state = 'active' AND active.removed_at IS NULL
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM tasks earlier
+                       WHERE earlier.assigned_worker_id = td.worker_id
+                         AND earlier.state = 'ready' AND earlier.removed_at IS NULL
+                         AND (earlier.position < t.position
+                              OR (earlier.position = t.position AND earlier.id < t.id))
+                   )
+                 ORDER BY t.position, td.updated_at, td.assignment_id
                  LIMIT ?2",
             )?;
             statement
@@ -237,6 +249,9 @@ mod tests {
                 "/workspace/petal",
             )
             .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
         store.assign_task(task.id, session).unwrap();
         (store, task.id, session)
     }
@@ -272,6 +287,76 @@ mod tests {
             store.get_task(task_id).unwrap().dispatch_state,
             Some(TaskDispatchState::Delivered)
         );
+    }
+
+    #[test]
+    fn draft_assignment_records_ownership_without_briefing() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Shape the task", "/workspace/petal")
+            .unwrap();
+
+        let assigned = store.assign_task(task.id, session).unwrap();
+
+        assert_eq!(assigned.state, swarm_domain::TaskState::Draft);
+        assert_eq!(assigned.assigned_worker_id, Some(worker.id));
+        assert_eq!(assigned.dispatch_state, None);
+        assert!(store.claim_task_dispatches(100).unwrap().is_empty());
+
+        let ready = store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        assert_eq!(ready.dispatch_state, Some(TaskDispatchState::Queued));
+        assert_eq!(store.claim_task_dispatches(101).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn one_worker_receives_only_the_first_ready_brief_until_it_finishes() {
+        let (store, first_id, session) = assigned_task();
+        let second = store
+            .create_task("Second queued task", "/workspace/petal")
+            .unwrap();
+        store
+            .transition_task(second.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store.assign_task(second.id, session).unwrap();
+
+        let first_dispatch = store.claim_task_dispatches(100).unwrap();
+        assert_eq!(first_dispatch.len(), 1);
+        assert_eq!(first_dispatch[0].task_id, first_id);
+        let worker_id = first_dispatch[0].worker_id;
+        store
+            .complete_task_dispatch(&first_dispatch[0].assignment_id, 101)
+            .unwrap();
+        assert!(store.claim_task_dispatches(102).unwrap().is_empty());
+
+        store
+            .transition_task(first_id, swarm_domain::TaskState::Active)
+            .unwrap();
+        assert!(store.claim_task_dispatches(103).unwrap().is_empty());
+        store
+            .transition_task(first_id, swarm_domain::TaskState::Review)
+            .unwrap();
+        store
+            .transition_task(first_id, swarm_domain::TaskState::Completed)
+            .unwrap();
+
+        let next_dispatch = store.claim_task_dispatches(104).unwrap();
+        assert_eq!(next_dispatch.len(), 1);
+        assert_eq!(next_dispatch[0].task_id, second.id);
+        assert_eq!(next_dispatch[0].worker_id, worker_id);
     }
 
     #[test]

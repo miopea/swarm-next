@@ -1374,8 +1374,14 @@ enum SubmissionObservation {
 }
 
 enum MarkerObservation {
-    Rendered(u64),
-    Rejected { code: String, message: String },
+    Rendered {
+        sequence: u64,
+        paste_placeholder: Option<Vec<u8>>,
+    },
+    Rejected {
+        code: String,
+        message: String,
+    },
     Uncertain,
 }
 
@@ -1485,7 +1491,7 @@ async fn submit_terminal_message(
     // Claude can redraw a long paste dozens of times before the bounded marker
     // reaches the canonical screen. Observe elapsed time rather than frame
     // count, then require a short stable render window before sending Enter.
-    let rendered_sequence = match observe_stable_marker(
+    let (rendered_sequence, rendered_paste_placeholder) = match observe_stable_marker(
         client,
         session_id,
         provider,
@@ -1495,7 +1501,10 @@ async fn submit_terminal_message(
     )
     .await?
     {
-        MarkerObservation::Rendered(sequence) => sequence,
+        MarkerObservation::Rendered {
+            sequence,
+            paste_placeholder,
+        } => (sequence, paste_placeholder),
         MarkerObservation::Rejected { code, message } => {
             return Ok(TerminalSubmission::Rejected { code, message });
         }
@@ -1519,8 +1528,15 @@ async fn submit_terminal_message(
             return Ok(TerminalSubmission::Uncertain);
         }
 
-        match observe_terminal_submission(client, session_id, provider, marker, observed_sequence)
-            .await?
+        match observe_terminal_submission(
+            client,
+            session_id,
+            provider,
+            marker,
+            rendered_paste_placeholder.as_deref(),
+            observed_sequence,
+        )
+        .await?
         {
             SubmissionObservation::Accepted => return Ok(TerminalSubmission::Acknowledged),
             SubmissionObservation::RetryAfter(sequence) => observed_sequence = sequence,
@@ -1573,10 +1589,12 @@ async fn observe_stable_marker(
         // proof that this exact PTY write finished rendering. Comparing it to
         // the baseline prevents an older, operator-owned paste from being
         // mistaken for the current coordination message.
-        let new_claude_paste_is_visible = provider == ProviderKind::ClaudeCode
-            && snapshot.sequence > baseline
-            && latest_claude_paste_placeholder(&snapshot.bytes)
-                .is_some_and(|placeholder| Some(placeholder) != baseline_paste_placeholder);
+        let new_claude_paste = (provider == ProviderKind::ClaudeCode
+            && snapshot.sequence > baseline)
+            .then(|| latest_claude_paste_placeholder(&snapshot.bytes))
+            .flatten()
+            .filter(|placeholder| Some(*placeholder) != baseline_paste_placeholder);
+        let new_claude_paste_is_visible = new_claude_paste.is_some();
         if (marker_is_visible || new_claude_paste_is_visible)
             && rendered_stability.observe(
                 snapshot.sequence,
@@ -1584,7 +1602,10 @@ async fn observe_stable_marker(
                 Duration::from_millis(300),
             )
         {
-            return Ok(MarkerObservation::Rendered(snapshot.sequence));
+            return Ok(MarkerObservation::Rendered {
+                sequence: snapshot.sequence,
+                paste_placeholder: new_claude_paste.map(<[u8]>::to_vec),
+            });
         }
         if !marker_is_visible && !new_claude_paste_is_visible {
             rendered_stability.reset();
@@ -1610,6 +1631,7 @@ async fn observe_terminal_submission(
     session_id: WorkerSessionId,
     provider: ProviderKind,
     marker: &[u8],
+    submitted_paste_placeholder: Option<&[u8]>,
     observed_sequence: u64,
 ) -> Result<SubmissionObservation, swarm_terminal::IpcError> {
     let acceptance_deadline = Instant::now() + Duration::from_secs(10);
@@ -1629,8 +1651,30 @@ async fn observe_terminal_submission(
         else {
             return Ok(SubmissionObservation::Uncertain);
         };
-        match provider_activity::classify_observed_activity(provider, &snapshot) {
-            ProviderActivity::Active | ProviderActivity::AwaitingOperator => {
+        let activity = provider_activity::classify_observed_activity(provider, &snapshot);
+        if activity == ProviderActivity::Active {
+            return Ok(SubmissionObservation::Accepted);
+        }
+        let submitted_paste_is_still_open = submitted_claude_paste_is_still_open(
+            provider,
+            &snapshot.bytes,
+            submitted_paste_placeholder,
+        );
+        let visible_marker_is_still_input = activity != ProviderActivity::Unknown
+            && claude_input_marker_is_still_open(provider, &snapshot.bytes, marker);
+        if submitted_paste_is_still_open || visible_marker_is_still_input {
+            if resting_stability.observe(
+                snapshot.sequence,
+                Instant::now(),
+                Duration::from_millis(300),
+            ) {
+                return Ok(SubmissionObservation::RetryAfter(snapshot.sequence));
+            }
+            continue;
+        }
+        match activity {
+            ProviderActivity::Active => unreachable!("active submissions return above"),
+            ProviderActivity::AwaitingOperator => {
                 return Ok(SubmissionObservation::Accepted);
             }
             ProviderActivity::Unknown if snapshot.sequence > observed_sequence => {
@@ -1657,6 +1701,26 @@ async fn observe_terminal_submission(
             return Ok(SubmissionObservation::Uncertain);
         }
     }
+}
+
+fn submitted_claude_paste_is_still_open(
+    provider: ProviderKind,
+    snapshot: &[u8],
+    submitted_paste_placeholder: Option<&[u8]>,
+) -> bool {
+    provider == ProviderKind::ClaudeCode
+        && submitted_paste_placeholder.is_some()
+        && latest_claude_paste_placeholder(snapshot) == submitted_paste_placeholder
+}
+
+fn claude_input_marker_is_still_open(
+    provider: ProviderKind,
+    snapshot: &[u8],
+    marker: &[u8],
+) -> bool {
+    provider == ProviderKind::ClaudeCode
+        && snapshot.windows(marker.len()).any(|part| part == marker)
+        && !resting_prompt_follows_marker(snapshot, marker)
 }
 
 fn resume_sequence(resume: &swarm_terminal::Resume) -> u64 {
@@ -1706,15 +1770,9 @@ fn decision_delivery_message(delivery: &DecisionDispatch) -> Vec<u8> {
 
 fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
     let title = terminal_safe_text(&delivery.title);
-    let description = if delivery.description.is_empty() {
-        "No additional brief.".into()
-    } else {
-        terminal_safe_text(&delivery.description)
-    };
-    let workspace = terminal_safe_text(&delivery.workspace);
     format!(
-        "[Swarm task {} assigned] {}. Priority: {}. Workspace: {}. Brief: {} Use swarm_list_tasks for the authoritative current assignment; if it is not visible, the assignment changed.\r",
-        delivery.task_id, title, delivery.priority, workspace, description,
+        "[Swarm task {} assigned] {}. Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
+        delivery.task_id, title,
     )
     .into_bytes()
 }
@@ -7406,6 +7464,46 @@ mod tests {
     }
 
     #[test]
+    fn exact_submitted_claude_paste_must_leave_input_before_acknowledgement() {
+        let submitted = Some(&b"[Pasted text #4]"[..]);
+        assert!(submitted_claude_paste_is_still_open(
+            ProviderKind::ClaudeCode,
+            b"manual mode\n\xe2\x9d\xaf [Pasted text #4]",
+            submitted,
+        ));
+        assert!(!submitted_claude_paste_is_still_open(
+            ProviderKind::ClaudeCode,
+            b"worked\n\xe2\x9d\xaf ",
+            submitted,
+        ));
+        assert!(!submitted_claude_paste_is_still_open(
+            ProviderKind::ClaudeCode,
+            b"manual mode\n\xe2\x9d\xaf [Pasted text #5]",
+            submitted,
+        ));
+        assert!(!submitted_claude_paste_is_still_open(
+            ProviderKind::Codex,
+            b"[Pasted text #4]",
+            submitted,
+        ));
+    }
+
+    #[test]
+    fn visible_claude_marker_must_leave_the_current_input_before_acknowledgement() {
+        let marker = b"01ab23cd";
+        assert!(claude_input_marker_is_still_open(
+            ProviderKind::ClaudeCode,
+            b"manual mode\n\xe2\x9d\xaf [Swarm task 01ab23cd]",
+            marker,
+        ));
+        assert!(!claude_input_marker_is_still_open(
+            ProviderKind::ClaudeCode,
+            b"\xe2\x9d\xaf [Swarm task 01ab23cd]\nworked\n\xe2\x9d\xaf ",
+            marker,
+        ));
+    }
+
+    #[test]
     fn decision_delivery_is_one_sanitized_terminal_submission() {
         let delivery = DecisionDispatch {
             decision_id: DecisionRequestId::new(),
@@ -7436,7 +7534,12 @@ mod tests {
         assert_eq!(message.last(), Some(&b'\r'));
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));
-        assert!(String::from_utf8_lossy(&message).contains("polish mobile"));
+        let message = String::from_utf8(message).unwrap();
+        assert!(message.contains("polish mobile"));
+        assert!(message.contains("Call swarm_list_tasks now"));
+        assert!(!message.contains("keep context stable"));
+        assert!(!message.contains("/workspace/petal"));
+        assert!(message.len() < 512);
     }
     #[test]
     fn task_outcome_is_one_sanitized_terminal_submission() {

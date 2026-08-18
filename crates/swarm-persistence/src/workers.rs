@@ -502,7 +502,7 @@ impl TaskStore {
         )?;
         let owned_tasks = {
             let mut statement = transaction.prepare(
-                "SELECT task.id
+                "SELECT task.id, task.state
                  FROM tasks task
                  WHERE task.assigned_worker_id = ?1 AND task.state != 'completed'
                    AND NOT EXISTS (
@@ -512,10 +512,12 @@ impl TaskStore {
                  ORDER BY task.position, task.id",
             )?;
             statement
-                .query_map([worker_id.to_string()], |row| row.get::<_, String>(0))?
+                .query_map([worker_id.to_string()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
                 .collect::<Result<Vec<_>, _>>()?
         };
-        for task_id in &owned_tasks {
+        for (task_id, task_state) in &owned_tasks {
             let assignment_id = Uuid::now_v7().to_string();
             transaction.execute(
                 "INSERT INTO task_assignments (id, task_id, worker_session_id)
@@ -531,7 +533,7 @@ impl TaskStore {
                 params![task_id, worker_id.to_string()],
                 |row| row.get(0),
             )?;
-            if !previously_briefed {
+            if !previously_briefed && task_state == "ready" {
                 let queued: i64 = transaction.query_row(
                     "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
                     [],

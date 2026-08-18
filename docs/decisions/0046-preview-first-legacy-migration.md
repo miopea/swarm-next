@@ -28,16 +28,21 @@ roster are independent review sections with separate commits and rollback
 receipts. Worker import brings across the display name, repository path,
 operator-reviewed routing description, provider choice, and relative ordering.
 Every imported worker is sleeping and does not autostart. Provider processes,
-terminal history, conversation content, identity-file contents, groups,
-isolation settings, credentials, and approval rules are excluded. For each
+terminal history, conversation content in the Swarm database or UI,
+identity-file contents, groups, isolation settings, credentials, and approval
+rules are excluded. For each
 eligible Claude or Codex worker, preview may discover the latest exact provider
 conversation identifier for that repository from the provider's local metadata.
 The operator chooses whether to retain those identifiers; the option is explicit
 and can be disabled to start every imported worker fresh. Retaining an identifier
-does not wake a worker, read transcript content, or copy terminal history. On the
-worker's first later wake, Next asks the matching provider to resume that exact
-conversation. If no valid matching identifier is available, preview says so and
-the worker starts fresh. When the same repository worker already exists in
+does not wake a worker or copy terminal history. To make provider-native resume
+truthful while Claude runs under an isolated Swarm profile, commit stages the
+exact local Claude conversation file into that profile without parsing or
+exposing its content. First wake repeats this check as a recovery path for
+earlier imports and fails closed when the exact file is unavailable. Next then
+asks the matching provider to resume that exact conversation. If no valid
+matching identifier is available, preview says so and the worker starts fresh.
+When the same repository worker already exists in
 Next, the wizard offers a separate opt-in replacement choice. It requires the
 worker to be sleeping, preserves the prior Next conversation for rollback, and
 changes only the provider conversation identity. Names, descriptions,

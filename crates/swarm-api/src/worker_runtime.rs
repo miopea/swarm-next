@@ -1,4 +1,7 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use axum::http::StatusCode;
 use swarm_domain::{ProviderKind, WorkerId, WorkerProfile, WorkerSessionId};
@@ -93,26 +96,29 @@ fn provider_start_request(
         .iter()
         .any(|root| worker_workspace.starts_with(root));
     let request = match profile.provider {
-        ProviderKind::ClaudeCode => HostRequest::StartClaude {
-            workspace: worker_workspace.clone(),
-            size,
-            conversation: match (
-                profile.provider_conversation_id,
-                profile.has_session_history,
-            ) {
-                (Some(session_id), false) => ClaudeConversationStart::New { session_id },
-                (Some(session_id), true) => ClaudeConversationStart::Resume { session_id },
-                (None, true) => ClaudeConversationStart::Continue,
-                (None, false) => {
-                    let session_id = task_store(state)?
-                        .assign_provider_conversation(worker_id)
-                        .map_err(|error| task_store_error(&error))?;
-                    ClaudeConversationStart::New { session_id }
-                }
-            },
-            mcp_config,
-            allow_outside_roots,
-        },
+        ProviderKind::ClaudeCode => {
+            ensure_claude_resume_history(profile)?;
+            HostRequest::StartClaude {
+                workspace: worker_workspace.clone(),
+                size,
+                conversation: match (
+                    profile.provider_conversation_id,
+                    profile.has_session_history,
+                ) {
+                    (Some(session_id), false) => ClaudeConversationStart::New { session_id },
+                    (Some(session_id), true) => ClaudeConversationStart::Resume { session_id },
+                    (None, true) => ClaudeConversationStart::Continue,
+                    (None, false) => {
+                        let session_id = task_store(state)?
+                            .assign_provider_conversation(worker_id)
+                            .map_err(|error| task_store_error(&error))?;
+                        ClaudeConversationStart::New { session_id }
+                    }
+                },
+                mcp_config,
+                allow_outside_roots,
+            }
+        }
         ProviderKind::Codex => HostRequest::StartCodex {
             workspace: worker_workspace,
             size,
@@ -128,6 +134,73 @@ fn provider_start_request(
         },
     };
     Ok(request)
+}
+
+fn ensure_claude_resume_history(profile: &WorkerProfile) -> Result<(), ApiError> {
+    let Some(conversation_id) = profile
+        .provider_conversation_id
+        .filter(|_| profile.has_session_history)
+    else {
+        return Ok(());
+    };
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| unavailable_conversation(&profile.name))?;
+    let target = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    ensure_claude_resume_history_between(
+        &profile.workspace,
+        &conversation_id.to_string(),
+        &home.join(".claude/projects"),
+        &target.join("projects"),
+        &home,
+    )
+    .map_err(|_| unavailable_conversation(&profile.name))
+}
+
+fn unavailable_conversation(worker_name: &str) -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "provider_conversation_unavailable",
+        format!("The saved Claude conversation for {worker_name} is not available on this machine"),
+    )
+}
+
+fn ensure_claude_resume_history_between(
+    workspace: &str,
+    conversation_id: &str,
+    source_root: &Path,
+    target_root: &Path,
+    home: &Path,
+) -> Result<(), std::io::Error> {
+    let workspace = if workspace == "~" {
+        home.to_string_lossy().into_owned()
+    } else if let Some(relative) = workspace.strip_prefix("~/") {
+        home.join(relative).to_string_lossy().into_owned()
+    } else {
+        workspace.to_owned()
+    };
+    let encoded = workspace.replace(['/', '.'], "-");
+    let destination_directory = target_root.join(&encoded);
+    let destination = destination_directory.join(format!("{conversation_id}.jsonl"));
+    if destination.is_file() {
+        return Ok(());
+    }
+    let older_encoded = workspace.replace('/', "-");
+    let source = [encoded.as_str(), older_encoded.as_str()]
+        .into_iter()
+        .map(|directory| {
+            source_root
+                .join(directory)
+                .join(format!("{conversation_id}.jsonl"))
+        })
+        .find(|path| path.is_file())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "conversation missing"))?;
+    std::fs::create_dir_all(&destination_directory)?;
+    let temporary = destination.with_extension("jsonl.importing");
+    std::fs::copy(source, &temporary)?;
+    std::fs::rename(temporary, destination)
 }
 
 fn worker_is_scout(state: &AppState, worker_id: WorkerId) -> Result<bool, ApiError> {
@@ -167,4 +240,54 @@ async fn reconcile_worker_bindings_unlocked(
         state.control_room_notify.notify_waiters();
     }
     Ok(live)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_wake_stages_an_existing_legacy_claude_conversation() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("home");
+        let source_root = home.join(".claude/projects");
+        let target_root = home.join("isolated/projects");
+        let conversation_id = "8e9ed267-7ed8-4b64-94ef-dde3ab17f21a";
+        let source = source_root.join("-home-projects-petal");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join(format!("{conversation_id}.jsonl")), b"history").unwrap();
+
+        ensure_claude_resume_history_between(
+            "~/projects/petal",
+            conversation_id,
+            &source_root,
+            &target_root,
+            Path::new("/home"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(
+                target_root
+                    .join("-home-projects-petal")
+                    .join(format!("{conversation_id}.jsonl"))
+            )
+            .unwrap(),
+            b"history"
+        );
+    }
+
+    #[test]
+    fn first_wake_fails_closed_when_the_saved_conversation_is_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let error = ensure_claude_resume_history_between(
+            "/home/projects/petal",
+            "8e9ed267-7ed8-4b64-94ef-dde3ab17f21a",
+            &directory.path().join("source"),
+            &directory.path().join("target"),
+            Path::new("/home"),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
 }
