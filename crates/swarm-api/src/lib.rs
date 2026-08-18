@@ -7009,6 +7009,7 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         TaskStoreError::InvalidTransition { .. }
         | TaskStoreError::CompletedTask
         | TaskStoreError::ActiveTaskCannotBeRemoved
+        | TaskStoreError::WorkerAlreadyHasActiveTask
         | TaskStoreError::JiraTaskCannotBeRestored => ApiError::new(
             StatusCode::CONFLICT,
             "task_transition_rejected",

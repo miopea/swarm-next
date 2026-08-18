@@ -292,6 +292,8 @@ pub enum TaskStoreError {
     CompletedTask,
     #[error("work in progress must be stopped or completed before it can be removed")]
     ActiveTaskCannotBeRemoved,
+    #[error("this worker already has work in progress; leave additional assigned work Ready")]
+    WorkerAlreadyHasActiveTask,
     #[error("Jira work must be restored from Jira so its remote state remains authoritative")]
     JiraTaskCannotBeRestored,
     #[error("worker was not found")]
@@ -1381,6 +1383,9 @@ impl TaskStore {
                 from: current,
                 to: target,
             });
+        }
+        if target == TaskState::Active {
+            ensure_worker_has_no_other_active_task(&transaction, id)?;
         }
         jira::queue_jira_transition(&transaction, id, target)?;
         transaction.execute(
@@ -2763,6 +2768,40 @@ fn migrate_notifications(transaction: &rusqlite::Transaction<'_>) -> rusqlite::R
          PRAGMA user_version = 15;",
     )
 }
+fn ensure_worker_has_no_other_active_task(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: TaskId,
+) -> Result<(), TaskStoreError> {
+    let assigned_worker_id = transaction
+        .query_row(
+            "SELECT assigned_worker_id FROM tasks WHERE id = ?1",
+            [task_id.to_string()],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(worker_id) = assigned_worker_id else {
+        return Ok(());
+    };
+    let another_active_task = transaction
+        .query_row(
+            "SELECT 1 FROM tasks
+             WHERE assigned_worker_id = ?1
+               AND id != ?2
+               AND state = 'active'
+               AND removed_at IS NULL
+             LIMIT 1",
+            params![worker_id, task_id.to_string()],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if another_active_task {
+        return Err(TaskStoreError::WorkerAlreadyHasActiveTask);
+    }
+    Ok(())
+}
+
 fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
     if title.is_empty() || title.len() > MAX_TASK_TITLE_BYTES {
         return Err(TaskStoreError::InvalidTitle);
@@ -2940,6 +2979,37 @@ mod tests {
         assert_eq!(activity.events[1].to_state, Some(TaskState::Ready));
         assert_eq!(activity.events[2].kind, TaskActivityKind::Assigned);
         assert_eq!(activity.events[5].to_state, Some(TaskState::Completed));
+    }
+
+    #[test]
+    fn one_worker_cannot_start_two_assigned_tasks() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Daisy",
+                swarm_domain::ProviderKind::ClaudeCode,
+                "/workspace",
+                false,
+                1,
+            )
+            .unwrap();
+        let session_id = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session_id).unwrap();
+        let first = store.create_task("Current work", "/workspace").unwrap();
+        let next = store.create_task("Queued work", "/workspace").unwrap();
+        for task in [first.id, next.id] {
+            store.transition_task(task, TaskState::Ready).unwrap();
+            store.assign_task_to_worker(task, worker.id).unwrap();
+        }
+
+        store
+            .transition_worker_task(first.id, TaskState::Active, "Starting", session_id)
+            .unwrap();
+        assert!(matches!(
+            store.transition_worker_task(next.id, TaskState::Active, "Starting", session_id),
+            Err(TaskStoreError::WorkerAlreadyHasActiveTask)
+        ));
+        assert_eq!(store.get_task(next.id).unwrap().state, TaskState::Ready);
     }
 
     #[test]

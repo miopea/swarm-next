@@ -54,6 +54,7 @@ This is the working product audit for the first real developer week. It records 
 29. **Removed local work is recoverable without weakening Jira ownership.** The task board now exposes a bounded **Removed local work** shelf. Restoring returns open work to the end of the queue, preserves its audit trail, records a typed restoration event, and refuses Jira-linked tasks at both the data and API boundaries.
 30. **Persistent phone controls meet a practical touch target.** Primary navigation, presence, quick navigation, theme, and Lock controls now expose at least a 44 px target instead of requiring precise taps on 36–39 px buttons.
 31. **The touch target rule follows the developer workflow.** Queen mode/status, decision actions, worker switching and ordering, task assignment/actions, Settings sections, image intake, and terminal-key controls now use the same 44 px minimum on phones. The fix is shared at the responsive component boundary rather than repeated per screen.
+32. **A worker has one current task and an unlimited visible queue.** The persistence transaction now refuses a second assigned task entering **In progress** while that worker already owns active work. Additional tasks remain assigned and **Ready**, so Queen and the operator share one unambiguous definition of what the worker is doing now. Unassigned tasks and Jira issues without a Swarm worker are unaffected.
 
 ## Live deployed proof — 2026-08-18
 
