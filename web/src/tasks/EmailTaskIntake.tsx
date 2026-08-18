@@ -36,16 +36,27 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [readinessLoaded, setReadinessLoaded] = useState(false);
+  const [readinessError, setReadinessError] = useState("");
+  const [readinessAttempt, setReadinessAttempt] = useState(0);
   const assignableWorkers = useMemo(() => workers.filter((worker) => worker.role !== "queen"), [workers]);
   const preview = selectedMessages[previewIndex];
 
   useEffect(() => {
     let cancelled = false;
+    setReadinessLoaded(false);
+    setReadinessError("");
     void fetchEmailReadiness(operatorToken)
       .then((next) => { if (!cancelled) setReadiness(next); })
-      .catch(() => { if (!cancelled) setReadiness(undefined); });
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setReadiness(undefined);
+          setReadinessError(error instanceof Error ? error.message : "Outlook could not be checked.");
+        }
+      })
+      .finally(() => { if (!cancelled) setReadinessLoaded(true); });
     return () => { cancelled = true; };
-  }, [operatorToken]);
+  }, [operatorToken, readinessAttempt]);
 
   useEffect(() => {
     if (readiness?.connection !== "ready" || selectedMessages.length) return;
@@ -173,12 +184,17 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
     setMessage("");
   }
 
+  if (!readinessLoaded) {
+    return <EmailSourceState title="Checking Outlook…" detail="Confirming the issue-intake mailbox connection." />;
+  }
+
+  if (readinessError) {
+    return <EmailSourceState title="Outlook could not be loaded" detail={readinessError} action="Try again" onAction={() => setReadinessAttempt((current) => current + 1)} />;
+  }
+
   if (readiness?.connection !== "ready") {
     return (
-      <section className="email-task-source email-not-connected" aria-labelledby="email-work-heading">
-        <div><p className="eyebrow">Email work</p><h3 id="email-work-heading">Connect Outlook first</h3></div>
-        <p>Link the one issue-intake account in Settings → Integrations, then return here to choose Inbox messages.</p>
-      </section>
+      <EmailSourceState title="Connect Outlook first" detail="Link the one issue-intake account in Settings → Integrations, then return here to choose Inbox messages." />
     );
   }
 
@@ -250,6 +266,14 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
       {message ? <p className="settings-message" role="status">{message}</p> : null}
     </section>
   );
+}
+
+function EmailSourceState({ title, detail, action, onAction }: { title: string; detail: string; action?: string; onAction?: () => void }) {
+  return <section className="email-task-source email-not-connected" aria-label="Email work status">
+    <div><p className="eyebrow">Email work</p><h3>{title}</h3></div>
+    <p>{detail}</p>
+    {action && onAction ? <button type="button" className="secondary-button" onClick={onAction}>{action}</button> : null}
+  </section>;
 }
 
 function formatReceived(timestamp: number) {

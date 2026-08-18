@@ -150,6 +150,22 @@ test("directs the operator to integrations when Outlook is not connected", async
   expect(screen.getByText(/Settings → Integrations/)).toBeInTheDocument();
 });
 
+test("distinguishes a temporary Outlook failure from a missing connection", async () => {
+  let attempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.endsWith("/readiness")) throw new Error(`Unexpected request: ${url}`);
+    if (attempts++ === 0) return new Response("temporary gateway failure", { status: 502 });
+    return ok({ configured: true, connection: "not_connected", account_name: null, account_address: null });
+  }));
+
+  render(<EmailTaskIntake operatorToken="operator-token" onImported={vi.fn()} />);
+
+  expect(await screen.findByRole("heading", { name: "Outlook could not be loaded" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("heading", { name: "Connect Outlook first" })).toBeInTheDocument();
+});
+
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
