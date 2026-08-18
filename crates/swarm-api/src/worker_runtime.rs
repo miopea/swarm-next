@@ -1,7 +1,7 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use axum::http::StatusCode;
-use swarm_domain::{ProviderKind, WorkerId, WorkerSessionId};
+use swarm_domain::{ProviderKind, WorkerId, WorkerProfile, WorkerSessionId};
 use swarm_terminal::{
     ClaudeConversationStart, CodexConversationStart, HostRequest, HostResponse, ProviderActivity,
     TerminalSize,
@@ -51,6 +51,42 @@ pub(super) async fn start_worker_process(
         None
     };
 
+    let request = provider_start_request(state, worker_id, &profile, size, mcp_config)?;
+    let response = request_host(state, request).await?;
+    let HostResponse::SessionStarted { session_id } = response else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected response",
+        ));
+    };
+    if let Err(error) = task_store(state)?.bind_worker_session(worker_id, session_id) {
+        let _ = request_host(state, HostRequest::Stop { session_id }).await;
+        return Err(task_store_error(&error));
+    }
+    state.worker_errors.write().await.remove(&worker_id);
+    state.control_room_notify.notify_waiters();
+    let profile = task_store(state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    let is_scout = worker_is_scout(state, worker_id)?;
+    Ok(worker_view(
+        profile,
+        true,
+        false,
+        None,
+        ProviderActivity::Unknown,
+        is_scout,
+    ))
+}
+
+fn provider_start_request(
+    state: &AppState,
+    worker_id: WorkerId,
+    profile: &WorkerProfile,
+    size: TerminalSize,
+    mcp_config: Option<PathBuf>,
+) -> Result<HostRequest, ApiError> {
     let worker_workspace = PathBuf::from(&profile.workspace);
     let allow_outside_roots = !state
         .workspace_roots
@@ -91,32 +127,7 @@ pub(super) async fn start_worker_process(
             allow_outside_roots,
         },
     };
-    let response = request_host(state, request).await?;
-    let HostResponse::SessionStarted { session_id } = response else {
-        return Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "unexpected_host_response",
-            "terminal host returned an unexpected response",
-        ));
-    };
-    if let Err(error) = task_store(state)?.bind_worker_session(worker_id, session_id) {
-        let _ = request_host(state, HostRequest::Stop { session_id }).await;
-        return Err(task_store_error(&error));
-    }
-    state.worker_errors.write().await.remove(&worker_id);
-    state.control_room_notify.notify_waiters();
-    let profile = task_store(state)?
-        .get_worker_profile(worker_id)
-        .map_err(|error| task_store_error(&error))?;
-    let is_scout = worker_is_scout(state, worker_id)?;
-    Ok(worker_view(
-        profile,
-        true,
-        false,
-        None,
-        ProviderActivity::Unknown,
-        is_scout,
-    ))
+    Ok(request)
 }
 
 fn worker_is_scout(state: &AppState, worker_id: WorkerId) -> Result<bool, ApiError> {
