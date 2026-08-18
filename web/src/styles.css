@@ -1385,6 +1385,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .empty-card { flex-direction: column; padding: 20px; text-align: center; }
   .settings-workspace { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); padding: 12px; overflow-x: hidden; }
   .settings-section-nav { top: 0; margin-block-start: -12px; margin-inline: -4px; padding: 7px; }
+  .settings-section-nav::before { position: absolute; top: -12px; right: -4px; left: -4px; height: 12px; background: var(--bg); content: ""; }
   .settings-card { min-width: 0; }
   .migration-summary { grid-template-columns: minmax(0, 1fr); }
   .migration-summary span + span { border-inline-start: 0; border-block-start: 1px solid var(--line); }

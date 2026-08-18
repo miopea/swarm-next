@@ -26,6 +26,9 @@ test("keeps the mobile settings section rail flush with its scroll viewport", ()
   expect(stylesheet).toContain(
     ".settings-section-nav { top: 0; margin-block-start: -12px; margin-inline: -4px; padding: 7px; }",
   );
+  expect(stylesheet).toContain(
+    '.settings-section-nav::before { position: absolute; top: -12px; right: -4px; left: -4px; height: 12px; background: var(--bg); content: ""; }',
+  );
 });
 
 test("lets repository paths wrap inside the worker editor", () => {
