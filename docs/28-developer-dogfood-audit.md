@@ -73,6 +73,8 @@ This is the working product audit for the first real developer week. It records 
 48. **Claiming Jira work cannot fail as an empty panel.** The entry workspace now distinguishes connection checking, a disconnected identity, projects that still need mapping, and a transient runtime error with a direct retry. A highlighted **Claim Jira work** action therefore always leads to a useful explanation or the actual project chooser.
 49. **Inbox intake does not blame configuration for a runtime failure.** The email workspace now shows a checking state, distinguishes an unavailable Outlook request from a disconnected account, and offers an in-place retry. A transient gateway failure no longer flashes or settles on the false instruction to reconnect Outlook.
 50. **Integration source states share one interaction contract.** Jira and Outlook checking, configuration, failure, and retry surfaces now use one small component rather than two copies. The consolidation keeps new task sources consistent without turning their domain-specific loading logic into a premature framework.
+51. **A Jira refresh failure no longer looks like deleted configuration.** Settings now distinguishes checking connected projects, a verified empty configuration, and a temporary refresh failure with an in-place retry. Existing project cards remain visible during a failed refresh instead of being replaced by the false claim that no projects are connected.
+52. **A Keeper cannot mistake a failed roster request for vanished Hives.** Apiary membership now has explicit loading, ready, and failure states. A failed refresh preserves the last-known roster and offers a direct retry instead of clearing every member and leaving a permanent “refreshing” message.
 
 ## Live deployed proof — 2026-08-18
 
@@ -115,7 +117,7 @@ This is the working product audit for the first real developer week. It records 
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
 - The full Rust workspace is green: 461 unit/integration tests plus all crate documentation tests passed on the release checkout.
 - Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
-- The web workspace is green: 60 test files with 302 tests, TypeScript project checking, and the production Vite build all pass.
+- The web workspace is green: 60 test files with 304 tests, TypeScript project checking, and the production Vite build all pass.
 
 ## Release re-proofs required
 

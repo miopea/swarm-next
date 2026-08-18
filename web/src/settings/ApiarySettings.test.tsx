@@ -252,6 +252,32 @@ test("shows registered Apiary Hives without implying live presence", async () =>
   expect(screen.getByText(/Registered membership, not live presence/)).toBeVisible();
 });
 
+test("does not present a failed Apiary roster refresh as missing membership", async () => {
+  let memberAttempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/apiary/members") {
+      memberAttempts += 1;
+      if (memberAttempts === 1) return new Response("keeper unavailable", { status: 502 });
+      return ok([
+        { hive_id: "hive-1", hive_name: "Meadow Hive", operator_id: "operator-1", operator_display_name: "Bea", role: "keeper", is_local: true },
+        { hive_id: "hive-2", hive_name: "Clover Hive", operator_id: "operator-2", operator_display_name: "Cora", role: "member", is_local: false },
+      ]);
+    }
+    if (url === "/api/v1/apiary/collapse-readiness") return ok({ active_hive_count: 2, pending_invitation_count: 0, active_stewardship_count: 0, open_cross_hive_work_count: 0, departed_node_count: 0 });
+    if (["/api/v1/apiary/jira-projects", "/api/v1/integrations/jira/bindings", "/api/v1/apiary/shared-work", "/api/v1/apiary/stewardships", "/api/v1/apiary/hive-candidates"].includes(url)) return ok([]);
+    throw new Error(`unexpected request ${url}`);
+  }));
+
+  render(<ApiarySettings busy={false} hiveIdentity={keeperIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  expect(await screen.findByText("The Hive roster could not be refreshed. Last-known membership remains unchanged.")).toBeInTheDocument();
+  expect(screen.queryByText("Membership is being refreshed.")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Retry Hive roster" }));
+  expect(await screen.findByText("Clover Hive")).toBeInTheDocument();
+  expect(screen.queryByText("The Hive roster could not be refreshed. Last-known membership remains unchanged.")).not.toBeInTheDocument();
+});
+
 test("collapses a ready sole-Keeper Apiary only after inline confirmation", async () => {
   const personal = personalIdentity();
   const onHiveIdentityChange = vi.fn();

@@ -52,6 +52,8 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   const [readiness, setReadiness] = useState<ApiaryCollapseReadiness>();
   const [promotedProjects, setPromotedProjects] = useState<ApiaryJiraProject[]>([]);
   const [members, setMembers] = useState<ApiaryMember[]>([]);
+  const [memberRosterState, setMemberRosterState] = useState<"loading" | "ready" | "error">("loading");
+  const [memberRosterAttempt, setMemberRosterAttempt] = useState(0);
   const [sharedWork, setSharedWork] = useState<ApiarySharedWorkClaim[]>([]);
   const [stewardships, setStewardships] = useState<Stewardship[]>([]);
   const [memberSync, setMemberSync] = useState<FederationSyncHealth>();
@@ -80,14 +82,22 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
   useEffect(() => {
     if (personal) {
       setMembers([]);
+      setMemberRosterState("ready");
       return;
     }
     let cancelled = false;
+    setMemberRosterState("loading");
     void fetchApiaryMembers(operatorToken)
-      .then((value) => { if (!cancelled) setMembers(value); })
-      .catch(() => { if (!cancelled) setMembers([]); });
+      .then((value) => {
+        if (cancelled) return;
+        setMembers(value);
+        setMemberRosterState("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setMemberRosterState("error");
+      });
     return () => { cancelled = true; };
-  }, [personal, operatorToken, hiveIdentity?.hive.apiary_id]);
+  }, [personal, operatorToken, hiveIdentity?.hive.apiary_id, memberRosterAttempt]);
 
   useEffect(() => {
     if (!keeper) {
@@ -422,7 +432,13 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
                   </li>
                 ))}
               </ul>
-            ) : <p className="empty-copy">Membership is being refreshed.</p>}
+            ) : memberRosterState === "loading" ? <p className="empty-copy">Membership is being refreshed.</p> : null}
+            {memberRosterState === "error" ? (
+              <div className="apiary-blockers" role="alert">
+                <p>The Hive roster could not be refreshed. Last-known membership remains unchanged.</p>
+                <button className="secondary-button" type="button" onClick={() => setMemberRosterAttempt((attempt) => attempt + 1)}>Retry Hive roster</button>
+              </div>
+            ) : null}
           </div>
           {keeper ? (
             <>

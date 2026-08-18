@@ -110,6 +110,38 @@ test("offers an operator-facing Atlassian connection instead of host-setting ins
   await waitFor(() => expect(assign).toHaveBeenCalledWith("https://auth.atlassian.test/authorize"));
 });
 
+test("keeps a transient binding failure distinct from an empty Jira configuration", async () => {
+  let bindingAttempts = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/bindings")) {
+      bindingAttempts += 1;
+      if (bindingAttempts === 1) return new Response("upstream unavailable", { status: 502 });
+      return ok([{
+        id: "binding-1", project_id: "10001", project_key: "WEB", project_name: "Website Services",
+        scope: "hive", hive_id: "hive-1", apiary_id: null, access_verified: true, workflow_mapped: true,
+        auto_sync_assigned: false,
+      }]);
+    }
+    if (url.includes("/projects?")) return ok([]);
+    throw new Error(`Unexpected request: GET ${url}`);
+  }));
+
+  render(
+    <JiraSettings
+      operatorToken="operator-token"
+      readiness={{ configured: true, connection: "ready", account_name: "Bea" }}
+      unavailable={false}
+    />,
+  );
+
+  expect(await screen.findByText("Connected projects could not be refreshed")).toBeInTheDocument();
+  expect(screen.queryByText("No Jira projects are connected to this Hive yet.")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("Website Services")).toBeInTheDocument();
+  expect(screen.queryByText("Connected projects could not be refreshed")).not.toBeInTheDocument();
+});
+
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }

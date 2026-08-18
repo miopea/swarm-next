@@ -35,6 +35,8 @@ const taskStates: { value: TaskState; label: string }[] = [
 
 export default function JiraSettings({ operatorToken, readiness, unavailable, onNavigate = (url) => window.location.assign(url) }: Props) {
   const [bindings, setBindings] = useState<JiraProjectBinding[]>([]);
+  const [bindingsState, setBindingsState] = useState<"loading" | "ready" | "error">("loading");
+  const [bindingsAttempt, setBindingsAttempt] = useState(0);
   const [query, setQuery] = useState("");
   const [projects, setProjects] = useState<JiraProject[]>([]);
   const [selectedProject, setSelectedProject] = useState<JiraProject>();
@@ -48,11 +50,18 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
 
   useEffect(() => {
     let cancelled = false;
+    setBindingsState("loading");
     void fetchJiraBindings(operatorToken)
-      .then((next) => { if (!cancelled) setBindings(next); })
-      .catch(() => { if (!cancelled) setBindings([]); });
+      .then((next) => {
+        if (cancelled) return;
+        setBindings(next);
+        setBindingsState("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setBindingsState("error");
+      });
     return () => { cancelled = true; };
-  }, [operatorToken]);
+  }, [bindingsAttempt, operatorToken]);
 
   useEffect(() => {
     if (readiness?.connection !== "ready" || selectedProject) return;
@@ -183,7 +192,22 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
               </div>
           ))}
         </div>
-      ) : <small className="privacy-note">No Jira projects are connected to this Hive yet.</small>}
+      ) : bindingsState === "ready" ? (
+        <small className="privacy-note">No Jira projects are connected to this Hive yet.</small>
+      ) : null}
+
+      {bindingsState === "loading" ? (
+        <p className="settings-message" role="status">Checking connected Jira projects…</p>
+      ) : bindingsState === "error" ? (
+        <div className="integration-status" role="alert">
+          <span className="presence offline" />
+          <span>
+            <strong>Connected projects could not be refreshed</strong>
+            <small>Your existing Jira work is unchanged. Check the connection and try again.</small>
+          </span>
+          <button className="secondary-button" type="button" onClick={() => setBindingsAttempt((attempt) => attempt + 1)}>Try again</button>
+        </div>
+      ) : null}
 
       {readiness?.connection === "ready" ? (
         <div className="jira-project-setup">
