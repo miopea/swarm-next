@@ -20,7 +20,7 @@ export type Task = {
   updated_at: number;
 };
 
-export type TaskActivityKind = "created" | "details_updated" | "state_changed" | "assigned" | "unassigned" | "removed";
+export type TaskActivityKind = "created" | "details_updated" | "state_changed" | "assigned" | "unassigned" | "removed" | "restored";
 export type TaskActivityActorKind = "operator" | "worker" | "jira" | "email" | "system";
 
 export type TaskActivity = {
@@ -92,10 +92,22 @@ export async function updateTask(operatorToken: string, taskId: string, input: T
   return response.json() as Promise<Task>;
 }
 
+export async function fetchRemovedTasks(operatorToken: string): Promise<Task[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/tasks/removed");
+  return response.json() as Promise<Task[]>;
+}
+
 export async function removeTask(operatorToken: string, taskId: string): Promise<void> {
   await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}`, {
     method: "DELETE",
   });
+}
+
+export async function restoreTask(operatorToken: string, taskId: string): Promise<Task> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/restore`, {
+    method: "POST",
+  });
+  return response.json() as Promise<Task>;
 }
 
 export async function transitionTask(operatorToken: string, taskId: string, state: TaskState, note = ""): Promise<Task> {

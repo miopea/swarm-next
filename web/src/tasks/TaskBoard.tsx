@@ -6,6 +6,7 @@ import {
   fetchApiaryMembers,
   fetchApiaryTasks,
   fetchEmailTaskSources,
+  fetchRemovedTasks,
   fetchFederationTaskOutbox,
   fetchLocalApiaryTaskExecutions,
   fetchMyFederationStewardship,
@@ -51,6 +52,7 @@ type Props = {
   onCreate: (input: TaskDraftInput) => Promise<void>;
   onUpdate: (task: Task, input: TaskUpdateInput) => Promise<void>;
   onRemove: (task: Task) => Promise<void>;
+  onRestore: (task: Task) => Promise<void>;
   onTransition: (task: Task, state: TaskState, note?: string) => Promise<void>;
   onAssign: (task: Task, workerId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
@@ -119,6 +121,7 @@ export default function TaskBoard({
   onCreate,
   onUpdate,
   onRemove,
+  onRestore,
   onTransition,
   onAssign,
   onStartWorker,
@@ -166,6 +169,8 @@ export default function TaskBoard({
   const [jiraOpen, setJiraOpen] = useState(false);
   const [emailOpen, setEmailOpen] = useState(false);
   const [emailTaskSources, setEmailTaskSources] = useState<EmailTaskSource[]>([]);
+  const [removedTasks, setRemovedTasks] = useState<Task[]>([]);
+  const [restoringTaskId, setRestoringTaskId] = useState<string>();
   const titleInput = useRef<HTMLInputElement>(null);
   const completedTasksPanel = useRef<HTMLDetailsElement>(null);
 
@@ -270,6 +275,13 @@ export default function TaskBoard({
     void fetchEmailTaskSources(operatorToken)
       .then((sources) => { if (!cancelled) setEmailTaskSources(Array.isArray(sources) ? sources : []); })
       .catch(() => { if (!cancelled) setEmailTaskSources([]); });
+    return () => { cancelled = true; };
+  }, [operatorToken, tasks]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchRemovedTasks(operatorToken)
+      .then((removed) => { if (!cancelled) setRemovedTasks(Array.isArray(removed) ? removed : []); })
+      .catch(() => { if (!cancelled) setRemovedTasks([]); });
     return () => { cancelled = true; };
   }, [operatorToken, tasks]);
   useEffect(() => {
@@ -559,6 +571,28 @@ export default function TaskBoard({
           </div>
         </details>
       )}
+
+      {removedTasks.length > 0 && <details className="removed-tasks">
+        <summary><span>Removed local work</span><small>{removedTasks.length}</small></summary>
+        <p>Recover a task removed from this Hive. Jira work stays under Jira and never appears here.</p>
+        <div className="removed-task-list">
+          {removedTasks.map((task) => <article key={task.id}>
+            <span><strong>{task.title}</strong><small>{stateLabels[task.state]} · removed {new Date(task.updated_at * 1000).toLocaleString()}</small></span>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy || restoringTaskId === task.id}
+              onClick={() => {
+                setRestoringTaskId(task.id);
+                void onRestore(task)
+                  .then(() => setRemovedTasks((current) => current.filter((candidate) => candidate.id !== task.id)))
+                  .catch(() => undefined)
+                  .finally(() => setRestoringTaskId(undefined));
+              }}
+            >{restoringTaskId === task.id ? "Restoring…" : "Restore to board"}</button>
+          </article>)}
+        </div>
+      </details>}
     </div>
   );
 }

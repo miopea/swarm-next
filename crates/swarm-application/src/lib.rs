@@ -1877,6 +1877,14 @@ impl TaskService {
         self.store.list_tasks().map_err(Into::into)
     }
 
+    /// Lists the bounded recovery shelf for local, non-Jira work.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the recovery snapshot cannot be read.
+    pub fn list_removed_local_tasks(&self) -> Result<Vec<Task>, ApplicationError> {
+        self.store.list_removed_local_tasks().map_err(Into::into)
+    }
+
     /// Creates a validated local draft through the shared application boundary.
     ///
     /// # Errors
@@ -1919,6 +1927,16 @@ impl TaskService {
     pub fn remove_operator_task(&self, task_id: TaskId) -> Result<(), ApplicationError> {
         self.store
             .remove_task_as(task_id, &TaskActivityActor::operator())
+            .map_err(Into::into)
+    }
+
+    /// Returns one removed local task to the active Hive board.
+    ///
+    /// # Errors
+    /// Propagates missing-task, Jira-authority, and persistence failures.
+    pub fn restore_operator_task(&self, task_id: TaskId) -> Result<Task, ApplicationError> {
+        self.store
+            .restore_task_as(task_id, &TaskActivityActor::operator())
             .map_err(Into::into)
     }
     /// Assigns a local task to a stable worker profile.

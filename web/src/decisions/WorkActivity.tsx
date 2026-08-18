@@ -83,6 +83,7 @@ function activityLabel(activity: TaskActivity): string {
   if (activity.kind === "created") return "Task created";
   if (activity.kind === "details_updated") return "Details updated";
   if (activity.kind === "removed") return "Removed from Hive";
+  if (activity.kind === "restored") return "Restored to Hive";
   if (activity.kind === "assigned") return "Worker assigned";
   if (activity.kind === "unassigned") return "Worker released";
   if (activity.from_state && activity.to_state) return `${stateLabels[activity.from_state]} → ${stateLabels[activity.to_state]}`;

@@ -292,6 +292,8 @@ pub enum TaskStoreError {
     CompletedTask,
     #[error("work in progress must be stopped or completed before it can be removed")]
     ActiveTaskCannotBeRemoved,
+    #[error("Jira work must be restored from Jira so its remote state remains authoritative")]
+    JiraTaskCannotBeRestored,
     #[error("worker was not found")]
     WorkerNotFound,
     #[error("worker name is invalid")]
@@ -827,6 +829,40 @@ impl TaskStore {
             .map_err(TaskStoreError::from)
     }
 
+    /// Lists the newest removed local tasks that can safely return to this Hive.
+    ///
+    /// Jira-backed work is deliberately absent because Jira remains its lifecycle
+    /// authority. The bounded result prevents old cleanup history from becoming
+    /// another unbounded board.
+    ///
+    /// # Errors
+    /// Returns an error when persistence cannot be read safely.
+    pub fn list_removed_local_tasks(&self) -> Result<Vec<Task>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "
+            SELECT t.id, t.hive_id, t.title, t.description, t.priority, t.workspace, t.state,
+                   t.assigned_worker_id, a.worker_session_id,
+                   (SELECT state FROM task_dispatches td WHERE td.assignment_id = a.id),
+                   (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
+                    AND outcome.target_state = t.state
+                    ORDER BY outcome.activity_sequence DESC LIMIT 1),
+                   t.position, t.created_at, t.updated_at
+            FROM tasks t
+            LEFT JOIN task_assignments a
+              ON a.task_id = t.id AND a.released_at IS NULL
+            WHERE t.removed_at IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM jira_issue_links jira WHERE jira.task_id = t.id)
+            ORDER BY t.removed_at DESC, t.id
+            LIMIT 100
+            ",
+        )?;
+        statement
+            .query_map([], task_from_row)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(TaskStoreError::from)
+    }
+
     /// Loads one task and its current active assignment.
     ///
     /// # Errors
@@ -1036,6 +1072,59 @@ impl TaskStore {
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Restores one removed local task to the active Hive board.
+    ///
+    /// Jira-backed work cannot use this local recovery path because its remote
+    /// issue remains authoritative. Open work returns at the end of the queue;
+    /// completed work returns to completed history.
+    ///
+    /// # Errors
+    /// Returns `NotFound` for an unknown or already-active task, and refuses
+    /// Jira-backed work.
+    pub fn restore_task_as(
+        &self,
+        id: TaskId,
+        actor: &TaskActivityActor,
+    ) -> Result<Task, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let jira_backed = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM jira_issue_links WHERE task_id = ?1)
+                 FROM tasks WHERE id = ?1 AND removed_at IS NOT NULL",
+                [id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::NotFound)?;
+        if jira_backed {
+            return Err(TaskStoreError::JiraTaskCannotBeRestored);
+        }
+        transaction.execute(
+            "UPDATE tasks
+             SET removed_at = NULL,
+                 position = CASE WHEN state = 'completed' THEN position ELSE (
+                     SELECT COALESCE(MAX(active.position), -1) + 1
+                     FROM tasks active
+                     WHERE active.hive_id = tasks.hive_id
+                       AND active.removed_at IS NULL
+                       AND active.state != 'completed'
+                 ) END,
+                 updated_at = unixepoch()
+             WHERE id = ?1 AND removed_at IS NOT NULL",
+            [id.to_string()],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, note, actor_kind, actor_id)
+             VALUES (?1, 'restored', 'Restored to this Hive', ?2, ?3)",
+            params![id.to_string(), actor.kind.to_string(), actor.id.as_deref()],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_task(id)
     }
 
     /// Replaces the supplied task details and records one atomic activity event.
@@ -2913,6 +3002,34 @@ mod tests {
             Err(TaskStoreError::ActiveTaskCannotBeRemoved)
         ));
         assert_eq!(store.get_task(active.id).unwrap().state, TaskState::Active);
+    }
+
+    #[test]
+    fn restoring_removed_local_work_returns_it_at_the_end_of_the_queue() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store.create_task("First", "/workspace").unwrap();
+        let restored = store.create_task("Restore me", "/workspace").unwrap();
+        store
+            .remove_task_as(restored.id, &TaskActivityActor::operator())
+            .unwrap();
+
+        assert_eq!(store.list_removed_local_tasks().unwrap()[0].id, restored.id);
+        let returned = store
+            .restore_task_as(restored.id, &TaskActivityActor::operator())
+            .unwrap();
+
+        assert!(store.list_removed_local_tasks().unwrap().is_empty());
+        assert_eq!(returned.position, first.position + 1);
+        assert_eq!(store.list_tasks().unwrap().len(), 2);
+        let activity = store.list_task_activity(restored.id, 10).unwrap();
+        assert_eq!(
+            activity.events.last().unwrap().kind,
+            TaskActivityKind::Restored
+        );
+        assert!(matches!(
+            store.restore_task_as(restored.id, &TaskActivityActor::operator()),
+            Err(TaskStoreError::NotFound)
+        ));
     }
 
     #[test]

@@ -2633,6 +2633,7 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/tasks/order", put(tasks::reorder_tasks))
         .route("/api/v1/tasks/activity", get(tasks::recent_task_activity))
+        .route("/api/v1/tasks/removed", get(tasks::list_removed_tasks))
         .route(
             "/api/v1/tasks/{task_id}",
             patch(tasks::update_task).delete(tasks::remove_task),
@@ -2641,6 +2642,7 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/tasks/{task_id}/activity",
             get(tasks::task_activity),
         )
+        .route("/api/v1/tasks/{task_id}/restore", post(tasks::restore_task))
         .route(
             "/api/v1/tasks/{task_id}/state",
             patch(tasks::transition_task),
@@ -7006,7 +7008,8 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         }
         TaskStoreError::InvalidTransition { .. }
         | TaskStoreError::CompletedTask
-        | TaskStoreError::ActiveTaskCannotBeRemoved => ApiError::new(
+        | TaskStoreError::ActiveTaskCannotBeRemoved
+        | TaskStoreError::JiraTaskCannotBeRestored => ApiError::new(
             StatusCode::CONFLICT,
             "task_transition_rejected",
             error.to_string(),

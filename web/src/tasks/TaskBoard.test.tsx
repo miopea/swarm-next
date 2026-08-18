@@ -30,7 +30,7 @@ const jiraTaskLink = {
 function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> = {}) {
   const props: React.ComponentProps<typeof TaskBoard> = {
     tasks: [task], jiraTaskLinks: [], operatorToken: "operator-token", sessions: [], workers: [worker], busy: false,
-    onCreate: vi.fn(), onUpdate: vi.fn(), onRemove: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onFetchJiraComments: vi.fn().mockResolvedValue([]), onAddJiraComment: vi.fn().mockResolvedValue({ state: "delivered" }), onRetryJira: vi.fn(), onJiraImported: vi.fn().mockResolvedValue(undefined), onReorder: vi.fn(),
+    onCreate: vi.fn(), onUpdate: vi.fn(), onRemove: vi.fn(), onRestore: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onFetchJiraComments: vi.fn().mockResolvedValue([]), onAddJiraComment: vi.fn().mockResolvedValue({ state: "delivered" }), onRetryJira: vi.fn(), onJiraImported: vi.fn().mockResolvedValue(undefined), onReorder: vi.fn(),
     ...overrides,
   };
   return { props, ...render(<TaskBoard {...props} />) };
@@ -121,6 +121,41 @@ test("creates a task with useful context and priority", () => {
     priority: "urgent",
     worker_id: worker.id,
   });
+});
+
+test("lets the operator recover removed local work without mixing in Jira work", async () => {
+  const removed = { ...task, id: "removed-1", title: "Recover this idea", removed_at: 2 };
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/tasks/removed")) return Promise.resolve(ok([removed]));
+    return Promise.resolve(ok([]));
+  }));
+  const onRestore = vi.fn().mockResolvedValue(undefined);
+  renderBoard({ tasks: [], onRestore });
+
+  const disclosure = await screen.findByText("Removed local work");
+  fireEvent.click(disclosure);
+  expect(screen.getByText("Recover a task removed from this Hive. Jira work stays under Jira and never appears here.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Restore to board" }));
+
+  await waitFor(() => expect(onRestore).toHaveBeenCalledWith(removed));
+  await waitFor(() => expect(screen.queryByText(removed.title)).not.toBeInTheDocument());
+});
+
+test("keeps removed work recoverable when restoration fails", async () => {
+  const removed = { ...task, id: "removed-2", title: "Try recovery again", removed_at: 2 };
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(ok(
+    String(input).endsWith("/api/v1/tasks/removed") ? [removed] : [],
+  ))));
+  const onRestore = vi.fn().mockRejectedValue(new Error("recovery unavailable"));
+  renderBoard({ tasks: [], onRestore });
+
+  fireEvent.click(await screen.findByText("Removed local work"));
+  fireEvent.click(screen.getByRole("button", { name: "Restore to board" }));
+
+  await waitFor(() => expect(onRestore).toHaveBeenCalledWith(removed));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Restore to board" })).toBeEnabled());
+  expect(screen.getByText(removed.title)).toBeInTheDocument();
 });
 
 test("creates Apiary work from Tasks instead of the supervisory Apiary view", async () => {

@@ -4,10 +4,12 @@ import {
   assignTask,
   createTask,
   fetchRecentTaskActivity,
+  fetchRemovedTasks,
   fetchTaskActivity,
   fetchTasks,
   reorderTasks,
   removeTask,
+  restoreTask,
   transitionTask,
   updateTask,
   type Task,
@@ -92,4 +94,17 @@ test("removes a task from the Hive without a request body", async () => {
 
   await expect(removeTask("operator", "task/one")).resolves.toBeUndefined();
   expect(fetch).toHaveBeenCalledWith("/api/v1/tasks/task%2Fone", expect.objectContaining({ method: "DELETE" }));
+});
+
+test("lists and restores removed local work through explicit recovery endpoints", async () => {
+  const removed = { ...task, removed_at: 2 };
+  const fetch = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify([removed]), { status: 200 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify(task), { status: 200 }));
+  vi.stubGlobal("fetch", fetch);
+
+  await expect(fetchRemovedTasks("operator")).resolves.toEqual([removed]);
+  await expect(restoreTask("operator", "task/one")).resolves.toEqual(task);
+  expect(fetch).toHaveBeenNthCalledWith(1, "/api/v1/tasks/removed", expect.any(Object));
+  expect(fetch).toHaveBeenNthCalledWith(2, "/api/v1/tasks/task%2Fone/restore", expect.objectContaining({ method: "POST" }));
 });

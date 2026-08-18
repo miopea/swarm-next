@@ -19,6 +19,7 @@ This is the working product audit for the first real developer week. It records 
 | Find Legacy data for migration | Pass | Pass | Primary path discovers the normal local Legacy database read-only. File selection remains an advanced fallback. |
 | Understand runtime updates | Pass in current UI | Pass | Worker engine and App/API are separate cards with versions, risk, and action state. Re-prove progress across a real update after release. |
 | Find one worker or command in a 31-worker Hive | Pass | Pass | The Awake filter keeps the rail calm; quick navigation filters sleeping workers by name and scrolls inside its bounded dialog. Alt+K opens it from ordinary desktop controls. |
+| Recover work removed by mistake | Test pass; live release pending | Same | A bounded recovery shelf restores local Swarm work with its history intact. Jira work never enters the local recovery path because Jira remains authoritative. |
 
 ## Fixes made during this pass
 
@@ -50,6 +51,7 @@ This is the working product audit for the first real developer week. It records 
 26. **A new task never defaults to Scout by roster position.** Local task creation now requires the operator to choose the repository worker explicitly. Scout remains available for deliberate cross-repository work, but Swarm no longer silently routes ordinary work there simply because Scout is the first configured worker.
 27. **Terminal diagnostics explain their identity.** The internal Swarm terminal-session ID stays behind a disclosure, now says what it identifies, distinguishes itself from the Claude or Codex conversation, and can be copied for a support report.
 28. **Legacy repository spelling cannot duplicate an existing worker.** Migration compares repository identity after expanding the local home shorthand, normalizing separators, and ignoring a trailing slash. A Legacy `~/projects/...` worker is therefore recognized as the same repository already stored by Next as `/home/<operator>/projects/...`, rather than being offered as a second worker.
+29. **Removed local work is recoverable without weakening Jira ownership.** The task board now exposes a bounded **Removed local work** shelf. Restoring returns open work to the end of the queue, preserves its audit trail, records a typed restoration event, and refuses Jira-linked tasks at both the data and API boundaries.
 
 ## Live deployed proof — 2026-08-18
 
@@ -86,8 +88,9 @@ This is the working product audit for the first real developer week. It records 
 - Apiary pages show organization, public work rollups, claims, and delegation; private worker/repository/session data remains owned by each Hive.
 - Task removal is available for local work with stronger guards for Jira-backed work.
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
-- The full Rust workspace is green: 455 unit/integration tests plus all crate documentation tests passed on the release checkout.
+- The full Rust workspace is green: 459 unit/integration tests plus all crate documentation tests passed on the release checkout.
 - Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
+- The web workspace is green: 58 test files with 290 tests, TypeScript project checking, and the production Vite build all pass.
 
 ## Release re-proofs required
 

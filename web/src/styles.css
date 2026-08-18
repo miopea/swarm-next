@@ -655,13 +655,20 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .empty-card strong { color: var(--text); font-size: .9rem; }
 .empty-card span { font-size: .79rem; }
 .empty-bee { width: 112px; height: 112px; }
-.completed-tasks { max-width: 1400px; margin: 24px auto 0; color: var(--muted); }
-.completed-tasks summary { display: inline-flex; min-height: 34px; cursor: pointer; list-style: none; align-items: center; gap: 9px; padding: 5px 9px; border-radius: var(--radius-sm); font-size: .79rem; font-weight: 500; }
-.completed-tasks summary::-webkit-details-marker { display: none; }
-.completed-tasks summary::before { width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; content: ""; transform: rotate(-45deg); transition: transform .15s; }
-.completed-tasks[open] summary::before { transform: rotate(45deg); }
-.completed-tasks summary:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
-.completed-tasks summary small { display: grid; min-width: 22px; height: 21px; place-items: center; border-radius: 7px; color: var(--muted); background: var(--panel-soft); font-size: .69rem; }
+.completed-tasks, .removed-tasks { max-width: 1400px; margin: 24px auto 0; color: var(--muted); }
+.completed-tasks summary, .removed-tasks summary { display: inline-flex; min-height: 34px; cursor: pointer; list-style: none; align-items: center; gap: 9px; padding: 5px 9px; border-radius: var(--radius-sm); font-size: .79rem; font-weight: 500; }
+.completed-tasks summary::-webkit-details-marker, .removed-tasks summary::-webkit-details-marker { display: none; }
+.completed-tasks summary::before, .removed-tasks summary::before { width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; content: ""; transform: rotate(-45deg); transition: transform .15s; }
+.completed-tasks[open] summary::before, .removed-tasks[open] summary::before { transform: rotate(45deg); }
+.completed-tasks summary:hover, .removed-tasks summary:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
+.completed-tasks summary small, .removed-tasks summary small { display: grid; min-width: 22px; height: 21px; place-items: center; border-radius: 7px; color: var(--muted); background: var(--panel-soft); font-size: .69rem; }
+.removed-tasks > p { margin: 4px 9px 12px; font-size: .73rem; }
+.removed-task-list { display: grid; gap: 8px; }
+.removed-task-list article { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.removed-task-list article > span { display: grid; min-width: 0; gap: 3px; }
+.removed-task-list strong { overflow: hidden; color: var(--text); font-size: .82rem; text-overflow: ellipsis; white-space: nowrap; }
+.removed-task-list small { font-size: .68rem; }
+.removed-task-list button { flex: 0 0 auto; }
 .task-grid.compact .task-card { min-height: 96px; box-shadow: none; }
 
 /* The worker rail is user-resizable, so task density must follow the space
@@ -1282,6 +1289,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 }
 @media (max-width: 680px) {
   body { overflow: hidden; }
+  .removed-task-list article { align-items: stretch; flex-direction: column; }
+  .removed-task-list button { width: 100%; }
   .worker-roster-search { grid-template-columns: minmax(0, 1fr); }
   .worker-roster-search small { padding-bottom: 0; white-space: normal; }
   .app-shell { grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); height: 100dvh; min-height: 0; }

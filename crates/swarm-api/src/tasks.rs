@@ -152,6 +152,17 @@ pub(super) async fn update_task(
     Ok(Json(task).into_response())
 }
 
+pub(super) async fn list_removed_tasks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let tasks = task_service(&state)?
+        .list_removed_local_tasks()
+        .map_err(application_error)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(tasks)).into_response())
+}
+
 pub(super) async fn remove_task(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -163,6 +174,19 @@ pub(super) async fn remove_task(
         .map_err(application_error)?;
     state.control_room_notify.notify_waiters();
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+pub(super) async fn restore_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task = task_service(&state)?
+        .restore_operator_task(parse_task_id(&task_id)?)
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(Json(task).into_response())
 }
 
 pub(super) async fn transition_task(

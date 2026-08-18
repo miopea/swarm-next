@@ -1227,7 +1227,7 @@ fn valid_issue(issue: &JiraIssueSnapshot<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::{ProviderKind, TaskDetailsUpdate, TaskState};
+    use swarm_domain::{ProviderKind, TaskActivityActor, TaskDetailsUpdate, TaskState};
 
     #[test]
     fn project_binding_is_idempotent_by_remote_project_id() {
@@ -1439,6 +1439,57 @@ mod tests {
                 .is_empty(),
             "an unchanged Jira snapshot must not wake every connected client"
         );
+    }
+
+    #[test]
+    fn removed_jira_work_cannot_be_restored_as_a_local_task() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10003",
+                project_key: "WEB",
+                project_name: "Website Services",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "1".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "20003",
+                    issue_key: "WEB-44",
+                    summary: "Keep Jira authoritative",
+                    description: "Do not restore this as local-only work.",
+                    status_id: "1",
+                    status_name: "To Do",
+                    assignee_account_id: None,
+                    assignee_name: None,
+                    remote_updated_at: "2026-08-18T12:00:00.000+0000",
+                }],
+            )
+            .unwrap()
+            .remove(0);
+
+        store
+            .remove_task_as(task.id, &TaskActivityActor::operator())
+            .unwrap();
+
+        assert!(store.list_removed_local_tasks().unwrap().is_empty());
+        assert!(matches!(
+            store.restore_task_as(task.id, &TaskActivityActor::operator()),
+            Err(TaskStoreError::JiraTaskCannotBeRestored)
+        ));
     }
 
     #[test]

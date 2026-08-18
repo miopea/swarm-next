@@ -664,6 +664,9 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).endsWith("/api/v1/integrations/email/task-links")) {
       return Promise.resolve(ok([]));
     }
+    if (String(url).endsWith("/api/v1/tasks/removed")) {
+      return Promise.resolve(ok([]));
+    }
     const response = responses.shift();
     if (!response) throw new Error(`Unexpected request: ${String(url)}`);
     return Promise.resolve(response);
