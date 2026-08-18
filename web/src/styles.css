@@ -844,6 +844,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .worker-description-heading { align-items: center; display: flex; gap: 10px; justify-content: space-between; }
 .worker-description-heading .secondary-button { min-height: 30px; padding: 4px 8px; }
 .worker-provider-field small { color: var(--text-muted); font-weight: 400; line-height: 1.35; }
+.worker-repository-path { display: grid; grid-column: 1 / -1; gap: 3px; overflow: visible !important; white-space: normal !important; }
+.worker-repository-path code { min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: .76rem; font-weight: 500; line-height: 1.35; }
 .worker-description-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .worker-preference-form > small { grid-column: 1 / -1; }
 .worker-autostart { display: flex; align-items: center; gap: 7px; font-size: .8rem; }
@@ -1382,7 +1384,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-mobile-controls input, .task-mobile-controls select { width: 100%; min-height: 40px; }
   .empty-card { flex-direction: column; padding: 20px; text-align: center; }
   .settings-workspace { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); padding: 12px; overflow-x: hidden; }
-  .settings-section-nav { top: -4px; margin-inline: -4px; padding: 7px; }
+  .settings-section-nav { top: 0; margin-block-start: -12px; margin-inline: -4px; padding: 7px; }
   .settings-card { min-width: 0; }
   .migration-summary { grid-template-columns: minmax(0, 1fr); }
   .migration-summary span + span { border-inline-start: 0; border-block-start: 1px solid var(--line); }

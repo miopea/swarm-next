@@ -13,7 +13,7 @@ This is the working product audit for the first real developer week. It records 
 | Navigate a large worker roster | Pass | Pass | Active/total count and All/Awake filter keep 30+ sleeping workers manageable. |
 | Quick navigation with keyboard and long result sets | Pass with fix | Pass with fix | Alt+K and scrolling work. Result rows now size to their content rather than overlapping metadata. |
 | Inspect Keeper/Member Apiary state | Pass | Pass | Apiary is supervisory; work creation remains on Tasks. Member Hives can see public Apiary structure without routine terminal noise. |
-| Resize and use a terminal | Pass in current code | Pass in current code | Terminal owns the remaining viewport, touch scrolling follows the content gesture, and a Jump to latest control appears away from the bottom. Re-prove after the next live release. |
+| Resize and use a terminal | Pass with live fix | Pass with live fix | Terminal owns the remaining viewport. A large canonical scrollback now shows a bounded layout-recovery state during a viewport change, then repaints at the full width without a refresh. Touch direction and Jump to latest remain real-device proofs. |
 | Recover Queen automation submission | Test pass; live release pending | Same | Submission now waits for stable output, retries Enter, and proves the marker left the input instead of trusting a host acknowledgement. |
 | Open an existing Queen decision from Settings | Pass | Pass | Settings recognizes the durable decision, removes the retry action, and routes to the one calm queue without starting another Queen review. |
 | Find Legacy data for migration | Pass | Pass | Primary path discovers the normal local Legacy database read-only. File selection remains an advanced fallback. |
@@ -34,6 +34,10 @@ This is the working product audit for the first real developer week. It records 
 10. **Large Crew settings are searchable.** A 30+ worker roster can be filtered by worker, repository, provider, or Queen-routing description. Reordering is deliberately paused while results are filtered so hidden positions cannot move unexpectedly.
 11. **A pending Queen decision is not mistaken for a failed review.** Settings now presents the durable decision count and opens **Needs you** instead of offering to rerun Queen and creating a review loop.
 12. **Release packaging refuses a stale browser build.** The guarded packaging path now fails when web source is newer than `web/dist`, preventing an updated API from silently shipping an older UI.
+13. **Terminal resize recovery is visible instead of looking broken.** Large canonical scrollback can take several seconds to parse and refit after a phone-to-desktop transition. Swarm now keeps the terminal surface visible, marks it busy, and shows **Adjusting terminal layout…** until the full-width repaint completes.
+14. **Mobile Settings deep links no longer expose clipped content above the section rail.** The sticky section control now sits flush with the Settings scroll viewport.
+15. **Repository paths remain readable while editing a worker.** Long paths wrap within the mobile worker card instead of disappearing beyond its edge.
+16. **Worker-engine compatibility is not described as version equality.** Runtime now says that an unchanged worker engine is compatible with the current App/API release, while continuing to show each installed revision independently.
 
 ## Live deployed proof — 2026-08-18
 
@@ -51,6 +55,8 @@ This is the working product audit for the first real developer week. It records 
 - Repeated Tasks → Workers route changes painted the mobile terminal immediately during the re-proof. One earlier delayed compositor frame remains intermittent rather than a reproducible application failure; it is not being masked with an arbitrary delay.
 - Release `0.1.0-e1ca5f59155d` displayed **Queen needs you** and one **Review decision** action in Settings, with no **Retry Queen review** action. Selecting it opened the existing approval in **Needs you** without creating or resolving any work.
 - The first `8a2ba9e3` package exposed a stale-browser-build hazard during live proof: the API revision changed while the installed browser bundle did not. Packaging now rejects that condition, and the uniquely versioned `e1ca5f59` package proved the corrected browser and API together while preserving the terminal-host process.
+- Release `0.1.0-aec0ba3fb9e9` preserved the terminal-host process and Queen session. A 412 × 915 → 1440 × 1000 transition exposed **Adjusting terminal layout…** while the large Queen scrollback was rebuilt, then restored the complete terminal at the new width without a refresh.
+- The same release rechecked the task board, Jira image detail, Inbox chooser, mobile worker switcher, Keeper rollup, Settings deep link, and runtime identities at both phone and desktop widths without mutating tasks, workers, decisions, or external systems.
 
 ## Verified existing capabilities
 
@@ -69,7 +75,7 @@ This is the working product audit for the first real developer week. It records 
 
 - Submit one automatic Queen review and prove it starts without a stranded pasted token or manual Enter.
 - Scroll a long terminal on Android and a Windows touch screen in both directions, then use **Jump to latest**.
-- Resize the worker rail repeatedly and rotate/change viewport; confirm the terminal does not jump, blank, or retain stale geometry.
+- Resize the worker rail repeatedly and rotate/change viewport on a real touch device; the browser-sized transition is now proven with explicit recovery and correct final geometry.
 - Run a worker-engine update and verify immediate progress, worker-engine build identity, completion, and accurate timeout recovery.
 - Run an App/API development reload with a changed and unchanged checkout; only the changed checkout should offer an action.
 - Generate a worker routing description with Claude and verify the progress state resolves to an editable success or a specific recoverable error.
@@ -80,6 +86,7 @@ This is the working product audit for the first real developer week. It records 
 - Split the main browser bundle by workspace after the functional milestone; the current production build is healthy but its shared entry chunk is about 522 kB before gzip.
 - Give compute load a user-facing interpretation only after observing real Hive baselines. Do not invent a warning threshold from one four-CPU machine.
 - Keep desktop and Android PWA persistence on the real-device acceptance list; a responsive browser viewport cannot prove installed-app storage behavior.
+- Instrument route-to-first-paint timing before attempting another redraw workaround. During automated phone-sized proof, the accessibility tree changed immediately while captured pixels sometimes retained the previous workspace for roughly one to two seconds. The final surface was correct, but this matches the operator's intermittent stale-paint report and should be measured rather than hidden behind an arbitrary delay.
 
 ## Morning decisions
 

@@ -21,3 +21,13 @@ test("adapts task rows to the board width left by the resizable worker rail", ()
   expect(stylesheet).toContain("@container task-board (max-width: 920px)");
   expect(stylesheet).toContain('"assignment actions"');
 });
+
+test("keeps the mobile settings section rail flush with its scroll viewport", () => {
+  expect(stylesheet).toContain(
+    ".settings-section-nav { top: 0; margin-block-start: -12px; margin-inline: -4px; padding: 7px; }",
+  );
+});
+
+test("lets repository paths wrap inside the worker editor", () => {
+  expect(stylesheet).toContain(".worker-repository-path code { min-width: 0; overflow-wrap: anywhere;");
+});

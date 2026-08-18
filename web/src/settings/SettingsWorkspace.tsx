@@ -406,7 +406,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
                   <button className="primary-action" disabled={busy} onClick={() => { setConfirmMaintenance(false); void onUpdateWorkerEngine(); }}>Stop workers and update</button>
                 </div>
               </div>
-            )}</> : <><p>The separate terminal host already matches this release. Running workers do not need to restart.</p><small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small></>}
+            )}</> : <><p>The installed worker engine is compatible with this App/API release. Running workers do not need to restart.</p><small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small></>}
           </article>
           <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} healthVersion={health?.version} onReload={onReloadDevelopment} />
         </div>
