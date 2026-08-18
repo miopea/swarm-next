@@ -40,8 +40,11 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
   const [confirmRollback, setConfirmRollback] = useState(false);
   const [confirmWorkerImport, setConfirmWorkerImport] = useState(false);
   const [confirmWorkerRollback, setConfirmWorkerRollback] = useState(false);
+  const [showClosedHistory, setShowClosedHistory] = useState(false);
   const [message, setMessage] = useState<string>();
   const disabled = busy || working;
+  const closedHistoryCount = preview?.records.filter((record) => record.disposition === "skipped_closed").length ?? 0;
+  const visibleTaskRecords = preview?.records.filter((record) => showClosedHistory || record.disposition !== "skipped_closed") ?? [];
 
   useEffect(() => {
     let cancelled = false;
@@ -324,9 +327,14 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
             <button type="button" className="text-button" onClick={() => setSelected(new Set(preview.records.filter((record) => record.selectable).map((record) => record.source_id)))}>Select recommended</button>
             <button type="button" className="text-button" onClick={() => setSelected(new Set())}>Clear</button>
             <button type="button" className="text-button" onClick={() => { setBundle(undefined); setPreview(undefined); setWorkerPreview(undefined); setSelected(new Set()); setSelectedWorkers(new Set()); }}>Start over</button>
+            {closedHistoryCount > 0 ? (
+              <button type="button" className="text-button" aria-pressed={showClosedHistory} onClick={() => setShowClosedHistory((current) => !current)}>
+                {showClosedHistory ? "Hide closed history" : `Show ${closedHistoryCount} closed Legacy task${closedHistoryCount === 1 ? "" : "s"}`}
+              </button>
+            ) : null}
           </div>
           <div className="migration-records" role="list" aria-label="Legacy task migration preview">
-            {preview.records.map((record) => (
+            {visibleTaskRecords.map((record) => (
               <label key={record.source_id} className={`migration-record ${record.selectable ? "" : "unavailable"}`}>
                 <input
                   type="checkbox"

@@ -134,6 +134,44 @@ test("previews before importing and selects only server-approved records", async
   expect(screen.getByText("1 task staged for review. No workers were started.")).toBeInTheDocument();
 });
 
+test("keeps closed Legacy history out of the migration work list until requested", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/tasks") || url.endsWith("/workers")) return ok([]);
+    if (url.endsWith("/local")) return ok({
+      format: "swarm-next-migration",
+      version: 1,
+      source: { installation_id: "legacy", exported_at: 1, snapshot_digest: "source" },
+      tasks: [],
+      workers: [],
+    });
+    if (url.endsWith("/workers/preview")) return ok({ bundle_digest: "digest", source_installation_id: "legacy", selectable: 0, skipped: 0, invalid: 0, records: [] });
+    if (url.endsWith("/tasks/preview")) return ok({
+      bundle_digest: "digest",
+      source_installation_id: "legacy",
+      selectable: 1,
+      skipped: 2,
+      invalid: 0,
+      records: [
+        { source_id: "open", title: "Carry this forward", source_status: "assigned", target_state: "ready", priority: "normal", disposition: "ready", selectable: true, warnings: [] },
+        { source_id: "closed-1", title: "Old completed work", source_status: "completed", priority: "normal", disposition: "skipped_closed", selectable: false, warnings: [] },
+        { source_id: "closed-2", title: "Another closed task", source_status: "removed", priority: "normal", disposition: "skipped_closed", selectable: false, warnings: [] },
+      ],
+    });
+    throw new Error(`unexpected ${url}`);
+  }));
+
+  render(<LegacyMigrationSettings busy={false} operatorToken="token" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find my Legacy Hive" }));
+
+  expect(await screen.findByText("Carry this forward")).toBeInTheDocument();
+  expect(screen.queryByText("Old completed work")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show 2 closed Legacy tasks" }));
+  expect(screen.getByText("Old completed work")).toBeInTheDocument();
+  expect(screen.getByText("Another closed task")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Hide closed history" })).toHaveAttribute("aria-pressed", "true");
+});
+
 test("recovers an active migration receipt after reopening settings", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     if (String(input).endsWith("/workers")) return ok([]);

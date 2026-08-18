@@ -17,6 +17,7 @@ This is the working product audit for the first real developer week. It records 
 | Recover Queen automation submission | Test pass; live release pending | Same | Submission now waits for stable output, retries Enter, and proves the marker left the input instead of trusting a host acknowledgement. |
 | Find Legacy data for migration | Fixed; live release pending | Fixed; live release pending | Primary path discovers the normal local Legacy database read-only. File selection remains an advanced fallback. |
 | Understand runtime updates | Pass in current UI | Pass | Worker engine and App/API are separate cards with versions, risk, and action state. Re-prove progress across a real update after release. |
+| Find one worker or command in a 31-worker Hive | Pass | Pass | The Awake filter keeps the rail calm; quick navigation filters sleeping workers by name and scrolls inside its bounded dialog. Alt+K opens it from ordinary desktop controls. |
 
 ## Fixes made during this pass
 
@@ -26,6 +27,17 @@ This is the working product audit for the first real developer week. It records 
 4. **Merged email review starts where the user needs to act.** The task draft is scrolled into view and focused when review opens.
 5. **Mobile quick-navigation rows no longer overlap.** Grid rows size to content.
 6. **Mobile terminal metadata is reduced.** The internal session identifier is hidden at phone sizes so the status and controls do not collide.
+7. **Legacy history no longer buries migration work.** Closed Legacy tasks are hidden from the actionable preview by default, with an explicit counted control for operators who need to audit that history.
+
+## Live deployed proof — 2026-08-18
+
+- Desktop and 412 × 915 phone layouts were exercised against `swarm2.bfgsolutions.net` on App/API `0.1.0-5a8a14b7d9ca`.
+- The normal Legacy database was found read-only, previewed, and cancelled. Seventeen open tasks were selectable; closed history was visible but too noisy, which led to the default-hidden history repair above. No import was committed.
+- A merged Outlook task opened directly into its single review/edit dialog. Both images appeared, both attachment records were present, and guarded removal stayed visible without changing the task.
+- A long Queen terminal moved into scrollback with Shift+PageUp, exposed **Jump to latest**, and returned to the live prompt when selected.
+- Quick navigation opened from its toolbar action and Alt+K, filtered a 31-worker roster down to the requested Codex workers, and kept the result list scrollable at phone size.
+- **Generate with Claude** showed bounded progress, completed in roughly 30 seconds, and returned an editable routing draft with a clear save requirement. The draft was cancelled so the live worker profile was not changed.
+- Repeated Tasks → Workers route changes painted the mobile terminal immediately during the re-proof. One earlier delayed compositor frame remains intermittent rather than a reproducible application failure; it is not being masked with an arbitrary delay.
 
 ## Verified existing capabilities
 
@@ -58,6 +70,7 @@ These are product choices rather than obvious repairs:
 3. **Migration completion signal in Legacy.** Confirm the exact non-destructive marker Legacy should record after Next accepts a task so both apps show one authority during cutover.
 4. **Night Watch deployment rules.** Approve the first exact durable deployment scopes Queen may use; Queen should delegate execution to Scout/repository workers rather than becoming a coding worker.
 5. **Apiary activity density.** Choose the default Keeper/Member time window for completed-work rollups once more than one real Hive is connected.
+6. **Queen approval granularity.** The current Queen can correctly group eight related Ready records into one durable decision, but that produces one large approval with coupled action buttons. The next contract should create task- or worker-scoped decision records, with an optional summary above them, instead of asking the UI to parse a model-written blob into actions.
 
 ## Not reproduced or intentionally deferred
 
