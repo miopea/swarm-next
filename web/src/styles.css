@@ -214,7 +214,18 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .runtime-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .72rem; }
 .runtime-status.error { color: var(--bad); }
 
-.workspace { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; }
+.workspace {
+  /* Keep xterm's accelerated canvas inside the replaceable workspace layer.
+     Without an explicit paint boundary Chromium can keep the detached terminal
+     texture above a newly mounted Tasks or Settings view on touch devices. */
+  contain: layout paint;
+  isolation: isolate;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
 .workspace-header { display: flex; min-height: 78px; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 17px 27px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 94%, transparent); }
 .workspace-header h2 { margin: 0; font-size: 1.3rem; letter-spacing: -.02em; }
 .mobile-worker-switcher-trigger { display: none; }
