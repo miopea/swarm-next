@@ -114,7 +114,7 @@ This is the working product audit for the first real developer week. It records 
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
 - The full Rust workspace is green: 461 unit/integration tests plus all crate documentation tests passed on the release checkout.
 - Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
-- The web workspace is green: 58 test files with 291 tests, TypeScript project checking, and the production Vite build all pass.
+- The web workspace is green: 60 test files with 302 tests, TypeScript project checking, and the production Vite build all pass.
 
 ## Release re-proofs required
 
@@ -141,9 +141,10 @@ These are product choices rather than obvious repairs:
 3. **Migration finalization experience.** Legacy now implements the source-owned, reversible finalizer required by ADR 0046: exact receipt verification, backup, a `Moved to Swarm Next` marker, assignment release, and refusal after drift. The remaining choice is how much of that installed command-line handoff Next should orchestrate or explain without ever writing the Legacy database itself.
 4. **Night Watch deployment rules.** Approve the first exact durable deployment scopes Queen may use; Queen should delegate execution to Scout/repository workers rather than becoming a coding worker.
 5. **Apiary activity density.** Choose the default Keeper/Member time window for completed-work rollups once more than one real Hive is connected.
-6. **Queen approval granularity.** The current Queen can correctly group eight related Ready records into one durable decision, but that produces one large approval with coupled action buttons. The next contract should create task- or worker-scoped decision records, with an optional summary above them, instead of asking the UI to parse a model-written blob into actions.
+6. **Retiring old grouped Queen approvals.** Current unattended automation already requires one task-linked decision with exact typed actions; the large eight-task approval is durable data created by the older contract. Decide whether an upgrade should automatically retire those old grouped requests with an audit note, or leave the current explicit **Dismiss request** choice to the operator. Swarm must not parse the old model-written prose into new executable actions.
 7. **Legacy tasks that only look Jira-backed.** At least one Legacy row starts with a valid Jira key in its title but has an empty `jira_key` field and no other Jira provenance. Decide whether migration should leave all such title-only records in Legacy, offer them behind a separate warning, or query connected Jira for an exact issue before excluding them. Title shape alone is not safe enough to discard local work automatically.
 8. **Self-service restore boundary.** Backups already contain the full Hive database and the guarded host command verifies the snapshot and creates a rollback copy before replacement. Decide whether ordinary operators should keep this explicit host-admin restore boundary or receive a browser-driven restore flow with a destructive preview, forced confirmation, and an App/API restart. Replacing the live database is materially different from importing preferences and should not be disguised as a routine upload.
+9. **Cross-surface draft recovery.** Switching entry modes or hiding linked communication now preserves in-memory work, and explicit Cancel actions protect edits. Navigating away from Tasks/Settings or fully reloading still needs a deliberate policy: a warning only, private server-side drafts, or encrypted device-local recovery. Email bodies and routing descriptions should not be placed in ordinary browser storage merely for convenience.
 
 ## Not reproduced or intentionally deferred
 
