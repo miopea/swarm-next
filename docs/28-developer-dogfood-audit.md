@@ -48,6 +48,7 @@ This is the working product audit for the first real developer week. It records 
 24. **The operator can always decline a worker request.** Model-proposed buttons no longer trap an obsolete or unwanted decision in **Needs you**. A separately confirmed **Dismiss request** resolution records that no proposed action was taken and reports that outcome back to the requesting worker without performing external work.
 25. **Queen's two queues no longer appear to contradict each other.** A pending operator decision remains explicit above the deterministic coordinator. Its mechanical counters now say **Worker starts queued**, **Worker cases surfaced**, and **Worker cases needing judgment** instead of the ambiguous **Waiting** and **Needs review** labels that looked like incorrect decision totals.
 26. **A new task never defaults to Scout by roster position.** Local task creation now requires the operator to choose the repository worker explicitly. Scout remains available for deliberate cross-repository work, but Swarm no longer silently routes ordinary work there simply because Scout is the first configured worker.
+27. **Terminal diagnostics explain their identity.** The internal Swarm terminal-session ID stays behind a disclosure, now says what it identifies, distinguishes itself from the Claude or Codex conversation, and can be copied for a support report.
 
 ## Live deployed proof — 2026-08-18
 
@@ -69,6 +70,7 @@ This is the working product audit for the first real developer week. It records 
 - The same release rechecked the task board, Jira image detail, Inbox chooser, mobile worker switcher, Keeper rollup, Settings deep link, and runtime identities at both phone and desktop widths without mutating tasks, workers, decisions, or external systems.
 - Release `0.1.0-6c91a005b0a1` removed the clipped mobile Settings seam, kept long worker repository paths readable in the editor, and described the separately versioned worker engine as compatible rather than falsely identical. Apiary membership briefly showed its explicit refresh state and then settled to Lead Hive without intervention.
 - On the same release, the phone task board presented one coherent work entry surface (**Write task**, **Claim Jira work**, and **Use email**), two readable active-work cards, source/worker/status filters, and no duplicate Apiary task-creation form.
+- Release `0.1.0-91f589d4ddc6` preserved the terminal host and Queen session, then proved at 1440 × 1000 and 412 × 915 that a new local task starts at **Choose a worker** and cannot be created until the operator deliberately selects repository ownership. No task was created during proof.
 
 ## Verified existing capabilities
 

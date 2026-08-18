@@ -34,6 +34,7 @@ afterEach(() => {
   cleanup();
   controller.sendInput.mockClear();
   controller.scrollToBottom.mockClear();
+  vi.unstubAllGlobals();
 });
 
 test("captures Ctrl-V text before the provider receives a terminal control character", () => {
@@ -110,4 +111,17 @@ test("keeps the internal terminal id behind session details", () => {
   render(<TerminalView busy={false} onStop={vi.fn()} operatorToken="browser-session-cookie" session={{ session_id: "private-session-id", running: true }} />);
   expect(screen.getByText("Session details")).toBeInTheDocument();
   expect(screen.getByText("private-session-id").closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText("Swarm terminal session")).toBeInTheDocument();
+  expect(screen.getByText(/Claude or Codex conversation is separate/)).toBeInTheDocument();
+});
+
+test("copies the internal terminal id only when the operator asks", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  render(<TerminalView busy={false} onStop={vi.fn()} operatorToken="browser-session-cookie" session={{ session_id: "private-session-id", running: true }} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Copy session ID" }));
+
+  expect(writeText).toHaveBeenCalledWith("private-session-id");
+  expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
 });

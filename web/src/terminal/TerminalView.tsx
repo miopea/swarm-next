@@ -37,6 +37,7 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
   const [detail, setDetail] = useState<string>();
   const [attachmentState, setAttachmentState] = useState<"idle" | "uploading" | "ready" | "error">("idle");
   const [atBottom, setAtBottom] = useState(true);
+  const [sessionCopyState, setSessionCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   useEffect(() => {
     const element = mount.current;
@@ -77,6 +78,15 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
     }
   }
 
+  async function copySessionId() {
+    try {
+      await navigator.clipboard.writeText(session.session_id);
+      setSessionCopyState("copied");
+    } catch {
+      setSessionCopyState("error");
+    }
+  }
+
   return (
     <div
       className="terminal-panel"
@@ -90,7 +100,13 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
           <span className={`connection-state connection-${connectionState}`}>{connectionState.replace("_", " ")}</span>
           <details className="terminal-session-details">
             <summary>Session details</summary>
-            <code>{session.session_id}</code>
+            <div className="terminal-session-popover">
+              <strong>Swarm terminal session</strong>
+              <code>{session.session_id}</code>
+              <small>This identifies the durable terminal for diagnostics. Your Claude or Codex conversation is separate.</small>
+              <button type="button" className="secondary-button" onClick={() => void copySessionId()}>{sessionCopyState === "copied" ? "Copied" : "Copy session ID"}</button>
+              {sessionCopyState === "error" ? <small role="alert">Copy was blocked. Select the ID above to copy it manually.</small> : null}
+            </div>
           </details>
           {detail && <small>{detail}</small>}
           {attachmentState !== "idle" && (

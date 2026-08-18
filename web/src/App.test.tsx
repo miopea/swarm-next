@@ -675,6 +675,7 @@ test("creates a persisted task draft from the task board", async () => {
 
   fireEvent.click(await screen.findByRole("button", { name: "Write task" }));
   fireEvent.change(await screen.findByLabelText("Task title"), { target: { value: task.title } });
+  fireEvent.change(screen.getByLabelText("Who should handle this?"), { target: { value: worker.id } });
   fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
 
   expect(await screen.findByRole("heading", { name: task.title })).toBeInTheDocument();
