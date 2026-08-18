@@ -35,6 +35,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
   const [priority, setPriority] = useState(task.priority);
   const [attachments, setAttachments] = useState<JiraTaskAttachment[]>([]);
   const [images, setImages] = useState<LoadedImage[]>([]);
+  const [imageLoadFailures, setImageLoadFailures] = useState(0);
   const [loading, setLoading] = useState(Boolean(jiraLink || emailSources.length));
   const [failed, setFailed] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
@@ -62,6 +63,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
     const objectUrls: string[] = [];
     setLoading(true);
     setFailed(false);
+    setImageLoadFailures(0);
     void (async () => {
       try {
         const emailAttachments: JiraTaskAttachment[] = emailSources.flatMap((source) => source.attachments.map((attachment) => ({
@@ -76,6 +78,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
         setSourceDescription(detail?.description || "");
         const allAttachments = [...(detail?.attachments ?? []), ...emailAttachments];
         setAttachments(allAttachments);
+        let failedImages = 0;
         const loaded = (await Promise.all(allAttachments.filter((attachment) => attachment.is_image).map(async (attachment) => {
           try {
             const blob = attachment.id.startsWith("email:")
@@ -86,10 +89,14 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
             objectUrls.push(url);
             return { ...attachment, url };
           } catch {
+            failedImages += 1;
             return null;
           }
         }))).filter((image): image is LoadedImage => image !== null);
-        if (active) setImages(loaded);
+        if (active) {
+          setImages(loaded);
+          setImageLoadFailures(failedImages);
+        }
       } catch {
         if (active) setFailed(true);
       } finally {
@@ -156,6 +163,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
           {sourceDescription && sourceDescription !== description && <section><h3>Source description</h3><p className="task-detail-description">{sourceDescription}</p></section>}
           {loading && <p className="task-detail-loading">Loading task details and images…</p>}
           {failed && <div className="task-detail-error"><span>Some linked details could not be loaded. The saved Swarm description is still shown.</span><button type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></div>}
+          {!failed && imageLoadFailures > 0 && <div className="task-detail-error" role="alert"><span>{imageLoadFailures} linked image{imageLoadFailures === 1 ? "" : "s"} could not be loaded. Attachment names and the rest of this task are still available.</span><button type="button" onClick={() => setAttempt((value) => value + 1)}>Retry images</button></div>}
           {images.length > 0 && (
             <section>
               <h3>Images</h3>

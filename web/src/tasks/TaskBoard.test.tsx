@@ -496,6 +496,36 @@ test("opens an editable task detail with Jira description and image on double cl
   await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:jira-image"));
 });
 
+test("makes a partial Jira image failure visible and retryable", async () => {
+  let attachmentAttempts = 0;
+  Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn().mockReturnValue("blob:recovered-image") });
+  Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+  vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+    if (url.endsWith("/detail")) {
+      return Promise.resolve(new Response(JSON.stringify({
+        summary: task.title,
+        description: "The screenshot carries the reproduction details.",
+        attachments: [{ id: "attachment-1", filename: "evidence.png", media_type: "image/png", byte_size: 128, is_image: true }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+    if (url.includes("/attachments/")) {
+      attachmentAttempts += 1;
+      if (attachmentAttempts === 1) return Promise.resolve(new Response("temporary failure", { status: 502 }));
+      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" }), { status: 200 }));
+    }
+    return Promise.resolve(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }));
+  }));
+  renderBoard({ jiraTaskLinks: [jiraTaskLink] });
+
+  fireEvent.doubleClick(screen.getByRole("article", { name: task.title }));
+  const dialog = await screen.findByRole("dialog", { name: "Review and edit task" });
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("1 linked image could not be loaded");
+  expect(within(dialog).getByText("evidence.png")).toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Retry images" }));
+  expect(await within(dialog).findByRole("img", { name: "evidence.png" })).toHaveAttribute("src", "blob:recovered-image");
+  expect(within(dialog).queryByText(/linked image could not be loaded/)).not.toBeInTheDocument();
+});
+
 test("keeps edit explicit and ignores double clicks on interactive task controls", () => {
   renderBoard({ jiraTaskLinks: [jiraTaskLink] });
   const card = screen.getByRole("article", { name: task.title });
