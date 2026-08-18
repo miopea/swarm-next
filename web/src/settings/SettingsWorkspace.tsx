@@ -280,11 +280,11 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
             </span>
             <span className="coordinator-metrics">
               <strong>{coordinatorStatus?.queen_calls_avoided ?? 0}</strong>
-              <small>Queen calls avoided</small>
+              <small>Queen reviews avoided</small>
             </span>
             <span className="coordinator-metrics">
               <strong>{coordinatorStatus?.queued_actions ?? 0}</strong>
-              <small>Waiting</small>
+              <small>Worker starts queued</small>
             </span>
             <span className="coordinator-metrics">
               <strong>{coordinationAttentionTotal(coordinatorStatus)}</strong>
@@ -292,7 +292,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
             </span>
             <span className="coordinator-metrics">
               <strong>{coordinatorStatus?.uncertain_actions ?? 0}</strong>
-              <small>Needs review</small>
+              <small>Worker cases needing judgment</small>
             </span>
           </div>
           {queenAutomationError && <p className="queen-automation-error" role="alert">{queenAutomationError}</p>}
@@ -490,7 +490,7 @@ function coordinationAttentionTotal(status: CoordinatorStatus | undefined) {
 }
 
 function coordinationAttentionDetail(status: CoordinatorStatus | undefined) {
-  if (!status || coordinationAttentionTotal(status) === 0) return "Work surfaced";
+  if (!status || coordinationAttentionTotal(status) === 0) return "Worker cases surfaced";
   return `${status.unstarted_attention_actions} not started · ${status.stale_attention_actions} stale · ${status.worker_exit_attention_actions} exited`;
 }
 
