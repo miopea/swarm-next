@@ -37,6 +37,7 @@ This is the working product audit for the first real developer week. It records 
 - Desktop and 412 × 915 phone layouts were exercised against `swarm2.bfgsolutions.net` on App/API `0.1.0-5a8a14b7d9ca`.
 - The normal Legacy database was found read-only, previewed, and cancelled. Release `0.1.0-ca4d9ff2ff0e` showed 16 actionable tasks initially, with 33 malformed records, 62 records staying in Legacy, and 1,708 closed tasks behind separate disclosures. No import was committed.
 - Runtime diagnostics were rechecked on `0.1.0-7d9538977d9c`: one loaded provider tree at 474.6 MiB remained **Normal**, machine memory remained separately visible, and the terminal-host service stayed at 43.9 MiB.
+- Release `0.1.0-90c3ee6a20cc` kept the existing terminal-host process and Queen session attached, rendered concise App/API and worker-engine identities, and filtered the 31-worker Crew roster at 412 × 915 without horizontal overflow or hidden reorder actions.
 - A merged Outlook task opened directly into its single review/edit dialog. Both images appeared, both attachment records were present, and guarded removal stayed visible without changing the task.
 - A long Queen terminal moved into scrollback with Shift+PageUp, exposed **Jump to latest**, and returned to the live prompt when selected.
 - Quick navigation opened from its toolbar action and Alt+K, filtered a 31-worker roster down to the requested Codex workers, and kept the result list scrollable at phone size.
@@ -53,6 +54,7 @@ This is the working product audit for the first real developer week. It records 
 - Apiary pages show organization, public work rollups, claims, and delegation; private worker/repository/session data remains owned by each Hive.
 - Task removal is available for local work with stronger guards for Jira-backed work.
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
+- The full Rust workspace is green: 455 unit/integration tests plus all crate documentation tests passed on the release checkout.
 
 ## Release re-proofs required
 

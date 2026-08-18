@@ -56,6 +56,10 @@ enforceable rule. Inventing a meaning would itself violate POLA.
    owned by `NotificationController`. Settings only renders its typed state;
    it does not infer browser capability from the server's aggregate device
    count.
+7. App/API and terminal-host version strings previously had three local parsers.
+   They now use one `runtimeVersion` presenter, so development timestamps can no
+   longer reappear on one Runtime or Diagnostics surface while another stays
+   compact.
 
 These abstractions are justified by shared behavior, not visual resemblance.
 
@@ -68,12 +72,12 @@ These abstractions are justified by shared behavior, not visual resemblance.
   `useControlRoomModel`. Cancelled effects cannot apply stale room state, and
   locking cannot leave workspace or Jira-link state behind while hiding the
   rest of the room.
-- `web/src/tasks/TaskBoard.tsx` has dropped below 400 lines. Query/filter/sort
-  is a pure tested `taskBoardModel`; collection composition remains in the
-  board; and `TaskCard` now owns its vertical editing, assignment, activity,
-  Jira discussion, email resolution, action-menu, and drag behavior. Metadata
-  and assignment remain focused child components rather than a generic card
-  framework.
+- `web/src/tasks/TaskBoard.tsx` is roughly 550 lines after Jira and merged-email
+  intake became first-class entry paths. Query/filter/sort is a pure tested
+  `taskBoardModel`; collection composition remains in the board; and `TaskCard`
+  owns its vertical editing, assignment, activity, Jira discussion, email
+  resolution, action-menu, and drag behavior. The next extraction should be a
+  complete intake owner, not another generic card or one-line form component.
 - `web/src/settings/ApiarySettings.tsx` previously combined identity editing,
   both bootstrap handoffs, policy review, Jira readiness, membership,
   Stewardship, shared-work rollup, and collapse. Signed handoff controls now
@@ -105,7 +109,7 @@ These abstractions are justified by shared behavior, not visual resemblance.
   reply outbox now share `web/src/api/email.ts`. Contract tests exercise the
   transport boundary without reading, importing, replying to, or otherwise
   mutating real mail.
-- `web/src/styles.css` is roughly 1,165 lines in one global
+- `web/src/styles.css` is roughly 1,740 lines in one global
   cascade, making component ownership and mobile regressions harder to see.
 
 Required next extractions are vertical and behavior-led:
@@ -127,7 +131,7 @@ Required next extractions are vertical and behavior-led:
 
 ### P1 — backend adapter concentration
 
-- `crates/swarm-api/src/lib.rs` is still over 11,000 lines. Routing, state
+- `crates/swarm-api/src/lib.rs` is still roughly 13,700 lines. Routing, state
   composition, diagnostics, tests, and supervisors share one module. Worker
   discovery, repository catalog/boundary validation, profile
   creation/editing/order, and start/stop routes now share a focused `workers`
@@ -155,13 +159,13 @@ Required next extractions are vertical and behavior-led:
   verification, and secure cookie policy now share one `auth` owner used by
   every private route rather than leaving authentication in the composition
   root.
-- `crates/swarm-persistence/src/lib.rs` is roughly 3,700 lines although Jira,
+- `crates/swarm-persistence/src/lib.rs` is roughly 4,200 lines although Jira,
   workers, decisions, notifications, dispatches, and outcomes have begun moving
   to focused modules. The content-free control-room event aggregate now owns
   durable append, bounded retention, resumable reads, and stale-cursor reset in
   `events.rs`; task, worker, presence, and runtime mutations still call that one
   shared event contract rather than duplicating invalidation behavior.
-- `crates/swarm-domain/src/lib.rs` is roughly 2,800 lines and should be grouped by
+- `crates/swarm-domain/src/lib.rs` is roughly 3,700 lines and should be grouped by
   domain vocabulary before cross-Hive work expands it.
 
 The file size is evidence, not the rule. Split only at existing domain and
