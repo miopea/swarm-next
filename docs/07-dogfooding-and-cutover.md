@@ -103,7 +103,7 @@ failures, and operator interruptions.
 - No dual write between legacy and Next.
 - Cutover rehearsals include rollback before real migration.
 
-The first executable migration tool is deliberately read-only:
+The command-line inspection boundary remains deliberately read-only:
 
 ```text
 swarmctl inspect-legacy /absolute/path/to/swarm.db
@@ -111,6 +111,10 @@ swarmctl inspect-legacy /absolute/path/to/swarm.db
 
 It opens a snapshot with SQLite read-only flags, verifies integrity, identifies
 the legacy schema version, and emits a compact JSON inventory of worker, task,
-and group rows that are structurally eligible or invalid. It does not attach the
-file to the Next database, transform records, copy credentials, or touch the
-legacy installation. Import remains a later, separately rehearsed command.
+and group rows that are structurally eligible or invalid. The browser migration
+journey now discovers that installed database, previews tasks and workers, and
+commits only an explicit selection. Imported workers stay sleeping. The operator
+can retain each matching local Claude or Codex conversation identifier for an
+exact first-wake resume, or choose fresh sessions. Neither path copies transcript
+content, terminal history, credentials, or a running provider process. No import
+attaches to or writes the Legacy database.

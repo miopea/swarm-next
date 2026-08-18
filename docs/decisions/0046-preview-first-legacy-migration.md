@@ -28,8 +28,16 @@ roster are independent review sections with separate commits and rollback
 receipts. Worker import brings across the display name, repository path,
 operator-reviewed routing description, provider choice, and relative ordering.
 Every imported worker is sleeping and does not autostart. Provider processes,
-provider conversations, terminal history, identity-file contents, groups,
-isolation settings, credentials, and approval rules are excluded. Existing
+terminal history, conversation content, identity-file contents, groups,
+isolation settings, credentials, and approval rules are excluded. For each
+eligible Claude or Codex worker, preview may discover the latest exact provider
+conversation identifier for that repository from the provider's local metadata.
+The operator chooses whether to retain those identifiers; the option is explicit
+and can be disabled to start every imported worker fresh. Retaining an identifier
+does not wake a worker, read transcript content, or copy terminal history. On the
+worker's first later wake, Next asks the matching provider to resume that exact
+conversation. If no valid matching identifier is available, preview says so and
+the worker starts fresh. Existing
 workers match by name or repository, and the managed Queen, Scout, and Legacy
 Project Root identities are never duplicated. Any later section requires its
 own normalization and review policy rather than inheriting task behavior.
@@ -56,5 +64,6 @@ The workflow has deliberate confirmations and cannot promise one atomic transact
 - Browser tests prove that no record is imported before explicit selection and confirmation.
 - Legacy finalization tests use a disposable snapshot, verify its pre-write backup, and prove receipt reversal before the feature is exposed.
 - Worker tests prove managed-identity and duplicate exclusions, sleeping import,
-  stable ordering, provider fallback, provenance, and rollback refusal after a
-  worker is edited, awakened, or assigned work.
+  stable ordering, optional exact provider-conversation resume, fresh-session
+  fallback, provenance, historical-schema upgrades, and rollback refusal after
+  a worker is edited, awakened, or assigned work.
