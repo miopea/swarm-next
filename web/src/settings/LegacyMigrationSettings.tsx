@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
   commitLegacyTaskMigration,
   commitLegacyWorkerMigration,
+  discoverLocalLegacyMigration,
   listActiveLegacyTaskMigrations,
   listActiveLegacyWorkerMigrations,
   previewLegacyTaskMigration,
@@ -61,6 +62,38 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
     return () => { cancelled = true; };
   }, [operatorToken]);
 
+  async function previewBundle(parsed: LegacyMigrationBundle) {
+    const [nextPreview, nextWorkerPreview] = await Promise.all([
+      previewLegacyTaskMigration(operatorToken, parsed),
+      previewLegacyWorkerMigration(operatorToken, parsed),
+    ]);
+    setBundle(parsed);
+    setPreview(nextPreview);
+    setWorkerPreview(nextWorkerPreview);
+    setSelected(new Set(nextPreview.records.filter((record) => record.selectable).map((record) => record.source_id)));
+    setSelectedWorkers(new Set(nextWorkerPreview.records.filter((record) => record.selectable).map((record) => record.source_id)));
+    setMessage(nextPreview.selectable === 0 && nextWorkerPreview.selectable === 0 ? "Nothing in this Legacy Hive is ready to import." : undefined);
+  }
+
+  async function findLocalHive() {
+    setMessage(undefined);
+    setReceipt(undefined);
+    setConfirmImport(false);
+    setWorking(true);
+    try {
+      await previewBundle(await discoverLocalLegacyMigration(operatorToken));
+    } catch {
+      setBundle(undefined);
+      setPreview(undefined);
+      setWorkerPreview(undefined);
+      setSelected(new Set());
+      setSelectedWorkers(new Set());
+      setMessage("Swarm could not find a compatible Legacy Hive on this machine. Use the advanced file option only if Legacy was installed somewhere unusual.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   async function choosePackage(file: File | undefined) {
     if (!file) return;
     setMessage(undefined);
@@ -72,17 +105,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
     }
     setWorking(true);
     try {
-      const parsed = JSON.parse(await file.text()) as LegacyMigrationBundle;
-      const [nextPreview, nextWorkerPreview] = await Promise.all([
-        previewLegacyTaskMigration(operatorToken, parsed),
-        previewLegacyWorkerMigration(operatorToken, parsed),
-      ]);
-      setBundle(parsed);
-      setPreview(nextPreview);
-      setWorkerPreview(nextWorkerPreview);
-      setSelected(new Set(nextPreview.records.filter((record) => record.selectable).map((record) => record.source_id)));
-      setSelectedWorkers(new Set(nextWorkerPreview.records.filter((record) => record.selectable).map((record) => record.source_id)));
-      setMessage(nextPreview.selectable === 0 && nextWorkerPreview.selectable === 0 ? "Nothing in this package is ready to import." : undefined);
+      await previewBundle(JSON.parse(await file.text()) as LegacyMigrationBundle);
     } catch {
       setBundle(undefined);
       setPreview(undefined);
@@ -204,16 +227,25 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
       <p>Preview the familiar crew and open local work before anything changes. Workers arrive sleeping; tasks remain Draft until you approve them. Jira work stays in Jira.</p>
 
       {!preview && !workerPreview && !receipt && !workerReceipt && (
-        <label className={`migration-drop ${disabled ? "disabled" : ""}`}>
-          <strong>{working ? "Checking package…" : "Choose Legacy migration package"}</strong>
-          <span>Swarm validates every record and shows exactly what would change.</span>
-          <input
-            type="file"
-            accept="application/json,.json"
-            disabled={disabled}
-            onChange={(event) => void choosePackage(event.target.files?.[0])}
-          />
-        </label>
+        <div className="migration-discovery">
+          <button type="button" className="primary-action" disabled={disabled} onClick={() => void findLocalHive()}>
+            {working ? "Finding your Legacy Hive…" : "Find my Legacy Hive"}
+          </button>
+          <span>Swarm looks in the normal Legacy location on this computer, reads it safely, and shows a preview. Nothing is moved yet.</span>
+          <details>
+            <summary>Legacy was installed somewhere else</summary>
+            <label className={`migration-drop ${disabled ? "disabled" : ""}`}>
+              <strong>Use a migration file</strong>
+              <span>Choose an exported package only for a custom or remote Legacy install.</span>
+              <input
+                type="file"
+                accept="application/json,.json"
+                disabled={disabled}
+                onChange={(event) => void choosePackage(event.target.files?.[0])}
+              />
+            </label>
+          </details>
+        </div>
       )}
 
       {workerPreview && !workerReceipt && workerPreview.records.length > 0 && (
@@ -228,7 +260,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
           <div className="migration-selection-actions">
             <button type="button" className="text-button" onClick={() => setSelectedWorkers(new Set(workerPreview.records.filter((record) => record.selectable).map((record) => record.source_id)))}>Select recommended</button>
             <button type="button" className="text-button" onClick={() => setSelectedWorkers(new Set())}>Clear</button>
-            {!preview?.records.length && <button type="button" className="text-button" onClick={() => { setBundle(undefined); setPreview(undefined); setWorkerPreview(undefined); setSelectedWorkers(new Set()); }}>Choose another package</button>}
+            {!preview?.records.length && <button type="button" className="text-button" onClick={() => { setBundle(undefined); setPreview(undefined); setWorkerPreview(undefined); setSelectedWorkers(new Set()); }}>Start over</button>}
           </div>
           <div className="migration-records" role="list" aria-label="Legacy worker migration preview">
             {workerPreview.records.map((record) => (
@@ -291,7 +323,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
           <div className="migration-selection-actions">
             <button type="button" className="text-button" onClick={() => setSelected(new Set(preview.records.filter((record) => record.selectable).map((record) => record.source_id)))}>Select recommended</button>
             <button type="button" className="text-button" onClick={() => setSelected(new Set())}>Clear</button>
-            <button type="button" className="text-button" onClick={() => { setBundle(undefined); setPreview(undefined); setWorkerPreview(undefined); setSelected(new Set()); setSelectedWorkers(new Set()); }}>Choose another package</button>
+            <button type="button" className="text-button" onClick={() => { setBundle(undefined); setPreview(undefined); setWorkerPreview(undefined); setSelected(new Set()); setSelectedWorkers(new Set()); }}>Start over</button>
           </div>
           <div className="migration-records" role="list" aria-label="Legacy task migration preview">
             {preview.records.map((record) => (
@@ -345,7 +377,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken }: Props) 
         </div>
       )}
       {message && <p className="migration-message" role="status">{message}</p>}
-      <small className="privacy-note">Migration packages contain private task content and repository paths. Store them like a Hive backup. Credentials, terminal sessions, provider conversations, identity files, and Jira records are never included.</small>
+      <small className="privacy-note">Migration reads only the Legacy crew and open local tasks needed for this preview. Credentials, terminal sessions, provider conversations, identity files, and Jira records are never included.</small>
     </section>
   );
 }

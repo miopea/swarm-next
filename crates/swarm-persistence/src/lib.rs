@@ -58,12 +58,14 @@ pub use federation_jira_claims::{
     FederationJiraClaimIntent, FederationJiraClaimPhase, MAX_FEDERATION_JIRA_CLAIM_BATCH,
 };
 mod jira;
+mod legacy_source;
 mod migration;
 pub use feedback::{DogfoodReport, MAX_DOGFOOD_REPORTS};
 pub use jira::{
     JiraCommentDispatch, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionDispatch,
     JiraTransitionFailure,
 };
+pub use legacy_source::{LegacySourceError, read_legacy_migration_bundle};
 pub use migration::{
     LEGACY_MIGRATION_FORMAT, LEGACY_MIGRATION_VERSION, LegacyImportDisposition,
     LegacyMigrationBundle, LegacyMigrationCommit, LegacyMigrationPreview, LegacyMigrationReceipt,

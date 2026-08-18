@@ -785,6 +785,11 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .migration-drop.disabled { cursor: wait; opacity: .65; }
 .migration-drop span { color: var(--muted); font-size: .82rem; }
 .migration-drop input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
+.migration-discovery { display: grid; gap: 10px; }
+.migration-discovery > span { color: var(--muted); font-size: .82rem; line-height: 1.5; }
+.migration-discovery > details { border-top: 1px solid var(--line); padding-top: 10px; }
+.migration-discovery > details > summary { cursor: pointer; color: var(--muted); font-size: .78rem; }
+.migration-discovery .migration-drop { margin-top: 10px; }
 .migration-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
 .migration-summary span { display: grid; gap: 2px; padding: 12px 14px; }
 .migration-summary span + span { border-inline-start: 1px solid var(--line); }
@@ -1153,7 +1158,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .command-palette { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; width: min(620px, 100%); max-height: min(680px, calc(100dvh - 72px)); gap: 13px; padding: 20px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel-raised); box-shadow: 0 22px 70px color-mix(in srgb, var(--terminal-frame) 45%, transparent); }
 .command-header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .command-palette h2 { margin: 0; font-size: 1.15rem; }
-.command-results { display: grid; min-height: 0; gap: 5px; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; scrollbar-gutter: stable; }
+.command-results { display: grid; min-height: 0; grid-auto-rows: max-content; gap: 5px; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; scrollbar-gutter: stable; }
 .command-results > button { display: flex; min-height: 54px; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 11px; border-color: transparent; color: var(--text); background: transparent; text-align: left; }
 .command-results > button[data-group="Work"] { display: grid; grid-template-columns: minmax(0, 1fr) 120px; align-items: start; }
 .command-results > button:hover, .command-results > button:focus-visible, .command-results > button[aria-selected="true"] { border-color: var(--good); background: var(--good-soft); }
@@ -1478,6 +1483,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .command-backdrop { padding: 10px; }
   .command-palette { max-height: calc(100dvh - 20px); padding: 16px; }
   .command-results > button, .command-results > button[data-group="Work"] { display: flex; align-items: flex-start; flex-direction: column; gap: 3px; }
+  .terminal-connection-summary .terminal-session-details { display: none; }
   .decision-inbox { padding: 16px; }
   .apiary-attention-card, .queen-attention-card { align-items: stretch; flex-direction: column; gap: 11px; padding: 14px; }
   .apiary-attention-card button { width: 100%; min-height: 44px; }

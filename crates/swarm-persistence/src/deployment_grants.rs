@@ -16,11 +16,21 @@ const MAX_ENVIRONMENT_BYTES: usize = 80;
 const MAX_GRANT_USES: u32 = 100;
 
 impl TaskStore {
+    /// Returns the deployment rules configured for this Hive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot be opened or the saved rules cannot be read.
     pub fn deployment_grants(&self) -> Result<Vec<DeploymentGrant>, TaskStoreError> {
         let connection = self.connection()?;
         list_grants(&connection)
     }
 
+    /// Creates a bounded Night Watch deployment rule for one worker and environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the rule is invalid, the worker does not exist, or persistence fails.
     pub fn create_deployment_grant(
         &self,
         worker_id: WorkerId,
@@ -69,6 +79,11 @@ impl TaskStore {
         })
     }
 
+    /// Revokes a deployment rule without removing its audit history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot be updated.
     pub fn revoke_deployment_grant(
         &self,
         id: DeploymentGrantId,
@@ -90,6 +105,11 @@ impl TaskStore {
 
     /// Records Swarm authority before Queen asks Scout or a repository worker to deploy.
     /// Provider and operating-system permissions remain an independent boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Night Watch authority is absent, the task or worker does not match,
+    /// no active rule permits the deployment, or the authorization cannot be persisted.
     pub fn authorize_night_watch_deployment(
         &self,
         task_id: TaskId,
@@ -181,7 +201,7 @@ impl TaskStore {
         id: DeploymentGrantId,
     ) -> Result<Option<DeploymentGrant>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(&format!("{} WHERE grant.id = ?1", GRANT_SELECT))?;
+        let mut statement = connection.prepare(&format!("{GRANT_SELECT} WHERE grant.id = ?1"))?;
         Ok(statement
             .query_row([id.to_string()], deployment_grant_from_row)
             .optional()?)
@@ -209,8 +229,7 @@ fn normalize_environment(value: &str) -> Result<&str, TaskStoreError> {
 
 fn list_grants(connection: &rusqlite::Connection) -> Result<Vec<DeploymentGrant>, TaskStoreError> {
     let sql = format!(
-        "{} ORDER BY grant.revoked_at IS NULL DESC, grant.expires_at DESC, grant.created_at DESC",
-        GRANT_SELECT
+        "{GRANT_SELECT} ORDER BY grant.revoked_at IS NULL DESC, grant.expires_at DESC, grant.created_at DESC"
     );
     let mut statement = connection.prepare(&sql)?;
     Ok(statement

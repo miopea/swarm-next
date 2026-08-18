@@ -15,6 +15,60 @@ use super::{ApiError, AppState, authorize, task_store, task_store_error};
 
 pub const MAX_MIGRATION_BUNDLE_BYTES: usize = 16 * 1024 * 1024;
 
+pub(super) async fn discover_local_legacy_migration(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let path = state.legacy_database_path.as_deref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            "legacy_hive_not_found",
+            "No local Legacy Hive is configured on this machine",
+        )
+    })?;
+    if !path.is_file() {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "legacy_hive_not_found",
+            "No local Legacy Hive was found on this machine",
+        ));
+    }
+    let path = path.clone();
+    let bundle =
+        tokio::task::spawn_blocking(move || swarm_persistence::read_legacy_migration_bundle(path))
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "legacy_hive_read_failed",
+                    "Swarm could not finish reading the local Legacy Hive",
+                )
+            })?
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "legacy_hive_invalid",
+                    "The local Legacy Hive could not be safely prepared for migration",
+                )
+            })?;
+    let encoded = serde_json::to_vec(&bundle).map_err(|_| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "legacy_hive_read_failed",
+            "Swarm could not prepare the local Legacy Hive preview",
+        )
+    })?;
+    if encoded.len() > MAX_MIGRATION_BUNDLE_BYTES {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "legacy_hive_too_large",
+            "The local Legacy Hive contains too much open work for one migration preview",
+        ));
+    }
+    Ok(Json(bundle).into_response())
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct CommitLegacyMigrationRequest {
     bundle: LegacyMigrationBundle,

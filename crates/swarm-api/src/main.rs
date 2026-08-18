@@ -36,6 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_attachment_store(attachment_root_from_database(&database_path))
         .with_email_attachment_store(email_attachment_root_from_database(&database_path))
+        .with_legacy_database_path(legacy_database_path_from_env())
         .with_maintenance_request_path(maintenance_request_path_from_env(&database_path))
         .with_workspace_roots(workspace_roots)
         .with_task_store(store)
@@ -58,6 +59,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
     recover_interrupted_deliveries(&state)?;
     state.supervise_workers().await;
+    start_background_services(&state);
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    info!(%address, "Swarm Next API listening");
+    let app = match (
+        env::var_os("SWARM_WEB_ROOT"),
+        env::var_os("SWARM_ASSET_ROOT"),
+    ) {
+        (Some(root), Some(asset_root)) => router_with_asset_root(state, root, asset_root),
+        (Some(root), None) => router_with_web_root(state, root),
+        (None, _) => router(state),
+    };
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    Ok(())
+}
+
+fn start_background_services(state: &AppState) {
     let supervisor = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -93,20 +112,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             email_delivery.deliver_email_replies().await;
         }
     });
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    info!(%address, "Swarm Next API listening");
-    let app = match (
-        env::var_os("SWARM_WEB_ROOT"),
-        env::var_os("SWARM_ASSET_ROOT"),
-    ) {
-        (Some(root), Some(asset_root)) => router_with_asset_root(state, root, asset_root),
-        (Some(root), None) => router_with_web_root(state, root),
-        (None, _) => router(state),
-    };
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
-    Ok(())
 }
 
 fn recover_interrupted_deliveries(state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
@@ -233,6 +238,18 @@ fn database_path_from_env() -> PathBuf {
                         .join("swarm-next")
                         .join("swarm-next.sqlite3")
                 },
+            )
+        },
+        PathBuf::from,
+    )
+}
+
+fn legacy_database_path_from_env() -> PathBuf {
+    env::var_os("SWARM_LEGACY_DATABASE_PATH").map_or_else(
+        || {
+            env::var_os("HOME").map_or_else(
+                || PathBuf::from(".swarm").join("swarm.db"),
+                |home| PathBuf::from(home).join(".swarm").join("swarm.db"),
             )
         },
         PathBuf::from,

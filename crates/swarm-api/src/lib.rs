@@ -145,6 +145,7 @@ pub struct AppState {
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
+    legacy_database_path: Option<Arc<PathBuf>>,
     workspace_roots: Arc<Vec<PathBuf>>,
     maintenance_request_path: Option<Arc<PathBuf>>,
     development_reload_request_path: Option<Arc<PathBuf>>,
@@ -201,6 +202,7 @@ impl AppState {
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
+            legacy_database_path: None,
             workspace_roots: Arc::new(Vec::new()),
             maintenance_request_path: None,
             development_reload_request_path: None,
@@ -390,6 +392,13 @@ impl AppState {
     #[must_use]
     pub fn with_email_attachment_store(mut self, root: PathBuf) -> Self {
         self.email_attachment_store = Some(email_attachments::EmailAttachmentStore::new(root));
+        self
+    }
+
+    /// Configures the read-only source used by the local Legacy migration flow.
+    #[must_use]
+    pub fn with_legacy_database_path(mut self, path: PathBuf) -> Self {
+        self.legacy_database_path = Some(Arc::new(path));
         self
     }
 
@@ -2561,6 +2570,10 @@ fn api_router(state: AppState) -> Router {
             post(maintenance::maintain_worker_engine),
         )
         .route("/api/v1/backups/database", get(backups::download_database))
+        .route(
+            "/api/v1/migrations/legacy/local",
+            get(migration::discover_local_legacy_migration),
+        )
         .route(
             "/api/v1/migrations/legacy/tasks",
             get(migration::list_active_legacy_task_migrations),
@@ -11952,6 +11965,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn task_routes_persist_the_minimal_lifecycle() {
         let store = TaskStore::in_memory().unwrap();
         let state = AppState::default()

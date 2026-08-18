@@ -9,6 +9,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+test("discovers the normal local Legacy install without a file picker", async () => {
+  const requests: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.endsWith("/tasks") || url.endsWith("/workers")) return ok([]);
+    if (url.endsWith("/local")) return ok({
+      format: "swarm-next-migration",
+      version: 1,
+      source: { installation_id: "legacy", exported_at: 1, snapshot_digest: "source" },
+      tasks: [{ source_id: "local-1" }],
+      workers: [],
+    });
+    if (url.endsWith("/tasks/preview")) return ok({
+      bundle_digest: "digest", source_installation_id: "legacy", selectable: 1, skipped: 0, invalid: 0,
+      records: [{ source_id: "local-1", title: "Continue local work", source_status: "assigned", target_state: "ready", priority: "normal", disposition: "ready", selectable: true, warnings: [] }],
+    });
+    if (url.endsWith("/workers/preview")) return ok({ bundle_digest: "digest", source_installation_id: "legacy", selectable: 0, skipped: 0, invalid: 0, records: [] });
+    throw new Error(`unexpected ${url}`);
+  }));
+
+  render(<LegacyMigrationSettings busy={false} operatorToken="token" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find my Legacy Hive" }));
+
+  expect(await screen.findByText("Continue local work")).toBeInTheDocument();
+  expect(requests.some((url) => url.endsWith("/local"))).toBe(true);
+  expect(screen.getByRole("button", { name: "Review import of 1" })).toBeEnabled();
+});
+
 test("previews before importing and selects only server-approved records", async () => {
   const requests: Array<{ url: string; body: unknown }> = [];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

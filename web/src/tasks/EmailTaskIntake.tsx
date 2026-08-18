@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   fetchEmailInbox,
@@ -21,6 +21,7 @@ type Props = {
 };
 
 export default function EmailTaskIntake({ operatorToken, workers = [], onImported }: Props) {
+  const reviewRef = useRef<HTMLElement>(null);
   const [readiness, setReadiness] = useState<EmailReadiness>();
   const [messages, setMessages] = useState<EmailMessageSummary[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -90,6 +91,12 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [operatorToken, preview]);
+
+  useEffect(() => {
+    if (!selectedMessages.length) return;
+    reviewRef.current?.scrollIntoView?.({ block: "start", behavior: "auto" });
+    reviewRef.current?.focus({ preventScroll: true });
+  }, [selectedMessages.length]);
 
   function toggle(messageId: string) {
     setSelectedIds((current) => current.includes(messageId)
@@ -205,7 +212,7 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
         </>
       ) : (
         <div className="email-import-review">
-          <section className="email-task-setup" aria-labelledby="email-task-setup-heading">
+          <section ref={reviewRef} className="email-task-setup" aria-labelledby="email-task-setup-heading" tabIndex={-1}>
             <div><p className="eyebrow">Task draft</p><h4 id="email-task-setup-heading">Finish the task before saving it</h4></div>
             <div className="email-task-fields">
               <div className="email-task-field email-task-title"><label htmlFor="email-task-title">Task title</label><input id="email-task-title" value={title} maxLength={240} onChange={(event) => setTitle(event.target.value)} /></div>

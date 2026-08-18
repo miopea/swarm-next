@@ -88,6 +88,13 @@ export type LegacyMigrationReceipt = {
   imported_at: number;
 };
 
+export async function discoverLocalLegacyMigration(
+  operatorToken: string,
+): Promise<LegacyMigrationBundle> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/migrations/legacy/local");
+  return response.json() as Promise<LegacyMigrationBundle>;
+}
+
 export async function listActiveLegacyTaskMigrations(
   operatorToken: string,
 ): Promise<LegacyMigrationReceipt[]> {
