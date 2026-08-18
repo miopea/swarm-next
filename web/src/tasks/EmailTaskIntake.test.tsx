@@ -48,9 +48,9 @@ test("previews an Inbox message and explicitly imports its body and attachments 
   expect(await screen.findByText("The submit button does not work on my phone.")).toBeInTheDocument();
   expect(screen.getByText("screenshot.png · 2 KB")).toBeInTheDocument();
   expect(await screen.findByRole("img", { name: "screenshot.png" })).toHaveAttribute("src", "blob:private-attached-image");
-  expect(screen.getByText(/Every original thread and attachment stays linked/)).toBeInTheDocument();
+  expect(screen.getByText(/source email and every attachment will stay linked/)).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "high" } });
-  fireEvent.click(screen.getByRole("button", { name: "Import 1 email as one task" }));
+  fireEvent.click(screen.getByRole("button", { name: "Create task" }));
 
   await waitFor(() => expect(imported).toHaveBeenCalledOnce());
   const request = requests.find((item) => item.url.endsWith("/integrations/email/import"));

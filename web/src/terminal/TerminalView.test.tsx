@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 const controller = vi.hoisted(() => ({
@@ -9,6 +9,13 @@ const controller = vi.hoisted(() => ({
     listener("connected");
     return { dispose: vi.fn() };
   }),
+  scrollListener: undefined as ((atBottom: boolean) => void) | undefined,
+  subscribeScroll: vi.fn((listener: (atBottom: boolean) => void) => {
+    controller.scrollListener = listener;
+    listener(true);
+    return { dispose: vi.fn() };
+  }),
+  scrollToBottom: vi.fn(),
 }));
 
 vi.mock("./TerminalWorkspace", () => ({
@@ -26,6 +33,7 @@ import TerminalView from "./TerminalView";
 afterEach(() => {
   cleanup();
   controller.sendInput.mockClear();
+  controller.scrollToBottom.mockClear();
 });
 
 test("captures Ctrl-V text before the provider receives a terminal control character", () => {
@@ -54,6 +62,14 @@ test("captures Ctrl-V text before the provider receives a terminal control chara
   expect(parentKeyDown).not.toHaveBeenCalled();
   expect(controller.sendInput).toHaveBeenCalledOnce();
   expect(controller.sendInput).toHaveBeenCalledWith("\u001b[200~one\ntwo\u001b[201~");
+});
+
+test("offers a jump to latest action only while viewing scrollback", () => {
+  render(<TerminalView busy={false} onStop={vi.fn()} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  expect(screen.queryByRole("button", { name: "Jump to latest ↓" })).not.toBeInTheDocument();
+  act(() => controller.scrollListener?.(false));
+  fireEvent.click(screen.getByRole("button", { name: "Jump to latest ↓" }));
+  expect(controller.scrollToBottom).toHaveBeenCalledOnce();
 });
 
 test("keeps Queen automation visible beside her terminal without changing it", () => {

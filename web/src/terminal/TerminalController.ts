@@ -16,6 +16,8 @@ export interface TerminalSurface {
   restore(snapshot: TerminalSnapshot): Promise<void>;
   onData(listener: (text: string) => void): Disposable;
   onResize(listener: (size: { rows: number; columns: number }) => void): Disposable;
+  onScroll(listener: (atBottom: boolean) => void): Disposable;
+  scrollToBottom(): void;
   dispose(): void;
 }
 
@@ -29,6 +31,7 @@ export interface TerminalConnectionLike {
 export type TerminalSurfaceFactory = () => TerminalSurface;
 export type TerminalConnectionFactory = () => TerminalConnectionLike;
 export type TerminalStatusListener = (state: TerminalConnectionState, detail?: string) => void;
+export type TerminalScrollListener = (atBottom: boolean) => void;
 
 const MAX_STATUS_SUBSCRIBERS = 8;
 
@@ -39,6 +42,7 @@ export class TerminalController {
   readonly #connection: TerminalConnectionLike;
   readonly #surfaceSubscriptions: Disposable[];
   readonly #statusSubscribers = new Set<TerminalStatusListener>();
+  readonly #scrollSubscribers = new Set<TerminalScrollListener>();
   #opened = false;
   #started = false;
   #startPromise: Promise<void> | undefined;
@@ -49,6 +53,7 @@ export class TerminalController {
   #pendingFocus: "container" | "input" | undefined;
   #focusOnConnect: "container" | "input" | undefined;
   #lastRequestedFocus: "container" | "input" | undefined;
+  #atBottom = true;
 
   constructor(surfaceFactory: TerminalSurfaceFactory, connectionFactory: TerminalConnectionFactory) {
     this.#surface = surfaceFactory();
@@ -57,6 +62,7 @@ export class TerminalController {
     this.#host.tabIndex = -1;
     this.#surfaceSubscriptions = [
       this.#surface.onData((text) => this.#connection.sendInput(text)),
+      this.#surface.onScroll((atBottom) => this.#setAtBottom(atBottom)),
     ];
   }
 
@@ -101,6 +107,17 @@ export class TerminalController {
     this.#applyPendingFocus();
   }
 
+  subscribeScroll(listener: TerminalScrollListener): Disposable {
+    this.#scrollSubscribers.add(listener);
+    listener(this.#atBottom);
+    return { dispose: () => this.#scrollSubscribers.delete(listener) };
+  }
+
+  scrollToBottom(): void {
+    if (this.#disposed) return;
+    this.#surface.scrollToBottom();
+  }
+
   /** Refit and repaint a connected renderer without replacing its transport. */
   async redraw(): Promise<void> {
     if (this.#disposed || !this.#opened || !this.#host.parentElement) return;
@@ -115,6 +132,7 @@ export class TerminalController {
     this.#connection.dispose();
     this.#surface.dispose();
     this.#statusSubscribers.clear();
+    this.#scrollSubscribers.clear();
   }
 
   #startWhenFitted(): void {
@@ -200,6 +218,12 @@ export class TerminalController {
       this.#applyPendingFocus();
     }
     for (const subscriber of this.#statusSubscribers) subscriber(state, detail);
+  }
+
+  #setAtBottom(atBottom: boolean): void {
+    if (this.#atBottom === atBottom) return;
+    this.#atBottom = atBottom;
+    for (const subscriber of this.#scrollSubscribers) subscriber(atBottom);
   }
 
   #applyPendingFocus(): void {

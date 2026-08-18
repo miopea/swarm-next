@@ -155,6 +155,11 @@ export async function fetchEmailTaskSources(operatorToken: string): Promise<Emai
   return response.json() as Promise<EmailTaskSource[]>;
 }
 
+export async function fetchEmailTaskAttachment(operatorToken: string, taskId: string, storageName: string): Promise<Blob> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email/attachments/${encodeURIComponent(storageName)}`);
+  return response.blob();
+}
+
 export async function fetchTaskDeployments(operatorToken: string, taskId: string): Promise<TaskDeployment[]> {
   const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/deployments`);
   return response.json() as Promise<TaskDeployment[]>;

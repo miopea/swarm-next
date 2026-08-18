@@ -34,6 +34,7 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
   const [connectionState, setConnectionState] = useState<TerminalConnectionState>("connecting");
   const [detail, setDetail] = useState<string>();
   const [attachmentState, setAttachmentState] = useState<"idle" | "uploading" | "ready" | "error">("idle");
+  const [atBottom, setAtBottom] = useState(true);
 
   useEffect(() => {
     const element = mount.current;
@@ -43,8 +44,10 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
       setConnectionState(state);
       setDetail(nextDetail);
     });
+    const scrollSubscription = controller.subscribeScroll(setAtBottom);
     return () => {
       subscription.dispose();
+      scrollSubscription.dispose();
       controller.detach();
     };
   }, [controller]);
@@ -108,7 +111,10 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
           <span className="protected-worker">Always active</span>
         </div>}
       </div>
-      <div className="terminal-mount" ref={mount} />
+      <div className="terminal-stage">
+        <div className="terminal-mount" ref={mount} />
+        {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
+      </div>
       <MobileTerminalComposer connectionState={connectionState} onInput={(text) => controller.sendInput(text)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onImage={addImage} attachmentState={attachmentState} />
     </div>
   );

@@ -3,10 +3,11 @@ import { useState } from "react";
 type Props = {
   busy: boolean;
   runtime?: import("../api").DevelopmentRuntime;
+  healthVersion?: string;
   onReload: () => Promise<void>;
 };
 
-export default function DevelopmentReloadAction({ busy, runtime, onReload }: Props) {
+export default function DevelopmentReloadAction({ busy, runtime, healthVersion, onReload }: Props) {
   const [confirming, setConfirming] = useState(false);
   if (!runtime?.enabled) return null;
   const runningRevision = shortRevision(runtime.deployed_source_revision) ?? deployedRevision(runtime.version);
@@ -31,7 +32,7 @@ export default function DevelopmentReloadAction({ busy, runtime, onReload }: Pro
     </article>
   );
   if (!runtime.reload_available) {
-    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Running build matches the working copy</strong></div><span className="runtime-status-badge current">Current</span></header><p>Active revision {runningRevision} matches the product code in this checkout. No App/API build is waiting.</p><small>Swarm checks the working copy every 15 seconds. When product code changes, you can build and activate it without restarting Claude, Codex, or the worker engine.</small></article>;
+    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Running build matches the working copy</strong></div><span className="runtime-status-badge current">Current</span></header><p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(healthVersion ?? runtime.version)}</p><p>Active revision {runningRevision} matches the product code in this checkout. No App/API build is waiting.</p><small>Swarm checks the working copy every 15 seconds. When product code changes, you can build and activate it without restarting Claude, Codex, or the worker engine.</small></article>;
   }
   return (
     <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status">
@@ -64,4 +65,10 @@ function deployedRevision(version: string) {
 
 function shortRevision(revision?: string | null) {
   return revision?.slice(0, 7);
+}
+
+function runtimeVersionIdentity(version: string) {
+  const revision = version.match(/-dev-([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7);
+  const release = version.split("-dev-")[0];
+  return revision ? `${release} · revision ${revision}` : version;
 }

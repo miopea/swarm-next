@@ -11,6 +11,8 @@ const xterm = vi.hoisted(() => ({
   refresh: vi.fn(),
   clearTextureAtlas: vi.fn(),
   scrollLines: vi.fn(),
+  scrollToBottom: vi.fn(),
+  scrollListener: undefined as ((viewportY: number) => void) | undefined,
   bufferBaseY: 0,
   bufferViewportY: 0,
 }));
@@ -61,6 +63,7 @@ vi.mock("@xterm/xterm", () => ({
     refresh(start: number, end: number): void { xterm.refresh(start, end); }
     clearTextureAtlas(): void { xterm.clearTextureAtlas(); }
     scrollLines(lines: number): void { xterm.scrollLines(lines); }
+    scrollToBottom(): void { xterm.scrollToBottom(); }
     write(_bytes: Uint8Array, callback: () => void): void {
       callback();
     }
@@ -69,6 +72,10 @@ vi.mock("@xterm/xterm", () => ({
     }
     onResize(listener: (size: { rows: number; cols: number }) => void): { dispose(): void } {
       xterm.resizeListener = listener;
+      return { dispose: vi.fn() };
+    }
+    onScroll(listener: (viewportY: number) => void): { dispose(): void } {
+      xterm.scrollListener = listener;
       return { dispose: vi.fn() };
     }
     dispose(): void {}
@@ -207,7 +214,7 @@ test("authoritative fit ignores one usable transitional mobile measurement", asy
   surface.dispose();
 });
 
-test("turns an upward one-finger drag into older terminal scrollback", () => {
+test("turns an upward one-finger drag into newer terminal output", () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -227,7 +234,7 @@ test("turns an upward one-finger drag into older terminal scrollback", () => {
 
   expect(move.defaultPrevented).toBe(true);
   expect(xterm.scrollLines).toHaveBeenCalledOnce();
-  expect(xterm.scrollLines).toHaveBeenCalledWith(-3);
+  expect(xterm.scrollLines).toHaveBeenCalledWith(3);
   surface.dispose();
 });
 
@@ -262,7 +269,7 @@ test("uses the Android primary pointer path without handing the drag back to xte
   expect(move.defaultPrevented).toBe(true);
   expect(downstreamMove).not.toHaveBeenCalled();
   expect(xterm.scrollLines).toHaveBeenCalledOnce();
-  expect(xterm.scrollLines).toHaveBeenCalledWith(-3);
+  expect(xterm.scrollLines).toHaveBeenCalledWith(3);
   surface.dispose();
 });
 
@@ -288,7 +295,7 @@ test("captures a real xterm-child drag even when the child stops bubbling", () =
   xtermChild.dispatchEvent(move);
 
   expect(move.defaultPrevented).toBe(true);
-  expect(xterm.scrollLines).toHaveBeenCalledWith(-2);
+  expect(xterm.scrollLines).toHaveBeenCalledWith(2);
   surface.dispose();
 });
 
@@ -309,9 +316,9 @@ test("accumulates small touch movement and scrolls in both directions", () => {
   element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 91 }]));
   expect(xterm.scrollLines).not.toHaveBeenCalled();
   element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 82 }]));
-  expect(xterm.scrollLines).toHaveBeenLastCalledWith(-1);
-  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 108 }]));
   expect(xterm.scrollLines).toHaveBeenLastCalledWith(1);
+  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 108 }]));
+  expect(xterm.scrollLines).toHaveBeenLastCalledWith(-1);
   surface.dispose();
 });
 

@@ -97,7 +97,8 @@ grep -q '127.0.0.1:8766' "$SWARM_CONFIG_ROOT/swarm-next.env"
 grep -q "SWARM_WORKSPACE_ROOTS=$SWARM_WORKSPACE_ROOT" "$SWARM_CONFIG_ROOT/swarm-next.env"
 grep -q "$SWARM_INSTALL_ROOT/current/bin/swarm-api" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-api.service"
 grep -q "$SWARM_INSTALL_ROOT/host-current/bin/swarm-terminal-host" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-terminal-host.service"
-grep -q "$SWARM_INSTALL_ROOT/current/swarm-next-package reconcile-host-if-idle" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.service"
+grep -q "$SWARM_INSTALL_ROOT/current/swarm-next-package reconcile-host-requested" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.service"
+grep -q "ReadWritePaths=$SWARM_STATE_ROOT" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.service"
 grep -q "PathChanged=$SWARM_STATE_ROOT/worker-engine-maintenance.request" "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.path"
 tr -d '\r' < "$SWARM_SYSTEMD_USER_ROOT/swarm-next-host-reconcile.timer" | grep -q '^OnUnitActiveSec=2min$'
 grep -q 'swarm-next-host-reconcile.path' "$SWARM_SYSTEMD_USER_ROOT/swarm-next.target"
@@ -254,9 +255,11 @@ grep -q '^cancel-drain$' "$HOME/swarmctl.log"
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "1.0.0" ]
 grep -q '^drain$' "$HOME/swarmctl.log"
 grep -q '^cancel-drain$' "$HOME/swarmctl.log"
+printf 'requested_at=%s\ntarget_version=2.0.0\n' "$(date +%s)" > "$SWARM_STATE_ROOT/worker-engine-maintenance.request"
 printf '0\n' > "$HOME/running-sessions"
 : > "$HOME/systemctl.log"
-"$package" reconcile-host
+"$package" reconcile-host-requested
+[ ! -e "$SWARM_STATE_ROOT/worker-engine-maintenance.request" ]
 [ "$(cat "$SWARM_INSTALL_ROOT/host-current/VERSION")" = "2.0.0" ]
 [ -x "$SWARM_BIN_ROOT/swarm-terminal-host" ]
 grep -q '^--user restart swarm-next-terminal-host.service$' "$HOME/systemctl.log"

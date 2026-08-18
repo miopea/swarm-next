@@ -21,6 +21,7 @@ import { navigateToSettingsSection, readSettingsSection, SETTINGS_SECTIONS } fro
 
 type Props = {
   busy: boolean;
+  workerEngineProgress?: string;
   colorTheme: ColorTheme;
   feedbackRevision: number;
   health: Health | undefined;
@@ -54,7 +55,7 @@ type Props = {
   onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
-export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
+export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, lockDetectionState, notificationSettings, queenPolicy, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -103,7 +104,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
       .then((status) => { if (!cancelled) { setTerminalHostStatus(status); setTerminalHostLoaded(true); } })
       .catch(() => { if (!cancelled) { setTerminalHostStatus(undefined); setTerminalHostLoaded(true); } });
     return () => { cancelled = true; };
-  }, [operatorToken, providers]);
+  }, [operatorToken, providers, workerEngineProgress]);
   useEffect(() => {
     let cancelled = false;
     void fetchJiraReadiness(operatorToken)
@@ -366,10 +367,16 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
         <div className="runtime-subsystem-grid">
           <article className={`runtime-subsystem-card ${workerEngineNeedsUpdate ? "runtime-subsystem-restart" : "runtime-subsystem-current"}`} aria-label="Worker engine status">
             <header><div><span className="runtime-component-name">Worker engine</span><strong>{workerEngineLabel(health, terminalHostStatus, terminalHostLoaded)}</strong></div><span className={`runtime-status-badge ${workerEngineNeedsUpdate ? "restart" : "current"}`}>{workerEngineNeedsUpdate ? "Restart required" : "Current"}</span></header>
+            <p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(terminalHostStatus?.host_version)}</p>
             {workerEngineNeedsUpdate ? <>
               <p>Updating this layer briefly stops {activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"}, then revives Queen and configured always-active workers from their saved conversations.</p>
               <small><strong>Active commands can be interrupted.</strong> Wait for workers to rest when practical. Identities, provider conversations, tasks, ownership, and terminal history remain durable.</small>
-            {!confirmMaintenance ? (
+            {workerEngineProgress ? (
+              <div className="maintenance-progress" role="status" aria-live="polite">
+                <span className="maintenance-spinner" aria-hidden="true" />
+                <div><strong>Updating worker engine…</strong><span>{workerEngineProgress}</span></div>
+              </div>
+            ) : !confirmMaintenance ? (
               <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(true)}>Prepare worker engine update</button>
             ) : (
               <div className="maintenance-confirmation" role="group" aria-label="Confirm worker engine update">
@@ -382,7 +389,7 @@ export default function SettingsWorkspace({ busy, colorTheme, feedbackRevision, 
               </div>
             )}</> : <><p>The separate terminal host already matches this release. Running workers do not need to restart.</p><small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small></>}
           </article>
-          <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} onReload={onReloadDevelopment} />
+          <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} healthVersion={health?.version} onReload={onReloadDevelopment} />
         </div>
       </section>
 
@@ -462,6 +469,13 @@ function compactRuntimeVersion(version: string) {
   const revision = version.match(/-dev-([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7);
   const release = version.split("-dev-")[0];
   return revision ? `Healthy · ${release} · ${revision}` : `Healthy · ${version}`;
+}
+
+function runtimeVersionIdentity(version?: string | null) {
+  if (!version) return "Unavailable";
+  const revision = version.match(/-dev-([0-9a-f]{7,40})(?:-|$)/i)?.[1]?.slice(0, 7);
+  const release = version.split("-dev-")[0];
+  return revision ? `${release} · revision ${revision}` : version;
 }
 
 function notificationStateLabel(state: NotificationCapabilityState) {

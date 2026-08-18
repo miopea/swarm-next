@@ -134,6 +134,7 @@ export function App() {
   const [operationError, setOperationError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string>();
+  const [workerEngineProgress, setWorkerEngineProgress] = useState<string>();
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
   const [mobileKeysVisible, setMobileKeysVisible] = useState(initialMobileKeysVisibility);
   const [liveFeedState, setLiveFeedState] = useState<LiveFeedState>("connecting");
@@ -632,38 +633,42 @@ export function App() {
   async function maintainWorkerEngine() {
     if (!operatorToken) return;
     const previousSessionIds = sessions.map((session) => session.session_id);
-    await perform(async () => {
-      const targetVersion = loadState.kind === "ready" ? loadState.health.version : undefined;
-      await requestRuntimeHandoff(() => updateWorkerEngine(operatorToken).then(() => undefined));
-      setBusyLabel("Reconnecting workers…");
-      let ready = false;
-      for (let attempt = 0; attempt < 120; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-        try {
-          const [health, host] = await Promise.all([
-            fetchHealth(),
-            fetchTerminalHostStatus(operatorToken),
-          ]);
-          if ((!targetVersion || health.version === targetVersion)
-            && workerEngineMatches(health, host)
-            && !host.draining) {
-            ready = true;
-            break;
+    setWorkerEngineProgress("Stopping active workers and preserving their conversations…");
+    try {
+      await perform(async () => {
+        await requestRuntimeHandoff(() => updateWorkerEngine(operatorToken).then(() => undefined));
+        setBusyLabel("Checking the updated worker engine…");
+        setWorkerEngineProgress("The engine is restarting. Swarm is checking its version and reconnecting your crew…");
+        let ready = false;
+        for (let attempt = 0; attempt < 300; attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+          try {
+            const [health, host] = await Promise.all([
+              fetchHealth(),
+              fetchTerminalHostStatus(operatorToken),
+            ]);
+            if (workerEngineMatches(health, host) && !host.draining) {
+              ready = true;
+              break;
+            }
+          } catch (error) {
+            if (!isExpectedRuntimeHandoff(error)) throw error;
           }
-        } catch (error) {
-          if (!isExpectedRuntimeHandoff(error)) throw error;
         }
-      }
-      if (!ready) throw new Error("The worker engine did not become healthy within two minutes. Workers remain recoverable; check Runtime before retrying.");
-      previousSessionIds.forEach((sessionId) => terminalWorkspace.closeSession(sessionId));
-      const [controlRoom, nextProviders] = await Promise.all([
-        loadControlRoom(operatorToken),
-        fetchProviderCapabilities(operatorToken),
-      ]);
-      controlRoomModel.replace(controlRoom);
-      setProviders(nextProviders);
-      setActiveSessionId(preferredSessionId(controlRoom.workers, controlRoom.sessions));
-    }, "Restarting worker engine…");
+        if (!ready) throw new Error("The worker engine update is still not visible after five minutes. Workers remain recoverable; Runtime will keep showing the installed and available versions so it is safe to check again.");
+        setWorkerEngineProgress("Worker engine updated. Reconnecting Queen and your always-active workers…");
+        previousSessionIds.forEach((sessionId) => terminalWorkspace.closeSession(sessionId));
+        const [controlRoom, nextProviders] = await Promise.all([
+          loadControlRoom(operatorToken),
+          fetchProviderCapabilities(operatorToken),
+        ]);
+        controlRoomModel.replace(controlRoom);
+        setProviders(nextProviders);
+        setActiveSessionId(preferredSessionId(controlRoom.workers, controlRoom.sessions));
+      }, "Restarting worker engine…");
+    } finally {
+      setWorkerEngineProgress(undefined);
+    }
   }
 
   async function reloadDevelopmentBuild() {
@@ -1070,6 +1075,7 @@ export function App() {
         ) : surface === "settings" ? (
           <SettingsWorkspace
             busy={busy}
+            workerEngineProgress={workerEngineProgress}
             colorTheme={colorTheme}
             feedbackRevision={feedbackRevision}
             hiveIdentity={hiveIdentity}

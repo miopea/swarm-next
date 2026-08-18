@@ -11,7 +11,9 @@ function fakeSurface(): TerminalSurface {
     write: vi.fn().mockResolvedValue(undefined),
     restore: vi.fn().mockResolvedValue(undefined),
     onData: vi.fn(() => ({ dispose: vi.fn() })),
-    onResize: vi.fn(() => ({ dispose: vi.fn() })),
+  onResize: vi.fn(() => ({ dispose: vi.fn() })),
+  onScroll: vi.fn((listener) => { listener(true); return { dispose: vi.fn() }; }),
+  scrollToBottom: vi.fn(),
     dispose: vi.fn(),
   };
 }

@@ -105,7 +105,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                   </div>
                   <span className={`decision-urgency ${decision.urgency}`}>{decision.urgency === "time_sensitive" ? "Time-sensitive" : "When ready"}</span>
                 </header>
-                <p className="decision-reason">{decision.reason}</p>
+                <DecisionReason reason={decision.reason} />
                 <dl className="decision-context">
                   {decision.task_id && <div><dt>Task</dt><dd>{onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(decision.task_id!)}>{taskNames.get(decision.task_id) ?? "Linked task"}</button> : taskNames.get(decision.task_id) ?? "Linked task"}</dd></div>}
                   {decision.risk && <div><dt>Risk</dt><dd>{decision.risk}</dd></div>}
@@ -145,4 +145,35 @@ function deliveryLabel(state: DecisionRequest["delivery_state"]): string {
 }
 function humanize(value: string): string {
   return value.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
+}
+
+const queenSectionLabels: Record<string, string> = {
+  "dispatchable now": "Can proceed now",
+  "blocked on your ruling": "Needs your ruling",
+  "not delegable / out of scope this run": "Cannot proceed in this review",
+};
+
+function DecisionReason({ reason }: { reason: string }) {
+  const heading = /(DISPATCHABLE NOW|BLOCKED ON YOUR RULING|NOT DELEGABLE \/ OUT OF SCOPE THIS RUN)\s*\((\d+)\)/gi;
+  const matches = [...reason.matchAll(heading)];
+  if (!matches.length) return <p className="decision-reason">{reason}</p>;
+  const preamble = reason.slice(0, matches[0].index).trim();
+  return (
+    <div className="decision-reason decision-reason-structured">
+      {preamble ? <p>{preamble}</p> : null}
+      <div className="decision-reason-sections">
+        {matches.map((match, index) => {
+          const start = (match.index ?? 0) + match[0].length;
+          const end = matches[index + 1]?.index ?? reason.length;
+          const items = reason.slice(start, end).trim().split(/\s+(?=\d+\.\s)/).map((item) => item.replace(/^\d+\.\s*/, "").trim()).filter(Boolean);
+          return (
+            <section key={`${match[1]}-${index}`} className={`decision-reason-section section-${index}`}>
+              <header><strong>{queenSectionLabels[match[1].toLowerCase()] ?? humanize(match[1])}</strong><span>{match[2]}</span></header>
+              <ol>{items.map((item, itemIndex) => <li key={`${itemIndex}-${item.slice(0, 28)}`}>{item}</li>)}</ol>
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
 }

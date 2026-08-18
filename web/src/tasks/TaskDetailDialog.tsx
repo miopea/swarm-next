@@ -3,6 +3,8 @@ import { useEffect, useId, useState } from "react";
 import {
   fetchJiraTaskAttachment,
   fetchJiraTaskDetail,
+  fetchEmailTaskAttachment,
+  type EmailTaskSource,
   type JiraTaskAttachment,
   type JiraTaskLink,
   type Task,
@@ -10,9 +12,10 @@ import {
 
 type LoadedImage = JiraTaskAttachment & { url: string };
 
-export default function TaskDetailDialog({ task, jiraLink, operatorToken, onClose, onEdit }: {
+export default function TaskDetailDialog({ task, jiraLink, emailSources = [], operatorToken, onClose, onEdit }: {
   task: Task;
   jiraLink?: JiraTaskLink;
+  emailSources?: EmailTaskSource[];
   operatorToken: string;
   onClose: () => void;
   onEdit: () => void;
@@ -21,7 +24,7 @@ export default function TaskDetailDialog({ task, jiraLink, operatorToken, onClos
   const [description, setDescription] = useState(task.description);
   const [attachments, setAttachments] = useState<JiraTaskAttachment[]>([]);
   const [images, setImages] = useState<LoadedImage[]>([]);
-  const [loading, setLoading] = useState(Boolean(jiraLink));
+  const [loading, setLoading] = useState(Boolean(jiraLink || emailSources.length));
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
@@ -34,20 +37,29 @@ export default function TaskDetailDialog({ task, jiraLink, operatorToken, onClos
   }, [onClose]);
 
   useEffect(() => {
-    if (!jiraLink) return;
     let active = true;
     const objectUrls: string[] = [];
     setLoading(true);
     setFailed(false);
     void (async () => {
       try {
-        const detail = await fetchJiraTaskDetail(operatorToken, task.id);
+        const emailAttachments: JiraTaskAttachment[] = emailSources.flatMap((source) => source.attachments.map((attachment) => ({
+          id: `email:${source.id}:${attachment.storage_name}`,
+          filename: attachment.display_name,
+          media_type: attachment.media_type,
+          byte_size: attachment.byte_size,
+          is_image: attachment.media_type.startsWith("image/"),
+        })));
+        const detail = jiraLink ? await fetchJiraTaskDetail(operatorToken, task.id) : undefined;
         if (!active) return;
-        setDescription(detail.description || task.description);
-        setAttachments(detail.attachments);
-        const loaded = (await Promise.all(detail.attachments.filter((attachment) => attachment.is_image).map(async (attachment) => {
+        setDescription(detail?.description || task.description);
+        const allAttachments = [...(detail?.attachments ?? []), ...emailAttachments];
+        setAttachments(allAttachments);
+        const loaded = (await Promise.all(allAttachments.filter((attachment) => attachment.is_image).map(async (attachment) => {
           try {
-            const blob = await fetchJiraTaskAttachment(operatorToken, task.id, attachment.id);
+            const blob = attachment.id.startsWith("email:")
+              ? await fetchEmailTaskAttachment(operatorToken, task.id, attachment.id.split(":").slice(2).join(":"))
+              : await fetchJiraTaskAttachment(operatorToken, task.id, attachment.id);
             if (!active) return null;
             const url = URL.createObjectURL(blob);
             objectUrls.push(url);
@@ -67,7 +79,7 @@ export default function TaskDetailDialog({ task, jiraLink, operatorToken, onClos
       active = false;
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [attempt, jiraLink, operatorToken, task.description, task.id]);
+  }, [attempt, emailSources, jiraLink, operatorToken, task.description, task.id]);
 
   return (
     <div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -92,8 +104,8 @@ export default function TaskDetailDialog({ task, jiraLink, operatorToken, onClos
             <h3>Description</h3>
             {description ? <p className="task-detail-description">{description}</p> : <p className="empty-note">No description was provided.</p>}
           </section>
-          {loading && <p className="task-detail-loading">Loading Jira details and images…</p>}
-          {failed && <div className="task-detail-error"><span>Jira details could not be loaded. The saved Swarm description is still shown.</span><button type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></div>}
+          {loading && <p className="task-detail-loading">Loading task details and images…</p>}
+          {failed && <div className="task-detail-error"><span>Some linked details could not be loaded. The saved Swarm description is still shown.</span><button type="button" onClick={() => setAttempt((value) => value + 1)}>Try again</button></div>}
           {images.length > 0 && (
             <section>
               <h3>Images</h3>

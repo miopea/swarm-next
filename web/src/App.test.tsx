@@ -565,7 +565,7 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
   render(<App />);
 
   expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+  fireEvent.click(screen.getByRole("button", { name: "Write task" }));
   const taskTitle = screen.getByLabelText("Task title");
   taskTitle.focus();
   fireEvent.keyDown(taskTitle, { key: "4", altKey: true });
@@ -673,7 +673,7 @@ test("creates a persisted task draft from the task board", async () => {
   fireEvent.change(screen.getByLabelText("Operator token"), { target: { value: "secret" } });
   fireEvent.click(screen.getByRole("button", { name: "Unlock Swarm" }));
 
-  fireEvent.click(await screen.findByRole("button", { name: "Create task" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Write task" }));
   fireEvent.change(await screen.findByLabelText("Task title"), { target: { value: task.title } });
   fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
 

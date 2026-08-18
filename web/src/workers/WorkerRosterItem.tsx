@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
+import CursorMenu, { pointFromElement, type MenuPoint } from "../shared/CursorMenu";
 import { workerAttention } from "./workerAttention";
 
 type Props = {
@@ -15,9 +16,8 @@ type Props = {
 };
 
 export default function WorkerRosterItem({ worker, selected, detail, busy, onOpen, onStart, onStop }: Props) {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPoint, setMenuPoint] = useState<MenuPoint>();
   const [, refreshAttention] = useState(0);
-  const rowRef = useRef<HTMLDivElement>(null);
   const primaryAction = worker.running ? onOpen : onStart;
   const primaryActionLabel = worker.running ? "Open terminal" : worker.runtime_error ? "Retry worker" : "Wake worker";
   const attention = workerAttention(worker);
@@ -30,30 +30,20 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
     return () => window.clearTimeout(timer);
   }, [worker.attention_state, worker.engagement_expires_at]);
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    function dismissMenu(event: PointerEvent) {
-      if (event.target instanceof Node && !rowRef.current?.contains(event.target)) setMenuOpen(false);
-    }
-    document.addEventListener("pointerdown", dismissMenu);
-    return () => document.removeEventListener("pointerdown", dismissMenu);
-  }, [menuOpen]);
-
   function run(action: () => void) {
-    setMenuOpen(false);
+    setMenuPoint(undefined);
     action();
   }
 
   return (
     <div
-      ref={rowRef}
       className={`worker-row worker-state-${attention.state}`}
       onContextMenu={(event) => {
         event.preventDefault();
-        setMenuOpen(true);
+        setMenuPoint({ x: event.clientX, y: event.clientY });
       }}
       onKeyDown={(event) => {
-        if (event.key === "Escape") setMenuOpen(false);
+        if (event.key === "Escape") setMenuPoint(undefined);
       }}
     >
       <button
@@ -73,14 +63,17 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
         className="worker-menu-trigger"
         aria-label={`Actions for ${worker.name}`}
         aria-haspopup="menu"
-        aria-expanded={menuOpen}
-        onClick={() => setMenuOpen((current) => !current)}
+        aria-expanded={Boolean(menuPoint)}
+        onClick={(event) => {
+          const point = pointFromElement(event.currentTarget);
+          setMenuPoint((current) => current ? undefined : point);
+        }}
         disabled={busy}
       >
         <span aria-hidden="true">•••</span>
       </button>
-      {menuOpen && (
-        <div className="worker-menu" role="menu" aria-label={`${worker.name} actions`}>
+      {menuPoint && (
+        <CursorMenu className="worker-menu" point={menuPoint} onClose={() => setMenuPoint(undefined)} label={`${worker.name} actions`}>
           <button role="menuitem" onClick={() => run(primaryAction)}>
             {primaryActionLabel}
           </button>
@@ -88,7 +81,7 @@ export default function WorkerRosterItem({ worker, selected, detail, busy, onOpe
             <button className="danger-text" role="menuitem" onClick={() => run(onStop)}>Put worker to sleep</button>
           )}
           {worker.role === "queen" && <span className="protected-menu-note">Queen is always active</span>}
-        </div>
+        </CursorMenu>
       )}
     </div>
   );

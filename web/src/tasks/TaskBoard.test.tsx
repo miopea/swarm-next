@@ -41,7 +41,7 @@ test("keeps active work above the fold on phones until task creation is requeste
   renderBoard({ tasks: [] });
 
   expect(screen.queryByLabelText("Task title")).not.toBeInTheDocument();
-  const toggle = screen.getByRole("button", { name: "Create task" });
+  const toggle = screen.getByRole("button", { name: "Write task" });
   expect(toggle).toHaveAttribute("aria-expanded", "false");
   fireEvent.click(toggle);
   const title = screen.getByLabelText("Task title");
@@ -105,7 +105,7 @@ test("creates a task with useful context and priority", () => {
   const onCreate = vi.fn().mockResolvedValue(undefined);
   renderBoard({ tasks: [], onCreate });
 
-  fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+  fireEvent.click(screen.getByRole("button", { name: "Write task" }));
   fireEvent.change(screen.getByLabelText("Task title"), { target: { value: "Ship task editing" } });
   fireEvent.change(screen.getByLabelText(/Description/), { target: { value: "Keep failed forms open" } });
   fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "urgent" } });

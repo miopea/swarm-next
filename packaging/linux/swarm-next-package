@@ -515,6 +515,23 @@ reconcile_host() {
   die "terminal host restart failed; previous host release restored"
 }
 
+reconcile_host_requested() {
+  request_path="$state_root/worker-engine-maintenance.request"
+  [ -f "$request_path" ] || { reconcile_host if-idle; return; }
+  requested_at=$(sed -n 's/^requested_at=//p' "$request_path")
+  now=$(date +%s)
+  case "$requested_at" in
+    *[!0-9]*|"") rm -f "$request_path"; reconcile_host if-idle; return;;
+  esac
+  if [ "$requested_at" -gt "$now" ] || [ $((now - requested_at)) -gt 300 ]; then
+    rm -f "$request_path"
+    reconcile_host if-idle
+    return
+  fi
+  reconcile_host
+  rm -f "$request_path"
+}
+
 migrate_protocol() {
   validate_bundle
   validate_config
@@ -579,8 +596,9 @@ case "$action" in
   rollback) rollback;;
   reconcile-host) reconcile_host;;
   reconcile-host-if-idle) reconcile_host if-idle;;
+  reconcile-host-requested) reconcile_host_requested;;
   migrate-protocol) migrate_protocol;;
   uninstall) uninstall_product;;
   restore) restore_database;;
-  *) die "usage: swarm-next-package <install|update|migrate-protocol> RELEASE_DIR | enable-development CHECKOUT | disable-development | reload-development | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | uninstall";;
+  *) die "usage: swarm-next-package <install|update|migrate-protocol> RELEASE_DIR | enable-development CHECKOUT | disable-development | reload-development | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | reconcile-host-requested | uninstall";;
 esac

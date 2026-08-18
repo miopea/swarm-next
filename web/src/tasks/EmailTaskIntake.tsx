@@ -178,7 +178,7 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
   return (
     <section className="email-task-source" aria-labelledby="email-work-heading">
       <div className="email-intake-heading">
-        <div><p className="eyebrow">Email work</p><h3 id="email-work-heading">{selectedMessages.length ? "Review the task before import" : "Choose messages from Inbox"}</h3></div>
+        <div><p className="eyebrow">Email work</p><h3 id="email-work-heading">{selectedMessages.length ? "Review and create the task" : "Choose messages from Inbox"}</h3></div>
         <span>{selectedMessages.length ? `${selectedMessages.length} source thread${selectedMessages.length === 1 ? "" : "s"}` : `${messages.length || "Inbox"} · ${readiness.account_address}`}</span>
       </div>
       {!selectedMessages.length ? (
@@ -192,9 +192,8 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
               <label key={item.id} role="listitem" className={selectedIds.includes(item.id) ? "selected" : ""}>
                 <input type="checkbox" checked={selectedIds.includes(item.id)} disabled={busy} onChange={() => toggle(item.id)} />
                 <span className="email-message-sender">{item.sender_name || item.sender_address}</span>
-                <span className="email-message-content"><strong>{item.subject || "(No subject)"}</strong><small>{item.preview || "No message preview"}</small></span>
+                <span className="email-message-content"><strong>{item.subject || "(No subject)"}</strong><small>{item.preview || "No message preview"}</small>{item.has_attachments ? <span className="email-attachment-mark">Attachment</span> : null}</span>
                 <time dateTime={new Date(item.received_at * 1000).toISOString()}>{formatReceived(item.received_at)}</time>
-                {item.has_attachments ? <span className="email-attachment-mark">Attachments</span> : null}
               </label>
             ))}
             {!busy && messages.length === 0 ? <p className="jira-intake-empty">No Inbox messages match this view.</p> : null}
@@ -207,7 +206,7 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
       ) : (
         <div className="email-import-review">
           <section className="email-task-setup" aria-labelledby="email-task-setup-heading">
-            <div><p className="eyebrow">Task setup</p><h4 id="email-task-setup-heading">Shape the work before it joins the board</h4></div>
+            <div><p className="eyebrow">Task draft</p><h4 id="email-task-setup-heading">Finish the task before saving it</h4></div>
             <div className="email-task-fields">
               <div className="email-task-field email-task-title"><label htmlFor="email-task-title">Task title</label><input id="email-task-title" value={title} maxLength={240} onChange={(event) => setTitle(event.target.value)} /></div>
               <div className="email-task-field email-task-description"><label htmlFor="email-task-description">Task description</label><textarea id="email-task-description" value={description} rows={6} onChange={(event) => setDescription(event.target.value)} /></div>
@@ -215,7 +214,7 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
               <div className="email-task-field"><label htmlFor="email-task-status">Starting status</label><select id="email-task-status" value={initialState} onChange={(event) => setInitialState(event.target.value as "draft" | "ready")}><option value="draft">Draft — review later</option><option value="ready">Ready — available to work</option></select></div>
               <div className="email-task-field email-task-worker"><label htmlFor="email-task-worker">Worker</label><select id="email-task-worker" value={workerId} onChange={(event) => setWorkerId(event.target.value)}><option value="">Unassigned</option>{assignableWorkers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name} · {worker.attention_state}</option>)}</select></div>
             </div>
-            <div className="email-import-actions"><small>Every original thread and attachment stays linked for a reviewed plain-language reply after completion and deployment.</small><button className="primary-action" type="button" disabled={busy || !title.trim()} onClick={() => void importSelected()}>{busy ? "Importing…" : `Import ${selectedMessages.length} email${selectedMessages.length === 1 ? "" : "s"} as one task`}</button></div>
+            <div className="email-import-actions"><small>{selectedMessages.length} source email{selectedMessages.length === 1 ? "" : "s"} and every attachment will stay linked to this task.</small><button className="primary-action" type="button" disabled={busy || !title.trim()} onClick={() => void importSelected()}>{busy ? "Creating task…" : "Create task"}</button></div>
           </section>
           <section className="email-source-workbench" aria-labelledby="email-source-review-heading">
             <div className="email-detail-toolbar">

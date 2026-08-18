@@ -100,6 +100,7 @@ export {
   fetchEmailReply,
   fetchEmailTaskSource,
   fetchEmailTaskSources,
+  fetchEmailTaskAttachment,
   fetchTaskDeployments,
   importEmailMessage,
   importEmailTask,

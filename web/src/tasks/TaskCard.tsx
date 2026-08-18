@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react";
+import { useState, type DragEvent, type FormEvent } from "react";
 
 import {
   type EmailTaskSource,
@@ -13,6 +13,7 @@ import {
   type Worker,
 } from "../api";
 import EmailResolutionPanel from "./EmailResolutionPanel";
+import CursorMenu, { pointFromElement, type MenuPoint } from "../shared/CursorMenu";
 import JiraDiscussion from "./JiraDiscussion";
 import TaskActivityPanel from "./TaskActivityPanel";
 import TaskAssignment from "./TaskAssignment";
@@ -62,23 +63,13 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
   const [activity, setActivity] = useState<TaskActivityPage>();
   const [historyError, setHistoryError] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPoint, setMenuPoint] = useState<MenuPoint>();
   const [discussionOpen, setDiscussionOpen] = useState(false);
   const [emailDetailsOpen, setEmailDetailsOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const cardRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    function dismissMenu(event: PointerEvent) {
-      if (event.target instanceof Node && !cardRef.current?.contains(event.target)) setMenuOpen(false);
-    }
-    document.addEventListener("pointerdown", dismissMenu);
-    return () => document.removeEventListener("pointerdown", dismissMenu);
-  }, [menuOpen]);
 
   function runMenuAction(action: () => void) {
-    setMenuOpen(false);
+    setMenuPoint(undefined);
     action();
   }
 
@@ -114,7 +105,6 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
 
   return (
     <article
-      ref={cardRef}
       data-task-id={task.id}
       tabIndex={-1}
       className={`task-card state-${task.state}${dropTarget ? " drop-target-before" : ""}`}
@@ -126,9 +116,9 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
       onDragOver={(event) => { event.preventDefault(); onDragTarget(); }}
       onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onDragLeave(); }}
       onDrop={(event) => { event.preventDefault(); onDropBefore(); }}
-      onContextMenu={(event) => { event.preventDefault(); setMenuOpen(true); }}
+      onContextMenu={(event) => { event.preventDefault(); setMenuPoint({ x: event.clientX, y: event.clientY }); }}
       onDoubleClick={(event) => openDetailsFromEvent(event.target)}
-      onKeyDown={(event) => { if (event.key === "Escape") setMenuOpen(false); if (event.key === "Enter") openDetailsFromEvent(event.target); }}
+      onKeyDown={(event) => { if (event.key === "Escape") setMenuPoint(undefined); if (event.key === "Enter") openDetailsFromEvent(event.target); }}
     >
       <TaskMetadata task={task} jiraLink={jiraLink} busy={busy} onRetryJira={onRetryJira} />
       <h4>{task.title}</h4>
@@ -143,13 +133,16 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
         {!editing && jiraLink && <button className="text-button" disabled={busy} onClick={toggleDiscussion}>{discussionOpen ? "Hide discussion" : "Discussion"}</button>}
         {!editing && emailSources.length > 0 && <button className="text-button" disabled={busy} onClick={() => setEmailDetailsOpen((current) => !current)}>{emailDetailsOpen ? "Hide email" : task.state === "completed" ? "Close email loop" : emailSources.length === 1 ? "Email source" : `${emailSources.length} email sources`}</button>}
         {!editing && (
-          <button className="task-menu-trigger" aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)}>
+          <button className="task-menu-trigger" aria-label={`Actions for ${task.title}`} aria-haspopup="menu" aria-expanded={Boolean(menuPoint)} onClick={(event) => {
+            const point = pointFromElement(event.currentTarget);
+            setMenuPoint((current) => current ? undefined : point);
+          }}>
             <span aria-hidden="true">•••</span>
           </button>
         )}
       </div>
-      {menuOpen && (
-        <div className="task-menu" role="menu" aria-label={`${task.title} actions`}>
+      {menuPoint && (
+        <CursorMenu className="task-menu" point={menuPoint} onClose={() => setMenuPoint(undefined)} label={`${task.title} actions`}>
           <button role="menuitem" onClick={() => runMenuAction(() => setDetailsOpen(true))}>View details</button>
           <button role="menuitem" onClick={() => runMenuAction(() => setEditing(true))}>Edit task</button>
           <button role="menuitem" onClick={() => runMenuAction(toggleHistory)}>{historyOpen ? "Hide history" : "Show history"}</button>
@@ -157,12 +150,12 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
           {task.state !== "completed" && <button role="menuitem" disabled={busy || !canMoveLater} onClick={() => runMenuAction(onMoveLater)}>Move later</button>}
           {task.state === "active" && <button className="danger-text" role="menuitem" disabled={busy} onClick={() => runMenuAction(() => void onTransition(task, "blocked"))}>Block task</button>}
           {task.state === "review" && <button role="menuitem" disabled={busy} onClick={() => runMenuAction(() => void onTransition(task, "active"))}>Changes needed</button>}
-        </div>
+        </CursorMenu>
       )}
       {historyOpen && <TaskActivityPanel activity={activity} loading={historyLoading} failed={historyError} onRetry={() => void loadActivity()} />}
       {discussionOpen && jiraLink && <JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} />}
       {emailDetailsOpen && emailSources.length > 0 && <EmailResolutionPanel operatorToken={operatorToken} task={task} sources={emailSources} />}
-      {detailsOpen && <TaskDetailDialog task={task} jiraLink={jiraLink} operatorToken={operatorToken} onClose={() => setDetailsOpen(false)} onEdit={() => { setDetailsOpen(false); setEditing(true); }} />}
+      {detailsOpen && <TaskDetailDialog task={task} jiraLink={jiraLink} emailSources={emailSources} operatorToken={operatorToken} onClose={() => setDetailsOpen(false)} onEdit={() => { setDetailsOpen(false); setEditing(true); }} />}
     </article>
   );
 }

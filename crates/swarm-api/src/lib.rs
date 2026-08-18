@@ -105,8 +105,7 @@ use swarm_terminal::{
     TerminalWriteProvenance,
 };
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore};
-#[cfg(test)]
-use tokio::time::sleep;
+use tokio::time::{Instant, sleep};
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 use attach::AttachGrantStore;
@@ -1436,41 +1435,90 @@ async fn submit_terminal_message(
         }
         _ => return Ok(TerminalSubmission::Uncertain),
     }
-    let mut after_sequence = baseline;
-    let mut rendered = false;
-    for _ in 0..64 {
-        let observed_sequence = match client
-            .request(&HostRequest::Wait {
+    // Claude can redraw a long paste dozens of times before the bounded marker
+    // reaches the canonical screen. Observe elapsed time rather than frame
+    // count, then require a short stable render window before sending Enter.
+    let render_deadline = Instant::now() + Duration::from_secs(10);
+    let mut rendered_since = None;
+    let rendered_sequence = loop {
+        sleep(Duration::from_millis(50)).await;
+        let snapshot = match client
+            .request(&HostRequest::Read {
                 session_id,
-                after_sequence: Some(after_sequence),
+                after_sequence: None,
             })
             .await?
         {
-            HostResponse::Output { resume, .. } => resume_sequence(&resume),
-            _ => return Ok(TerminalSubmission::Uncertain),
-        };
-        if observed_sequence <= after_sequence {
-            return Ok(TerminalSubmission::Uncertain);
-        }
-        after_sequence = observed_sequence;
-        rendered = matches!(
-            client
-                .request(&HostRequest::Read {
-                    session_id,
-                    after_sequence: None,
-                })
-                .await?,
             HostResponse::Output {
                 resume: swarm_terminal::Resume::Snapshot { snapshot },
+                running: true,
                 ..
-            } if snapshot.bytes.windows(marker.len()).any(|part| part == marker)
-        );
-        if rendered {
+            } => snapshot,
+            HostResponse::Error { code, message } => {
+                return Ok(TerminalSubmission::Rejected { code, message });
+            }
+            _ => return Ok(TerminalSubmission::Uncertain),
+        };
+        if snapshot.sequence > baseline
+            && snapshot
+                .bytes
+                .windows(marker.len())
+                .any(|part| part == marker)
+        {
+            let first_seen = rendered_since.get_or_insert_with(Instant::now);
+            if first_seen.elapsed() >= Duration::from_millis(300) {
+                break snapshot.sequence;
+            }
+        } else {
+            rendered_since = None;
+        }
+        if Instant::now() >= render_deadline {
+            return Ok(TerminalSubmission::Uncertain);
+        }
+    };
+    let submit_response = client
+        .request(&HostRequest::Write {
+            session_id,
+            bytes: vec![b'\r'],
+            provenance: TerminalWriteProvenance::coordination(),
+        })
+        .await;
+    if !matches!(submit_response, Ok(HostResponse::Acknowledged)) {
+        return Ok(TerminalSubmission::Uncertain);
+    }
+
+    // Claude may acknowledge that first Enter while still finalizing its
+    // bracketed-paste placeholder. If the exact resting prompt remains, one
+    // bounded second submit prevents text from being stranded in Queen's input.
+    let acceptance_deadline = Instant::now() + Duration::from_millis(750);
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        let snapshot = match client
+            .request(&HostRequest::Read {
+                session_id,
+                after_sequence: None,
+            })
+            .await?
+        {
+            HostResponse::Output {
+                resume: swarm_terminal::Resume::Snapshot { snapshot },
+                running: true,
+                ..
+            } => snapshot,
+            _ => return Ok(TerminalSubmission::Uncertain),
+        };
+        match provider_activity::classify_observed_activity(provider, &snapshot) {
+            ProviderActivity::Active | ProviderActivity::AwaitingOperator => {
+                return Ok(TerminalSubmission::Acknowledged);
+            }
+            ProviderActivity::Unknown if snapshot.sequence > rendered_sequence => {
+                return Ok(TerminalSubmission::Acknowledged);
+            }
+            ProviderActivity::Resting | ProviderActivity::Unknown => {}
+        }
+        if Instant::now() >= acceptance_deadline {
             break;
         }
-    }
-    if !rendered {
-        return Ok(TerminalSubmission::Uncertain);
     }
     match client
         .request(&HostRequest::Write {

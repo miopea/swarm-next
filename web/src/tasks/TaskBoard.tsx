@@ -213,7 +213,7 @@ export default function TaskBoard({
               }
             }}
           >
-            {composeOpen ? "Close task form" : "Create task"}
+            {composeOpen ? "Close task form" : "Write task"}
           </button>
           <button
             type="button"
@@ -222,7 +222,7 @@ export default function TaskBoard({
             aria-controls="jira-work-source"
             onClick={() => { setJiraOpen((current) => !current); setComposeOpen(false); setEmailOpen(false); }}
           >
-            {jiraOpen ? "Close Jira work" : "Choose Jira work"}
+            {jiraOpen ? "Close Jira work" : "Claim Jira work"}
           </button>
           <button
             type="button"
@@ -231,7 +231,7 @@ export default function TaskBoard({
             aria-controls="email-work-source"
             onClick={() => { setEmailOpen((current) => !current); setComposeOpen(false); setJiraOpen(false); }}
           >
-            {emailOpen ? "Close email" : "Import email"}
+            {emailOpen ? "Close email" : "Use email"}
           </button>
           </div>
         </div>
