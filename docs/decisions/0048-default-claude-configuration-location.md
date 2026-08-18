@@ -45,8 +45,25 @@ Swarm does not set `CLAUDE_CONFIG_DIR`. Workers use Claude's default
 configuration location, exactly as the operator's own terminal does.
 
 The service units grant write access to `~/.claude` and `~/.claude.json`
-instead. `ProtectHome=read-only` still covers the rest of home, so this widens
-the sandbox by two documented provider-owned paths rather than opening home.
+instead, declaring exactly the two provider-owned paths Claude needs rather
+than opening home.
+
+Those grants are correct by declaration but are not currently load-bearing.
+Measured on the dogfood host on 2026-08-18: `ProtectHome=read-only` and
+`ProtectSystem=strict` do not take effect for these units. Running the same
+directives under `systemd-run --user` leaves the whole of home writable with or
+without the grants, because Ubuntu sets
+`kernel.apparmor_restrict_unprivileged_userns=1` and an unprivileged user
+manager cannot create the mount namespace the directives require. systemd 255
+applies no protection and fails no unit. The redirect was therefore never the
+only thing making Claude's state writable, and removing it cannot break a
+worker's ability to write.
+
+This also means ADR 0009's claim that "the remainder of home is read-only" did
+not hold in practice on this host. That gap predates this decision and is not
+resolved by it: the units keep declaring the intent so the protection applies
+wherever the namespace is available, and restoring real enforcement is separate
+work.
 
 Swarm still passes `--settings ~/.claude/settings.json` explicitly, because a
 service-started worker does not inherit login-shell state.

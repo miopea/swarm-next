@@ -39,11 +39,14 @@ open tab can therefore load a deferred module from its own release after an
 update. The current release remains the fallback source, unknown asset names
 remain 404s, and release directories stay immutable and checksum-verifiable.
 
-The terminal host gets write access only to the configured workspace
-root, application state, and the operator's Claude configuration; the remainder
-of home is read-only. The service PATH explicitly includes the user's local
-binary directory so a user-scoped Claude installation is available without
-depending on login-shell initialization.
+The terminal host declares write access only to the configured workspace root,
+application state, and the operator's Claude configuration, with the remainder
+of home read-only. Measured on 2026-08-18, that confinement does not actually
+take effect on an Ubuntu host that restricts unprivileged user namespaces; see
+[ADR 0048](0048-default-claude-configuration-location.md). The declaration is
+retained so it applies where the namespace is available. The service PATH
+explicitly includes the user's local binary directory so a user-scoped Claude
+installation is available without depending on login-shell initialization.
 
 This record originally redirected Claude's credentials, settings, session
 history, and plugins into an isolated provider directory using the documented
