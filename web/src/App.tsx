@@ -23,6 +23,7 @@ import {
   fetchJiraComments,
   addJiraComment,
   removeWorker,
+  removeTask,
   reorderTasks,
   reorderWorkers,
   reconcileJira,
@@ -537,6 +538,21 @@ export function App() {
       const updated = await transitionTask(operatorToken, task.id, state, note);
       replaceTask(updated);
     });
+  }
+
+  async function removeTaskFromHive(task: Task) {
+    if (!operatorToken) return;
+    setBusy(true);
+    setOperationError(undefined);
+    try {
+      await removeTask(operatorToken, task.id);
+      setTasks((current) => current.filter((candidate) => candidate.id !== task.id));
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "The task could not be removed");
+      throw error;
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function setTaskWorker(task: Task, workerId: string) {
@@ -1057,7 +1073,7 @@ export function App() {
             />
           </div>
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
+          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onRemove={removeTaskFromHive} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
         ) : surface === "apiary" && keeper && hiveIdentity ? (
           <KeeperControlRoom identity={hiveIdentity} operatorToken={operatorToken} onManage={openApiarySettings} />
         ) : surface === "apiary" && federated && hiveIdentity ? (

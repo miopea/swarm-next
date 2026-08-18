@@ -278,7 +278,7 @@ impl TaskStore {
                                WHERE worker_id = worker_profiles.id AND ended_at IS NULL),
                         EXISTS(SELECT 1 FROM tasks
                                WHERE assigned_worker_id = worker_profiles.id
-                                 AND state != 'completed')
+                                 AND state != 'completed' AND removed_at IS NULL)
                  FROM worker_profiles WHERE id = ?1 AND archived_at IS NULL",
                 [worker_id.to_string()],
                 |row| {

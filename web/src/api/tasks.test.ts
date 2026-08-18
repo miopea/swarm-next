@@ -7,6 +7,7 @@ import {
   fetchTaskActivity,
   fetchTasks,
   reorderTasks,
+  removeTask,
   transitionTask,
   updateTask,
   type Task,
@@ -83,4 +84,12 @@ test("owns core task reads, activity, ordering, editing, transitions, and assign
     method: "PUT",
     body: JSON.stringify({ worker_id: null }),
   }));
+});
+
+test("removes a task from the Hive without a request body", async () => {
+  const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", fetch);
+
+  await expect(removeTask("operator", "task/one")).resolves.toBeUndefined();
+  expect(fetch).toHaveBeenCalledWith("/api/v1/tasks/task%2Fone", expect.objectContaining({ method: "DELETE" }));
 });

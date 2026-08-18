@@ -45,6 +45,7 @@ export {
   fetchTaskActivity,
   fetchTasks,
   reorderTasks,
+  removeTask,
   transitionTask,
   updateTask,
 } from "./api/tasks";

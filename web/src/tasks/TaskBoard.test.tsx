@@ -30,7 +30,7 @@ const jiraTaskLink = {
 function renderBoard(overrides: Partial<React.ComponentProps<typeof TaskBoard>> = {}) {
   const props: React.ComponentProps<typeof TaskBoard> = {
     tasks: [task], jiraTaskLinks: [], operatorToken: "operator-token", sessions: [], workers: [worker], busy: false,
-    onCreate: vi.fn(), onUpdate: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onFetchJiraComments: vi.fn().mockResolvedValue([]), onAddJiraComment: vi.fn().mockResolvedValue({ state: "delivered" }), onRetryJira: vi.fn(), onJiraImported: vi.fn().mockResolvedValue(undefined), onReorder: vi.fn(),
+    onCreate: vi.fn(), onUpdate: vi.fn(), onRemove: vi.fn(), onTransition: vi.fn(), onAssign: vi.fn(), onStartWorker: vi.fn(), onOpenWorker: vi.fn(), onFetchActivity: vi.fn().mockResolvedValue({ events: [], truncated: false }), onFetchJiraComments: vi.fn().mockResolvedValue([]), onAddJiraComment: vi.fn().mockResolvedValue({ state: "delivered" }), onRetryJira: vi.fn(), onJiraImported: vi.fn().mockResolvedValue(undefined), onReorder: vi.fn(),
     ...overrides,
   };
   return { props, ...render(<TaskBoard {...props} />) };
@@ -275,6 +275,19 @@ test("keeps edit explicit and ignores double clicks on interactive task controls
   expect(screen.queryByRole("dialog", { name: "Review and edit task" })).not.toBeInTheDocument();
   fireEvent.click(edit);
   expect(screen.getByRole("dialog", { name: "Review and edit task" })).toBeInTheDocument();
+});
+
+test("confirms safe Jira removal without implying that Jira will be deleted", async () => {
+  const onRemove = vi.fn().mockResolvedValue(undefined);
+  renderBoard({ jiraTaskLinks: [jiraTaskLink], onRemove });
+
+  fireEvent.doubleClick(screen.getByRole("article", { name: task.title }));
+  const dialog = screen.getByRole("dialog", { name: "Review and edit task" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove from Hive" }));
+
+  expect(within(dialog).getByText("The Jira issue will not be deleted or changed. Its source link and Swarm audit history stay retained.")).toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove from Hive" }));
+  await waitFor(() => expect(onRemove).toHaveBeenCalledWith(task));
 });
 
 test("reads and posts Jira discussion without leaving the task", async () => {

@@ -11,7 +11,7 @@ const PRESENTATION: Record<QueenAutonomyLevel, { label: string; detail: string }
   },
   local_execution: {
     label: "Run approved work",
-    detail: "Queen may coordinate unattended local work and use authority you already granted in the rules. She does not create new approvals or replace Scout.",
+    detail: "Most useful during Night Watch. Queen may keep approved work moving and use durable rules you already granted, including scoped deployment authority. She never creates a new approval or replaces Scout.",
   },
 };
 

@@ -152,6 +152,19 @@ pub(super) async fn update_task(
     Ok(Json(task).into_response())
 }
 
+pub(super) async fn remove_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    task_service(&state)?
+        .remove_operator_task(parse_task_id(&task_id)?)
+        .map_err(application_error)?;
+    state.control_room_notify.notify_waiters();
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 pub(super) async fn transition_task(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

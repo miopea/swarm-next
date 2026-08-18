@@ -21,6 +21,7 @@ type Props = {
   busy: boolean;
   onCreate: (input: TaskDraftInput) => Promise<void>;
   onUpdate: (task: Task, input: TaskUpdateInput) => Promise<void>;
+  onRemove: (task: Task) => Promise<void>;
   onTransition: (task: Task, state: TaskState, note?: string) => Promise<void>;
   onAssign: (task: Task, workerId: string) => Promise<void>;
   onStartWorker: (task: Task) => Promise<void>;
@@ -86,6 +87,7 @@ export default function TaskBoard({
   busy,
   onCreate,
   onUpdate,
+  onRemove,
   onTransition,
   onAssign,
   onStartWorker,
@@ -305,6 +307,7 @@ export default function TaskBoard({
                 workers={workers}
                 busy={busy}
                 onUpdate={onUpdate}
+                onRemove={onRemove}
                 onTransition={onTransition}
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}
@@ -365,6 +368,7 @@ export default function TaskBoard({
                 workers={workers}
                 busy={busy}
                 onUpdate={onUpdate}
+                onRemove={onRemove}
                 onTransition={onTransition}
                 onAssign={onAssign}
                 onStartWorker={onStartWorker}

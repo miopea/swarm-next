@@ -189,7 +189,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
       </section>
       <section id="settings-queen" className="settings-card queen-policy-settings" aria-labelledby="queen-policy-heading">
         <div><p className="eyebrow">Queen autonomy</p><h3 id="queen-policy-heading">Choose how far she may carry work</h3></div>
-        <p>Presence changes the ceiling for unattended work. These deterministic limits never expand from model confidence.</p>
+        <p>Presence changes the ceiling for unattended work. Night Watch can use durable rules you already approved so the Hive keeps moving while you sleep. These limits never expand from model confidence.</p>
         <div className="queen-policy-grid">
           {(["at_hive", "away", "night_watch"] as const).map((mode) => (
             <label key={mode} htmlFor={`queen-policy-${mode}`}><span>{presenceLabel(mode)}</span>
@@ -287,9 +287,9 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
             >{queenAutomationBusy ? "Checking…" : queenAutomation?.state === "uncertain" ? "Retry Queen review" : "Run Queen now"}</button>
             <small>Manual review works even when automatic review is off.</small>
           </div>
-          <p className="queen-conductor-boundary">She pauses while you are working with her. Jira, Apiary, email, deployment, purchases, messages, and other external effects remain blocked without separate operator approval.</p>
+          <p className="queen-conductor-boundary">She pauses while you are working with her. External effects remain blocked unless an exact action is covered by a durable operator-approved rule; Queen cannot create or widen that authority.</p>
         </div>
-        <small className="privacy-note">Pushes, deployments, messages, purchases, and other external effects still require a separately recorded approval. Repository and environment overrides come before unattended execution is enabled.</small>
+        <small className="privacy-note">A deployment rule grants only its recorded repository, environment, action, and limits. Anything outside that scope returns to Needs you. Scout and repository workers still perform implementation.</small>
       </section>
       <section id="settings-notifications" className="settings-card notification-settings" aria-labelledby="notification-heading">
         <div><p className="eyebrow">Mobile attention</p><h3 id="notification-heading">Let urgent work find you</h3></div>

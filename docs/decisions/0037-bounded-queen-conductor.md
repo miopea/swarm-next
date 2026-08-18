@@ -25,7 +25,11 @@ through the scoped MCP tool with one explicit outcome: completed, needs the
 operator, or no action. Until the marker is closed, Queen may read state and
 coordinate local tasks within the current presence policy. Jira, Apiary, email,
 deployment, messages, purchases, and every other external side effect remain
-denied without a separate recorded operator approval.
+denied without a separate recorded operator approval. That approval may be a
+durable, narrowly scoped rule established before the run. Night Watch is the
+primary journey for these rules: Queen can apply an existing deployment grant
+while the operator sleeps, but cannot create, widen, or infer one. Repository
+workers and Scout remain the implementation actors; Queen coordinates them.
 
 Delivery and completion are durable:
 
@@ -44,5 +48,7 @@ Delivery and completion are durable:
 Queen can perform useful unattended coordination without becoming a second
 permission authority. Operators receive visible queued, running, completed,
 waiting, and uncertain states plus a manual review control. The conductor does
-not yet schedule work by time, wake a sleeping Queen, or authorize external
-effects; each would require a separate bounded decision.
+not yet schedule work by time, wake a sleeping Queen, or define the durable
+external-effect grants described above. Each grant requires its own bounded
+product decision, explicit scope, expiry/revocation behavior, and audit trail
+before Queen may consume it.

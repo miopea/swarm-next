@@ -106,7 +106,8 @@ const MAX_WORKSPACE_BYTES: usize = 4096;
 const TERMINAL_GEOMETRY_SCHEMA_VERSION: i64 = 66;
 const LEGACY_MIGRATION_SCHEMA_VERSION: i64 = 67;
 const LEGACY_WORKER_MIGRATION_SCHEMA_VERSION: i64 = 68;
-const CURRENT_SCHEMA_VERSION: i64 = LEGACY_WORKER_MIGRATION_SCHEMA_VERSION;
+const TASK_REMOVAL_SCHEMA_VERSION: i64 = 69;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_REMOVAL_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -285,6 +286,8 @@ pub enum TaskStoreError {
     InvalidTransition { from: TaskState, to: TaskState },
     #[error("completed tasks cannot be assigned")]
     CompletedTask,
+    #[error("work in progress must be stopped or completed before it can be removed")]
+    ActiveTaskCannotBeRemoved,
     #[error("worker was not found")]
     WorkerNotFound,
     #[error("worker name is invalid")]
@@ -808,6 +811,7 @@ impl TaskStore {
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
+            WHERE t.removed_at IS NULL
             ORDER BY CASE t.state WHEN 'completed' THEN 1 ELSE 0 END,
                      CASE t.state WHEN 'completed' THEN -t.updated_at ELSE t.position END,
                      t.id
@@ -838,7 +842,7 @@ impl TaskStore {
                 FROM tasks t
                 LEFT JOIN task_assignments a
                   ON a.task_id = t.id AND a.released_at IS NULL
-                WHERE t.id = ?1
+                WHERE t.id = ?1 AND t.removed_at IS NULL
                 ",
                 [id.to_string()],
                 task_from_row,
@@ -909,7 +913,7 @@ impl TaskStore {
                     activity.occurred_at, activity.actor_kind, activity.actor_id
              FROM task_activity activity
              JOIN tasks task ON task.id = activity.task_id
-             WHERE task.hive_id = ?1
+             WHERE task.hive_id = ?1 AND task.removed_at IS NULL
              ORDER BY activity.sequence DESC LIMIT ?2",
         )?;
         let mut activity = statement
@@ -941,7 +945,7 @@ impl TaskStore {
         let expected = {
             let mut statement = transaction.prepare(
                 "SELECT id FROM tasks
-                 WHERE hive_id = ?1 AND state != 'completed'
+                 WHERE hive_id = ?1 AND state != 'completed' AND removed_at IS NULL
                  ORDER BY position, id",
             )?;
             statement
@@ -969,6 +973,65 @@ impl TaskStore {
         transaction.commit()?;
         drop(connection);
         self.list_tasks()
+    }
+
+    /// Removes one task from the active Hive without deleting its source,
+    /// attachments, Jira identity, or audit history.
+    ///
+    /// Active and review work must first be deliberately stopped or completed
+    /// so a running worker cannot continue work the operator can no longer see.
+    /// Jira-backed tasks retain their source link and therefore cannot be
+    /// recreated by the next synchronization pass.
+    ///
+    /// # Errors
+    /// Returns `NotFound` for an unknown/already removed task and rejects work
+    /// currently in progress or review.
+    pub fn remove_task_as(
+        &self,
+        id: TaskId,
+        actor: &TaskActivityActor,
+    ) -> Result<(), TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let state = transaction
+            .query_row(
+                "SELECT state FROM tasks WHERE id = ?1 AND removed_at IS NULL",
+                [id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::NotFound)?;
+        if matches!(state.as_str(), "active" | "review") {
+            return Err(TaskStoreError::ActiveTaskCannotBeRemoved);
+        }
+        transaction.execute(
+            "DELETE FROM task_dispatches WHERE assignment_id IN (
+                 SELECT id FROM task_assignments WHERE task_id = ?1 AND released_at IS NULL
+             ) AND state = 'queued'",
+            [id.to_string()],
+        )?;
+        transaction.execute(
+            "DELETE FROM task_outcome_deliveries WHERE task_id = ?1 AND state = 'queued'",
+            [id.to_string()],
+        )?;
+        transaction.execute(
+            "UPDATE task_assignments SET released_at = unixepoch()
+             WHERE task_id = ?1 AND released_at IS NULL",
+            [id.to_string()],
+        )?;
+        transaction.execute(
+            "UPDATE tasks SET assigned_worker_id = NULL, removed_at = unixepoch(),
+                 updated_at = unixepoch() WHERE id = ?1 AND removed_at IS NULL",
+            [id.to_string()],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_activity (task_id, kind, note, actor_kind, actor_id)
+             VALUES (?1, 'removed', 'Removed from this Hive', ?2, ?3)",
+            params![id.to_string(), actor.kind.to_string(), actor.id.as_deref()],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
+        transaction.commit()?;
+        Ok(())
     }
 
     /// Replaces the supplied task details and records one atomic activity event.
@@ -1004,7 +1067,7 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let current = transaction
             .query_row(
-                "SELECT title, description, priority, workspace FROM tasks WHERE id = ?1",
+                "SELECT title, description, priority, workspace FROM tasks WHERE id = ?1 AND removed_at IS NULL",
                 [id.to_string()],
                 |row| {
                     Ok((
@@ -1197,7 +1260,7 @@ impl TaskStore {
                          AND assignment.released_at IS NULL
                      JOIN worker_sessions session ON session.session_id = assignment.worker_session_id
                          AND session.ended_at IS NULL
-                     WHERE task.id = ?1 AND session.session_id = ?2",
+                     WHERE task.id = ?1 AND task.removed_at IS NULL AND session.session_id = ?2",
                     params![id.to_string(), session_id.to_string()],
                     |row| row.get(0),
                 )
@@ -1205,7 +1268,7 @@ impl TaskStore {
         } else {
             transaction
                 .query_row(
-                    "SELECT state FROM tasks WHERE id = ?1",
+                    "SELECT state FROM tasks WHERE id = ?1 AND removed_at IS NULL",
                     [id.to_string()],
                     |row| row.get(0),
                 )
@@ -1316,7 +1379,7 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let state: Option<String> = transaction
             .query_row(
-                "SELECT state FROM tasks WHERE id = ?1",
+                "SELECT state FROM tasks WHERE id = ?1 AND removed_at IS NULL",
                 [id.to_string()],
                 |row| row.get(0),
             )
@@ -1697,7 +1760,35 @@ fn migrate_recent_schema(
     if schema_version < LEGACY_WORKER_MIGRATION_SCHEMA_VERSION {
         migration::migrate_legacy_worker_migrations(transaction)?;
     }
+    if schema_version < TASK_REMOVAL_SCHEMA_VERSION {
+        migrate_task_removal(transaction)?;
+    }
     Ok(())
+}
+
+fn migrate_task_removal(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let tasks_exist: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !tasks_exist {
+        return transaction.pragma_update(None, "user_version", TASK_REMOVAL_SCHEMA_VERSION);
+    }
+    let column_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'removed_at')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !column_exists {
+        transaction.execute("ALTER TABLE tasks ADD COLUMN removed_at INTEGER", [])?;
+    }
+    transaction.execute(
+        "CREATE INDEX IF NOT EXISTS tasks_visible_queue
+         ON tasks(hive_id, state) WHERE removed_at IS NULL",
+        [],
+    )?;
+    transaction.pragma_update(None, "user_version", TASK_REMOVAL_SCHEMA_VERSION)
 }
 
 fn migrate_terminal_geometry_ownership(
@@ -2780,6 +2871,41 @@ mod tests {
             recent.events.last().unwrap().to_state,
             Some(TaskState::Ready)
         );
+    }
+
+    #[test]
+    fn removing_a_task_hides_it_but_retains_its_audit_history() {
+        let store = TaskStore::in_memory().unwrap();
+        let removable = store
+            .create_task("Duplicate Inbox report", "/workspace")
+            .unwrap();
+        store
+            .remove_task_as(removable.id, &TaskActivityActor::operator())
+            .unwrap();
+
+        assert!(store.list_tasks().unwrap().is_empty());
+        assert!(matches!(
+            store.get_task(removable.id),
+            Err(TaskStoreError::NotFound)
+        ));
+        let activity = store.list_task_activity(removable.id, 10).unwrap();
+        assert_eq!(
+            activity.events.last().unwrap().kind,
+            TaskActivityKind::Removed
+        );
+        assert_eq!(
+            activity.events.last().unwrap().actor_kind,
+            TaskActivityActorKind::Operator
+        );
+
+        let active = store.create_task("Work in progress", "/workspace").unwrap();
+        store.transition_task(active.id, TaskState::Ready).unwrap();
+        store.transition_task(active.id, TaskState::Active).unwrap();
+        assert!(matches!(
+            store.remove_task_as(active.id, &TaskActivityActor::operator()),
+            Err(TaskStoreError::ActiveTaskCannotBeRemoved)
+        ));
+        assert_eq!(store.get_task(active.id).unwrap().state, TaskState::Active);
     }
 
     #[test]
@@ -4205,8 +4331,8 @@ mod tests {
                 .connection()
                 .unwrap()
                 .execute_batch(&format!(
-                    "DROP TABLE migration_worker_links;
-                     DROP TABLE migration_worker_batches;
+                    "DROP INDEX tasks_visible_queue;
+                     ALTER TABLE tasks DROP COLUMN removed_at;
                      PRAGMA user_version = {};",
                     CURRENT_SCHEMA_VERSION - 1
                 ))
@@ -4215,16 +4341,15 @@ mod tests {
 
         let migrated = TaskStore::open(path).unwrap();
         let connection = migrated.connection().unwrap();
-        let migration_tables: i64 = connection
+        let removed_at_exists: bool = connection
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master
-                 WHERE type = 'table' AND name IN
-                     ('migration_worker_batches', 'migration_worker_links')",
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks')
+                 WHERE name = 'removed_at')",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(migration_tables, 2);
+        assert!(removed_at_exists);
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))

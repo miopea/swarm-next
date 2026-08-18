@@ -14,7 +14,7 @@ import {
 
 type LoadedImage = JiraTaskAttachment & { url: string };
 
-export default function TaskDetailDialog({ task, jiraLink, emailSources = [], operatorToken, busy, onClose, onSave }: {
+export default function TaskDetailDialog({ task, jiraLink, emailSources = [], operatorToken, busy, onClose, onSave, onRemove }: {
   task: Task;
   jiraLink?: JiraTaskLink;
   emailSources?: EmailTaskSource[];
@@ -22,6 +22,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
   busy: boolean;
   onClose: () => void;
   onSave: (input: TaskUpdateInput) => Promise<void>;
+  onRemove: () => Promise<void>;
 }) {
   const titleId = useId();
   const [title, setTitle] = useState(task.title);
@@ -33,6 +34,8 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
   const [loading, setLoading] = useState(Boolean(jiraLink || emailSources.length));
   const [failed, setFailed] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  const [removeConfirm, setRemoveConfirm] = useState(false);
+  const [removeFailed, setRemoveFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -100,6 +103,16 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
     }
   }
 
+  async function remove() {
+    setRemoveFailed(false);
+    try {
+      await onRemove();
+      onClose();
+    } catch {
+      setRemoveFailed(true);
+    }
+  }
+
   return (
     <div className="task-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="task-detail-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
@@ -153,6 +166,17 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
         </form>
         <footer>
           {jiraLink?.issue_url && <a className="button-link" href={jiraLink.issue_url} target="_blank" rel="noreferrer">Open in Jira</a>}
+          {!removeConfirm ? (
+            <button type="button" className="danger-text" disabled={busy || task.state === "active" || task.state === "review"} onClick={() => setRemoveConfirm(true)}>Remove from Hive</button>
+          ) : (
+            <div className="task-remove-confirm" role="alertdialog" aria-label="Confirm task removal">
+              <p><strong>{jiraLink ? `Remove ${jiraLink.issue_key} from Swarm?` : "Remove this task from the Hive?"}</strong><span>{jiraLink ? "The Jira issue will not be deleted or changed. Its source link and Swarm audit history stay retained." : "The task leaves the board, but its source, attachments, and audit history stay retained."}</span></p>
+              <button type="button" className="danger-button" disabled={busy} onClick={() => void remove()}>{busy ? "Removing…" : "Remove from Hive"}</button>
+              <button type="button" disabled={busy} onClick={() => setRemoveConfirm(false)}>Keep task</button>
+            </div>
+          )}
+          {(task.state === "active" || task.state === "review") && <small>Finish or move this work out of progress before removing it.</small>}
+          {removeFailed && <small className="task-detail-save-error" role="alert">The task was not removed. Nothing changed—try again when the connection is ready.</small>}
         </footer>
       </section>
     </div>

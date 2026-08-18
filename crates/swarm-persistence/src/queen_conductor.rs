@@ -427,7 +427,7 @@ fn queue_run(
 
 fn actionable_count(connection: &rusqlite::Connection) -> Result<i64, rusqlite::Error> {
     let task_count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE state IN ('blocked','review') OR (state = 'ready' AND assigned_worker_id IS NULL)",
+        "SELECT COUNT(*) FROM tasks WHERE removed_at IS NULL AND (state IN ('blocked','review') OR (state = 'ready' AND assigned_worker_id IS NULL))",
         [], |row| row.get(0),
     )?;
     let coordination_attention_count: i64 = connection.query_row(
@@ -481,7 +481,7 @@ fn actionable_fingerprint(
     let mut statement = connection.prepare(
         "SELECT task.id, task.state, COALESCE(MAX(activity.sequence), 0)
          FROM tasks task LEFT JOIN task_activity activity ON activity.task_id = task.id
-         WHERE task.state IN ('blocked','review') OR (task.state = 'ready' AND task.assigned_worker_id IS NULL)
+         WHERE task.removed_at IS NULL AND (task.state IN ('blocked','review') OR (task.state = 'ready' AND task.assigned_worker_id IS NULL))
          GROUP BY task.id, task.state ORDER BY task.id LIMIT ?1",
     )?;
     let mut rows = statement

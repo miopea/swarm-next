@@ -2780,6 +2780,7 @@ pub enum TaskActivityKind {
     StateChanged,
     Assigned,
     Unassigned,
+    Removed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2882,6 +2883,7 @@ impl fmt::Display for TaskActivityKind {
             Self::StateChanged => "state_changed",
             Self::Assigned => "assigned",
             Self::Unassigned => "unassigned",
+            Self::Removed => "removed",
         })
     }
 }
@@ -2896,6 +2898,7 @@ impl FromStr for TaskActivityKind {
             "state_changed" => Ok(Self::StateChanged),
             "assigned" => Ok(Self::Assigned),
             "unassigned" => Ok(Self::Unassigned),
+            "removed" => Ok(Self::Removed),
             _ => Err(ParseTaskActivityKindError),
         }
     }

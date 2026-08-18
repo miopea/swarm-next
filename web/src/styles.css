@@ -1080,6 +1080,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-detail-dialog > header { align-items: flex-start; border-bottom: 1px solid var(--line); }
 .task-detail-dialog > header h2 { margin: 3px 0 0; font-size: 1.28rem; line-height: 1.3; }
 .task-detail-dialog > footer { justify-content: flex-end; border-top: 1px solid var(--line); }
+.task-remove-confirm { display: flex; align-items: center; justify-content: flex-end; gap: 10px; width: 100%; }
+.task-remove-confirm p { display: grid; gap: 3px; margin: 0 auto 0 0; max-width: 560px; }
+.task-remove-confirm p span { color: var(--muted); font-size: .8rem; line-height: 1.45; }
 .task-detail-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; border-bottom: 1px solid var(--line); background: var(--line); }
 .task-detail-summary > span { display: grid; min-width: 0; gap: 3px; padding: 10px 14px; background: var(--panel-soft); }
 .task-detail-summary small { color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; }
@@ -1428,6 +1431,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-detail-dialog > header, .task-detail-dialog > footer { padding: 13px 15px; }
   .task-detail-dialog > header button, .task-detail-dialog > footer button, .task-detail-dialog > footer .button-link { min-height: 44px; }
   .task-detail-dialog > footer { align-items: stretch; flex-direction: column-reverse; }
+  .task-remove-confirm { align-items: stretch; flex-direction: column; }
   .task-detail-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .task-detail-content { padding: 16px 15px 22px; }
   .task-detail-gallery { grid-template-columns: minmax(0, 1fr); }

@@ -44,7 +44,7 @@ impl TaskStore {
                  JOIN tasks t ON t.id = td.task_id
                  JOIN worker_sessions ws ON ws.session_id = a.worker_session_id
                      AND ws.worker_id = td.worker_id AND ws.ended_at IS NULL
-                 WHERE td.state = 'queued'
+                 WHERE td.state = 'queued' AND t.removed_at IS NULL
                    AND NOT EXISTS (
                        SELECT 1 FROM worker_engagements e
                        WHERE e.worker_id = td.worker_id AND e.expires_at > ?1

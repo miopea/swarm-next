@@ -2518,7 +2518,10 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/tasks/order", put(tasks::reorder_tasks))
         .route("/api/v1/tasks/activity", get(tasks::recent_task_activity))
-        .route("/api/v1/tasks/{task_id}", patch(tasks::update_task))
+        .route(
+            "/api/v1/tasks/{task_id}",
+            patch(tasks::update_task).delete(tasks::remove_task),
+        )
         .route(
             "/api/v1/tasks/{task_id}/activity",
             get(tasks::task_activity),
@@ -6886,7 +6889,9 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         | TaskStoreError::CompletionEvidenceRequired => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_task", error.to_string())
         }
-        TaskStoreError::InvalidTransition { .. } | TaskStoreError::CompletedTask => ApiError::new(
+        TaskStoreError::InvalidTransition { .. }
+        | TaskStoreError::CompletedTask
+        | TaskStoreError::ActiveTaskCannotBeRemoved => ApiError::new(
             StatusCode::CONFLICT,
             "task_transition_rejected",
             error.to_string(),
@@ -11911,10 +11916,27 @@ mod tests {
         assert_eq!(recent["events"].as_array().unwrap().len(), 3);
         assert_eq!(recent["events"][0]["task_id"], created["id"]);
 
-        let listed = authorized_get(app, "/api/v1/tasks").await;
+        let listed = authorized_get(app.clone(), "/api/v1/tasks").await;
         let listed = response_json(listed).await;
         assert_eq!(listed.as_array().unwrap().len(), 1);
         assert_eq!(listed[0]["title"], "Recover every terminal");
+
+        let removed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/tasks/{}", created["id"].as_str().unwrap()))
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+        let listed = authorized_get(app, "/api/v1/tasks").await;
+        assert!(response_json(listed).await.as_array().unwrap().is_empty());
     }
 
     fn assert_operator_activity(activity: &serde_json::Value) {

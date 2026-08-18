@@ -1912,6 +1912,15 @@ impl TaskService {
             .update_task_details_as(task_id, update, &TaskActivityActor::operator())
             .map_err(Into::into)
     }
+    /// Removes one task from the active Hive while retaining its source and audit history.
+    ///
+    /// # Errors
+    /// Propagates lifecycle and persistence failures.
+    pub fn remove_operator_task(&self, task_id: TaskId) -> Result<(), ApplicationError> {
+        self.store
+            .remove_task_as(task_id, &TaskActivityActor::operator())
+            .map_err(Into::into)
+    }
     /// Assigns a local task to a stable worker profile.
     ///
     /// # Errors
