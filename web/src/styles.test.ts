@@ -32,3 +32,10 @@ test("keeps the mobile settings section rail flush with its scroll viewport", ()
 test("lets repository paths wrap inside the worker editor", () => {
   expect(stylesheet).toContain(".worker-repository-path code { min-width: 0; overflow-wrap: anywhere;");
 });
+
+test("keeps Queen autonomy explanations readable on phones", () => {
+  const baseRule = ".queen-policy-explainer { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));";
+  const mobileRule = ".queen-policy-explainer { grid-template-columns: minmax(0, 1fr); }";
+
+  expect(stylesheet.lastIndexOf(mobileRule)).toBeGreaterThan(stylesheet.lastIndexOf(baseRule));
+});

@@ -39,6 +39,7 @@ This is the working product audit for the first real developer week. It records 
 15. **Repository paths remain readable while editing a worker.** Long paths wrap within the mobile worker card instead of disappearing beyond its edge.
 16. **Worker-engine compatibility is not described as version equality.** Runtime now says that an unchanged worker engine is compatible with the current App/API release, while continuing to show each installed revision independently.
 17. **Touch terminal scrolling keeps its real-device direction.** A later jump-to-latest change had regressed the already-corrected Android and Windows-touch sign. Upward drags again move into older scrollback; downward drags return toward newer output, while **Jump to latest** remains available.
+18. **Queen autonomy explanations remain readable on phones.** The three desktop comparison cards now stack at phone width instead of collapsing into narrow text columns after a later base style won the cascade.
 
 ## Live deployed proof — 2026-08-18
 
