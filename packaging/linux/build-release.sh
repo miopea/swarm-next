@@ -34,6 +34,23 @@ if [ "${SWARM_SKIP_WEB_BUILD:-0}" != "1" ]; then
   (cd "$repo_root" && "${SWARM_PNPM_BIN:-pnpm}" --dir web build)
 fi
 [ -f "$repo_root/web/dist/index.html" ] || { echo "compiled web assets are missing" >&2; exit 1; }
+if [ "${SWARM_SKIP_WEB_BUILD:-0}" = "1" ]; then
+  stale_web_source=$(
+    find \
+      "$repo_root/web/src" \
+      "$repo_root/web/public" \
+      "$repo_root/web/index.html" \
+      "$repo_root/web/package.json" \
+      "$repo_root/web/vite.config.ts" \
+      "$repo_root/web/tsconfig.json" \
+      -type f -newer "$repo_root/web/dist/index.html" -print -quit 2>/dev/null || true
+  )
+  [ -z "$stale_web_source" ] || {
+    echo "refusing to package stale web assets; rebuild web/dist before using SWARM_SKIP_WEB_BUILD=1" >&2
+    echo "newer source: $stale_web_source" >&2
+    exit 1
+  }
+fi
 cp "$repo_root/target/release/swarm-api" "$bundle/bin/"
 cp "$repo_root/target/release/swarm-terminal-host" "$bundle/bin/"
 cp "$repo_root/target/release/swarmctl" "$bundle/bin/"
