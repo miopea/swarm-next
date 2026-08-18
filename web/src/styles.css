@@ -1326,7 +1326,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .workspace-header .hive-context-indicator.compact { display: flex; max-width: min(190px, 46vw); margin-top: 2px; font-size: .58rem; }
   .workspace-header .hive-context-indicator.compact .hive-context-role { font-size: .5rem; }
   .workspace-header:has(.mobile-worker-switcher-trigger) > div:first-child { display: none; }
-  .mobile-worker-switcher-trigger { display: grid; min-width: 0; max-width: min(190px, 48vw); min-height: 38px; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 7px; border-color: var(--line); color: var(--text); background: var(--panel-raised); text-align: left; }
+  .mobile-worker-switcher-trigger { display: grid; min-width: 0; max-width: min(190px, 48vw); min-height: 44px; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 7px; border-color: var(--line); color: var(--text); background: var(--panel-raised); text-align: left; }
   .mobile-worker-switcher-trigger .worker-avatar { width: 32px; height: 32px; }
   .mobile-worker-switcher-trigger .worker-avatar .bee-mascot { width: 35px; height: 35px; }
   .mobile-worker-switcher-trigger > span:nth-child(2) { display: grid; min-width: 0; }
@@ -1340,6 +1340,14 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .header-actions .icon-button { width: 44px; min-height: 44px; }
   .header-actions .secondary-button { min-height: 44px; padding-inline: 10px; }
   .operator-presence-chip { width: 44px; justify-content: center; padding: 0; }
+  .primary-action, .secondary-button, .danger-button,
+  .attention-tabs button, .decision-actions button,
+  .queen-autonomy-chip, .queen-automation-chip,
+  .mobile-terminal-key-heading button,
+  .settings-section-nav button, .worker-edit-button,
+  .task-actions button, .task-assignment-cell > button,
+  .task-assignment-cell select { min-height: 44px; }
+  .worker-order-actions button { width: 44px; min-height: 44px; }
   .operator-presence-chip > span:last-child { display: none; }
   .keeper-control-room { padding: 12px; }
   .member-handoff-list li, .member-claim-list li { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
@@ -1552,7 +1560,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .terminal-toolbar { min-height: 44px; padding: 7px 12px; }
   .terminal-toolbar strong { display: none; }
   .terminal-worker-controls { gap: 6px !important; }
-  .queen-automation-chip { min-height: 30px; padding: 0 8px; font-size: .68rem; }
+  .queen-automation-chip { min-height: 44px; padding: 0 8px; font-size: .68rem; }
   .terminal-worker-controls .protected-worker { display: none; }
   .terminal-mount { min-height: 180px; padding: 6px 7px 8px; }
   .mobile-terminal-composer { display: grid; flex: 0 0 auto; gap: 9px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
@@ -1562,7 +1570,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .mobile-terminal-composer form > button { min-height: 44px; align-self: stretch; border-color: var(--accent-strong); color: var(--text); background: var(--accent-soft); }
   .mobile-terminal-key-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: .78rem; }
   .mobile-terminal-key-heading > div { display: flex; gap: 6px; }
-  .mobile-terminal-key-heading button { min-height: 32px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--panel-raised); }
+  .mobile-terminal-key-heading button { min-height: 44px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--panel-raised); }
   .mobile-terminal-keys { display: flex; align-items: end; justify-content: space-between; gap: 10px; }
   .mobile-terminal-keys button { min-width: 42px; min-height: 38px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--panel-raised); }
   .terminal-dpad { display: grid; grid-template-areas: '. up .' 'left down right'; grid-template-columns: repeat(3, 42px); gap: 4px; }

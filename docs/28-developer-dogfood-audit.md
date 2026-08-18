@@ -53,6 +53,7 @@ This is the working product audit for the first real developer week. It records 
 28. **Legacy repository spelling cannot duplicate an existing worker.** Migration compares repository identity after expanding the local home shorthand, normalizing separators, and ignoring a trailing slash. A Legacy `~/projects/...` worker is therefore recognized as the same repository already stored by Next as `/home/<operator>/projects/...`, rather than being offered as a second worker.
 29. **Removed local work is recoverable without weakening Jira ownership.** The task board now exposes a bounded **Removed local work** shelf. Restoring returns open work to the end of the queue, preserves its audit trail, records a typed restoration event, and refuses Jira-linked tasks at both the data and API boundaries.
 30. **Persistent phone controls meet a practical touch target.** Primary navigation, presence, quick navigation, theme, and Lock controls now expose at least a 44 px target instead of requiring precise taps on 36–39 px buttons.
+31. **The touch target rule follows the developer workflow.** Queen mode/status, decision actions, worker switching and ordering, task assignment/actions, Settings sections, image intake, and terminal-key controls now use the same 44 px minimum on phones. The fix is shared at the responsive component boundary rather than repeated per screen.
 
 ## Live deployed proof — 2026-08-18
 

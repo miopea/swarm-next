@@ -45,4 +45,8 @@ test("keeps persistent phone navigation controls comfortably touchable", () => {
   expect(stylesheet).toContain(".header-actions .icon-button { width: 44px; min-height: 44px; }");
   expect(stylesheet).toContain(".header-actions .secondary-button { min-height: 44px;");
   expect(stylesheet).toContain(".operator-presence-chip { width: 44px;");
+  expect(stylesheet).toContain(".attention-tabs button, .decision-actions button,");
+  expect(stylesheet).toContain(".queen-autonomy-chip, .queen-automation-chip,");
+  expect(stylesheet).toContain(".settings-section-nav button, .worker-edit-button,");
+  expect(stylesheet).toContain(".worker-order-actions button { width: 44px; min-height: 44px; }");
 });
