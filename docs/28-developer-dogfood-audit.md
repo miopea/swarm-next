@@ -38,6 +38,7 @@ This is the working product audit for the first real developer week. It records 
 14. **Mobile Settings deep links no longer expose clipped content above the section rail.** The sticky section control now sits flush with the Settings scroll viewport.
 15. **Repository paths remain readable while editing a worker.** Long paths wrap within the mobile worker card instead of disappearing beyond its edge.
 16. **Worker-engine compatibility is not described as version equality.** Runtime now says that an unchanged worker engine is compatible with the current App/API release, while continuing to show each installed revision independently.
+17. **Touch terminal scrolling keeps its real-device direction.** A later jump-to-latest change had regressed the already-corrected Android and Windows-touch sign. Upward drags again move into older scrollback; downward drags return toward newer output, while **Jump to latest** remains available.
 
 ## Live deployed proof — 2026-08-18
 
@@ -57,6 +58,8 @@ This is the working product audit for the first real developer week. It records 
 - The first `8a2ba9e3` package exposed a stale-browser-build hazard during live proof: the API revision changed while the installed browser bundle did not. Packaging now rejects that condition, and the uniquely versioned `e1ca5f59` package proved the corrected browser and API together while preserving the terminal-host process.
 - Release `0.1.0-aec0ba3fb9e9` preserved the terminal-host process and Queen session. A 412 × 915 → 1440 × 1000 transition exposed **Adjusting terminal layout…** while the large Queen scrollback was rebuilt, then restored the complete terminal at the new width without a refresh.
 - The same release rechecked the task board, Jira image detail, Inbox chooser, mobile worker switcher, Keeper rollup, Settings deep link, and runtime identities at both phone and desktop widths without mutating tasks, workers, decisions, or external systems.
+- Release `0.1.0-6c91a005b0a1` removed the clipped mobile Settings seam, kept long worker repository paths readable in the editor, and described the separately versioned worker engine as compatible rather than falsely identical. Apiary membership briefly showed its explicit refresh state and then settled to Lead Hive without intervention.
+- On the same release, the phone task board presented one coherent work entry surface (**Write task**, **Claim Jira work**, and **Use email**), two readable active-work cards, source/worker/status filters, and no duplicate Apiary task-creation form.
 
 ## Verified existing capabilities
 
@@ -74,7 +77,7 @@ This is the working product audit for the first real developer week. It records 
 ## Release re-proofs required
 
 - Submit one automatic Queen review and prove it starts without a stranded pasted token or manual Enter.
-- Scroll a long terminal on Android and a Windows touch screen in both directions, then use **Jump to latest**.
+- Scroll a long terminal on Android and a Windows touch screen in both directions, then use **Jump to latest**. The unit-level gesture contract has been restored after finding a later sign regression; this remains a real-device acceptance proof.
 - Resize the worker rail repeatedly and rotate/change viewport on a real touch device; the browser-sized transition is now proven with explicit recovery and correct final geometry.
 - Run a worker-engine update and verify immediate progress, worker-engine build identity, completion, and accurate timeout recovery.
 - Run an App/API development reload with a changed and unchanged checkout; only the changed checkout should offer an action.

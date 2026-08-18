@@ -278,10 +278,12 @@ export class XtermSurface implements TerminalSurface {
       ? Math.ceil(this.#touchRemainderY / lineHeight)
       : Math.floor(this.#touchRemainderY / lineHeight);
     if (gestureLines === 0) return;
-    // Match native touch scrolling: dragging upward advances toward newer
-    // output, while dragging downward reveals older scrollback. xterm uses
-    // positive lines for the former and negative lines for the latter.
-    this.#terminal.scrollLines(gestureLines);
+    // A finger moving upward has a positive gesture delta, but xterm defines
+    // negative scrollLines as moving the viewport up toward older history.
+    // Keep the physical remainder in gesture coordinates and invert only at
+    // the xterm boundary. This matches the direct manipulation expected on
+    // Android and Windows touch screens.
+    this.#terminal.scrollLines(-gestureLines);
     this.#touchRemainderY -= gestureLines * lineHeight;
     this.#publishBufferMetrics();
   }
