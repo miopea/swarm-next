@@ -69,8 +69,10 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
   const developmentRuntime = useDevelopmentRuntime(operatorToken, health?.version);
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
+  const [jiraReadinessAttempt, setJiraReadinessAttempt] = useState(0);
   const [emailReadiness, setEmailReadiness] = useState<EmailReadiness>();
   const [emailUnavailable, setEmailUnavailable] = useState(false);
+  const [emailReadinessAttempt, setEmailReadinessAttempt] = useState(0);
   const [queenAutomation, setQueenAutomation] = useState<QueenAutomationStatus>();
   const [queenAutomationBusy, setQueenAutomationBusy] = useState(false);
   const [queenAutomationError, setQueenAutomationError] = useState<string>();
@@ -134,10 +136,10 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
   useEffect(() => {
     let cancelled = false;
     void fetchJiraReadiness(operatorToken)
-      .then((readiness) => { if (!cancelled) setJiraReadiness(readiness); })
+      .then((readiness) => { if (!cancelled) { setJiraReadiness(readiness); setJiraUnavailable(false); } })
       .catch(() => { if (!cancelled) setJiraUnavailable(true); });
     return () => { cancelled = true; };
-  }, [operatorToken]);
+  }, [jiraReadinessAttempt, operatorToken]);
   const latestEventSequence = recentEvents.reduce((latest, event) => Math.max(latest, event.sequence), 0);
   useEffect(() => {
     let cancelled = false;
@@ -160,7 +162,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
       .then((readiness) => { if (!cancelled) { setEmailReadiness(readiness); setEmailUnavailable(false); } })
       .catch(() => { if (!cancelled) setEmailUnavailable(true); });
     return () => { cancelled = true; };
-  }, [operatorToken]);
+  }, [emailReadinessAttempt, operatorToken]);
   async function downloadBackup() {
     setBackupState("downloading");
     try {
@@ -445,8 +447,8 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
         </div>
       </section>
 
-      <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} />
-      <EmailSettings operatorToken={operatorToken} readiness={emailReadiness} unavailable={emailUnavailable} />
+      <JiraSettings operatorToken={operatorToken} readiness={jiraReadiness} unavailable={jiraUnavailable} onRetryReadiness={() => setJiraReadinessAttempt((attempt) => attempt + 1)} />
+      <EmailSettings operatorToken={operatorToken} readiness={emailReadiness} unavailable={emailUnavailable} onRetryReadiness={() => setEmailReadinessAttempt((attempt) => attempt + 1)} />
 
       <LegacyMigrationSettings busy={busy} operatorToken={operatorToken} />
 

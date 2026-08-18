@@ -21,6 +21,7 @@ type Props = {
   operatorToken: string;
   readiness: JiraReadiness | undefined;
   unavailable: boolean;
+  onRetryReadiness?: () => void;
   onNavigate?: (url: string) => void;
 };
 
@@ -33,7 +34,7 @@ const taskStates: { value: TaskState; label: string }[] = [
   { value: "completed", label: "Done" },
 ];
 
-export default function JiraSettings({ operatorToken, readiness, unavailable, onNavigate = (url) => window.location.assign(url) }: Props) {
+export default function JiraSettings({ operatorToken, readiness, unavailable, onRetryReadiness, onNavigate = (url) => window.location.assign(url) }: Props) {
   const [bindings, setBindings] = useState<JiraProjectBinding[]>([]);
   const [bindingsState, setBindingsState] = useState<"loading" | "ready" | "error">("loading");
   const [bindingsAttempt, setBindingsAttempt] = useState(0);
@@ -164,6 +165,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
       <div className="integration-status" role="status">
         <span className={`presence ${readiness?.connection === "ready" ? "online" : unavailable || readiness?.connection === "credentials_invalid" || readiness?.connection === "permission_denied" ? "offline" : "waiting"}`} />
         <span><strong>{jiraReadinessLabel(readiness, unavailable)}</strong><small>{jiraReadinessDetail(readiness, unavailable)}</small></span>
+        {unavailable && onRetryReadiness ? <button className="secondary-button" type="button" onClick={onRetryReadiness}>Retry Jira status</button> : null}
       </div>
 
       {readiness?.connection === "ready" ? (

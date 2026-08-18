@@ -80,6 +80,7 @@ This is the working product audit for the first real developer week. It records 
 55. **An unreachable worker engine is never labelled Current.** Runtime now has distinct checking, unavailable, restart-required, and current presentations. A failed health request explains that no restart occurred, avoids claiming compatibility, and offers a safe status retry without touching worker processes.
 56. **Hive backup is no longer a silent download gamble.** Settings shows preparation progress, confirms that a private snapshot downloaded, and keeps a failed attempt visible with a safe retry. A failed backup request explicitly states that no local data changed.
 57. **Worker provider availability is no longer guessed when the worker engine cannot be reached.** Swarm preserves the last verified provider state, marks it as unavailable to verify, and pauses only provider-dependent worker creation or provider changes until a refresh succeeds. Existing worker names, descriptions, ordering, and activity preferences remain usable.
+58. **A temporary Jira or Outlook readiness failure no longer leaves integration setup permanently disabled or invents missing configuration.** Each failed readiness card now offers a direct, source-specific retry. Outlook no longer flashes the full Microsoft app-registration form merely because readiness could not be checked. The recheck preserves connected projects, imported tasks, stored configuration, and the other integration rather than reloading the whole application.
 
 ## Live deployed proof — 2026-08-18
 
@@ -122,7 +123,7 @@ This is the working product audit for the first real developer week. It records 
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
 - The full Rust workspace is green: 461 unit/integration tests plus all crate documentation tests passed on the release checkout.
 - Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
-- The web workspace is green: 60 test files with 309 tests, TypeScript project checking, and the production Vite build all pass.
+- The web workspace is green: 60 test files with 311 tests, TypeScript project checking, and the production Vite build all pass.
 
 ## Release re-proofs required
 

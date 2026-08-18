@@ -142,6 +142,23 @@ test("keeps a transient binding failure distinct from an empty Jira configuratio
   expect(screen.queryByText("Connected projects could not be refreshed")).not.toBeInTheDocument();
 });
 
+test("offers a direct retry when Jira readiness is temporarily unavailable", () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok([])));
+  const onRetryReadiness = vi.fn();
+  render(
+    <JiraSettings
+      operatorToken="operator-token"
+      readiness={undefined}
+      unavailable
+      onRetryReadiness={onRetryReadiness}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry Jira status" }));
+  expect(onRetryReadiness).toHaveBeenCalledOnce();
+  expect(screen.getByRole("button", { name: "Connect with Atlassian" })).toBeDisabled();
+});
+
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }

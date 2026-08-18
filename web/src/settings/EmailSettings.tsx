@@ -6,10 +6,11 @@ type Props = {
   operatorToken: string;
   readiness: EmailReadiness | undefined;
   unavailable: boolean;
+  onRetryReadiness?: () => void;
   onNavigate?: (url: string) => void;
 };
 
-export default function EmailSettings({ operatorToken, readiness, unavailable, onNavigate = (url) => window.location.assign(url) }: Props) {
+export default function EmailSettings({ operatorToken, readiness, unavailable, onRetryReadiness, onNavigate = (url) => window.location.assign(url) }: Props) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [configuration, setConfiguration] = useState<EmailOAuthConfiguration>();
@@ -76,7 +77,7 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
   const connected = readiness?.connection === "ready";
   const configured = readiness?.configured === true || configuration?.configured === true;
   const canManageConfiguration = configuration?.managed_by !== "environment";
-  const showConfigurationForm = !connected && canManageConfiguration && (!configured || editingConfiguration);
+  const showConfigurationForm = !unavailable && configuration !== undefined && !connected && canManageConfiguration && (!configured || editingConfiguration);
   return (
     <section className="settings-card integration-settings email-settings" aria-labelledby="email-integration-heading">
       <div><p className="eyebrow">Email intake</p><h3 id="email-integration-heading">Turn reported issues into finished work</h3></div>
@@ -84,6 +85,7 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
       <div className="integration-status" role="status">
         <span className={`presence ${connected ? "online" : unavailable || readiness?.connection === "credentials_invalid" || readiness?.connection === "permission_denied" ? "offline" : "waiting"}`} />
         <span><strong>{readinessLabel(readiness, unavailable)}</strong><small>{readinessDetail(readiness, unavailable)}</small></span>
+        {unavailable && onRetryReadiness ? <button className="secondary-button" type="button" onClick={onRetryReadiness}>Retry Outlook status</button> : null}
       </div>
       {showConfigurationForm ? (
         <form className="email-configuration" aria-label="Microsoft app setup" onSubmit={(event) => void saveConfiguration(event)}>
@@ -110,7 +112,7 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
         </form>
       ) : connected ? (
         <button className="secondary-button jira-auth-action" type="button" disabled={busy} onClick={() => void disconnect()}>Disconnect Outlook</button>
-      ) : (
+      ) : unavailable ? null : (
         <div className="jira-connect-panel">
           <div className="email-connect-actions">
             <button className="primary-action jira-auth-action" type="button" disabled={busy || unavailable || !configured} onClick={() => void connect()}>

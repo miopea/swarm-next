@@ -90,6 +90,24 @@ test("configures the host registration without returning its client secret", asy
   expect(screen.queryByDisplayValue("private-value")).not.toBeInTheDocument();
 });
 
+test("offers a direct retry when Outlook readiness is temporarily unavailable", () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ok({ configured: true, managed_by: "operator", tenant_id: "organizations", client_id: "client-id", callback_url: "https://swarm.test/auth/email/callback", secret_stored: true })));
+  const onRetryReadiness = vi.fn();
+  render(
+    <EmailSettings
+      operatorToken="operator-token"
+      readiness={undefined}
+      unavailable
+      onRetryReadiness={onRetryReadiness}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry Outlook status" }));
+  expect(onRetryReadiness).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("form", { name: "Microsoft app setup" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Connect Outlook" })).not.toBeInTheDocument();
+});
+
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 }
