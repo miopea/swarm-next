@@ -261,8 +261,7 @@ export default function TaskBoard({
   }
 
   useEffect(() => {
-    if (!workerId && assignableWorkers[0]) setWorkerId(assignableWorkers[0].id);
-    else if (workerId && !assignableWorkers.some((worker) => worker.id === workerId)) setWorkerId(assignableWorkers[0]?.id ?? "");
+    if (workerId && !assignableWorkers.some((worker) => worker.id === workerId)) setWorkerId("");
   }, [assignableWorkers, workerId]);
 
   const taskView = buildTaskBoardView(tasks, jiraTaskLinks, workers, { text: query, filter, source, sort, project, worker }, new Set(emailTaskSources.map((item) => item.task_id)));
@@ -410,7 +409,7 @@ export default function TaskBoard({
           {workScope === "hive" ? <div className="field-stack task-worker-field">
             <label htmlFor="task-worker">Who should handle this?</label>
             <select id="task-worker" value={workerId} onChange={(event) => setWorkerId(event.target.value)}>
-              {assignableWorkers.length === 0 && <option value="">Configure a worker first</option>}
+              <option value="">{assignableWorkers.length === 0 ? "Configure a worker first" : "Choose a worker"}</option>
               {assignableWorkers.map((worker) => (
                 <option key={worker.id} value={worker.id}>{worker.name} · {repositoryName(worker.workspace)}</option>
               ))}

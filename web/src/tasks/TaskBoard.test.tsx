@@ -106,7 +106,10 @@ test("creates a task with useful context and priority", () => {
   renderBoard({ tasks: [], onCreate });
 
   fireEvent.click(screen.getByRole("button", { name: "Write task" }));
+  expect(screen.getByLabelText("Who should handle this?")).toHaveValue("");
+  expect(screen.getByRole("button", { name: "Create draft" })).toBeDisabled();
   fireEvent.change(screen.getByLabelText("Task title"), { target: { value: "Ship task editing" } });
+  expect(screen.getByRole("button", { name: "Create draft" })).toBeDisabled();
   fireEvent.change(screen.getByLabelText(/Description/), { target: { value: "Keep failed forms open" } });
   fireEvent.change(screen.getByLabelText("Priority"), { target: { value: "urgent" } });
   fireEvent.change(screen.getByLabelText("Who should handle this?"), { target: { value: worker.id } });
