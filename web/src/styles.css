@@ -658,6 +658,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .empty-card > div { display: grid; gap: 7px; }
 .empty-card strong { color: var(--text); font-size: .9rem; }
 .empty-card span { font-size: .79rem; }
+.empty-card button { justify-self: start; margin-top: 4px; }
 .empty-bee { width: 112px; height: 112px; }
 .completed-tasks, .removed-tasks { max-width: 1400px; margin: 24px auto 0; color: var(--muted); }
 .completed-tasks summary, .removed-tasks summary { display: inline-flex; min-height: 34px; cursor: pointer; list-style: none; align-items: center; gap: 9px; padding: 5px 9px; border-radius: var(--radius-sm); font-size: .79rem; font-weight: 500; }
@@ -1430,6 +1431,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-mobile-controls label { display: grid; gap: 5px; color: var(--muted); font-size: .72rem; }
   .task-mobile-controls input, .task-mobile-controls select { width: 100%; min-height: 44px; }
   .empty-card { flex-direction: column; padding: 20px; text-align: center; }
+  .empty-card button { justify-self: center; }
   .settings-workspace { width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr); padding: 0 12px 12px; overflow-x: hidden; }
   .settings-section-nav { top: 0; margin-inline: -4px; padding: 7px; }
   .settings-card { min-width: 0; }

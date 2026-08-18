@@ -335,6 +335,14 @@ export default function TaskBoard({
     void onReorder(taskIds);
   }
 
+  function clearTaskView() {
+    onQueryChange?.("");
+    onFilterChange?.("all");
+    onSourceChange?.("all");
+    onProjectChange?.("all");
+    onWorkerChange?.("all");
+  }
+
   return (
     <div className="task-board">
       <section className={`task-compose${composeOpen || jiraOpen || emailOpen ? " compose-open" : " compose-collapsed"}`} aria-labelledby="new-task-heading">
@@ -451,7 +459,7 @@ export default function TaskBoard({
           <span className="count-badge">{openTasks.length === taskView.allOpenCount ? openTasks.length : `${openTasks.length}/${taskView.allOpenCount}`}</span>
         </div>
         {openTasks.length === 0 ? (
-          <div className="empty-card"><BeeMascot className="empty-bee" expression="available" /><div><strong>{taskView.allOpenCount ? "No work matches this view" : "No work queued"}</strong><span>{taskView.allOpenCount ? "Adjust the task-board filters in the sidebar." : "Create a focused task when you are ready."}</span></div></div>
+          <div className="empty-card"><BeeMascot className="empty-bee" expression="available" /><div><strong>{taskView.allOpenCount ? "No work matches this view" : "No work queued"}</strong><span>{taskView.allOpenCount ? "One or more board filters are hiding open work." : "Create a focused task when you are ready."}</span>{taskView.allOpenCount ? <button type="button" className="secondary-button" onClick={clearTaskView}>Show all open work</button> : null}</div></div>
         ) : (
           <div className="task-grid">
             {openTasks.map((task, index) => (

@@ -123,6 +123,35 @@ test("creates a task with useful context and priority", () => {
   });
 });
 
+test("offers one clear recovery action when filters hide every open task", () => {
+  const onQueryChange = vi.fn();
+  const onFilterChange = vi.fn();
+  const onSourceChange = vi.fn();
+  const onProjectChange = vi.fn();
+  const onWorkerChange = vi.fn();
+  renderBoard({
+    query: "missing",
+    filter: "assigned",
+    source: "jira",
+    project: "WEB",
+    worker: worker.id,
+    onQueryChange,
+    onFilterChange,
+    onSourceChange,
+    onProjectChange,
+    onWorkerChange,
+  });
+
+  expect(screen.getByText("One or more board filters are hiding open work.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show all open work" }));
+
+  expect(onQueryChange).toHaveBeenCalledWith("");
+  expect(onFilterChange).toHaveBeenCalledWith("all");
+  expect(onSourceChange).toHaveBeenCalledWith("all");
+  expect(onProjectChange).toHaveBeenCalledWith("all");
+  expect(onWorkerChange).toHaveBeenCalledWith("all");
+});
+
 test("lets the operator recover removed local work without mixing in Jira work", async () => {
   const removed = { ...task, id: "removed-1", title: "Recover this idea", removed_at: 2 };
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
