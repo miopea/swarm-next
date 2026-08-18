@@ -384,7 +384,9 @@ test("confirms safe Jira removal without implying that Jira will be deleted", as
 
   fireEvent.doubleClick(screen.getByRole("article", { name: task.title }));
   const dialog = screen.getByRole("dialog", { name: "Review and edit task" });
-  fireEvent.click(within(dialog).getByRole("button", { name: "Remove from Hive" }));
+  const remove = within(dialog).getByRole("button", { name: "Remove from Hive" });
+  expect(remove).toHaveClass("secondary-button", "danger-text");
+  fireEvent.click(remove);
 
   expect(within(dialog).getByText("The Jira issue will not be deleted or changed. Its source link and Swarm audit history stay retained.")).toBeInTheDocument();
   fireEvent.click(within(dialog).getByRole("button", { name: "Remove from Hive" }));

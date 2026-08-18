@@ -168,7 +168,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = [], op
           <div className="task-detail-footer-secondary">
             {jiraLink?.issue_url && <a className="button-link" href={jiraLink.issue_url} target="_blank" rel="noreferrer">Open in Jira</a>}
             {!removeConfirm ? (
-              <button type="button" className="danger-text" disabled={busy || task.state === "active" || task.state === "review"} onClick={() => setRemoveConfirm(true)}>Remove from Hive</button>
+              <button type="button" className="secondary-button danger-text" disabled={busy || task.state === "active" || task.state === "review"} onClick={() => setRemoveConfirm(true)}>Remove from Hive</button>
             ) : (
               <div className="task-remove-confirm" role="alertdialog" aria-label="Confirm task removal">
                 <p><strong>{jiraLink ? `Remove ${jiraLink.issue_key} from Swarm?` : "Remove this task from the Hive?"}</strong><span>{jiraLink ? "The Jira issue will not be deleted or changed. Its source link and Swarm audit history stay retained." : "The task leaves the board, but its source, attachments, and audit history stay retained."}</span></p>
