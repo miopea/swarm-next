@@ -24,9 +24,11 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
   const [confirmingCancellation, setConfirmingCancellation] = useState<string>();
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [refreshError, setRefreshError] = useState(false);
 
   const refresh = useCallback(async () => {
     setLinks(await fetchApiaryJoinLinks(operatorToken));
+    setRefreshError(false);
   }, [operatorToken]);
 
   useEffect(() => {
@@ -34,9 +36,12 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
     const load = async () => {
       try {
         const current = await fetchApiaryJoinLinks(operatorToken);
-        if (!cancelled) setLinks(current);
+        if (!cancelled) {
+          setLinks(current);
+          setRefreshError(false);
+        }
       } catch {
-        if (!cancelled) setError("Invitation status could not be refreshed. No membership changed.");
+        if (!cancelled) setRefreshError(true);
       }
     };
     void load();
@@ -155,6 +160,7 @@ export default function KeeperInvitationManager({ busy, operatorToken, onInvitat
         </ul>
       ) : <p className="empty-copy">No active invitation links. Create one when another Hive is ready to join.</p>}
       {message ? <p className="form-message" role="status">{message}</p> : null}
+      {refreshError ? <div className="form-error apiary-refresh-error" role="alert"><span>Invitation status could not be refreshed. No membership changed.</span><button className="secondary-button" type="button" disabled={working} onClick={() => void refresh().catch(() => setRefreshError(true))}>Check invitation status again</button></div> : null}
       {error ? <p className="form-error" role="alert">{error}</p> : null}
     </div>
   );
