@@ -241,11 +241,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .icon-button { display: grid; width: 38px; padding: 0; place-items: center; }
 .operation-error { padding: 10px 27px; flex: 0 0 auto; border-bottom: 1px solid var(--bad); color: var(--text); background: var(--bad-soft); font-size: .84rem; }
 .mobile-worker-backdrop { position: fixed; z-index: 100; inset: 0; display: none; padding: 10px; place-items: end center; background: color-mix(in srgb, #172017 52%, transparent); backdrop-filter: blur(5px); }
-.mobile-worker-dialog { display: grid; width: min(520px, 100%); max-height: min(82dvh, 760px); grid-template-rows: auto auto minmax(0, 1fr) auto; padding: 17px; overflow: hidden; gap: 11px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--panel-raised); box-shadow: var(--shadow); }
+.mobile-worker-dialog { display: grid; width: min(520px, 100%); max-height: min(82dvh, 760px); grid-template-rows: auto auto auto minmax(0, 1fr) auto; padding: 17px; overflow: hidden; gap: 11px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--panel-raised); box-shadow: var(--shadow); }
 .mobile-worker-dialog-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .mobile-worker-dialog-heading h3 { margin: 0; font-size: 1.12rem; }
 .mobile-worker-dialog-summary { margin: 0; color: var(--muted); font-size: .76rem; }
 .mobile-worker-dialog-toolbar { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; }
+.mobile-worker-search { width: 100%; min-height: 44px; }
 .mobile-worker-dialog-list { display: grid; min-height: 0; overflow-y: auto; gap: 5px; overscroll-behavior: contain; }
 .mobile-worker-choice { display: grid; width: 100%; min-height: 66px; grid-template-columns: 42px minmax(0, 1fr) 9px; align-items: center; gap: 10px; padding: 8px 10px; border-color: var(--line); color: var(--text); background: var(--panel); text-align: left; }
 .mobile-worker-choice[aria-current="page"] { border-color: var(--good); background: var(--good-soft); box-shadow: inset 3px 0 var(--good); }

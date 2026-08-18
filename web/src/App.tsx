@@ -125,6 +125,7 @@ export function App() {
   const [feedbackRevision, setFeedbackRevision] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
   const [showMobileWorkers, setShowMobileWorkers] = useState(false);
+  const [mobileWorkerQuery, setMobileWorkerQuery] = useState("");
   const [workerVisibility, setWorkerVisibility] = useState<WorkerVisibility>(readWorkerVisibility);
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
@@ -794,6 +795,19 @@ export function App() {
     () => workerVisibility === "awake" ? workers.filter((worker) => worker.running) : workers,
     [workerVisibility, workers],
   );
+  const normalizedMobileWorkerQuery = mobileWorkerQuery.trim().toLocaleLowerCase();
+  const mobileVisibleWorkers = useMemo(
+    () => normalizedMobileWorkerQuery
+      ? visibleWorkers.filter((worker) => `${worker.name} ${repositoryName(worker.workspace)} ${worker.workspace}`.toLocaleLowerCase().includes(normalizedMobileWorkerQuery))
+      : visibleWorkers,
+    [normalizedMobileWorkerQuery, visibleWorkers],
+  );
+  const mobileVisibleOrphanSessions = useMemo(
+    () => normalizedMobileWorkerQuery
+      ? orphanSessions.filter((session) => `${workerName(session.session_id)} unconfigured session`.toLocaleLowerCase().includes(normalizedMobileWorkerQuery))
+      : orphanSessions,
+    [normalizedMobileWorkerQuery, orphanSessions],
+  );
   const liveWorkerCount = workers.filter((worker) => worker.running).length
     + orphanSessions.filter((session) => session.running).length;
   const rosterWorkerCount = workers.length + orphanSessions.length;
@@ -981,7 +995,7 @@ export function App() {
             <HiveContextIndicator identity={hiveIdentity} compact />
           </div>
           {surface === "workers" && operatorToken ? (
-            <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" onClick={() => setShowMobileWorkers(true)}>
+            <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" aria-label={`Switch worker, current ${activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "none")}`} onClick={() => { setMobileWorkerQuery(""); setShowMobileWorkers(true); }}>
               <span className="worker-avatar"><BeeMascot expression={activeWorker ? workerExpression(activeWorker) : "sleeping"} /></span>
               <span><HiveContextIndicator identity={hiveIdentity} compact /><strong>{activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "Choose worker")}</strong></span>
               <span aria-hidden="true">⌄</span>
@@ -1012,9 +1026,20 @@ export function App() {
                   <button type="button" aria-pressed={workerVisibility === "awake"} onClick={() => changeWorkerVisibility("awake")}>Awake</button>
                 </div>
               </div>
+              <input
+                className="mobile-worker-search"
+                type="search"
+                aria-label="Find a worker"
+                autoComplete="off"
+                placeholder="Find by worker or repository"
+                value={mobileWorkerQuery}
+                onChange={(event) => setMobileWorkerQuery(event.target.value)}
+              />
               <div className="mobile-worker-dialog-list">
-                {visibleWorkers.length === 0 && orphanSessions.length === 0 ? <p className="empty-rail">All {workers.length} workers are sleeping. Choose All to wake one.</p> : null}
-                {visibleWorkers.map((worker) => {
+                {mobileVisibleWorkers.length === 0 && mobileVisibleOrphanSessions.length === 0 ? (
+                  <p className="empty-rail">{normalizedMobileWorkerQuery ? `No workers match “${mobileWorkerQuery.trim()}”.` : `All ${workers.length} workers are sleeping. Choose All to wake one.`}</p>
+                ) : null}
+                {mobileVisibleWorkers.map((worker) => {
                   const sessionId = worker.active_session_id;
                   const assignedTask = sessionId ? tasksBySession.get(sessionId) : undefined;
                   return (
@@ -1039,7 +1064,7 @@ export function App() {
                     </button>
                   );
                 })}
-                {orphanSessions.map((session) => (
+                {mobileVisibleOrphanSessions.map((session) => (
                   <button type="button" className="mobile-worker-choice" aria-current={session.session_id === activeSessionId ? "page" : undefined} key={session.session_id} onClick={() => { openWorker(session.session_id); setShowMobileWorkers(false); }}>
                     <span className="worker-avatar"><BeeMascot expression={session.running ? "focused" : "sleeping"} /></span>
                     <span className="mobile-worker-choice-copy"><span><strong>{workerName(session.session_id)}</strong><small>Unconfigured session</small></span><small>{tasksBySession.get(session.session_id)?.title ?? "Pre-roster session"}</small></span>
