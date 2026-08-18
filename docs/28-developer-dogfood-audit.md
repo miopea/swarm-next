@@ -27,12 +27,13 @@ This is the working product audit for the first real developer week. It records 
 4. **Merged email review starts where the user needs to act.** The task draft is scrolled into view and focused when review opens.
 5. **Mobile quick-navigation rows no longer overlap.** Grid rows size to content.
 6. **Mobile terminal metadata is reduced.** The internal session identifier is hidden at phone sizes so the status and controls do not collide.
-7. **Legacy history no longer buries migration work.** Closed Legacy tasks are hidden from the actionable preview by default, with an explicit counted control for operators who need to audit that history.
+7. **Legacy history no longer buries migration work.** Closed Legacy tasks, malformed records, and records staying in Legacy are hidden from the actionable preview by default, each with its own counted disclosure control.
+8. **A normal provider runtime is no longer a critical alert.** Loaded Claude and Codex process trees use the same 2/4 GiB pressure bands as automatic worker admission instead of the Rust service's smaller 256/512 MiB thresholds.
 
 ## Live deployed proof — 2026-08-18
 
 - Desktop and 412 × 915 phone layouts were exercised against `swarm2.bfgsolutions.net` on App/API `0.1.0-5a8a14b7d9ca`.
-- The normal Legacy database was found read-only, previewed, and cancelled. Seventeen open tasks were selectable; closed history was visible but too noisy, which led to the default-hidden history repair above. No import was committed.
+- The normal Legacy database was found read-only, previewed, and cancelled. Release `0.1.0-ca4d9ff2ff0e` showed 16 actionable tasks initially, with 33 malformed records, 62 records staying in Legacy, and 1,708 closed tasks behind separate disclosures. No import was committed.
 - A merged Outlook task opened directly into its single review/edit dialog. Both images appeared, both attachment records were present, and guarded removal stayed visible without changing the task.
 - A long Queen terminal moved into scrollback with Shift+PageUp, exposed **Jump to latest**, and returned to the live prompt when selected.
 - Quick navigation opened from its toolbar action and Alt+K, filtered a 31-worker roster down to the requested Codex workers, and kept the result list scrollable at phone size.

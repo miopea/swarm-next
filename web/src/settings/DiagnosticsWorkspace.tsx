@@ -81,6 +81,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   const apiMemory = resourceLabel(runtime.resources?.api);
   const hostMemory = ownResourceLabel(runtime.resources?.terminal_host);
   const workerMemory = workerTreeLabel(runtime.resources?.terminal_host, runtime.terminalHost?.running_sessions ?? sessions.filter((session) => session.running).length);
+  const workerPressure = workerTreePressure(runtime.resources?.terminal_host);
   const machine = runtime.resources?.machine;
   const measuredWorkers = workers
     .filter((worker) => worker.running && worker.active_session_id)
@@ -149,7 +150,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
         <div><dt>Terminal host</dt><dd>{terminalStatus}</dd></div>
         <div><dt>API memory</dt><dd className={resourceClass(runtime.resources?.api.pressure)}>{apiMemory}</dd></div>
         <div><dt>Terminal host service</dt><dd>{hostMemory}</dd></div>
-        <div><dt>Loaded worker runtimes</dt><dd className={resourceClass(runtime.resources?.terminal_host.pressure)}>{workerMemory}</dd></div>
+        <div><dt>Loaded worker runtimes</dt><dd className={resourceClass(workerPressure)}>{workerMemory}</dd></div>
         <div><dt>Machine memory</dt><dd className={resourceClass(machine?.pressure)}>{machineMemoryLabel(machine)}</dd></div>
         <div><dt>Memory stall</dt><dd className={resourceClass(machine?.pressure)}>{pressureLabel(machine?.memory_pressure_avg10)}</dd></div>
         <div><dt>Compute load</dt><dd>{loadLabel(machine?.load_average, machine?.logical_cpus)}</dd></div>
@@ -224,7 +225,20 @@ function ownResourceLabel(resource: RuntimeResources["api"] | undefined) {
 function workerTreeLabel(resource: RuntimeResources["api"] | undefined, sessions: number) {
   if (resource?.process_tree_resident_memory_bytes == null) return "Unavailable";
   const workerBytes = Math.max(0, resource.process_tree_resident_memory_bytes - (resource.resident_memory_bytes ?? 0));
-  return `${resourceLabel({ ...resource, resident_memory_bytes: workerBytes })} · ${sessions} loaded`;
+  const pressure = workerTreePressure(resource);
+  const label = pressure === "critical" ? "Critical" : pressure === "advisory" ? "Watch" : "Normal";
+  return `${label} · ${formatBytes(workerBytes)} · ${sessions} loaded`;
+}
+
+// Provider runtimes are expected to be much larger than the Rust service.
+// Match the 2/4 GiB automatic-start admission bands instead of applying the
+// service's 256/512 MiB limits to Claude or Codex process trees.
+function workerTreePressure(resource: RuntimeResources["api"] | undefined): RuntimeResources["api"]["pressure"] | undefined {
+  if (resource?.process_tree_resident_memory_bytes == null) return undefined;
+  const workerBytes = Math.max(0, resource.process_tree_resident_memory_bytes - (resource.resident_memory_bytes ?? 0));
+  if (workerBytes >= 4 * 1024 * 1024 * 1024) return "critical";
+  if (workerBytes >= 2 * 1024 * 1024 * 1024) return "advisory";
+  return "normal";
 }
 
 function machineMemoryLabel(machine: RuntimeResources["machine"] | undefined) {

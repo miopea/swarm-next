@@ -53,7 +53,12 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
         critical_bytes: 536_870_912,
       },
       api: { resident_memory_bytes: 18_874_368, pressure: "normal" },
-      terminal_host: { resident_memory_bytes: 9_437_184, pressure: "normal" },
+      terminal_host: {
+        resident_memory_bytes: 9_437_184,
+        process_tree_resident_memory_bytes: 508_559_360,
+        process_tree_process_count: 8,
+        pressure: "critical",
+      },
     });
     return ok({ type: "history_diagnostics", diagnostics: { retained_bytes: 42, session_count: 3, segment_count: 1, dropped_records: 0, dropped_bytes: 0, recovered_truncated_bytes: 0, recovered_corrupt_segments: 0 } });
   }));
@@ -136,7 +141,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(terminalHost.parentElement).toHaveTextContent("Terminal hostHealthy · 0.1.0-host");
   expect((await screen.findByText("API memory")).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
   expect(screen.getByText("Terminal host service").parentElement).toHaveTextContent("Terminal host service9.0 MiB");
-  expect(screen.getByText("Loaded worker runtimes").parentElement).toHaveTextContent("Loaded worker runtimesUnavailable");
+  expect(screen.getByText("Loaded worker runtimes").parentElement).toHaveTextContent("Loaded worker runtimesNormal · 476.0 MiB · 1 loaded");
   expect(screen.getByText("Live metrics")).toBeInTheDocument();
   expect(screen.getByText(/refreshes every 10 seconds/)).toBeInTheDocument();
   expect(screen.getByText("Jira").parentElement).toHaveTextContent("JiraNot connected");
