@@ -39,3 +39,10 @@ test("keeps Queen autonomy explanations readable on phones", () => {
 
   expect(stylesheet.lastIndexOf(mobileRule)).toBeGreaterThan(stylesheet.lastIndexOf(baseRule));
 });
+
+test("keeps persistent phone navigation controls comfortably touchable", () => {
+  expect(stylesheet).toContain(".surface-nav button { min-width: 0; min-height: 44px;");
+  expect(stylesheet).toContain(".header-actions .icon-button { width: 44px; min-height: 44px; }");
+  expect(stylesheet).toContain(".header-actions .secondary-button { min-height: 44px;");
+  expect(stylesheet).toContain(".operator-presence-chip { width: 44px;");
+});

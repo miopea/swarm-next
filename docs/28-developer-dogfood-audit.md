@@ -19,7 +19,7 @@ This is the working product audit for the first real developer week. It records 
 | Find Legacy data for migration | Pass | Pass | Primary path discovers the normal local Legacy database read-only. File selection remains an advanced fallback. |
 | Understand runtime updates | Pass in current UI | Pass | Worker engine and App/API are separate cards with versions, risk, and action state. Re-prove progress across a real update after release. |
 | Find one worker or command in a 31-worker Hive | Pass | Pass | The Awake filter keeps the rail calm; quick navigation filters sleeping workers by name and scrolls inside its bounded dialog. Alt+K opens it from ordinary desktop controls. |
-| Recover work removed by mistake | Test pass; live release pending | Same | A bounded recovery shelf restores local Swarm work with its history intact. Jira work never enters the local recovery path because Jira remains authoritative. |
+| Recover work removed by mistake | Pass | Pass | A bounded recovery shelf restores local Swarm work with its history intact. Jira work never enters the local recovery path because Jira remains authoritative. The live Hive currently has no removed local work, so the empty path was proven without mutating operator data. |
 
 ## Fixes made during this pass
 
@@ -52,9 +52,12 @@ This is the working product audit for the first real developer week. It records 
 27. **Terminal diagnostics explain their identity.** The internal Swarm terminal-session ID stays behind a disclosure, now says what it identifies, distinguishes itself from the Claude or Codex conversation, and can be copied for a support report.
 28. **Legacy repository spelling cannot duplicate an existing worker.** Migration compares repository identity after expanding the local home shorthand, normalizing separators, and ignoring a trailing slash. A Legacy `~/projects/...` worker is therefore recognized as the same repository already stored by Next as `/home/<operator>/projects/...`, rather than being offered as a second worker.
 29. **Removed local work is recoverable without weakening Jira ownership.** The task board now exposes a bounded **Removed local work** shelf. Restoring returns open work to the end of the queue, preserves its audit trail, records a typed restoration event, and refuses Jira-linked tasks at both the data and API boundaries.
+30. **Persistent phone controls meet a practical touch target.** Primary navigation, presence, quick navigation, theme, and Lock controls now expose at least a 44 px target instead of requiring precise taps on 36–39 px buttons.
 
 ## Live deployed proof — 2026-08-18
 
+- Release `0.1.0-ae4a9a47cafc` preserved terminal-host PID `1832378` and its loaded provider session while updating only App/API. Both services were active, `/health` returned the exact App/API and worker-engine identities, and the deployment produced no warning-level API entries.
+- The same release rendered the two-task board without horizontal overflow or browser warnings at 1440 × 900 and 412 × 915. Jira and merged-email cards, worker assignment controls, source filters, and completed-work disclosure remained readable. The live Hive had no removed local records, so recovery's empty path was proven without creating, removing, restoring, assigning, or resolving operator work.
 - Desktop and 412 × 915 phone layouts were exercised against `swarm2.bfgsolutions.net` on App/API `0.1.0-5a8a14b7d9ca`.
 - The normal Legacy database was found read-only, previewed, and cancelled. Release `0.1.0-ca4d9ff2ff0e` showed 16 actionable tasks initially, with 33 malformed records, 62 records staying in Legacy, and 1,708 closed tasks behind separate disclosures. No import was committed.
 - Runtime diagnostics were rechecked on `0.1.0-7d9538977d9c`: one loaded provider tree at 474.6 MiB remained **Normal**, machine memory remained separately visible, and the terminal-host service stayed at 43.9 MiB.
@@ -90,7 +93,7 @@ This is the working product audit for the first real developer week. It records 
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
 - The full Rust workspace is green: 459 unit/integration tests plus all crate documentation tests passed on the release checkout.
 - Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
-- The web workspace is green: 58 test files with 290 tests, TypeScript project checking, and the production Vite build all pass.
+- The web workspace is green: 58 test files with 291 tests, TypeScript project checking, and the production Vite build all pass.
 
 ## Release re-proofs required
 
