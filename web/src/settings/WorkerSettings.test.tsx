@@ -197,6 +197,35 @@ test("drafts private repository context into an editable unsaved description", a
   );
 });
 
+test("protects a generated routing draft from an accidental cancel", async () => {
+  render(
+    <WorkerSettings
+      workers={[queen, budget]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onRemove={vi.fn()}
+      onDraftDescription={vi.fn().mockResolvedValue("A useful routing draft.")}
+      onReorder={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Draft locally" }));
+  expect(await screen.findByDisplayValue("A useful routing draft.")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.getByRole("alertdialog", { name: "Discard worker changes?" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Keep editing" })).toHaveFocus();
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  expect(screen.getByDisplayValue("A useful routing draft.")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+  expect(screen.queryByRole("form", { name: "Edit Daisy" })).not.toBeInTheDocument();
+});
+
 test("filters a large roster without making hidden ordering ambiguous", () => {
   const onReorder = vi.fn().mockResolvedValue(undefined);
   render(

@@ -2,6 +2,7 @@ import { useState, type DragEvent, type FormEvent, type KeyboardEvent } from "re
 
 import type { ProviderCapabilities, ProviderKind, Worker, WorkspaceChoice } from "../api";
 import BeeMascot from "../brand/BeeMascot";
+import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import { useReorderDrag } from "../shared/useReorderDrag";
 import { workerAttention } from "../workers/workerAttention";
 
@@ -256,8 +257,10 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, orderingDisab
   const [improvingDescription, setImprovingDescription] = useState(false);
   const [draftStatus, setDraftStatus] = useState("");
   const [draftSource, setDraftSource] = useState<"local" | "claude" | undefined>();
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
   const attention = workerAttention(worker);
   const descriptionChanged = description !== (worker.description ?? "");
+  const dirty = name !== worker.name || descriptionChanged || provider !== worker.provider || autostart !== worker.autostart;
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -266,7 +269,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, orderingDisab
     setEditing(false);
   }
 
-  function cancel() {
+  function discardEdits() {
     setName(worker.name);
     setDescription(worker.description ?? "");
     setProvider(worker.provider);
@@ -275,7 +278,13 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, orderingDisab
     setDraftError("");
     setDraftStatus("");
     setDraftSource(undefined);
+    setConfirmingCancel(false);
     setEditing(false);
+  }
+
+  function requestCancel() {
+    if (dirty) return setConfirmingCancel(true);
+    discardEdits();
   }
 
   async function remove() {
@@ -336,7 +345,7 @@ function WorkerPreferenceRow({ worker, busy, first, last, managed, orderingDisab
             <option value="codex" disabled={!providers.codex}>Codex{providers.codex ? "" : " · unavailable"}</option>
           </select><small>{worker.running ? "Put this worker to sleep before changing provider." : "Used the next time this worker wakes. Existing history remains available."}</small></div>
           <label className="worker-autostart"><input type="checkbox" checked={autostart} onChange={(event) => setAutostart(event.target.checked)} />Keep this worker active automatically</label>
-          <span className="worker-edit-actions"><button disabled={busy || !name.trim()}>{descriptionChanged ? "Save description to worker" : "Save worker"}</button><button type="button" className="secondary-button" disabled={busy} onClick={cancel}>Cancel</button></span>
+          {confirmingCancel ? <UnsavedChangesPrompt label="Discard worker changes?" description="The worker name, provider, activity preference, or routing description has not been saved." onDiscard={discardEdits} onKeep={() => setConfirmingCancel(false)} /> : <span className="worker-edit-actions"><button disabled={busy || !name.trim()}>{descriptionChanged ? "Save description to worker" : "Save worker"}</button><button type="button" className="secondary-button" disabled={busy} onClick={requestCancel}>Cancel</button></span>}
           {!managed && <div className="worker-remove-zone">
             {confirmingRemoval ? <><p><strong>Remove {worker.name} from this Hive?</strong><small>Repository files are untouched. Historical sessions remain, but this worker must be sleeping and have no open assigned tasks.</small></p><span><button type="button" className="danger-button" disabled={busy || worker.running} onClick={() => void remove()}>Confirm removal</button><button type="button" className="secondary-button" disabled={busy} onClick={() => setConfirmingRemoval(false)}>Keep worker</button></span></> : <button type="button" className="danger-link" disabled={busy || worker.running} onClick={() => setConfirmingRemoval(true)}>Remove worker</button>}
           </div>}
