@@ -50,6 +50,10 @@ test("previews an explicit dogfood note with content-free runtime context", asyn
   expect(preview).not.toHaveTextContent("raw provider failure");
   expect(preview).not.toHaveTextContent("secret-token");
   fireEvent.keyDown(window, { key: "Escape" });
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.getByRole("alertdialog", { name: "Discard this feedback?" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Keep editing" })).toHaveFocus();
+  fireEvent.click(screen.getByRole("button", { name: "Discard feedback" }));
   expect(onClose).toHaveBeenCalledOnce();
 });
 

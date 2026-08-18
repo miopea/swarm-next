@@ -64,6 +64,7 @@ This is the working product audit for the first real developer week. It records 
 39. **Modal keyboard behavior is one shared contract.** Quick navigation, worker switching, task review/edit, and dogfood feedback now move focus to the useful first control, keep Tab navigation inside the open surface, close on Escape, and return focus to the control that launched them. Task review opens on the title rather than the unrelated Close button.
 40. **Task editing does not silently throw work away.** After changing a title, work brief, or priority, Close, Escape, and backdrop clicks show one in-modal discard choice. Saving remains direct, and cancelling the warning returns to the still-intact edit instead of invoking an inconsistent browser prompt.
 41. **A local task detail no longer spins on an unstable empty source list.** The isolated edit-dialog proof found that an omitted email-source prop recreated its default array after each loading-state change. The shared empty value is now stable, so plain Swarm tasks open and settle just like Jira- and email-backed work.
+42. **Dogfood notes receive the same loss-of-work protection as task edits.** Closing a feedback dialog with typed notes or a screenshot now offers a safe, focused **Keep editing** choice and an explicit discard. Once the report is saved to the Hive, Close remains immediate. The prompt is a shared component rather than two subtly different warnings.
 
 ## Live deployed proof — 2026-08-18
 

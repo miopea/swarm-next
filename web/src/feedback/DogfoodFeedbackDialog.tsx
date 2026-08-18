@@ -14,6 +14,7 @@ import {
 } from "../api";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import { useModalFocus } from "../shared/useModalFocus";
+import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 import { serializeDiagnosticReport, type RuntimeDiagnostics } from "../settings/diagnosticReport";
 
 const MAX_FEEDBACK_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -42,9 +43,16 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   const [screenshot, setScreenshot] = useState<File>();
   const [screenshotUrl, setScreenshotUrl] = useState<string>();
   const [imageError, setImageError] = useState<string>();
+  const [closeConfirm, setCloseConfirm] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const expectationInput = useRef<HTMLTextAreaElement>(null);
-  const dialog = useModalFocus<HTMLElement>(onClose, true, expectationInput);
+  const dirty = saveState !== "saved" && Boolean(expectation.trim() || observation.trim() || screenshot);
+  function requestClose() {
+    if (closeConfirm) return setCloseConfirm(false);
+    if (dirty) return setCloseConfirm(true);
+    onClose();
+  }
+  const dialog = useModalFocus<HTMLElement>(requestClose, true, expectationInput);
 
   function markChanged() {
     setPreview(undefined);
@@ -160,11 +168,11 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
   }
 
   return (
-    <div className="feedback-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="feedback-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
       <section ref={dialog} tabIndex={-1} className="feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-heading" onPaste={pastedImage} onDragOver={(event) => event.preventDefault()} onDrop={droppedImage}>
         <header>
           <div><p className="eyebrow">Dogfood feedback</p><h2 id="feedback-heading">Capture what felt wrong</h2></div>
-          <button className="secondary-button" type="button" onClick={onClose}>Close</button>
+          <button className="secondary-button" type="button" onClick={requestClose}>Close</button>
         </header>
         <p>Describe the outcome in your words. Swarm adds content-free runtime evidence, then shows the complete bundle before anything is copied.</p>
         <div className="feedback-fields">
@@ -183,11 +191,11 @@ export default function DogfoodFeedbackDialog({ activeSessionId, health, hiveIde
           {imageError ? <p role="alert">{imageError}</p> : null}
         </div>
         <small className="privacy-note">Your note is included exactly as entered. Automatic evidence never includes terminal output, task text, paths, credentials, worker names, or raw errors.</small>
-        <div className="diagnostic-actions">
+        {closeConfirm ? <UnsavedChangesPrompt label="Discard this feedback?" description="Your notes and attached screenshot have not been saved to the Hive." discardLabel="Discard feedback" onDiscard={onClose} onKeep={() => setCloseConfirm(false)} /> : <div className="diagnostic-actions">
           <button type="button" disabled={!runtime.loaded} onClick={buildPreview}>{runtime.loaded ? "Preview bundle" : "Gathering evidence…"}</button>
           <button type="button" className="primary-action" disabled={!runtime.loaded} onClick={() => void copyBundle()}>{copyState === "copied" ? "Copied" : "Copy notes & diagnostics"}</button>
           <button type="button" className="primary-action" disabled={!runtime.loaded || (!expectation.trim() && !observation.trim()) || saveState === "saving" || saveState === "saved"} onClick={() => void saveToHive()}>{saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved to Hive" : "Save to this Hive"}</button>
-        </div>
+        </div>}
         {copyState === "unavailable" ? <p role="status">Clipboard access is unavailable. Select the preview and copy it manually.</p> : null}
         {saveState === "saved" ? <p role="status">Saved privately. Open Settings, then Saved dogfood reports, to review the bundle or download its screenshot.</p> : null}
         {saveState === "error" ? <p role="alert">The report was not saved. Your notes and screenshot remain in this dialog.</p> : null}

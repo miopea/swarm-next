@@ -12,6 +12,7 @@ import {
   type TaskUpdateInput,
 } from "../api";
 import { useModalFocus } from "../shared/useModalFocus";
+import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
 
 type LoadedImage = JiraTaskAttachment & { url: string };
 const noEmailSources: EmailTaskSource[] = [];
@@ -42,7 +43,6 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
   const [closeConfirm, setCloseConfirm] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const titleInput = useRef<HTMLInputElement>(null);
-  const keepEditingButton = useRef<HTMLButtonElement>(null);
   const keepTaskButton = useRef<HTMLButtonElement>(null);
   const dirty = title !== task.title || description !== task.description || priority !== task.priority;
   function requestClose() {
@@ -54,9 +54,8 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
   const dialog = useModalFocus<HTMLElement>(requestClose, true, titleInput);
 
   useEffect(() => {
-    if (closeConfirm) keepEditingButton.current?.focus();
-    else if (removeConfirm) keepTaskButton.current?.focus();
-  }, [closeConfirm, removeConfirm]);
+    if (removeConfirm) keepTaskButton.current?.focus();
+  }, [removeConfirm]);
 
   useEffect(() => {
     let active = true;
@@ -176,11 +175,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
           {saveFailed && <p className="task-detail-save-error" role="alert">Changes were not saved. Your edits are still here—try again when the connection is ready.</p>}
         </form>
         <footer>
-          {closeConfirm ? <div className="task-close-confirm" role="alertdialog" aria-label="Unsaved task changes">
-            <p><strong>Discard unsaved changes?</strong><span>Your edits have not joined the task history.</span></p>
-            <button type="button" className="danger-button" onClick={onClose}>Discard changes</button>
-            <button ref={keepEditingButton} type="button" onClick={() => setCloseConfirm(false)}>Keep editing</button>
-          </div> : <><div className="task-detail-footer-secondary">
+          {closeConfirm ? <UnsavedChangesPrompt label="Unsaved task changes" description="Your edits have not joined the task history." onDiscard={onClose} onKeep={() => setCloseConfirm(false)} /> : <><div className="task-detail-footer-secondary">
             {jiraLink?.issue_url && <a className="button-link" href={jiraLink.issue_url} target="_blank" rel="noreferrer">Open in Jira</a>}
             {!removeConfirm ? (
               <button type="button" className="secondary-button danger-text" disabled={busy || task.state === "active" || task.state === "review"} onClick={() => setRemoveConfirm(true)}>Remove from Hive</button>
