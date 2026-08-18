@@ -12118,6 +12118,21 @@ mod tests {
                 deadline: None,
             })
             .unwrap();
+        let stale_decision = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Review an obsolete request",
+                reason: "The underlying work changed",
+                risk: "None; this request is stale",
+                evidence: "The operator already handled it elsewhere",
+                suggested_action: "Hold",
+                allowed_actions: &actions,
+                deadline: None,
+            })
+            .unwrap();
         let app = router(
             AppState::default()
                 .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
@@ -12137,10 +12152,11 @@ mod tests {
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
 
         let listed = response_json(authorized_get(app.clone(), "/api/v1/decisions").await).await;
-        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed.as_array().unwrap().len(), 2);
         assert_eq!(listed[0]["state"], "pending");
 
         let resolved = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("PATCH")
@@ -12158,6 +12174,29 @@ mod tests {
         assert_eq!(resolved["resolution_action"], "ship");
         assert_eq!(resolved["resolution_note"], "Proceed");
         assert!(resolved["resolved_by_operator_id"].is_string());
+
+        let dismissed = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!(
+                        "/api/v1/decisions/{}/resolution",
+                        stale_decision.id
+                    ))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"action":"dismissed","note":"No longer relevant"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dismissed.status(), StatusCode::OK);
+        let dismissed = response_json(dismissed).await;
+        assert_eq!(dismissed["state"], "resolved");
+        assert_eq!(dismissed["resolution_action"], "dismissed");
+        assert_eq!(dismissed["resolution_note"], "No longer relevant");
     }
 
     #[tokio::test]

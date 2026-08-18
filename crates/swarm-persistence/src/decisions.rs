@@ -17,6 +17,7 @@ const MAX_ACTIONS: usize = 6;
 const MAX_RESOLUTION_NOTE_BYTES: usize = 4_000;
 const MAX_DELIVERY_CLAIMS: i64 = 16;
 const MAX_DELIVERY_ATTEMPTS: i64 = 3;
+const OPERATOR_DISMISS_ACTION: &str = "dismissed";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecisionDispatch {
@@ -220,7 +221,12 @@ impl TaskStore {
         }
         let actions: Vec<String> = serde_json::from_str(&actions)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
-        if !actions.iter().any(|candidate| candidate == action) {
+        // The model controls the proposed actions, but it must never control
+        // whether the operator can decline the request altogether. Dismissal
+        // records a durable resolution and reports it back to the requester;
+        // it does not execute any proposed action.
+        if action != OPERATOR_DISMISS_ACTION && !actions.iter().any(|candidate| candidate == action)
+        {
             return Err(TaskStoreError::InvalidDecisionResolution);
         }
         let updated = transaction.execute(
@@ -554,6 +560,31 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn operator_can_dismiss_a_request_without_executing_a_proposed_action() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let actions = vec!["deploy_now".into(), "wait".into()];
+        let created = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+
+        let resolved = store
+            .resolve_decision_request(
+                created.id,
+                OPERATOR_DISMISS_ACTION,
+                "The queue changed; review current work again.",
+            )
+            .unwrap();
+
+        assert_eq!(resolved.state, DecisionRequestState::Resolved);
+        assert_eq!(
+            resolved.resolution_action.as_deref(),
+            Some(OPERATOR_DISMISS_ACTION)
+        );
+        assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
     }
 
     #[test]

@@ -30,6 +30,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   const [view, setView] = useState<"attention" | "activity">("attention");
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [dismissConfirmId, setDismissConfirmId] = useState<string>();
   const [activity, setActivity] = useState<TaskActivityPage>();
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityFailed, setActivityFailed] = useState(false);
@@ -117,8 +118,24 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     <label><span>Optional note</span><textarea value={note} maxLength={4000} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
                     <div className="decision-actions">
                       {decision.allowed_actions.map((action, index) => (
-                        <button key={action} className={index === 0 ? "primary-action" : "secondary-button"} disabled={busy} onClick={() => void onResolve(decision, action, note)}>{humanize(action)}</button>
+                        <button key={action} className={index === 0 ? "primary-action" : "secondary-button"} disabled={busy} onClick={() => { setDismissConfirmId(undefined); void onResolve(decision, action, note); }}>{humanize(action)}</button>
                       ))}
+                      <button
+                        type="button"
+                        className="secondary-button decision-dismiss"
+                        disabled={busy}
+                        title="Resolve this request without taking any proposed action"
+                        onClick={() => {
+                          if (dismissConfirmId !== decision.id) {
+                            setDismissConfirmId(decision.id);
+                            return;
+                          }
+                          setDismissConfirmId(undefined);
+                          void onResolve(decision, "dismissed", note);
+                        }}
+                      >
+                        {dismissConfirmId === decision.id ? "Confirm dismiss" : "Dismiss request"}
+                      </button>
                     </div>
                   </div>
                 ) : (

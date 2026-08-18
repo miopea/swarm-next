@@ -130,6 +130,32 @@ test("reveals and focuses a resolved decision selected through global navigation
   expect(scrollIntoView).toHaveBeenCalled();
 });
 
+test("requires confirmation before dismissing without a proposed action", () => {
+  const onResolve = vi.fn().mockResolvedValue(undefined);
+  render(
+    <DecisionInbox
+      decisions={[pending]}
+      tasks={[task]}
+      workers={[worker]}
+      busy={false}
+      onResolve={onResolve}
+    />,
+  );
+
+  fireEvent.change(screen.getByLabelText("Optional note"), {
+    target: { value: "The queue changed; review current work again." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss request" }));
+  expect(onResolve).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Confirm dismiss" }));
+  expect(onResolve).toHaveBeenCalledWith(
+    pending,
+    "dismissed",
+    "The queue changed; review current work again.",
+  );
+});
+
 test("counts and displays first-class attention that does not originate as a worker decision", () => {
   render(
     <DecisionInbox
