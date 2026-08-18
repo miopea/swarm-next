@@ -78,6 +78,7 @@ This is the working product audit for the first real developer week. It records 
 53. **Task recovery and source metadata failures are visible and recoverable.** The board now preserves last-known email links and removed-work records when their refresh fails, explains when source filtering may be incomplete, and offers direct retries. A failed task restore names the work that remained in recovery instead of making the button silently appear to do nothing.
 54. **Apiary warnings now match what the screen actually preserves.** A failed refresh of promoted projects, Jira bindings, shared claims, or Steward authority no longer clears the last-known cards while claiming that existing state is unchanged. Successful parts of a partial refresh still update independently; failed parts remain visible with their existing warning.
 55. **An unreachable worker engine is never labelled Current.** Runtime now has distinct checking, unavailable, restart-required, and current presentations. A failed health request explains that no restart occurred, avoids claiming compatibility, and offers a safe status retry without touching worker processes.
+56. **Hive backup is no longer a silent download gamble.** Settings shows preparation progress, confirms that a private snapshot downloaded, and keeps a failed attempt visible with a safe retry. A failed backup request explicitly states that no local data changed.
 
 ## Live deployed proof — 2026-08-18
 
@@ -120,7 +121,7 @@ This is the working product audit for the first real developer week. It records 
 - Desktop task details, Jira links, image attachments, and email source threads are visible without opening Jira or Outlook.
 - The full Rust workspace is green: 461 unit/integration tests plus all crate documentation tests passed on the release checkout.
 - Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
-- The web workspace is green: 60 test files with 307 tests, TypeScript project checking, and the production Vite build all pass.
+- The web workspace is green: 60 test files with 308 tests, TypeScript project checking, and the production Vite build all pass.
 
 ## Release re-proofs required
 

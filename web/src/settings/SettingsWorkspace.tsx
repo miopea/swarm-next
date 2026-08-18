@@ -64,6 +64,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
   const [terminalHostAttempt, setTerminalHostAttempt] = useState(0);
+  const [backupState, setBackupState] = useState<"idle" | "downloading" | "downloaded" | "error">("idle");
   const developmentRuntime = useDevelopmentRuntime(operatorToken, health?.version);
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
@@ -160,8 +161,14 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
     return () => { cancelled = true; };
   }, [operatorToken]);
   async function downloadBackup() {
-    const blob = await downloadDatabaseBackup(operatorToken);
-    downloadBlob(blob, `swarm-next-hive-${new Date().toISOString().slice(0, 10)}.sqlite3`);
+    setBackupState("downloading");
+    try {
+      const blob = await downloadDatabaseBackup(operatorToken);
+      downloadBlob(blob, `swarm-next-hive-${new Date().toISOString().slice(0, 10)}.sqlite3`);
+      setBackupState("downloaded");
+    } catch {
+      setBackupState("error");
+    }
   }
   const workerEngineNeedsUpdate = workerEngineUpdateRequired(health, terminalHostStatus);
   const workerEngineState = !terminalHostLoaded ? "checking" : !terminalHostStatus ? "unavailable" : workerEngineNeedsUpdate ? "restart" : "current";
@@ -446,8 +453,10 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
         <div><p className="eyebrow">Backup</p><h3 id="backup-heading">Carry your Hive safely</h3></div>
         <p>Download a consistent snapshot of workers, tasks, conversations, policies, and Hive identity. Repository contents are intentionally excluded.</p>
         <div className="settings-actions">
-          <button className="primary-action" disabled={busy} onClick={() => void downloadBackup()}>Download Hive backup</button>
+          <button className="primary-action" disabled={busy || backupState === "downloading"} onClick={() => void downloadBackup()}>{backupState === "downloading" ? "Preparing backup…" : backupState === "error" ? "Try backup again" : "Download Hive backup"}</button>
         </div>
+        {backupState === "downloaded" ? <p className="form-message" role="status">Hive backup downloaded. Keep it somewhere private and durable.</p> : null}
+        {backupState === "error" ? <p className="form-error" role="alert">The Hive backup could not be prepared. No local data was changed.</p> : null}
         <details className="restore-guide">
           <summary>How to restore this backup</summary>
           <ol>

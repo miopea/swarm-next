@@ -281,9 +281,39 @@ test("downloads a consistent Hive database snapshot", async () => {
   await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
   expect(click).toHaveBeenCalledOnce();
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:hive-backup");
+  expect(screen.getByText("Hive backup downloaded. Keep it somewhere private and durable.")).toBeInTheDocument();
   fireEvent.click(screen.getByText("How to restore this backup"));
   expect(screen.getByText(/swarm-next-package restore/)).toBeInTheDocument();
   expect(screen.getByText(/creates a rollback snapshot/)).toBeInTheDocument();
+});
+
+test("keeps backup failure visible and safely retryable", async () => {
+  let backupAvailable = false;
+  const createObjectURL = vi.fn().mockReturnValue("blob:hive-backup");
+  vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL: vi.fn() });
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/backups/database") {
+      return backupAvailable
+        ? new Response(new Uint8Array([83, 81, 76]), { status: 200, headers: { "Content-Type": "application/vnd.sqlite3" } })
+        : new Response("backup unavailable", { status: 503 });
+    }
+    if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("integrations/email/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("bindings") || url.includes("feedback/reports")) return ok([]);
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 5, host_version: "0.1.0", draining: false, running_sessions: 0, retained_sessions: 0 } });
+    if (url.includes("runtime/resources")) return ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 1, critical_bytes: 2 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: 1, pressure: "normal" } });
+    return ok({ type: "history_diagnostics", diagnostics: null });
+  }));
+
+  render(<SettingsWorkspace {...minimalProps()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Download Hive backup" }));
+  expect(await screen.findByText("The Hive backup could not be prepared. No local data was changed.")).toBeInTheDocument();
+  backupAvailable = true;
+  fireEvent.click(screen.getByRole("button", { name: "Try backup again" }));
+  await waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
+  expect(screen.queryByText("The Hive backup could not be prepared. No local data was changed.")).not.toBeInTheDocument();
 });
 
 test("confirms an opt-in development reload without implying worker loss", async () => {
