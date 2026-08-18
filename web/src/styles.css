@@ -1349,6 +1349,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .task-project-controls > button, .task-project-row > button,
   .task-actions button, .task-assignment-cell > button,
   .task-assignment-cell select { min-height: 44px; }
+  .task-project-row > a { display: grid; width: 44px; min-height: 44px; place-items: center; }
+  .task-jira-origin a { min-height: 44px; }
   .worker-order-actions button { width: 44px; min-height: 44px; }
   .operator-presence-chip > span:last-child { display: none; }
   .keeper-control-room { padding: 12px; }
