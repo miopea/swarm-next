@@ -84,7 +84,7 @@ test("creates a durable browser session without storing the operator token", asy
   fireEvent.click(screen.getByRole("button", { name: "Unlock Swarm" }));
 
   expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "What should the Hive take on next?" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "What should the Hive take on next?" })).toBeInTheDocument();
   expect(fetch).toHaveBeenCalledWith(
     "/api/v1/tasks",
     expect.objectContaining({ cache: "no-store" }),
@@ -183,13 +183,13 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Manage Apiary" }));
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
   expect(window.location.hash).toBe("#settings-apiary");
-  expect(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Apiary" })).toHaveAttribute("aria-current", "location");
+  expect(within(await screen.findByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Apiary" })).toHaveAttribute("aria-current", "location");
 
   cleanup();
   window.sessionStorage.clear();
   render(<App />);
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-  expect(within(screen.getByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Apiary" })).toHaveAttribute("aria-current", "location");
+  expect(within(await screen.findByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Apiary" })).toHaveAttribute("aria-current", "location");
   expect(window.location.hash).toBe("#settings-apiary");
 });
 

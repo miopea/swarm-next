@@ -64,8 +64,6 @@ import {
   type WorkspaceChoice,
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
-import KeeperControlRoom from "./apiary/KeeperControlRoom";
-import MemberControlRoom from "./apiary/MemberControlRoom";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
@@ -77,11 +75,9 @@ import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/the
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
 import HiveContextIndicator from "./controlRoom/HiveContextIndicator";
 import { useControlRoomModel } from "./controlRoom/useControlRoomModel";
-import SettingsWorkspace from "./settings/SettingsWorkspace";
 import { clearSettingsSection, navigateToSettingsSection, readSettingsSection, type SettingsSection } from "./settings/settingsNavigation";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
-import TaskBoard, { workerName } from "./tasks/TaskBoard";
 import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskBoardSource } from "./tasks/TaskBoardControls";
 import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./terminal/MobileTerminalComposer";
@@ -93,6 +89,10 @@ import { workerEngineMatches } from "./runtime/workerEngine";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
 const TerminalView = lazy(loadTerminalView);
+const TaskBoard = lazy(() => import("./tasks/TaskBoard"));
+const SettingsWorkspace = lazy(() => import("./settings/SettingsWorkspace"));
+const KeeperControlRoom = lazy(() => import("./apiary/KeeperControlRoom"));
+const MemberControlRoom = lazy(() => import("./apiary/MemberControlRoom"));
 const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
 const ACTIVE_SESSION_STORAGE_KEY = "swarm-next.active-session.v1";
 const WORKER_VISIBILITY_STORAGE_KEY = "swarm-next.worker-visibility.v1";
@@ -100,6 +100,10 @@ const WORKER_VISIBILITY_STORAGE_KEY = "swarm-next.worker-visibility.v1";
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
 type Surface = "decisions" | "tasks" | "workers" | "apiary" | "settings";
 type WorkerVisibility = "all" | "awake";
+
+function workerName(sessionId: string): string {
+  return `Claude ${sessionId.slice(-4).toUpperCase()}`;
+}
 
 export function App() {
   const [loadState, setLoadState] = useState<LoadState>({ kind: "loading" });
@@ -1075,54 +1079,62 @@ export function App() {
             />
           </div>
         ) : surface === "tasks" ? (
-          <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} hiveIdentity={hiveIdentity} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onRemove={removeTaskFromHive} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); void refreshControlRoom(); }} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
+          <Suspense fallback={<WorkspaceLoading label="task board" />}>
+            <TaskBoard tasks={tasks} jiraTaskLinks={jiraTaskLinks} operatorToken={operatorToken} hiveIdentity={hiveIdentity} focusTaskId={taskFocus?.id} focusRequest={taskFocus?.request} composeRequest={taskComposeRequest} sessions={sessions} workers={workers} busy={busy} query={taskQuery} filter={taskFilter} source={taskSource} sort={taskSort} project={taskProject} worker={taskWorker} projects={taskProjects} onQueryChange={setTaskQuery} onFilterChange={setTaskFilter} onSourceChange={(value) => { setTaskSource(value); if (value === "email" || value === "local") setTaskProject("all"); }} onSortChange={setTaskSort} onProjectChange={setTaskProject} onWorkerChange={setTaskWorkerFilter} onJiraSync={() => void syncJiraBoard()} onCreate={addTask} onUpdate={editTask} onRemove={removeTaskFromHive} onTransition={moveTask} onAssign={setTaskWorker} onStartWorker={startWorkerForTask} onOpenWorker={openWorker} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); void refreshControlRoom(); }} onFetchActivity={(taskId) => fetchTaskActivity(operatorToken, taskId)} onFetchJiraComments={(taskId) => fetchJiraComments(operatorToken, taskId)} onAddJiraComment={(taskId, body) => addJiraComment(operatorToken, taskId, body)} onRetryJira={retryTaskJira} onJiraImported={refreshControlRoom} onEmailImported={refreshControlRoom} onReorder={reorderOpenTasks} />
+          </Suspense>
         ) : surface === "apiary" && keeper && hiveIdentity ? (
-          <KeeperControlRoom identity={hiveIdentity} operatorToken={operatorToken} onManage={openApiarySettings} onOpenTasks={() => { setTaskComposeRequest((current) => current + 1); setSurface("tasks"); }} />
+          <Suspense fallback={<WorkspaceLoading label="Apiary" />}>
+            <KeeperControlRoom identity={hiveIdentity} operatorToken={operatorToken} onManage={openApiarySettings} onOpenTasks={() => { setTaskComposeRequest((current) => current + 1); setSurface("tasks"); }} />
+          </Suspense>
         ) : surface === "apiary" && federated && hiveIdentity ? (
-          <MemberControlRoom
-            identity={hiveIdentity}
-            operatorToken={operatorToken}
-            onManage={openApiarySettings}
-            onOpenTasks={() => setSurface("tasks")}
-          />
+          <Suspense fallback={<WorkspaceLoading label="Apiary" />}>
+            <MemberControlRoom
+              identity={hiveIdentity}
+              operatorToken={operatorToken}
+              onManage={openApiarySettings}
+              onOpenTasks={() => setSurface("tasks")}
+            />
+          </Suspense>
         ) : surface === "settings" ? (
-          <SettingsWorkspace
-            busy={busy}
-            workerEngineProgress={workerEngineProgress}
-            colorTheme={colorTheme}
-            feedbackRevision={feedbackRevision}
-            hiveIdentity={hiveIdentity}
-            liveFeedState={liveFeedState}
-            health={loadState.kind === "ready" ? loadState.health : undefined}
-            operatorToken={operatorToken}
-            recentEvents={recentEvents}
-            presence={presence}
-            lockDetectionState={lockDetectionState}
-            notificationSettings={notificationSettings}
-            queenPolicy={queenPolicy}
-            pendingQueenDecisionCount={pendingQueenDecisionCount}
-            providers={providers}
-            notificationState={notificationState}
-            sessions={sessions}
-            workers={workers}
-            workspaces={workspaces}
-            onThemeChange={changeColorTheme}
-            onPresenceChange={changePresenceMode}
-            onEnableLockDetection={enableLockDetection}
-            onNotificationPolicyChange={changeNotificationPolicy}
-            onQueenPolicyChange={changeQueenPolicy}
-            onOpenQueenDecisions={() => setSurface("decisions")}
-            onEnableNotifications={enableNotifications}
-            onDisableNotifications={disableNotifications}
-            onTestNotification={testNotification}
-            onCreateWorker={configureWorker}
-            onUpdateWorker={maintainWorkerProfile}
-            onRemoveWorker={removeWorkerProfile}
-            onReorderWorkers={reorderWorkerProfiles}
-            onUpdateWorkerEngine={maintainWorkerEngine}
-            onReloadDevelopment={reloadDevelopmentBuild}
-            onHiveIdentityChange={setHiveIdentity}
-          />
+          <Suspense fallback={<WorkspaceLoading label="Settings" />}>
+            <SettingsWorkspace
+              busy={busy}
+              workerEngineProgress={workerEngineProgress}
+              colorTheme={colorTheme}
+              feedbackRevision={feedbackRevision}
+              hiveIdentity={hiveIdentity}
+              liveFeedState={liveFeedState}
+              health={loadState.kind === "ready" ? loadState.health : undefined}
+              operatorToken={operatorToken}
+              recentEvents={recentEvents}
+              presence={presence}
+              lockDetectionState={lockDetectionState}
+              notificationSettings={notificationSettings}
+              queenPolicy={queenPolicy}
+              pendingQueenDecisionCount={pendingQueenDecisionCount}
+              providers={providers}
+              notificationState={notificationState}
+              sessions={sessions}
+              workers={workers}
+              workspaces={workspaces}
+              onThemeChange={changeColorTheme}
+              onPresenceChange={changePresenceMode}
+              onEnableLockDetection={enableLockDetection}
+              onNotificationPolicyChange={changeNotificationPolicy}
+              onQueenPolicyChange={changeQueenPolicy}
+              onOpenQueenDecisions={() => setSurface("decisions")}
+              onEnableNotifications={enableNotifications}
+              onDisableNotifications={disableNotifications}
+              onTestNotification={testNotification}
+              onCreateWorker={configureWorker}
+              onUpdateWorker={maintainWorkerProfile}
+              onRemoveWorker={removeWorkerProfile}
+              onReorderWorkers={reorderWorkerProfiles}
+              onUpdateWorkerEngine={maintainWorkerEngine}
+              onReloadDevelopment={reloadDevelopmentBuild}
+              onHiveIdentityChange={setHiveIdentity}
+            />
+          </Suspense>
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}:${terminalRevision}`}>
             <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
@@ -1135,6 +1147,10 @@ export function App() {
       </section>
     </main>
   );
+}
+
+function WorkspaceLoading({ label }: { label: string }) {
+  return <div className="workspace-loading" role="status"><BeeMascot expression="available" /><span>Opening {label}…</span></div>;
 }
 
 function preferredSessionId(workers: Worker[], sessions: SessionSummary[]): string | undefined {

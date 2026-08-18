@@ -1179,6 +1179,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .terminal-empty { display: grid; max-width: 560px; margin: auto; padding: 40px; place-items: center; color: var(--muted); text-align: center; }
 .terminal-empty h3 { margin: 0 0 8px; color: var(--text); font-size: 1.18rem; }
 .terminal-empty p:not(.eyebrow) { line-height: 1.6; }
+.workspace-loading { display: flex; min-height: 180px; margin: auto; align-items: center; justify-content: center; gap: 10px; color: var(--muted); }
+.workspace-loading svg { width: 36px; height: 36px; }
 .terminal-panel { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
 .terminal-toolbar { display: flex; min-height: 48px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .terminal-toolbar > div { display: flex; min-width: 0; align-items: center; gap: 10px; }

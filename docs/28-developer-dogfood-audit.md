@@ -42,6 +42,7 @@ This is the working product audit for the first real developer week. It records 
 18. **Queen autonomy explanations remain readable on phones.** The three desktop comparison cards now stack at phone width instead of collapsing into narrow text columns after a later base style won the cascade.
 19. **Settings keeps its selected section across responsive layout changes.** Crossing the phone breakpoint now restores the selected anchor after layout settles instead of leaving the Queen tab selected while an old pixel offset shows Apiary content.
 20. **Task edits keep their primary action reachable.** Attachment images may make the detail view long, but **Save changes** now stays in the fixed dialog footer instead of scrolling away. The guarded removal entry point is visually secondary and dangerous instead of competing with Save as another amber primary action.
+21. **Opening a terminal no longer downloads every management workspace first.** Tasks, Settings, and Keeper/Member Apiary views now load as bounded route chunks with an explicit in-app opening state. The shared initial JavaScript fell from roughly 522 kB to 304 kB before gzip, while each deferred surface remains independently testable and cached after first use.
 
 ## Live deployed proof — 2026-08-18
 
@@ -89,7 +90,7 @@ This is the working product audit for the first real developer week. It records 
 
 ## Catalogued refinements after dogfood blockers
 
-- Split the main browser bundle by workspace after the functional milestone; the current production build is healthy but its shared entry chunk is about 522 kB before gzip.
+- Continue measuring route chunks as features grow. The first workspace split reduced the shared entry from roughly 522 kB to 304 kB before gzip; Settings is now about 129 kB, Tasks 58 kB, and the two Apiary views 9 kB and 21 kB before gzip.
 - Give compute load a user-facing interpretation only after observing real Hive baselines. Do not invent a warning threshold from one four-CPU machine.
 - Keep desktop and Android PWA persistence on the real-device acceptance list; a responsive browser viewport cannot prove installed-app storage behavior.
 - Instrument route-to-first-paint timing before attempting another redraw workaround. During automated phone-sized proof, the accessibility tree changed immediately while captured pixels sometimes retained the previous workspace for roughly one to two seconds. The final surface was correct, but this matches the operator's intermittent stale-paint report and should be measured rather than hidden behind an arbitrary delay.

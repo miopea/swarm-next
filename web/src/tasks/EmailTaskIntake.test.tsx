@@ -48,7 +48,7 @@ test("previews an Inbox message and explicitly imports its body and attachments 
   fireEvent.click(screen.getByRole("checkbox"));
   fireEvent.click(screen.getByRole("button", { name: "Review 1 message" }));
   expect(await screen.findByText("The submit button does not work on my phone.")).toBeInTheDocument();
-  expect(scrollIntoView).toHaveBeenCalledWith({ block: "start", behavior: "auto" });
+  await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: "start", behavior: "auto" }));
   expect(screen.getByText("screenshot.png · 2 KB")).toBeInTheDocument();
   expect(await screen.findByRole("img", { name: "screenshot.png" })).toHaveAttribute("src", "blob:private-attached-image");
   expect(screen.getByText(/source email and every attachment will stay linked/)).toBeInTheDocument();
