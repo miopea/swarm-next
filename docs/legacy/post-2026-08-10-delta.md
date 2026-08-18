@@ -2,15 +2,15 @@
 
 Status: **Evidence review in progress**
 
-This review covers the 98 commits added to Legacy Swarm after the atlas froze on
+This review covers the 113 commits added to Legacy Swarm after the atlas froze on
 2026-08-10. It is a companion to bounded Swarm Next Ring 1 use, not a backlog
 generator. A legacy change is evidence that an operator outcome mattered; it is
 not proof that Next has the same defect or should reuse the same mechanism.
 
 ## Boundary and confidence
 
-- Range: ledger sequences 1,432 through 1,529, commits `1455bf19` through
-  `1f559e84`, dated 2026-08-10 through 2026-08-16.
+- Range: ledger sequences 1,432 through 1,544, commits `1455bf19` through
+  `10439aa8`, dated 2026-08-10 through 2026-08-18.
 - Shape: 56 fixes, 15 features, 13 release commits, 5 tests, 5 documentation
   changes, and 4 other changes.
 - Most-touched clusters: 90 testing/quality, 39 worker, 37 provider, 31 task,
@@ -42,6 +42,12 @@ They remain open to live Ring 1 evidence and operator decisions.
 | `30394629`, `caa69f25`, `2f7dc307`, `cfeb1b27`, `bee7b275`, and `938d63eb` show settings that existed but were inert, inconsistent, or not durable. | Next routes settings through typed APIs and persistence tests, and recent dogfood proved several settings live. | **Already reduced; continue rendered proof.** | A visible setting is an operator promise. Its saved value, runtime effect, and restart behavior must be tested together. |
 | `7887087a`, `2167b201`, `30394629`, `37afbf8a`, and `f01a065a` refined the distinction between assigned, active, resting, sleeping, paused, and idle work. | Next separates durable task lifecycle from provider activity and worker lifecycle, with sleeping meaning unloaded. Ring 1 has already exposed the importance of scan-friendly, truthful worker state. | **Outcome kept through redesign.** | Worker state is operational control, not decoration. Task assignment must never imply execution, and quiet must never imply absence. |
 | `2f7dc307` added operator-defined worker shortcuts, followed immediately by fixes for an inert list and missing persistence. | Next has mobile terminal controls and configurable worker roster behavior but no equivalent arbitrary shortcut system. | **Optional opportunity.** | Only consider it after real-use repetition identifies commands worth promoting. Avoid adding a general macro surface before a concrete need. |
+| `88dd7e1c` added the Legacy consumer for Next's content-bound migration receipt: exact source/task digests, a preflight preview, an automatic backup, a reversible `Moved to Swarm Next` marker, assignment release, and refusal after either side changes. | Next already exports read-only, imports as drafts, preserves provenance, and issues a signed/content-bound receipt. ADR 0046 deliberately kept finalization in the source system; the compatible consumer now exists. | **Architecture completed across both apps; product handoff remains.** | Next should guide the operator through the installed Legacy finalizer and report its verified result. Do not add direct Legacy database writes or dual-write synchronization to Next. |
+| `c40d5080` through `e929f9a4` made archive reversible, excluded archived work from Jira divergence, and guarded migrated tasks from ordinary mutation. | Next removal is soft and guarded, but an ordinary operator has no recovery view for removed local work. Jira-backed removal already has stronger constraints. | **Optional recoverability opportunity.** | A small removed-work view with guarded restore would make local mistakes recoverable. It must not turn Jira closure or migration finalization into an ambiguous local unarchive. |
+| `df526a3a`, `d53d0eee`, `6cd5ea89`, and `b660a652` distinguish holder write acknowledgement from provider delivery and detect idle workers with unsent composer text without mistaking Claude's status footer for a prompt. | Next's typed delivery records and guarded Enter path already separate queued, written, uncertain, and observed states. Ring 1 still observed stranded pasted input during Queen automation before the evidence-based submission fix. | **Core truth model already stronger; retain unsent-input detection as a focused gap.** | Detecting a non-empty provider composer is useful state evidence, but must be provider-specific, snapshot-bound, and content-free. It must never authorize an Enter by itself. |
+| `630c2681` binds approval to the exact visible picker fingerprint; `10439aa8` bounds repository identity used by command-touch diagnostics. | Next refuses durable delivery against the exact current provider snapshot and keeps repository authority typed to configured workers and Scout. | **Outcome already prevented through redesign.** | Preserve exact snapshot identity and bounded repository ownership. Do not port broad terminal parsing or command scraping as authority. |
+| `140be880` repaired a browser cache-buster that only considered Python files. | Next uses Vite content-hashed assets and its release packager refuses a stale browser build when web source is newer than `web/dist`. | **Already prevented.** | Keep source-to-bundle freshness as a release invariant rather than maintaining a handwritten extension list. |
+| `4608a81b` made Queen's composer the mobile landing control and `1d7a0978` exposed archive reason before restore. | Next already treats Queen as the primary operator surface on mobile and now has a unified Needs-you queue. | **Outcome kept through redesign.** | Continue reducing check-in friction without making Queen a coding worker or hiding the consequences of recovery actions. |
 
 ## Validated chains to expand next
 
@@ -101,7 +107,9 @@ Their current evidence, recommendation, and exact alternatives are maintained in
 
 ## Next evidence step
 
-Continue recording only observed Ring 1 overlap, refresh the root-to-tip ledger
-if Legacy advances, and close the four focused operator choices in the decision
-packet. Do not turn any remaining delta row into a port ticket without current
-Next evidence.
+Continue recording only observed Ring 1 overlap and close the focused operator
+choices in the decision packet. The root-to-tip ledger now includes the
+2026-08-18 Legacy tip. The migration finalization question is no longer open at
+the architecture level: implement and prove the bounded handoff around the
+compatible Legacy consumer without making Next a Legacy database writer. Do not
+turn any other delta row into a port ticket without current Next evidence.

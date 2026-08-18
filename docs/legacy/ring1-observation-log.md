@@ -118,6 +118,24 @@ For each naturally occurring session, record only what is relevant:
   the holder reporting one running and one retained Queen session. No Jira,
   email, task, or Apiary mutation was used for the proof.
 
+### 2026-08-18 Legacy refresh and migration boundary
+
+- Legacy `main` advanced by 15 commits to `10439aa8`; the generated ledger now
+  contains 1,544 root-to-tip identities and its self-test still passes.
+- The new Legacy migration finalizer implements the source-owned half of Next's
+  ADR 0046 contract. It verifies the exact content-bound receipt and selected
+  task digests, refuses drift, creates a backup, marks accepted tasks as moved
+  without deleting history, releases assignments, and supports a guarded
+  reversal while the migrated records remain untouched.
+- This closes the architecture question about how Legacy should acknowledge a
+  completed handoff. Next still needs an understandable operator journey around
+  that consumer; it must not write the Legacy database directly or introduce a
+  dual-write period.
+- Other new Legacy changes reinforce existing Next boundaries: write is not
+  delivery, picker approval is snapshot-specific, web bundles need mechanical
+  freshness, and unsent provider input is state evidence rather than permission
+  to press Enter.
+
 ## Window closure test
 
 At the end of the seventh elapsed day:

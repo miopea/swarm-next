@@ -73,6 +73,8 @@ This is the working product audit for the first real developer week. It records 
 - On the same release, the phone task board presented one coherent work entry surface (**Write task**, **Claim Jira work**, and **Use email**), two readable active-work cards, source/worker/status filters, and no duplicate Apiary task-creation form.
 - Release `0.1.0-91f589d4ddc6` preserved the terminal host and Queen session, then proved at 1440 × 1000 and 412 × 915 that a new local task starts at **Choose a worker** and cannot be created until the operator deliberately selects repository ownership. No task was created during proof.
 - Release `0.1.0-c2fed38c91cd` preserved the terminal host and Queen session. The terminal-session disclosure rendered above the live Queen terminal with its purpose, provider-conversation distinction, raw diagnostic identity, and copy action. Crew editing, Diagnostics, and the Legacy migration entry point were rechecked at desktop and phone widths without changing Hive records.
+- Release `0.1.0-2b0eb7e7c478` preserved the terminal host and Queen session. The read-only Legacy preview collapsed 26 familiar repository records to 25 already represented workers plus one genuinely absent repository; no `~/projects/...` record was offered as a duplicate of its `/home/<operator>/projects/...` Next worker. No migration was committed.
+- On the same release, **Manage Apiary** opened the Apiary settings anchor and a full browser reload returned to that exact section. Backup/restore guidance, the two-task board, and an imported two-email task with both image attachments were rechecked at desktop and phone widths without changing Hive data.
 
 ## Verified existing capabilities
 
@@ -110,11 +112,12 @@ These are product choices rather than obvious repairs:
 
 1. **Model routing defaults.** Decide whether Queen may recommend a cheaper/faster model only, or may also apply an in-provider `/model` switch while the worker is resting. Provider handover remains documentation-only.
 2. **Automatic description spend.** Decide whether new workers should automatically receive the bounded Claude routing draft or keep the current explicit button and cost disclosure.
-3. **Migration completion signal in Legacy.** Confirm the exact non-destructive marker Legacy should record after Next accepts a task so both apps show one authority during cutover.
+3. **Migration finalization experience.** Legacy now implements the source-owned, reversible finalizer required by ADR 0046: exact receipt verification, backup, a `Moved to Swarm Next` marker, assignment release, and refusal after drift. The remaining choice is how much of that installed command-line handoff Next should orchestrate or explain without ever writing the Legacy database itself.
 4. **Night Watch deployment rules.** Approve the first exact durable deployment scopes Queen may use; Queen should delegate execution to Scout/repository workers rather than becoming a coding worker.
 5. **Apiary activity density.** Choose the default Keeper/Member time window for completed-work rollups once more than one real Hive is connected.
 6. **Queen approval granularity.** The current Queen can correctly group eight related Ready records into one durable decision, but that produces one large approval with coupled action buttons. The next contract should create task- or worker-scoped decision records, with an optional summary above them, instead of asking the UI to parse a model-written blob into actions.
 7. **Legacy tasks that only look Jira-backed.** At least one Legacy row starts with a valid Jira key in its title but has an empty `jira_key` field and no other Jira provenance. Decide whether migration should leave all such title-only records in Legacy, offer them behind a separate warning, or query connected Jira for an exact issue before excluding them. Title shape alone is not safe enough to discard local work automatically.
+8. **Self-service restore boundary.** Backups already contain the full Hive database and the guarded host command verifies the snapshot and creates a rollback copy before replacement. Decide whether ordinary operators should keep this explicit host-admin restore boundary or receive a browser-driven restore flow with a destructive preview, forced confirmation, and an App/API restart. Replacing the live database is materially different from importing preferences and should not be disguised as a routine upload.
 
 ## Not reproduced or intentionally deferred
 
