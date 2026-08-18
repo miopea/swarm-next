@@ -34,6 +34,7 @@ Read and review these documents in order:
 30. [Legacy stable release boundaries](legacy/stable-release-boundaries.md)
 31. [Legacy atlas completion audit](legacy/atlas-completion-audit.md)
 32. [Ring 1 observation log](legacy/ring1-observation-log.md)
+33. [Transparent developer guidance](decisions/0047-transparent-developer-guidance.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do
@@ -85,3 +86,4 @@ Current decision records:
 - [ADR 0043: Loaded worker before Active work](decisions/0043-loaded-worker-before-active.md)
 - [ADR 0044: Delivered Ready work attention](decisions/0044-delivered-ready-work-attention.md)
 - [ADR 0045: Engaged-device terminal geometry](decisions/0045-engaged-device-terminal-geometry.md)
+- [ADR 0047: Transparent developer guidance](decisions/0047-transparent-developer-guidance.md)
