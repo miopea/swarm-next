@@ -96,3 +96,18 @@ test("names the device driving the worker, when it is not this one", () => {
 
   expect(screen.getByRole("status")).toHaveTextContent("On phone");
 });
+
+test("says what the unconfirmed-delivery mark means and where to look", () => {
+  // The roster mark explains itself on hover and then leads nowhere: opening
+  // the worker said nothing about what it meant or how to clear it.
+  render_({ unconfirmedDelivery: true });
+
+  expect(screen.getByRole("status")).toHaveTextContent("Briefing unconfirmed");
+  expect(screen.getByRole("status")).toHaveTextContent("check the terminal");
+});
+
+test("stays quiet when every briefing was confirmed", () => {
+  render_({ unconfirmedDelivery: false });
+
+  expect(screen.queryByText(/Briefing unconfirmed/)).not.toBeInTheDocument();
+});

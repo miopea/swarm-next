@@ -11,6 +11,8 @@ export interface WorkerContextBarProps {
   repository?: RepositoryState | null;
   /** Set only when a device other than this one is driving the worker. */
   engagement?: { deviceClass: "desktop" | "mobile"; detail: string };
+  /** Swarm wrote a briefing to this worker and could not confirm it landed. */
+  unconfirmedDelivery?: boolean;
   taskStateLabel: (task: Task) => string;
   onOpenQueue: (workerId: string, focusTaskId?: string) => void;
 }
@@ -29,6 +31,7 @@ export default function WorkerContextBar({
   workSummary,
   repository,
   engagement,
+  unconfirmedDelivery,
   taskStateLabel,
   onOpenQueue,
 }: WorkerContextBarProps) {
@@ -58,6 +61,13 @@ export default function WorkerContextBar({
             <span className="worker-repository-dirty">{repository.changed_paths}</span>
           ) : null}
         </span>
+      ) : null}
+      {unconfirmedDelivery ? (
+        <span
+          className="worker-unconfirmed-detail"
+          role="status"
+          title="Swarm wrote a briefing to this worker and could not confirm the worker received it. Nothing is retried automatically, because a briefing delivered twice is worse than one the operator was told about."
+        >Briefing unconfirmed — check the terminal below</span>
       ) : null}
       {engagement ? (
         <span

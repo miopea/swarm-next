@@ -1149,6 +1149,7 @@ export function App() {
               workSummary={activeWorkerWork.summary}
               repository={repository}
               engagement={activeWorkerEngagement}
+              unconfirmedDelivery={activeWorker.unconfirmed_delivery}
               taskStateLabel={taskStateLabel}
               onOpenQueue={openWorkerQueue}
             />

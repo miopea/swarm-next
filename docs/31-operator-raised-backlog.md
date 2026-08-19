@@ -13,14 +13,6 @@ This file is the durable record until then.
 
 ## Open
 
-### 2. The unconfirmed-delivery mark is a dead end
-
-The mustard `!` on a worker row explains itself on hover, but clicking through
-to that worker offers nothing about what it means or how to clear it. A marker
-that names a problem without offering a next action moves the confusion rather
-than resolving it. Raised alongside the observation that the glyph alone does
-not say what it is.
-
 ### 4. A task needs one operator instruction line
 
 The operator frequently wants to say something that governs how a task is
@@ -30,12 +22,6 @@ part of the work.
 
 Wanted: a single overarching operator comment on a task, distinct from the
 description and from activity notes.
-
-### 5. The Inbox needs a refresh
-
-The email intake list has no way to refresh. Mail arrives while the chooser is
-open, so the list is stale the moment it is rendered and the only recovery is to
-close and reopen the flow.
 
 ### 6. Worker engine upgrades need care proportional to their harm
 
@@ -70,6 +56,13 @@ would return the vertical chrome the phone layout reclaimed, so this needs a
 deliberate choice rather than a default.
 
 ## Landed
+
+- The unconfirmed-delivery mark now explains itself where the operator lands.
+  Opening the worker states what it means and that the briefing is in the
+  terminal below. Nothing is retried automatically: a briefing delivered twice
+  is worse than one the operator was told about, so the next step is to read the
+  terminal rather than press a button.
+- The Inbox chooser can be refreshed without closing and reopening the flow.
 
 - Worker state now reads as a scale: green is work happening, amber is work
   waiting on the operator, red is work that cannot proceed, with neutrals for a

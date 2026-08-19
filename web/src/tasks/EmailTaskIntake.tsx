@@ -40,6 +40,10 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
   const [readinessLoaded, setReadinessLoaded] = useState(false);
   const [readinessError, setReadinessError] = useState("");
   const [readinessAttempt, setReadinessAttempt] = useState(0);
+  // Mail arrives while the chooser is open, so the list is stale from the moment
+  // it renders. Refreshing it re-runs the same load rather than adding a second
+  // path to it.
+  const [inboxAttempt, setInboxAttempt] = useState(0);
   const assignableWorkers = useMemo(() => workers.filter((worker) => worker.role !== "queen"), [workers]);
   const preview = selectedMessages[previewIndex];
 
@@ -78,7 +82,7 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
         .finally(() => { if (!cancelled) setBusy(false); });
     }, query.trim() ? 250 : 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [operatorToken, query, readiness?.connection, selectedMessages.length]);
+  }, [operatorToken, query, readiness?.connection, selectedMessages.length, inboxAttempt]);
 
   useEffect(() => {
     const urls: string[] = [];
@@ -208,7 +212,15 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
       {!selectedMessages.length ? (
         <>
           <label className="jira-intake-filter">
-            <span>Find a message</span>
+            <span>
+              Find a message
+              <button
+                type="button"
+                className="secondary-button email-inbox-refresh"
+                disabled={busy}
+                onClick={() => setInboxAttempt((attempt) => attempt + 1)}
+              >{busy ? "Checking…" : "Refresh Inbox"}</button>
+            </span>
             <input value={query} placeholder="Subject, sender, or message text" autoComplete="off" onChange={(event) => setQuery(event.target.value)} />
           </label>
           <div className="email-message-list email-message-selection" role="list" aria-label="Inbox messages">
