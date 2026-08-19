@@ -13,7 +13,7 @@ This file is the durable record until then.
 
 ## Open
 
-### 4. A task needs one operator instruction line
+### 4. A task needs one operator instruction line — *fixed*
 
 The operator frequently wants to say something that governs how a task is
 approached rather than what it contains: "interview me first", "analyse this,
@@ -22,6 +22,11 @@ part of the work.
 
 Wanted: a single overarching operator comment on a task, distinct from the
 description and from activity notes.
+
+Fixed across `7c61be0` and `74f88bc`: a task carries one line, bounded to 280
+bytes and a single line, and the briefing states it before the work. Creating a
+task cannot carry one yet — that path goes through a constructor shared with
+the Jira and email intakes.
 
 ### 10. A worker-engine update loses the roster it promised to restore — *fixed*
 
