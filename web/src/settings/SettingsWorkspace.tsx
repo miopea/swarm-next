@@ -68,7 +68,8 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
   const terminalHostLoadedRef = useRef(false);
   const [terminalHostAttempt, setTerminalHostAttempt] = useState(0);
   const [backupState, setBackupState] = useState<"idle" | "downloading" | "downloaded" | "error">("idle");
-  const developmentRuntime = useDevelopmentRuntime(operatorToken, health?.version);
+  const { runtime: developmentRuntime, reachable: developmentReachable } =
+    useDevelopmentRuntime(operatorToken, health?.version);
   const [jiraReadiness, setJiraReadiness] = useState<JiraReadiness>();
   const [jiraUnavailable, setJiraUnavailable] = useState(false);
   const [jiraReadinessAttempt, setJiraReadinessAttempt] = useState(0);
@@ -456,7 +457,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
               </div>
             )}</> : <><p>The installed worker engine is compatible with this App/API release. Running workers do not need to restart.</p><small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small></>}
           </article>
-          <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} healthVersion={health?.version} onReload={onReloadDevelopment} />
+          <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} reachable={developmentReachable} healthVersion={health?.version} onReload={onReloadDevelopment} />
         </div>
       </section>
 

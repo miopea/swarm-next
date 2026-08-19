@@ -112,3 +112,22 @@ test("separates a build that has been asked for from one that is running", () =>
 
   expect(screen.getByLabelText("App and API status")).toHaveTextContent("Starting the App and API build…");
 });
+
+test("holds its place while the API restarts under the build", () => {
+  // The operator watched a build compile and then the whole App and API card
+  // disappeared, with a 502 alongside it. Vanishing mid-operation reads as the
+  // build having destroyed something.
+  render(<DevelopmentReloadAction busy={false} reachable={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "building",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "abcdef012345",
+    source_dirty: false,
+  }} />);
+
+  const status = screen.getByLabelText("App and API status");
+  expect(status).toHaveTextContent("Reconnecting…");
+  expect(status).toHaveTextContent("expected while a new build takes over");
+});

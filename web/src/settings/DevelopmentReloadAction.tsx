@@ -4,13 +4,34 @@ import { deployedRevision, runtimeVersionIdentity, shortRevision } from "./runti
 type Props = {
   busy: boolean;
   runtime?: import("../api").DevelopmentRuntime;
+  /** Whether the API is currently answering. False while it restarts under a reload. */
+  reachable?: boolean;
   healthVersion?: string;
   onReload: () => Promise<void>;
 };
 
-export default function DevelopmentReloadAction({ busy, runtime, healthVersion, onReload }: Props) {
+export default function DevelopmentReloadAction({ busy, runtime, reachable = true, healthVersion, onReload }: Props) {
   const [confirming, setConfirming] = useState(false);
   if (!runtime?.enabled) return null;
+  // Activating a build restarts the API, so this card loses contact in the
+  // middle of the operation it is reporting. It holds its place and says so:
+  // disappearing at that exact moment reads as the build having destroyed
+  // something.
+  if (!reachable) {
+    return (
+      <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status" role="status">
+        <header><div><span className="runtime-component-name">App and API</span><strong>Waiting for the API to answer</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header>
+        <div className="maintenance-progress" aria-live="polite">
+          <span className="maintenance-spinner" aria-hidden="true" />
+          <div>
+            <strong>Reconnecting…</strong>
+            <span>The API is not answering right now, which is expected while a new build takes over. This page reconnects on its own.</span>
+          </div>
+        </div>
+        <small>Claude, Codex, and the worker engine are not restarted by an App and API release.</small>
+      </article>
+    );
+  }
   const runningRevision = shortRevision(runtime.deployed_source_revision) ?? deployedRevision(runtime.version);
   const workingRevision = shortRevision(runtime.source_revision) ?? "the working copy";
   if (runtime.state === "source_mismatch") return (

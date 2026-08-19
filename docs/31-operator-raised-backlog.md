@@ -115,6 +115,29 @@ operator is present*, this is *which worker they are present with*.
 Fixed in `f98ee29`: typing into a worker ends that device's engagement
 everywhere else.
 
+### 15. The App and API card vanishes during the reload it is reporting — *fixed*
+
+Raised as: the app update ran, and after it compiled the module disappeared;
+opening a worker showed `Runtime request returned 502`; afterwards the card
+said current but still offered a reload.
+
+Root cause: the hook feeding the card discarded its last known state whenever a
+refresh failed. Activating a build restarts the API, so the one moment that
+call reliably fails is the middle of the operation the operator is watching —
+and with no runtime the card renders nothing at all.
+
+Fixed: the last known runtime is kept, and the card holds its place with a
+"Reconnecting…" state saying the API not answering is expected while a new
+build takes over.
+
+The 502 is the same restart, seen from another surface. `5bdd8a8` already added
+502-and-family to the statuses that retry.
+
+Still open from this report: **a completed build never says it succeeded.** The
+card returns to offering a reload — correctly, because newer commits exist —
+but nothing confirms the build the operator asked for landed. The runtime has a
+`ready` state that the card does not surface distinctly.
+
 ### 6. Worker engine upgrades need care proportional to their harm
 
 Raised as: this is the most harmful operation and currently has the least
