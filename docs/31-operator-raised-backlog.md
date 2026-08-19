@@ -333,6 +333,49 @@ Providers card naming the release, how many workers are behind, and a restart
 that stops and revives exactly those workers through the same durable
 revival-intent path the engine update uses.
 
+### 22. Worker revival deadlocked the API against itself — *fixed*
+
+Not operator-raised as a feature request; raised as "we are stuck at the login
+screen and I get a 524".
+
+Sequence, 2026-08-19:
+
+- **21:15** App/API deployed at `65e5db0`. That commit changed `swarm-terminal`,
+  so the expected worker-engine build id changed with it.
+- **21:47** `swarm-next-host-reconcile` saw the mismatch and applied the worker
+  engine update **on its own**, stopping all seven workers. Nobody asked it to;
+  a timer acted on a build id that a deploy had moved.
+- The revival intents from item 10 were recorded correctly — six workers owed a
+  return.
+- Revival then deadlocked. `start_worker_process` takes `worker_lifecycle`, the
+  mutex is not reentrant, and three callers held it and asked for it again: the
+  supervisor's revival pass, the provider restart endpoint, and the worker
+  engine update. The first revival waited forever for a lock it already held.
+- Everything needing the lifecycle queued behind it. `/health` answered in
+  1.6ms while `/api/v1/workers` never returned, so the proxy answered 524 and
+  the login screen never cleared.
+- **22:24** Fixed in `71c3ad5` and deployed. The supervisor checks the lock and
+  releases it immediately, since starting a worker takes it anyway; the other
+  two revive after unlocking.
+
+Two things worth carrying forward.
+
+**The bug shipped hours before it fired.** The revival path landed in `198af91`
+and only runs when a worker is owed a return, which first happened at 21:47.
+Deployed and exercised are different states.
+
+**Deploying App/API is not isolated from workers.** The card says workers stay
+online, and they do — until a build id change makes the reconcile timer restart
+the engine underneath them.
+
+Cost: the six workers were not revived. The fifteen-minute intent age-out from
+item 10 discarded them while the deadlock blocked revival for thirty-seven
+minutes, so they had to be started by hand. The age-out cannot tell "no longer
+wanted" from "revival has been broken for a while", which is worth revisiting.
+
+Covered by a test that fails against the bug: with the guard held, supervising
+an owed worker does not return within twenty seconds.
+
 ## Landed
 
 - The unconfirmed-delivery mark now explains itself where the operator lands.

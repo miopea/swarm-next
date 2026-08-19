@@ -12900,6 +12900,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reviving_an_owed_worker_does_not_deadlock_the_worker_lifecycle() {
+        // A live outage: the supervisor held the worker lifecycle while calling
+        // `start_worker_process`, which takes that same non-reentrant mutex. The
+        // first revival waited forever for a lock it already held, and every
+        // request needing the lifecycle queued behind it — including the ones
+        // behind the login screen, which is how it was noticed.
+        //
+        // This asserts completion, not success. Starting a provider is expected
+        // to fail in a test; hanging is the defect.
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let socket = runtime.path().join("terminal.sock");
+        // A host on the expected build, so revival is not skipped as unsettled.
+        let server = HostServer::bind_with_identity(
+            &socket,
+            registry,
+            build_version(),
+            worker_engine_build_id(),
+        )
+        .unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Dahlia",
+                ProviderKind::ClaudeCode,
+                workspace.to_str().unwrap(),
+                false,
+                1,
+            )
+            .unwrap();
+        store
+            .record_worker_revival_intents(&[worker.id], unix_timestamp())
+            .unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone());
+
+        let finished = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            state.supervise_workers(),
+        )
+        .await;
+
+        assert!(
+            finished.is_ok(),
+            "supervising owed workers deadlocked on the worker lifecycle"
+        );
+        // The lifecycle is free afterwards, which is what the rest of the API
+        // was waiting on.
+        assert!(state.worker_lifecycle.try_lock().is_ok());
+
+        server_task.abort();
+        let _ = server_task.await;
+    }
+
+    #[tokio::test]
     async fn an_interrupted_worker_engine_update_still_owes_the_workers_a_return() {
         let runtime = TempDir::new().unwrap();
         let workspace = env::temp_dir().canonicalize().unwrap();
