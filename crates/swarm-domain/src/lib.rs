@@ -607,7 +607,15 @@ pub struct DecisionRequest {
     pub allowed_actions: Vec<String>,
     pub deadline: Option<i64>,
     pub state: DecisionRequestState,
+    /// Present when this record is an interview rather than a ruling. Empty
+    /// means a ruling, and such records behave exactly as they did before
+    /// interviews existed.
+    #[serde(default)]
+    pub questions: Vec<DecisionQuestion>,
     pub resolution_action: Option<String>,
+    /// The operator's answers, keyed by question header. Empty for a ruling.
+    #[serde(default)]
+    pub resolution_answers: std::collections::BTreeMap<String, Vec<String>>,
     pub resolution_note: String,
     /// Which surface submitted the resolution, for diagnosis after the fact.
     /// Empty on records written before this was captured. Reported by the

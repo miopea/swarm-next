@@ -2,8 +2,8 @@ use swarm_domain::{
     Apiary, ApiaryCollapseReadiness, ApiaryHiveCandidate, ApiaryInvitation, ApiaryInvitationBundle,
     ApiaryInvitationId, ApiaryJiraProject, ApiaryJoinCheckState, ApiaryJoinChecks, ApiaryJoinLink,
     ApiaryJoinLinkBundle, ApiaryJoinLinkId, ApiaryJoinLinkPoll, ApiaryJoinReadiness,
-    ApiaryKeeperLink, ApiaryMemberSummary, ApiaryTask, DecisionRequest, DecisionRequestId,
-    DecisionRequestKind, DecisionUrgency, FederationCatalogAcknowledgement,
+    ApiaryKeeperLink, ApiaryMemberSummary, ApiaryTask, DecisionQuestion, DecisionRequest,
+    DecisionRequestId, DecisionRequestKind, DecisionUrgency, FederationCatalogAcknowledgement,
     FederationCatalogReadiness, FederationCatalogSnapshot, FederationClaimHandoff,
     FederationClaimHandoffId, FederationClaimId, FederationDepartureOverview,
     FederationDepartureReadiness, FederationDepartureReceipt, FederationJoinAcceptance,
@@ -2194,6 +2194,7 @@ impl TaskService {
                 evidence: &input.evidence,
                 suggested_action: &input.suggested_action,
                 allowed_actions: &input.allowed_actions,
+                questions: &input.questions,
                 deadline: input.deadline,
             })
             .map_err(Into::into)
@@ -2226,6 +2227,8 @@ pub struct DecisionRequestInput {
     pub evidence: String,
     pub suggested_action: String,
     pub allowed_actions: Vec<String>,
+    /// Present makes this an interview rather than a ruling.
+    pub questions: Vec<DecisionQuestion>,
     pub deadline: Option<i64>,
 }
 
@@ -2746,6 +2749,7 @@ mod tests {
                     evidence: "Both prototypes pass".into(),
                     suggested_action: "Use the durable variant".into(),
                     allowed_actions: vec!["durable".into(), "minimal".into()],
+                    questions: Vec::new(),
                     deadline: None,
                 },
             )
@@ -2763,6 +2767,7 @@ mod tests {
                     evidence: "All checks pass".into(),
                     suggested_action: "Ship".into(),
                     allowed_actions: vec!["ship".into(), "hold".into()],
+                    questions: Vec::new(),
                     deadline: None,
                 },
             )
@@ -2794,6 +2799,7 @@ mod tests {
                     evidence: String::new(),
                     suggested_action: "Do not allow".into(),
                     allowed_actions: vec!["acknowledge".into()],
+                    questions: Vec::new(),
                     deadline: None,
                 },
             ),

@@ -1535,6 +1535,7 @@ mod tests {
                 evidence: "",
                 suggested_action: "Treat the wire as authoritative",
                 allowed_actions: &["Treat the wire as authoritative".to_owned()],
+                questions: &[],
                 deadline: None,
             })
             .unwrap();

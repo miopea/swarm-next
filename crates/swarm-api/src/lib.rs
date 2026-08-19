@@ -6551,6 +6551,21 @@ fn email_attachment_error(error: email_attachments::EmailAttachmentError) -> Api
 #[allow(clippy::too_many_lines)]
 fn task_store_error(error: &TaskStoreError) -> ApiError {
     match error {
+        TaskStoreError::InvalidDecisionQuestions => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_decision_questions",
+            error.to_string(),
+        ),
+        TaskStoreError::IncompleteDecisionAnswers => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "incomplete_decision_answers",
+            error.to_string(),
+        ),
+        TaskStoreError::DismissedInterviewNeedsReason => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "dismissed_interview_needs_reason",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidMigrationBundle => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_migration_bundle",
@@ -11925,6 +11940,7 @@ mod tests {
                 evidence: "All checks pass",
                 suggested_action: "Ship",
                 allowed_actions: &actions,
+                questions: &[],
                 deadline: None,
             })
             .unwrap();
@@ -11940,6 +11956,7 @@ mod tests {
                 evidence: "The operator already handled it elsewhere",
                 suggested_action: "Hold",
                 allowed_actions: &actions,
+                questions: &[],
                 deadline: None,
             })
             .unwrap();
@@ -12046,6 +12063,7 @@ mod tests {
                 evidence: "All checks pass",
                 suggested_action: "Ship",
                 allowed_actions: &actions,
+                questions: &[],
                 deadline: None,
             })
             .unwrap();
@@ -12182,6 +12200,7 @@ mod tests {
                 evidence: "All checks pass",
                 suggested_action: "Ship",
                 allowed_actions: &actions,
+                questions: &[],
                 deadline: None,
             })
             .unwrap();

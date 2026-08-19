@@ -98,6 +98,7 @@ pub use task_dispatches::{TaskDispatch, TaskDispatchFailure};
 mod task_outcomes;
 pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
+pub use decisions::INTERVIEW_ANSWERED_ACTION;
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
@@ -122,7 +123,8 @@ const PRESENCE_LAST_ACTIVE_SCHEMA_VERSION: i64 = 74;
 const TASK_OPERATOR_INSTRUCTION_SCHEMA_VERSION: i64 = 75;
 const WORKER_REVIVAL_INTENT_SCHEMA_VERSION: i64 = 76;
 const DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION: i64 = 77;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION;
+const DECISION_QUESTIONS_SCHEMA_VERSION: i64 = 78;
+const CURRENT_SCHEMA_VERSION: i64 = DECISION_QUESTIONS_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -241,6 +243,14 @@ pub enum TaskStoreError {
     InvalidDecisionContent,
     #[error("decision request must offer 1 to 6 unique actions")]
     InvalidDecisionActions,
+    #[error(
+        "an interview asks at most 4 questions, each with 2 to 4 unique options and a unique header, and offers no actions"
+    )]
+    InvalidDecisionQuestions,
+    #[error("an interview is answered by answering every question it asks")]
+    IncompleteDecisionAnswers,
+    #[error("dismissing an interview needs a reason the asking worker can act on")]
+    DismissedInterviewNeedsReason,
     #[error("decision request deadline is invalid")]
     InvalidDecisionDeadline,
     #[error("decision request is already resolved")]
@@ -1940,6 +1950,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION {
         decisions::migrate_decision_resolution_surface(transaction)?;
+    }
+    if schema_version < DECISION_QUESTIONS_SCHEMA_VERSION {
+        decisions::migrate_decision_questions(transaction)?;
     }
     Ok(())
 }
@@ -4736,6 +4749,10 @@ mod tests {
         SchemaStep {
             table: "decision_requests",
             artifact: "resolution_surface",
+        },
+        SchemaStep {
+            table: "decision_requests",
+            artifact: "questions",
         },
     ];
 

@@ -1,15 +1,53 @@
-use std::{collections::HashSet, str::FromStr};
+use std::{
+    collections::{BTreeMap, HashSet},
+    str::FromStr,
+};
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
-    ControlRoomEventKind, DecisionDeliveryState, DecisionRequest, DecisionRequestId,
-    DecisionRequestKind, DecisionRequestState, DecisionUrgency, TaskId, WorkerId, WorkerSessionId,
+    ControlRoomEventKind, DecisionDeliveryState, DecisionQuestion, DecisionRequest,
+    DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
+    MAX_DECISION_QUESTION_HEADER_BYTES, MAX_DECISION_QUESTION_OPTION_BYTES,
+    MAX_DECISION_QUESTION_OPTIONS, MAX_DECISION_QUESTION_TEXT_BYTES, MAX_DECISION_QUESTIONS,
+    MIN_DECISION_QUESTION_OPTIONS, TaskId, WorkerId, WorkerSessionId,
 };
 
 use super::{
-    DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION, TaskStore, TaskStoreError,
-    insert_control_room_event,
+    DECISION_QUESTIONS_SCHEMA_VERSION, DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION, TaskStore,
+    TaskStoreError, insert_control_room_event,
 };
+
+/// Carries the questions an interview asks and the answers it collects.
+///
+/// Both default to empty, which is exactly what a ruling holds, so every record
+/// written before interviews existed keeps behaving as it did.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+pub(super) fn migrate_decision_questions(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let decisions_exist: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_requests')",
+        [],
+        |row| row.get(0),
+    )?;
+    if decisions_exist {
+        for (column, default) in [("questions", "'[]'"), ("resolution_answers", "'{}'")] {
+            let present: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('decision_requests') WHERE name = ?1)",
+                [column],
+                |row| row.get(0),
+            )?;
+            if !present {
+                transaction.execute_batch(&format!(
+                    "ALTER TABLE decision_requests ADD COLUMN {column} TEXT NOT NULL DEFAULT {default};"
+                ))?;
+            }
+        }
+    }
+    transaction.pragma_update(None, "user_version", DECISION_QUESTIONS_SCHEMA_VERSION)
+}
 
 /// Records which surface submitted a resolution.
 ///
@@ -57,6 +95,12 @@ const MAX_RESOLUTION_NOTE_BYTES: usize = 4_000;
 const MAX_DELIVERY_CLAIMS: i64 = 16;
 const MAX_DELIVERY_ATTEMPTS: i64 = 3;
 const OPERATOR_DISMISS_ACTION: &str = "dismissed";
+/// The action recorded when an interview is answered.
+///
+/// The schema requires every resolved record to name an action, and the audit
+/// trail should read as clearly for an interview as for a button. "answered"
+/// is that action; the substance is in `resolution_answers`.
+pub const INTERVIEW_ANSWERED_ACTION: &str = "answered";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecisionDispatch {
@@ -84,6 +128,8 @@ pub struct NewDecisionRequest<'a> {
     pub evidence: &'a str,
     pub suggested_action: &'a str,
     pub allowed_actions: &'a [String],
+    /// Present makes this an interview rather than a ruling. Empty is a ruling.
+    pub questions: &'a [DecisionQuestion],
     pub deadline: Option<i64>,
 }
 
@@ -118,6 +164,8 @@ impl TaskStore {
         request: &NewDecisionRequest<'_>,
     ) -> Result<DecisionRequest, TaskStoreError> {
         validate_new_request(request)?;
+        let questions = serde_json::to_string(request.questions)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
         let actions = serde_json::to_string(request.allowed_actions)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
         let id = DecisionRequestId::new();
@@ -140,9 +188,9 @@ impl TaskStore {
         let inserted = transaction.execute(
             "INSERT INTO decision_requests (
                 id, hive_id, requesting_worker_id, task_id, kind, urgency, title, reason,
-                risk, evidence, suggested_action, allowed_actions, deadline
+                risk, evidence, suggested_action, allowed_actions, deadline, questions
              )
-             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
              FROM worker_profiles w
              JOIN local_hive_identity l ON l.hive_id = w.hive_id AND l.singleton = 1
              WHERE w.id = ?2
@@ -162,6 +210,7 @@ impl TaskStore {
                 request.suggested_action,
                 actions,
                 request.deadline,
+                questions,
             ],
         )?;
         if inserted == 0 {
@@ -193,7 +242,7 @@ impl TaskStore {
                 "SELECT id, hive_id, requesting_worker_id, task_id, kind, urgency, title,
                         reason, risk, evidence, suggested_action, allowed_actions, deadline,
                         state, resolution_action, resolution_note, resolved_by_operator_id,
-                        resolution_surface,
+                        resolution_surface, questions, resolution_answers,
                         created_at, updated_at, resolved_at,
                         (SELECT state FROM decision_deliveries WHERE decision_id = decision_requests.id)
                  FROM decision_requests WHERE id = ?1",
@@ -214,7 +263,7 @@ impl TaskStore {
             "SELECT d.id, d.hive_id, d.requesting_worker_id, d.task_id, d.kind, d.urgency, d.title,
                     reason, risk, evidence, suggested_action, allowed_actions, deadline,
                     state, resolution_action, resolution_note, resolved_by_operator_id,
-                    resolution_surface,
+                    resolution_surface, questions, resolution_answers,
                     created_at, updated_at, resolved_at,
                     (SELECT state FROM decision_deliveries WHERE decision_id = d.id)
              FROM decision_requests d
@@ -227,6 +276,89 @@ impl TaskStore {
             .query_map([MAX_DECISION_RESULTS], decision_from_row)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
+    }
+
+    /// Answers an interview and delivers the answers to the worker that asked.
+    ///
+    /// Every declared question must carry an answer. A worker holding its
+    /// session on an interview is waiting for the whole set, and resuming it
+    /// with half of one would give it an incomplete picture and no way to ask
+    /// the rest without opening a second record.
+    ///
+    /// An answer is not restricted to the offered options. An answer that
+    /// matches none of them is the most informative kind — it is the case the
+    /// asker failed to guess, which is the reason interviews exist — so it is
+    /// stored as given.
+    ///
+    /// # Errors
+    /// Returns `DecisionNotFound`, `DecisionAlreadyResolved`,
+    /// `IncompleteDecisionAnswers`, or a database error.
+    pub fn answer_decision_request(
+        &self,
+        id: DecisionRequestId,
+        answers: &BTreeMap<String, Vec<String>>,
+        note: &str,
+        surface: &str,
+    ) -> Result<DecisionRequest, TaskStoreError> {
+        if note.len() > MAX_RESOLUTION_NOTE_BYTES || surface.len() > MAX_RESOLUTION_SURFACE_BYTES {
+            return Err(TaskStoreError::InvalidDecisionResolution);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let (state, declared): (String, String) = transaction
+            .query_row(
+                "SELECT d.state, d.questions FROM decision_requests d
+                 JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
+                 WHERE d.id = ?1",
+                [id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(TaskStoreError::DecisionNotFound)?;
+        if state != "pending" {
+            return Err(TaskStoreError::DecisionAlreadyResolved);
+        }
+        let declared: Vec<DecisionQuestion> = serde_json::from_str(&declared)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        if declared.is_empty() {
+            // A ruling is resolved by choosing one of its actions.
+            return Err(TaskStoreError::InvalidDecisionResolution);
+        }
+        let answered_every_question = declared.iter().all(|question| {
+            answers
+                .get(&question.header)
+                .is_some_and(|given| given.iter().any(|value| !value.trim().is_empty()))
+        });
+        if !answered_every_question || answers.len() != declared.len() {
+            return Err(TaskStoreError::IncompleteDecisionAnswers);
+        }
+        let recorded = serde_json::to_string(answers)
+            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+        let updated = transaction.execute(
+            "UPDATE decision_requests SET
+                 state = 'resolved', resolution_action = 'answered',
+                 resolution_answers = ?2, resolution_note = ?3,
+                 resolution_surface = ?4,
+                 resolved_by_operator_id = (
+                     SELECT h.operator_id FROM local_hive_identity l
+                     JOIN hives h ON h.id = l.hive_id WHERE l.singleton = 1
+                 ),
+                 resolved_at = unixepoch(), updated_at = unixepoch()
+             WHERE id = ?1 AND state = 'pending'",
+            params![id.to_string(), recorded, note, surface],
+        )?;
+        if updated != 1 {
+            return Err(TaskStoreError::DecisionAlreadyResolved);
+        }
+        transaction.execute(
+            "INSERT INTO decision_deliveries (decision_id, worker_id, state)
+             SELECT id, requesting_worker_id, 'queued' FROM decision_requests WHERE id = ?1",
+            [id.to_string()],
+        )?;
+        insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_decision_request(id)
     }
 
     /// Resolves a pending local-Hive request using one of its declared actions.
@@ -249,18 +381,31 @@ impl TaskStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let (state, actions): (String, String) = transaction
+        let (state, actions, questions): (String, String, String) = transaction
             .query_row(
-                "SELECT d.state, d.allowed_actions FROM decision_requests d
+                "SELECT d.state, d.allowed_actions, d.questions FROM decision_requests d
                  JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
                  WHERE d.id = ?1",
                 [id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?
             .ok_or(TaskStoreError::DecisionNotFound)?;
         if state != "pending" {
             return Err(TaskStoreError::DecisionAlreadyResolved);
+        }
+        // An interview offers no actions, so the only resolution this path can
+        // carry for one is a dismissal — and a dismissal without a note is the
+        // failure this whole shape exists to stop. "Hold, I will deal with it
+        // later" and "stop asking me about this" were recorded identically, and
+        // the asker had to collapse both into changing nothing.
+        if questions != "[]" {
+            if action != OPERATOR_DISMISS_ACTION {
+                return Err(TaskStoreError::InvalidDecisionResolution);
+            }
+            if note.trim().is_empty() {
+                return Err(TaskStoreError::DismissedInterviewNeedsReason);
+            }
         }
         let actions: Vec<String> = serde_json::from_str(&actions)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
@@ -488,6 +633,15 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
     {
         return Err(TaskStoreError::InvalidDecisionContent);
     }
+    // A record is either a ruling or an interview, never both. Permitting both
+    // invites a record whose button says one thing and whose answers say
+    // another, with no defined precedence between them.
+    if !request.questions.is_empty() {
+        if !request.allowed_actions.is_empty() {
+            return Err(TaskStoreError::InvalidDecisionQuestions);
+        }
+        return validate_questions(request.questions);
+    }
     let mut unique = HashSet::new();
     if request.allowed_actions.is_empty()
         || request.allowed_actions.len() > MAX_ACTIONS
@@ -496,6 +650,38 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
         })
     {
         return Err(TaskStoreError::InvalidDecisionActions);
+    }
+    Ok(())
+}
+
+/// Bounds an interview so it stays an instrument rather than a questionnaire.
+///
+/// The caps mirror `AskUserQuestion`, which is what the operator was
+/// interviewed with when this was specified. Headers must be unique because
+/// they key the answers: two questions sharing one would lose an answer
+/// silently.
+fn validate_questions(questions: &[DecisionQuestion]) -> Result<(), TaskStoreError> {
+    if questions.len() > MAX_DECISION_QUESTIONS {
+        return Err(TaskStoreError::InvalidDecisionQuestions);
+    }
+    let mut headers = HashSet::new();
+    for question in questions {
+        let mut options = HashSet::new();
+        if question.header.trim().is_empty()
+            || question.header.len() > MAX_DECISION_QUESTION_HEADER_BYTES
+            || !headers.insert(question.header.as_str())
+            || question.question.trim().is_empty()
+            || question.question.len() > MAX_DECISION_QUESTION_TEXT_BYTES
+            || question.options.len() < MIN_DECISION_QUESTION_OPTIONS
+            || question.options.len() > MAX_DECISION_QUESTION_OPTIONS
+            || question.options.iter().any(|option| {
+                option.trim().is_empty()
+                    || option.len() > MAX_DECISION_QUESTION_OPTION_BYTES
+                    || !options.insert(option.as_str())
+            })
+        {
+            return Err(TaskStoreError::InvalidDecisionQuestions);
+        }
     }
     Ok(())
 }
@@ -537,11 +723,15 @@ fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionReques
             .map(|value| parse_id(&value))
             .transpose()?,
         resolution_surface: row.get(17)?,
-        created_at: row.get(18)?,
-        updated_at: row.get(19)?,
-        resolved_at: row.get(20)?,
+        questions: serde_json::from_str(&row.get::<_, String>(18)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        resolution_answers: serde_json::from_str(&row.get::<_, String>(19)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        created_at: row.get(20)?,
+        updated_at: row.get(21)?,
+        resolved_at: row.get(22)?,
         delivery_state: row
-            .get::<_, Option<String>>(21)?
+            .get::<_, Option<String>>(23)?
             .map(|value| DecisionDeliveryState::from_str(&value))
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
@@ -568,6 +758,7 @@ mod tests {
             evidence: "All automated checks passed.",
             suggested_action: "Deploy after the current session.",
             allowed_actions: actions,
+            questions: &[],
             deadline: None,
         }
     }
@@ -631,6 +822,210 @@ mod tests {
             Some(OPERATOR_DISMISS_ACTION)
         );
         assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
+    }
+
+    fn interview(headers: &[(&str, &[&str])]) -> Vec<DecisionQuestion> {
+        headers
+            .iter()
+            .map(|(header, options)| DecisionQuestion {
+                header: (*header).to_owned(),
+                question: format!("What about {header}?"),
+                options: options.iter().map(|o| (*o).to_owned()).collect(),
+                multi_select: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_interview_collects_answers_including_one_no_option_offered() {
+        // The answer that matches nothing offered is the case the asker failed
+        // to guess, which is the reason interviews exist. It must survive to
+        // the asker exactly as the operator gave it.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let questions = interview(&[
+            ("Scope", &["This repo only", "Every repo"]),
+            ("Timing", &["Now", "After the release"]),
+        ]);
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                allowed_actions: &[],
+                questions: &questions,
+                ..request(queen.id, &[])
+            })
+            .unwrap();
+        assert_eq!(created.questions.len(), 2);
+
+        let mut answers = BTreeMap::new();
+        answers.insert("Scope".to_owned(), vec!["This repo only".to_owned()]);
+        answers.insert(
+            "Timing".to_owned(),
+            vec!["Wait until the Jira mapping is fixed".to_owned()],
+        );
+        let resolved = store
+            .answer_decision_request(created.id, &answers, "Mapping first.", "inbox_interview")
+            .unwrap();
+
+        assert_eq!(resolved.state, DecisionRequestState::Resolved);
+        assert_eq!(
+            resolved.resolution_answers.get("Timing").unwrap(),
+            &vec!["Wait until the Jira mapping is fixed".to_owned()],
+            "an answer matching no offered option must survive unmodified"
+        );
+        assert_eq!(
+            resolved.resolution_action.as_deref(),
+            Some(INTERVIEW_ANSWERED_ACTION),
+            "the audit trail must name the outcome as clearly as a button does"
+        );
+        assert_eq!(resolved.resolution_note, "Mapping first.");
+        assert_eq!(resolved.resolution_surface, "inbox_interview");
+        // Delivered back to the asker the same way a ruling is.
+        assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
+    }
+
+    #[test]
+    fn an_interview_is_not_answered_until_every_question_is() {
+        // The asking worker holds its session for the whole set. Resuming it on
+        // half an answer gives it an incomplete picture and no way to ask the
+        // rest without opening a second record.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let questions = interview(&[("Scope", &["One", "All"]), ("Timing", &["Now", "Later"])]);
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                allowed_actions: &[],
+                questions: &questions,
+                ..request(queen.id, &[])
+            })
+            .unwrap();
+
+        let mut partial = BTreeMap::new();
+        partial.insert("Scope".to_owned(), vec!["One".to_owned()]);
+        assert!(matches!(
+            store.answer_decision_request(created.id, &partial, "", "test"),
+            Err(TaskStoreError::IncompleteDecisionAnswers)
+        ));
+
+        // Blank is not an answer either.
+        let mut blank = partial.clone();
+        blank.insert("Timing".to_owned(), vec!["   ".to_owned()]);
+        assert!(matches!(
+            store.answer_decision_request(created.id, &blank, "", "test"),
+            Err(TaskStoreError::IncompleteDecisionAnswers)
+        ));
+        assert_eq!(
+            store.get_decision_request(created.id).unwrap().state,
+            DecisionRequestState::Pending
+        );
+    }
+
+    #[test]
+    fn a_record_is_a_ruling_or_an_interview_and_never_both() {
+        // Both would allow a record whose button says one thing and whose
+        // answers say another, with no defined precedence.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = ["ship".to_owned()];
+        assert!(matches!(
+            store.create_decision_request(&NewDecisionRequest {
+                allowed_actions: &actions,
+                questions: &interview(&[("Scope", &["One", "All"])]),
+                ..request(queen.id, &actions)
+            }),
+            Err(TaskStoreError::InvalidDecisionQuestions)
+        ));
+    }
+
+    #[test]
+    fn an_interview_is_bounded_so_it_stays_an_instrument() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let too_many = interview(&[
+            ("A", &["1", "2"]),
+            ("B", &["1", "2"]),
+            ("C", &["1", "2"]),
+            ("D", &["1", "2"]),
+            ("E", &["1", "2"]),
+        ]);
+        let one_option = interview(&[("A", &["only"])]);
+        let duplicate_headers = vec![
+            interview(&[("A", &["1", "2"])]).remove(0),
+            interview(&[("A", &["3", "4"])]).remove(0),
+        ];
+        for bad in [too_many, one_option, duplicate_headers] {
+            assert!(matches!(
+                store.create_decision_request(&NewDecisionRequest {
+                    allowed_actions: &[],
+                    questions: &bad,
+                    ..request(queen.id, &[])
+                }),
+                Err(TaskStoreError::InvalidDecisionQuestions)
+            ));
+        }
+    }
+
+    #[test]
+    fn dismissing_an_interview_needs_a_reason_the_asker_can_act_on() {
+        // The recorded failure: dismissed with an empty note, so "hold, I will
+        // deal with it later" and "stop asking me about this" were stored
+        // identically and the asker had to collapse both into changing nothing.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                allowed_actions: &[],
+                questions: &interview(&[("Scope", &["One", "All"])]),
+                ..request(queen.id, &[])
+            })
+            .unwrap();
+
+        assert!(matches!(
+            store.resolve_decision_request(created.id, OPERATOR_DISMISS_ACTION, "", "test"),
+            Err(TaskStoreError::DismissedInterviewNeedsReason)
+        ));
+        // An interview has no buttons, so no action can resolve one either.
+        assert!(matches!(
+            store.resolve_decision_request(created.id, "ship", "because", "test"),
+            Err(TaskStoreError::InvalidDecisionResolution)
+        ));
+
+        let dismissed = store
+            .resolve_decision_request(
+                created.id,
+                OPERATOR_DISMISS_ACTION,
+                "Holding until the mapping is fixed; ask again after.",
+                "test",
+            )
+            .unwrap();
+        assert_eq!(dismissed.state, DecisionRequestState::Resolved);
+        assert!(dismissed.resolution_note.contains("Holding"));
+    }
+
+    #[test]
+    fn a_ruling_is_untouched_by_interviews_existing() {
+        // A record without questions must behave exactly as it did before,
+        // including that answers are not how it gets resolved.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = ["continue".to_owned(), "hold".to_owned()];
+        let created = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+
+        assert!(created.questions.is_empty());
+        assert!(created.resolution_answers.is_empty());
+        let mut answers = BTreeMap::new();
+        answers.insert("Scope".to_owned(), vec!["One".to_owned()]);
+        assert!(matches!(
+            store.answer_decision_request(created.id, &answers, "", "test"),
+            Err(TaskStoreError::InvalidDecisionResolution)
+        ));
+
+        let resolved = store
+            .resolve_decision_request(created.id, "hold", "", "test")
+            .unwrap();
+        assert_eq!(resolved.resolution_action.as_deref(), Some("hold"));
+        assert!(resolved.resolution_answers.is_empty());
     }
 
     #[test]

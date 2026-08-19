@@ -439,10 +439,11 @@ impl ServerHandler for AgentMcp {
                                 ),
                             ));
                         }
-                        if !input
-                            .allowed_actions
-                            .iter()
-                            .any(|action| action == &input.suggested_action)
+                        if input.questions.is_empty()
+                            && !input
+                                .allowed_actions
+                                .iter()
+                                .any(|action| action == &input.suggested_action)
                         {
                             return Err(ApplicationError::Store(
                                 TaskStoreError::IntegrityFailure(
@@ -470,6 +471,7 @@ impl ServerHandler for AgentMcp {
                                 evidence: input.evidence,
                                 suggested_action: input.suggested_action,
                                 allowed_actions: input.allowed_actions,
+                                questions: input.questions,
                                 deadline: input.deadline,
                             },
                         )
@@ -853,7 +855,13 @@ struct RequestDecisionInput {
     #[serde(default)]
     evidence: String,
     suggested_action: String,
+    /// Empty when the record is an interview: a record is one or the other.
+    #[serde(default)]
     allowed_actions: Vec<String>,
+    /// Present makes this an interview. The operator answers questions instead
+    /// of pressing a button the asker had to guess at.
+    #[serde(default)]
+    questions: Vec<swarm_domain::DecisionQuestion>,
     deadline: Option<i64>,
 }
 

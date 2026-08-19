@@ -181,3 +181,36 @@ impl fmt::Display for ParseDecisionRequestStateError {
     }
 }
 impl std::error::Error for ParseDecisionRequestStateError {}
+
+/// One question in an interview-shaped decision request.
+///
+/// A button set is a good instrument for a ruling that is already understood,
+/// and a bad one for a question that is still open: it forces the asker to
+/// collapse the question into guesses before the operator has said anything.
+/// A record carrying questions asks instead of guessing.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DecisionQuestion {
+    /// Short label, and the key the answer is recorded under.
+    pub header: String,
+    /// The question as the operator reads it.
+    pub question: String,
+    /// The choices offered. The operator is not limited to them; an answer that
+    /// matches none of these is the most informative kind and must survive.
+    pub options: Vec<String>,
+    /// Whether more than one option may be chosen.
+    #[serde(default)]
+    pub multi_select: bool,
+}
+
+/// The most questions one interview may carry.
+///
+/// Mirrors `AskUserQuestion`, which the operator was interviewed with when this
+/// was specified. An unbounded interview is a worse instrument than a button.
+pub const MAX_DECISION_QUESTIONS: usize = 4;
+/// The fewest and most options a question may offer, also mirroring
+/// `AskUserQuestion`. One option is not a question; too many is a list.
+pub const MIN_DECISION_QUESTION_OPTIONS: usize = 2;
+pub const MAX_DECISION_QUESTION_OPTIONS: usize = 4;
+pub const MAX_DECISION_QUESTION_HEADER_BYTES: usize = 40;
+pub const MAX_DECISION_QUESTION_TEXT_BYTES: usize = 600;
+pub const MAX_DECISION_QUESTION_OPTION_BYTES: usize = 200;

@@ -681,6 +681,7 @@ mod tests {
             evidence: "",
             suggested_action: "Choose",
             allowed_actions: actions,
+            questions: &[],
             deadline: None,
         }
     }
