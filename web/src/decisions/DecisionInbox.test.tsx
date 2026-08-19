@@ -243,3 +243,33 @@ test("offers actions as buttons that cannot submit anything", () => {
     expect(screen.getByRole("button", { name: label })).toHaveAttribute("type", "button");
   }
 });
+
+test("cannot resolve a decision from the keyboard without choosing an action", async () => {
+  // Asked directly: can Enter, Tab, or a focused control resolve a decision
+  // without a deliberate press on that specific action? Navigation focuses the
+  // card, which is not a control, so Enter there does nothing.
+  const onResolve = vi.fn().mockResolvedValue(undefined);
+  Element.prototype.scrollIntoView = vi.fn();
+  render(
+    <DecisionInbox
+      decisions={[pending]}
+      tasks={[task]}
+      workers={[worker]}
+      busy={false}
+      focusDecisionId={pending.id}
+      focusRequest={1}
+      onResolve={onResolve}
+    />,
+  );
+
+  await waitFor(() => expect(document.activeElement).toBe(
+    document.querySelector(`[data-decision-id="${pending.id}"]`),
+  ));
+  fireEvent.keyDown(document.activeElement!, { key: "Enter" });
+  fireEvent.keyUp(document.activeElement!, { key: "Enter" });
+  expect(onResolve).not.toHaveBeenCalled();
+
+  // Reaching an action still takes an explicit press on that action.
+  fireEvent.click(screen.getByRole("button", { name: "Minimal path" }));
+  expect(onResolve).toHaveBeenCalledWith(pending, "minimal_path", "", "inbox_action");
+});
