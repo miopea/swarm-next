@@ -1,6 +1,6 @@
 # Worker context surfaces
 
-Status: **Specified from operator interview 2026-08-19**
+Status: **Specified and delivered 2026-08-19**
 
 Decided with the primary operator while dogfooding a 32-worker Hive. Nothing
 here is a legacy port; each item below traces to something observed during real
@@ -160,3 +160,32 @@ restart mid-delivery reproduces it whether or not the submission bug exists.
 
 The operator chose this order knowing the submission defect is live. It is
 recorded here so the second item is not lost.
+
+## Delivered
+
+Everything above is implemented and deployed except where noted.
+
+- In-progress task and queue badge, opening the board filtered to that worker
+  and ordered by state.
+- Last output age in the roster state badge, sourced from the terminal host.
+- Diagnostics entry point in the control room lockup.
+- Unconfirmed delivery marked on the worker it concerns.
+- Engaged device named when it is not the device looking.
+- Repository, branch, and changed-path count for the selected worker.
+- Runtime updates and build progress reported in the control room, which was
+  not in the original interview and was added from the same dogfood session.
+
+Two parts are deliberately not built, and both are decisions rather than work:
+
+- **Takeover.** Engagement is claimed by sending input. A button that claimed it
+  without input would be a new input-authority path, which belongs in an ADR
+  rather than in a toolbar.
+- **The deterministic resume for a legacy uncertain run.** The rule keys on the
+  session a delivery was written to, and rows created before that column exists
+  cannot prove their terminal has ended. They keep waiting for an explicit
+  operator retry rather than being guessed at.
+
+Verified against the live 32-worker Hive rather than only under test: the
+repository read was exercised across every configured workspace, including the
+two whose workspace is not a Git checkout at all, where it correctly reports
+nothing instead of failing the view that asked.
