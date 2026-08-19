@@ -498,6 +498,40 @@ fn terminal_safe_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swarm_terminal::{CanonicalTerminalState, JournalLimits, TerminalSize, TerminalSnapshot};
+
+    /// Renders a message through the same canonical state a real terminal uses,
+    /// at a given width, and reports whether the delivery marker survives.
+    fn marker_survives_render(columns: u16, prefix: &str, marker: &str) -> bool {
+        let mut state = CanonicalTerminalState::new(
+            JournalLimits::new(64 * 1024, 64),
+            TerminalSize::new(24, columns),
+        );
+        state.push(format!("{prefix}{marker} and the rest of the briefing").into_bytes());
+        let TerminalSnapshot { bytes, .. } = state.snapshot();
+        let marker = marker.as_bytes();
+        bytes.windows(marker.len()).any(|part| part == marker)
+    }
+
+    #[test]
+    fn a_delivery_marker_survives_the_terminal_wrapping_it() {
+        // Confirmation searches the snapshot for eight bytes taken from the head
+        // of an identifier, and the snapshot is a re-rendered screen rather than
+        // the raw stream. If that render ever broke a token at the wrap column,
+        // or coloured inside one, delivery would stop being confirmable while
+        // every byte still reached the screen — and the message would sit unsent
+        // in the operator's prompt with nothing to explain it.
+        //
+        // Written while eliminating that as the cause of a real unconfirmed
+        // delivery. It is not the cause, and this keeps it from becoming one.
+        let marker = "01a0169f";
+
+        assert!(marker_survives_render(80, "moved task ", marker));
+        // Starting at column 37 of a 40 column terminal, so it crosses the wrap.
+        assert!(marker_survives_render(40, &"x".repeat(36), marker));
+        // And immediately before the boundary, the other side of the same edge.
+        assert!(marker_survives_render(40, &"x".repeat(32), marker));
+    }
 
     #[test]
     fn terminal_render_stability_resets_on_every_output_advance() {
