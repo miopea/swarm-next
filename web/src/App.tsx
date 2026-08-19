@@ -86,6 +86,7 @@ import TerminalLoadBoundary from "./terminal/TerminalLoadBoundary";
 import { initialMobileKeysVisibility, rememberMobileKeysVisibility } from "./terminal/MobileTerminalComposer";
 import { terminalWorkspace } from "./terminal/TerminalWorkspace";
 import WorkerRosterItem from "./workers/WorkerRosterItem";
+import WorkerContextBar from "./workers/WorkerContextBar";
 import { workerWork } from "./workers/workerWork";
 import { normalizeRosterQuery, orphanSessionMatchesRosterQuery, repositoryName, workerMatchesRosterQuery } from "./workers/workerRoster";
 import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
@@ -1142,46 +1143,16 @@ export function App() {
             </button>
           ) : null}
           {surface === "workers" && activeWorker && activeWorkerWork?.current ? (
-            <div className="worker-context" aria-label={`Work owned by ${activeWorker.name}`}>
-              <button
-                type="button"
-                className="worker-context-task"
-                title={activeWorkerWork.current.title}
-                onClick={() => { openWorkerQueue(activeWorker.id, activeWorkerWork.current!.id); }}
-              >
-                <span className={`task-state state-${activeWorkerWork.current.state}`}>{taskStateLabel(activeWorkerWork.current)}</span>
-                <span className="worker-context-title">{activeWorkerWork.current.title}</span>
-              </button>
-              {repository?.branch || repository?.detached ? (
-                <span
-                  className="worker-repository"
-                  title={repository.detached
-                    ? `${repositoryName(activeWorker.workspace)} has a detached HEAD${repository.changed_paths ? `, with ${repository.changed_paths} path(s) differing from HEAD` : ""}`
-                    : `${repositoryName(activeWorker.workspace)} on ${repository.branch}${repository.changed_paths ? `, with ${repository.changed_paths} path(s) differing from HEAD` : ", matching HEAD"}`}
-                >
-                  <span className="worker-repository-branch">{repository.detached ? "detached" : repository.branch}</span>
-                  {repository.changed_paths ? (
-                    <span className="worker-repository-dirty">{repository.changed_paths}</span>
-                  ) : null}
-                </span>
-              ) : null}
-              {activeWorkerEngagement ? (
-                <span
-                  className={`worker-engaged-elsewhere device-${activeWorkerEngagement.deviceClass}`}
-                  role="status"
-                  title={activeWorkerEngagement.detail}
-                >{activeWorkerEngagement.deviceClass === "mobile" ? "On phone" : "On another desktop"}</span>
-              ) : null}
-              {activeWorkerWork.openCount > 1 ? (
-                <button
-                  type="button"
-                  className="worker-context-queue"
-                  aria-label={`Show all ${activeWorkerWork.openCount} open tasks for ${activeWorker.name}`}
-                  title={activeWorkerWork.summary}
-                  onClick={() => { openWorkerQueue(activeWorker.id); }}
-                >+{activeWorkerWork.openCount - 1}</button>
-              ) : null}
-            </div>
+            <WorkerContextBar
+              worker={activeWorker}
+              currentTask={activeWorkerWork.current}
+              openCount={activeWorkerWork.openCount}
+              workSummary={activeWorkerWork.summary}
+              repository={repository}
+              engagement={activeWorkerEngagement}
+              taskStateLabel={taskStateLabel}
+              onOpenQueue={openWorkerQueue}
+            />
           ) : null}
           <div className="header-actions">
             {busy && <span className="saving-state">{busyLabel ?? "Saving…"}</span>}
