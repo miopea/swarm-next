@@ -138,7 +138,7 @@ card returns to offering a reload — correctly, because newer commits exist —
 but nothing confirms the build the operator asked for landed. The runtime has a
 `ready` state that the card does not surface distinctly.
 
-### 6. Worker engine upgrades need care proportional to their harm
+### 6. Worker engine upgrades need care proportional to their harm — *fixed*
 
 Raised as: this is the most harmful operation and currently has the least
 friction around it. Wanted:
@@ -146,10 +146,19 @@ friction around it. Wanted:
 - Check whether workers are actually working, and warn before interrupting.
 - Come back with the same workers on the same sessions afterwards.
 
-Partly addressed: `d8e77a1` restores the workers an upgrade unloads, which it
-previously never did. Not addressed: nothing checks whether a worker was
-mid-turn before pulling the floor out, and the warning does not distinguish
-loaded from busy.
+Addressed in three steps. `d8e77a1` restored the workers an upgrade unloads.
+`198af91` made that restoration survive an interrupted update, which is when it
+was actually failing.
+
+Now the warning distinguishes loaded from busy. Loaded and working are
+different questions and only the second costs anything: replacing the engine
+while a worker rests loses nothing, while doing it mid-command kills work that
+is not resumed. The card names the workers running a command, says plainly when
+none are, and repeats the same sentence in the confirmation — where the
+operator commits, not only where they first read it.
+
+The count of sessions still comes from the host, which is what stops them;
+which of those are busy comes from the roster, which is what knows.
 
 ### 7. App upgrade progress is close to invisible
 

@@ -130,7 +130,9 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByText("Retained sessions").parentElement).toHaveTextContent("Retained sessions3");
   expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("Worker engineUpdate ready · restart requiredRestart required");
   expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("briefly stops 1 active worker");
-  expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("Active commands can be interrupted");
+  // This worker is blocked, not mid-command, so the update costs nothing in
+  // progress and the card says so rather than warning generically.
+  expect(screen.getByLabelText("Worker engine status")).toHaveTextContent("nothing in progress is lost");
   expect(screen.getByLabelText("App and API status")).toHaveTextContent("App and APIRunning build matches the working copyCurrent");
   expect(screen.getByLabelText("App and API status")).toHaveTextContent("checks the working copy every 15 seconds");
   fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
@@ -471,6 +473,42 @@ test("keeps a confirmed worker engine steady when provider capabilities refresh"
   expect(engine).toHaveTextContent("Current · 2 active");
   expect(engine).not.toHaveTextContent("Checking");
   expect(hostRequests()).toBe(requestsBeforeProviderRefresh);
+});
+
+test("names the work a worker engine update would interrupt, before asking", async () => {
+  // Raised as: this is the most harmful operation and has the least friction
+  // around it. Loaded and working are different questions, and only the second
+  // costs the operator anything.
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    // A host on a different build is what makes an update available at all.
+    if (url.includes("terminal-host")) return ok({ type: "host_status", status: { protocol_version: 7, host_version: "0.1.0-old", draining: false, running_sessions: 2, retained_sessions: 2 } });
+    if (url.endsWith("/orchestration/queen-automation")) return ok(queenAutomation());
+    if (url.endsWith("/orchestration/coordinator")) return ok({ completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0, stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0, last_action_at: null, automatic_start_admission: "available", automatic_start_batch_limit: 1 });
+    if (url.includes("integrations/jira/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("integrations/email/readiness")) return ok({ configured: false, connection: "not_connected", account_name: null });
+    if (url.includes("runtime/development")) return ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false });
+    if (url.includes("runtime/resources")) return ok({ sampled_at: 1, policy: { mode: "observe_only", advisory_bytes: 1, critical_bytes: 2 }, api: { resident_memory_bytes: 1, pressure: "normal" }, terminal_host: { resident_memory_bytes: null, pressure: "unavailable" } });
+    if (url.includes("bindings") || url.includes("feedback/reports")) return ok([]);
+    return ok({ type: "history_diagnostics", diagnostics: null });
+  }));
+  render(<SettingsWorkspace {...minimalProps()}
+    health={{ status: "ok", version: "0.1.0" }}
+    workers={[
+      { id: "w1", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code", workspace: "/w", autostart: true, position: 1, active_session_id: "s1", created_at: 1, updated_at: 1, running: true, attention_state: "buzzing" },
+      { id: "w2", hive_id: "hive-1", name: "BudgetBug", role: "worker", provider: "claude_code", workspace: "/w", autostart: false, position: 2, active_session_id: "s2", created_at: 1, updated_at: 1, running: true, attention_state: "buzzing" },
+      { id: "w3", hive_id: "hive-1", name: "Sculpt Studio", role: "worker", provider: "claude_code", workspace: "/w", autostart: false, position: 3, active_session_id: null, created_at: 1, updated_at: 1, running: false, attention_state: "resting" },
+    ]}
+  />);
+
+  const engine = await screen.findByLabelText("Worker engine status");
+  await waitFor(() => expect(engine).toHaveTextContent("2 workers are running a command right now: Queen, BudgetBug"));
+  expect(engine).toHaveTextContent("not resumed");
+  // And the same cost is restated where the operator commits to it, not only
+  // where they first read about it.
+  fireEvent.click(screen.getByRole("button", { name: "Prepare worker engine update" }));
+  expect(screen.getByRole("group", { name: "Confirm worker engine update" }))
+    .toHaveTextContent("2 workers are running a command right now");
 });
 
 function minimalProps() {

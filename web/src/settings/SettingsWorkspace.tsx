@@ -9,7 +9,7 @@ import { deviceClass } from "../presence/PresenceController";
 import type { NotificationCapabilityState } from "../notifications/NotificationController";
 import { queenAutomationStateDetail, queenAutomationStateLabel, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
 import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
-import { workerEngineUpdateRequired } from "../runtime/workerEngine";
+import { engineUpdateCost, workerEngineUpdateRequired, workersMidCommand } from "../runtime/workerEngine";
 import ApiarySettings from "./ApiarySettings";
 import DevelopmentReloadAction from "./DevelopmentReloadAction";
 import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
@@ -190,6 +190,10 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
   const workerEngineNeedsUpdate = workerEngineUpdateRequired(health, terminalHostStatus);
   const workerEngineState = !terminalHostLoaded ? "checking" : !terminalHostStatus ? "unavailable" : workerEngineNeedsUpdate ? "restart" : "current";
   const activeWorkerCount = terminalHostStatus?.running_sessions ?? 0;
+  // Two different questions, answered by whichever source actually knows. The
+  // host knows how many sessions it will stop; the roster knows which of them
+  // are mid-command, which is the part that costs the operator something.
+  const busyWorkerNames = workersMidCommand(workers);
   const hasPendingQueenDecision = pendingQueenDecisionCount > 0;
   const queenReviewLabel = hasPendingQueenDecision ? "Queen needs you" : queenAutomationStateLabel(queenAutomation);
   const queenReviewDetail = hasPendingQueenDecision
@@ -437,8 +441,9 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
               <small>No restart or update has been attempted.</small>
               <button className="secondary-button" type="button" onClick={() => setTerminalHostAttempt((attempt) => attempt + 1)}>Retry worker engine status</button>
             </> : workerEngineNeedsUpdate ? <>
-              <p>Updating this layer briefly stops {activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"}, then revives Queen and configured always-active workers from their saved conversations.</p>
-              <small><strong>Active commands can be interrupted.</strong> Wait for workers to rest when practical. Identities, provider conversations, tasks, ownership, and terminal history remain durable.</small>
+              <p>Updating this layer briefly stops {activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"}, then brings back the ones that were loaded from their saved conversations.</p>
+              <p className={busyWorkerNames.length > 0 ? "engine-update-cost busy" : "engine-update-cost"} role="status">{engineUpdateCost(busyWorkerNames)}</p>
+              <small>Identities, provider conversations, tasks, ownership, and terminal history remain durable.</small>
             {workerEngineProgress ? (
               <div className="maintenance-progress" role="status" aria-live="polite">
                 <span className="maintenance-spinner" aria-hidden="true" />
@@ -449,6 +454,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
             ) : (
               <div className="maintenance-confirmation" role="group" aria-label="Confirm worker engine update">
                 <strong>Restart {activeWorkerCount} active worker{activeWorkerCount === 1 ? "" : "s"} now?</strong>
+                <span>{engineUpdateCost(busyWorkerNames)}</span>
                 <span>Claude/Codex processes will close. Worker identities, tasks, and known conversation IDs remain durable.</span>
                 <div className="settings-actions">
                   <button className="secondary-button" disabled={busy} onClick={() => setConfirmMaintenance(false)}>Not now</button>
