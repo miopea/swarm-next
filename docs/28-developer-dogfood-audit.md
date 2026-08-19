@@ -159,6 +159,34 @@ This is the working product audit for the first real developer week. It records 
 - Keep desktop and Android PWA persistence on the real-device acceptance list; a responsive browser viewport cannot prove installed-app storage behavior.
 - Instrument route-to-first-paint timing before attempting another redraw workaround. During automated phone-sized proof, the accessibility tree changed immediately while captured pixels sometimes retained the previous workspace for roughly one to two seconds. The final surface was correct, but this matches the operator's intermittent stale-paint report and should be measured rather than hidden behind an arbitrary delay.
 
+## Incident 2026-08-19: a schema change that only reached new databases
+
+Queen automation failed on every observe and claim for about forty-five
+minutes, from 04:29 until 05:14, with `no such column: delivery_session_id`.
+Introduced while making an interrupted review resumable.
+
+The column was added inside the migration that creates the `queen_automation`
+table. Every installed database had already passed that version, so only
+databases built from nothing gained it. The schema ceiling was also left where
+it was, so an installed database at that version counted as current and skipped
+migration entirely — the added statement was unreachable even in principle.
+
+The full Rust suite passed on the broken change, and would have passed on any
+version of it, because every test builds its database from nothing. That is the
+gap worth keeping: a schema change is not covered by a suite that never starts
+from an already-migrated database. There is now a test that does, and the
+"one version short" test was corrected too — it had been dropping the previous
+step's columns, describing a database that never existed.
+
+Two things about the detection are worth recording. The failure was visible in
+the service journal the whole time, and a health sweep run during the outage
+reported zero warnings because it counted a window starting at midnight rather
+than looking at what was recent. Aggregates over a long window hide a fault that
+started inside it. And when the fix was verified, a count taken over a window
+that straddled the deploy showed errors from the outgoing process and briefly
+looked like a failed repair; the running build should be identified before a
+count over time is believed.
+
 ## Morning decisions
 
 These are product choices rather than obvious repairs:
