@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
 use rusqlite::params;
 use swarm_domain::{TaskDispatchState, TaskId, TaskPriority, WorkerId, WorkerSessionId};
@@ -28,6 +28,29 @@ pub enum TaskDispatchFailure {
 }
 
 impl TaskStore {
+    /// Lists workers holding a briefing Swarm wrote but could not confirm.
+    ///
+    /// This is Swarm's own delivery evidence, not a reading of terminal
+    /// content, so it stays inside the rule that worker attention never comes
+    /// from guessing at what is on a screen.
+    ///
+    /// # Errors
+    /// Returns a persistence or data-integrity error.
+    pub fn workers_with_unconfirmed_delivery(&self) -> Result<HashSet<WorkerId>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT DISTINCT worker_id FROM task_dispatches WHERE state = 'uncertain'")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .map(|result| -> Result<WorkerId, TaskStoreError> {
+                let id = result?;
+                WorkerId::from_str(&id).map_err(|_| {
+                    TaskStoreError::IntegrityFailure("invalid dispatch worker identity".into())
+                })
+            })
+            .collect()
+    }
+
     /// Atomically claims a bounded batch of current assignments whose worker is quiet.
     ///
     /// # Errors

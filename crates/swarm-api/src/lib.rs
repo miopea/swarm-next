@@ -1977,6 +1977,9 @@ struct WorkerView {
     /// roster can show how long it has been silent without opening it.
     #[serde(skip_serializing_if = "Option::is_none")]
     last_output_at: Option<i64>,
+    /// Swarm wrote a briefing to this worker and could not confirm it landed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    unconfirmed_delivery: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -2158,15 +2161,46 @@ struct SetStewardshipRequest {
     capabilities: Vec<StewardCapability>,
 }
 
-fn worker_view(
-    profile: WorkerProfile,
+/// What the API knows about one worker beyond its durable profile. Grouped so
+/// the view keeps one parameter per caller decision rather than a row of
+/// positional booleans nobody can read at the call site.
+struct WorkerViewFacts {
     running: bool,
     awaiting_operator: bool,
     runtime_error: Option<String>,
     provider_activity: ProviderActivity,
-    is_scout: bool,
+    /// The worker's system role, if it holds one. Carried as the role itself
+    /// rather than a flag per role, so adding a second one does not add a
+    /// second boolean nobody can read at the call site.
+    system_role: Option<&'static str>,
     last_output_at: Option<i64>,
-) -> WorkerView {
+    unconfirmed_delivery: bool,
+}
+
+impl Default for WorkerViewFacts {
+    fn default() -> Self {
+        Self {
+            running: false,
+            awaiting_operator: false,
+            runtime_error: None,
+            provider_activity: ProviderActivity::Unknown,
+            system_role: None,
+            last_output_at: None,
+            unconfirmed_delivery: false,
+        }
+    }
+}
+
+fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
+    let WorkerViewFacts {
+        running,
+        awaiting_operator,
+        runtime_error,
+        provider_activity,
+        system_role,
+        last_output_at,
+        unconfirmed_delivery,
+    } = facts;
     let engagement_expires_at = profile.engagement_expires_at;
     let attention_state = if runtime_error.is_some() {
         WorkerAttentionState::Blocked
@@ -2187,8 +2221,9 @@ fn worker_view(
         attention_state,
         engagement_expires_at,
         runtime_error,
-        system_role: is_scout.then_some("scout"),
+        system_role,
         last_output_at,
+        unconfirmed_delivery,
     }
 }
 
@@ -10452,12 +10487,12 @@ mod tests {
         assert_eq!(
             worker_view(
                 profile.clone(),
-                true,
-                true,
-                None,
-                ProviderActivity::Resting,
-                false,
-                None,
+                WorkerViewFacts {
+                    running: true,
+                    awaiting_operator: true,
+                    provider_activity: ProviderActivity::Resting,
+                    ..WorkerViewFacts::default()
+                },
             )
             .attention_state,
             WorkerAttentionState::AwaitingOperator
@@ -10467,12 +10502,12 @@ mod tests {
         assert_eq!(
             worker_view(
                 engaged,
-                true,
-                true,
-                None,
-                ProviderActivity::Resting,
-                false,
-                None
+                WorkerViewFacts {
+                    running: true,
+                    awaiting_operator: true,
+                    provider_activity: ProviderActivity::Resting,
+                    ..WorkerViewFacts::default()
+                },
             )
             .attention_state,
             WorkerAttentionState::WithOperator
@@ -10486,12 +10521,12 @@ mod tests {
         assert_eq!(
             worker_view(
                 profile.clone(),
-                true,
-                false,
-                None,
-                ProviderActivity::Resting,
-                false,
-                None,
+                WorkerViewFacts {
+                    running: true,
+                    awaiting_operator: false,
+                    provider_activity: ProviderActivity::Resting,
+                    ..WorkerViewFacts::default()
+                },
             )
             .attention_state,
             WorkerAttentionState::Resting
@@ -10499,12 +10534,12 @@ mod tests {
         assert_eq!(
             worker_view(
                 profile.clone(),
-                true,
-                false,
-                None,
-                ProviderActivity::Active,
-                false,
-                None,
+                WorkerViewFacts {
+                    running: true,
+                    awaiting_operator: false,
+                    provider_activity: ProviderActivity::Active,
+                    ..WorkerViewFacts::default()
+                },
             )
             .attention_state,
             WorkerAttentionState::Buzzing
@@ -10512,12 +10547,12 @@ mod tests {
         assert_eq!(
             worker_view(
                 profile,
-                false,
-                false,
-                None,
-                ProviderActivity::Active,
-                false,
-                None
+                WorkerViewFacts {
+                    running: false,
+                    awaiting_operator: false,
+                    provider_activity: ProviderActivity::Active,
+                    ..WorkerViewFacts::default()
+                },
             )
             .attention_state,
             WorkerAttentionState::Sleeping

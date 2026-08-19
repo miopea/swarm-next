@@ -6,12 +6,12 @@ use std::{
 use axum::http::StatusCode;
 use swarm_domain::{ProviderKind, WorkerId, WorkerProfile, WorkerSessionId};
 use swarm_terminal::{
-    ClaudeConversationStart, CodexConversationStart, HostRequest, HostResponse, ProviderActivity,
-    TerminalSize,
+    ClaudeConversationStart, CodexConversationStart, HostRequest, HostResponse, TerminalSize,
 };
 
 use crate::{
-    ApiError, AppState, task_store, task_store_error, terminal_host::request_host, worker_view,
+    ApiError, AppState, WorkerViewFacts, task_store, task_store_error, terminal_host::request_host,
+    worker_view,
 };
 
 pub(super) async fn start_worker_process(
@@ -31,12 +31,12 @@ pub(super) async fn start_worker_process(
         let last_output_at = live.get(&session_id).copied().flatten();
         return Ok(worker_view(
             profile,
-            true,
-            false,
-            None,
-            ProviderActivity::Unknown,
-            is_scout,
-            last_output_at,
+            WorkerViewFacts {
+                running: true,
+                system_role: is_scout.then_some("scout"),
+                last_output_at,
+                ..WorkerViewFacts::default()
+            },
         ));
     }
     let mcp_config = if profile.provider == ProviderKind::ClaudeCode {
@@ -77,12 +77,11 @@ pub(super) async fn start_worker_process(
     let is_scout = worker_is_scout(state, worker_id)?;
     Ok(worker_view(
         profile,
-        true,
-        false,
-        None,
-        ProviderActivity::Unknown,
-        is_scout,
-        None,
+        WorkerViewFacts {
+            running: true,
+            system_role: is_scout.then_some("scout"),
+            ..WorkerViewFacts::default()
+        },
     ))
 }
 

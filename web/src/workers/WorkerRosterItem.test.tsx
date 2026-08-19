@@ -82,3 +82,37 @@ test("returns to resting when the operator engagement lease expires", () => {
   expect(item.getByTitle("Resting")).toHaveClass("online");
   vi.useRealTimers();
 });
+
+test("marks a worker whose briefing Swarm could not confirm", () => {
+  render(
+    <WorkerRosterItem
+      worker={{ ...queen, id: "worker", name: "Daisy", role: "worker", unconfirmed_delivery: true }}
+      selected={false}
+      detail="Running"
+      busy={false}
+      onOpen={vi.fn()}
+      onStart={vi.fn()}
+      onStop={vi.fn()}
+    />,
+  );
+
+  expect(
+    screen.getByRole("img", { name: "Swarm could not confirm this worker received its briefing" }),
+  ).toBeInTheDocument();
+});
+
+test("stays quiet when the briefing was confirmed", () => {
+  render(
+    <WorkerRosterItem
+      worker={{ ...queen, id: "worker", name: "Daisy", role: "worker" }}
+      selected={false}
+      detail="Running"
+      busy={false}
+      onOpen={vi.fn()}
+      onStart={vi.fn()}
+      onStop={vi.fn()}
+    />,
+  );
+
+  expect(screen.queryByRole("img", { name: /could not confirm/ })).not.toBeInTheDocument();
+});

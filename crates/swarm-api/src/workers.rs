@@ -15,7 +15,7 @@ use swarm_domain::{ProviderKind, WorkerId, WorkerProfile};
 use swarm_terminal::{HostRequest, ProviderActivity, TerminalSize};
 
 use super::{
-    ApiError, AppState, authorize, default_provider, default_terminal_columns,
+    ApiError, AppState, WorkerViewFacts, authorize, default_provider, default_terminal_columns,
     default_terminal_rows, parse_worker_id, provider_activity, require_valid_size, task_store,
     task_store_error,
     terminal_host::request_host,
@@ -78,6 +78,9 @@ pub(super) async fn list_workers(
     let awaiting_operator = task_store(&state)?
         .workers_awaiting_operator()
         .map_err(|error| task_store_error(&error))?;
+    let unconfirmed = task_store(&state)?
+        .workers_with_unconfirmed_delivery()
+        .map_err(|error| task_store_error(&error))?;
     let errors = state.worker_errors.read().await;
     let scout_id = task_store(&state)?
         .scout_worker_id()
@@ -95,18 +98,22 @@ pub(super) async fn list_workers(
                 .and_then(|session_id| provider_activity.get(&session_id).copied())
                 .unwrap_or(ProviderActivity::Unknown);
             let is_scout = scout_id == Some(profile.id);
+            let profile_id = profile.id;
             let last_output_at = profile
                 .active_session_id
                 .and_then(|session_id| live.get(&session_id).copied())
                 .flatten();
             worker_view(
                 profile,
-                running,
-                needs_operator,
-                runtime_error,
-                activity,
-                is_scout,
-                last_output_at,
+                WorkerViewFacts {
+                    running,
+                    awaiting_operator: needs_operator,
+                    runtime_error,
+                    provider_activity: activity,
+                    system_role: is_scout.then_some("scout"),
+                    last_output_at,
+                    unconfirmed_delivery: unconfirmed.contains(&profile_id),
+                },
             )
         })
         .collect::<Vec<_>>();
@@ -296,15 +303,7 @@ pub(super) async fn create_worker(
     state.control_room_notify.notify_waiters();
     Ok((
         StatusCode::CREATED,
-        Json(worker_view(
-            profile,
-            false,
-            false,
-            None,
-            ProviderActivity::Unknown,
-            false,
-            None,
-        )),
+        Json(worker_view(profile, WorkerViewFacts::default())),
     )
         .into_response())
 }
@@ -355,12 +354,11 @@ pub(super) async fn update_worker(
     state.control_room_notify.notify_waiters();
     Ok(Json(worker_view(
         profile,
-        running,
-        false,
-        None,
-        ProviderActivity::Unknown,
-        is_scout,
-        None,
+        WorkerViewFacts {
+            running,
+            system_role: is_scout.then_some("scout"),
+            ..WorkerViewFacts::default()
+        },
     ))
     .into_response())
 }
@@ -729,12 +727,10 @@ pub(super) async fn stop_worker(
         .map_err(|error| task_store_error(&error))?;
     Ok(Json(worker_view(
         profile,
-        false,
-        false,
-        None,
-        ProviderActivity::Unknown,
-        is_scout,
-        None,
+        WorkerViewFacts {
+            system_role: is_scout.then_some("scout"),
+            ..WorkerViewFacts::default()
+        },
     ))
     .into_response())
 }

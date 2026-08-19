@@ -28,6 +28,8 @@ export type Worker = {
   attention_state: WorkerAttentionState;
   /** Wall-clock second this worker's terminal last produced output. */
   last_output_at?: number;
+  /** Swarm wrote a briefing to this worker and could not confirm it landed. */
+  unconfirmed_delivery?: boolean;
   engagement_expires_at?: number;
   runtime_error?: string;
 };
