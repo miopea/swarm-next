@@ -139,6 +139,8 @@ This is the working product audit for the first real developer week. It records 
 - The full Rust workspace is green: 461 unit/integration tests plus all crate documentation tests passed on the release checkout.
 - Rust formatting and workspace-wide Clippy checks pass with warnings denied; the five browser-process dogfood harness tests also pass.
 - The web workspace is green: 64 test files with 322 tests, TypeScript project checking, and the production Vite build all pass.
+- Re-measured 2026-08-19: Rust 483 tests, web 381 tests across 70 files, five dogfood harness tests, the packaging lifecycle smoke, and the worker-engine build-id boundary all pass, with formatting clean.
+- The workspace-wide Clippy claim above was not true when re-checked. `cargo clippy --workspace --all-targets -- -D warnings` failed on six findings in `swarm-persistence` and `swarm-api` that predated the day's work: two overlong functions, a De Morgan simplification, a collapsible `if`, and two `map(..).unwrap_or_else(..)`. They are fixed and the gate now passes, but a recorded green that had stopped being true is worth naming, because everything downstream of it was trusted on that basis.
 
 ## Release re-proofs required
 
