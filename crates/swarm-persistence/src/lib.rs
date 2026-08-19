@@ -101,6 +101,7 @@ mod workers;
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
+pub use workers::ActiveWorkerSession;
 pub(crate) const MAX_TASK_TITLE_BYTES: usize = 240;
 pub(crate) const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;

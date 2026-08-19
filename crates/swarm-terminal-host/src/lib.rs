@@ -305,10 +305,24 @@ fn dispatch_blocking(
         HostRequest::HostStatus => terminal_host_status(registry, host_version, host_build_id)
             .map(|status| HostResponse::HostStatus { status })
             .map_err(|error| error.to_string()),
-        HostRequest::ProviderCapabilities => Ok(HostResponse::ProviderCapabilities {
-            claude_code: executable_in_path("claude"),
-            codex: executable_in_path("codex"),
-        }),
+        HostRequest::ProviderCapabilities => {
+            // Resolved here rather than in the API because this is the process
+            // that spawns providers, so its PATH is the one that decides which
+            // release a worker actually gets.
+            let search_path = std::env::var("PATH").ok();
+            Ok(HostResponse::ProviderCapabilities {
+                claude_code: executable_in_path("claude"),
+                codex: executable_in_path("codex"),
+                claude_release: swarm_terminal::provider_release(
+                    std::path::Path::new("claude"),
+                    search_path.as_deref(),
+                ),
+                codex_release: swarm_terminal::provider_release(
+                    std::path::Path::new("codex"),
+                    search_path.as_deref(),
+                ),
+            })
+        }
         HostRequest::BeginDrain => registry
             .begin_drain()
             .and_then(|_| terminal_host_status(registry, host_version, host_build_id))

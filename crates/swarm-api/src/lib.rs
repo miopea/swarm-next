@@ -2348,6 +2348,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/runtime/terminal-host/maintenance",
             post(maintenance::maintain_worker_engine),
         )
+        .route(
+            "/api/v1/runtime/providers/restart",
+            post(maintenance::restart_superseded_workers),
+        )
         .route("/api/v1/backups/database", get(backups::download_database))
         .route(
             "/api/v1/migrations/legacy/local",

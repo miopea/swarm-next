@@ -7,6 +7,7 @@ import {
   createTask,
   fetchDevelopmentRuntime,
   resolveDecision,
+  restartSupersededWorkers,
   type DecisionSurface,
   createWorker,
   fetchHealth,
@@ -697,6 +698,14 @@ export function App() {
     });
   }
 
+  async function restartProviders() {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await restartSupersededWorkers(operatorToken);
+      await refreshControlRoom(true);
+    }, "Restarting workers on the installed provider release…");
+  }
+
   async function maintainWorkerEngine() {
     if (!operatorToken) return;
     const previousSessionIds = sessions.map((session) => session.session_id);
@@ -1376,6 +1385,7 @@ export function App() {
               onUpdateWorker={maintainWorkerProfile}
               onRemoveWorker={removeWorkerProfile}
               onReorderWorkers={reorderWorkerProfiles}
+              onRestartProviders={restartProviders}
               onUpdateWorkerEngine={maintainWorkerEngine}
               onReloadDevelopment={reloadDevelopmentBuild}
               onHiveIdentityChange={setHiveIdentity}

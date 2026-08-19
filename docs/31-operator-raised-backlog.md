@@ -300,6 +300,39 @@ this is enforced by the client's good behaviour rather than by the rule. A
 per-viewer geometry identity would make it structural, and belongs in an
 amendment to ADR 0045.
 
+### 21. A provider update is installed but not running until each worker restarts — *fixed*
+
+Raised as: Claude shows "Update installed · Restart to update" in its own
+terminal — confirm whether that means workers need restarting, and if so add it
+to the worker updater and show the option in the runtime area.
+
+**Confirmed, and worse than the banner suggests.** Measured on this machine at
+2026-08-19 20:50 UTC. Claude installs each release as its own file and moves a
+symlink:
+
+    versions/2.1.233   Aug 14 20:41
+    versions/2.1.234   Aug 17 20:25
+    versions/2.1.235   Aug 18 20:40
+    versions/2.1.236   Aug 19 20:12   <- what `claude` points at now
+
+Two worker provider processes were running, started Aug 17 02:37 and Aug 18
+19:46. The newest release existing at those moments was 2.1.233 and 2.1.234
+respectively. Both were therefore two to three releases behind, and nothing in
+Swarm said so.
+
+`/proc/<pid>/exe` is not readable here, so the running version was inferred from
+start time against install time rather than read from the process. That
+inference is the same one the fix uses, and it is conservative: it can say a
+worker predates the installed release, not which release it holds.
+
+Fixed. The terminal host resolves each provider executable, because it is the
+process that spawns them and its `PATH` decides which release a worker gets, and
+reports the resolved path, version, and install time. The API compares that
+install time against each live session's start time. The runtime area gains a
+Providers card naming the release, how many workers are behind, and a restart
+that stops and revives exactly those workers through the same durable
+revival-intent path the engine update uses.
+
 ## Landed
 
 - The unconfirmed-delivery mark now explains itself where the operator lands.

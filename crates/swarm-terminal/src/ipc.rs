@@ -240,6 +240,14 @@ pub enum HostResponse {
     ProviderCapabilities {
         claude_code: bool,
         codex: bool,
+        /// What each provider executable resolves to right now.
+        ///
+        /// Defaulted so an older host, which reports availability only, stays
+        /// readable: a missing release is "not known", not "not superseded".
+        #[serde(default)]
+        claude_release: Option<crate::ProviderRelease>,
+        #[serde(default)]
+        codex_release: Option<crate::ProviderRelease>,
     },
     SessionStarted {
         session_id: WorkerSessionId,

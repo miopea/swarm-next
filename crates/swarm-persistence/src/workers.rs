@@ -43,6 +43,14 @@ pub(super) fn migrate_worker_revival_intents(
     transaction.pragma_update(None, "user_version", WORKER_REVIVAL_INTENT_SCHEMA_VERSION)
 }
 
+/// One live worker session, and what it is running.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActiveWorkerSession {
+    pub worker_id: WorkerId,
+    pub provider: ProviderKind,
+    pub started_at: i64,
+}
+
 const MAX_WORKER_NAME_BYTES: usize = 80;
 const MAX_WORKER_DESCRIPTION_BYTES: usize = 2_000;
 
@@ -950,6 +958,45 @@ impl TaskStore {
         Ok(released)
     }
 
+    /// The live worker sessions, with the provider each runs and when it began.
+    ///
+    /// A provider process executes the release it started with, so the start
+    /// time is what decides whether a worker is still running something that
+    /// has since been replaced on disk.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or holds an invalid ID.
+    pub fn active_worker_sessions(&self) -> Result<Vec<ActiveWorkerSession>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT p.id, p.provider, s.started_at
+             FROM worker_sessions s
+             JOIN worker_profiles p ON p.id = s.worker_id
+             WHERE s.ended_at IS NULL
+             ORDER BY s.started_at, p.id",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(id, provider, started_at)| {
+                Ok(ActiveWorkerSession {
+                    worker_id: WorkerId::from_str(&id)
+                        .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
+                    provider: ProviderKind::from_str(&provider)
+                        .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
+                    started_at,
+                })
+            })
+            .collect()
+    }
+
     /// Remembers the workers a worker-engine replacement is about to unload.
     ///
     /// Recorded before anything is stopped and kept in the database rather than
@@ -1743,6 +1790,47 @@ mod tests {
         assert!(!store.worker_accepts_injection(worker.id, 103).unwrap());
         assert!(store.release_worker_engagement(session, phone).unwrap());
         assert!(store.worker_accepts_injection(worker.id, 103).unwrap());
+    }
+
+    #[test]
+    fn live_sessions_report_when_they_started_and_what_they_run() {
+        // A provider process executes the release it started with, so the start
+        // time is what decides whether a worker is running something disk has
+        // moved past.
+        let store = TaskStore::in_memory().unwrap();
+        let claude = store
+            .create_worker("Ginger", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let codex = store
+            .create_worker("Hazel", ProviderKind::Codex, "/workspace", false, 2)
+            .unwrap();
+        let ended = store
+            .create_worker("Ivy", ProviderKind::ClaudeCode, "/workspace", false, 3)
+            .unwrap();
+        let ended_session = WorkerSessionId::new();
+        store
+            .bind_worker_session(claude.id, WorkerSessionId::new())
+            .unwrap();
+        store
+            .bind_worker_session(codex.id, WorkerSessionId::new())
+            .unwrap();
+        store.bind_worker_session(ended.id, ended_session).unwrap();
+        store.release_worker_session(ended_session).unwrap();
+
+        let live = store.active_worker_sessions().unwrap();
+
+        // A worker that is asleep is not running an old release; it is not
+        // running one at all.
+        assert_eq!(live.len(), 2);
+        assert!(
+            live.iter()
+                .any(|s| s.worker_id == claude.id && s.provider == ProviderKind::ClaudeCode)
+        );
+        assert!(
+            live.iter()
+                .any(|s| s.worker_id == codex.id && s.provider == ProviderKind::Codex)
+        );
+        assert!(live.iter().all(|s| s.started_at > 0));
     }
 
     #[test]

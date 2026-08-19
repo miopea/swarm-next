@@ -19,10 +19,71 @@ use swarm_terminal::{
 
 use crate::{ApiError, AppState, authorize, terminal_host::request_host};
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub(super) struct ProviderCapabilitiesView {
     claude_code: bool,
     codex: bool,
+    /// The release each provider resolves to now, and the workers still running
+    /// something older.
+    ///
+    /// Claude and Codex update themselves and the running process keeps
+    /// executing what it started with, so an update installed while workers are
+    /// up is not running anywhere until each one restarts.
+    #[serde(default)]
+    superseded: Vec<SupersededProviderView>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct SupersededProviderView {
+    provider: &'static str,
+    version: Option<String>,
+    installed_at: Option<i64>,
+    worker_ids: Vec<String>,
+}
+
+/// The workers still running a provider release that disk has moved past.
+///
+/// Reports nothing rather than guessing when the roster cannot be read: a
+/// restart prompt that is not needed teaches the operator to ignore the one
+/// that is.
+fn superseded_providers(
+    state: &AppState,
+    claude_release: Option<&swarm_terminal::ProviderRelease>,
+    codex_release: Option<&swarm_terminal::ProviderRelease>,
+) -> Vec<SupersededProviderView> {
+    let Ok(sessions) = crate::task_store(state).and_then(|store| {
+        store
+            .active_worker_sessions()
+            .map_err(|error| crate::task_store_error(&error))
+    }) else {
+        return Vec::new();
+    };
+    [
+        (
+            "claude_code",
+            swarm_domain::ProviderKind::ClaudeCode,
+            claude_release,
+        ),
+        ("codex", swarm_domain::ProviderKind::Codex, codex_release),
+    ]
+    .into_iter()
+    .filter_map(|(name, kind, release)| {
+        let worker_ids = sessions
+            .iter()
+            .filter(|session| {
+                session.provider == kind
+                    && swarm_terminal::provider_release_superseded(release, session.started_at)
+            })
+            .map(|session| session.worker_id.to_string())
+            .collect::<Vec<_>>();
+        (!worker_ids.is_empty()).then(|| SupersededProviderView {
+            provider: name,
+            version: release.and_then(|release| release.version.clone()),
+            installed_at: release.and_then(|release| release.installed_at),
+            worker_ids,
+        })
+    })
+    .collect()
 }
 
 async fn observe(
@@ -172,12 +233,24 @@ pub(super) async fn capabilities(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let capabilities = match request_host(&state, HostRequest::ProviderCapabilities).await {
-        Ok(HostResponse::ProviderCapabilities { claude_code, codex }) => {
-            ProviderCapabilitiesView { claude_code, codex }
-        }
+        Ok(HostResponse::ProviderCapabilities {
+            claude_code,
+            codex,
+            claude_release,
+            codex_release,
+        }) => ProviderCapabilitiesView {
+            claude_code,
+            codex,
+            superseded: superseded_providers(
+                &state,
+                claude_release.as_ref(),
+                codex_release.as_ref(),
+            ),
+        },
         _ => ProviderCapabilitiesView {
             claude_code: true,
             codex: false,
+            superseded: Vec::new(),
         },
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(capabilities)).into_response())

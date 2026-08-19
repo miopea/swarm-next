@@ -177,7 +177,19 @@ export type ProcessResources = {
 export type SessionSummary = { session_id: string; running: boolean; resources?: ProcessResources | null };
 export type SessionsResponse = { type: "sessions"; sessions: SessionSummary[] };
 export type SessionStartedResponse = { type: "session_started"; session_id: string };
-export type ProviderCapabilities = { claude_code: boolean; codex: boolean };
+/** A provider release on disk that some running workers have not picked up. */
+export type SupersededProvider = {
+  provider: "claude_code" | "codex";
+  version: string | null;
+  installed_at: number | null;
+  worker_ids: string[];
+};
+export type ProviderCapabilities = {
+  claude_code: boolean;
+  codex: boolean;
+  /** Empty when every running worker is on the installed release. */
+  superseded?: SupersededProvider[];
+};
 export type PresentationDeviceClass = "desktop" | "mobile";
 export type PresentationPreferences = {
   device_class: PresentationDeviceClass;
@@ -1426,6 +1438,11 @@ export async function fetchDevelopmentRuntime(operatorToken: string): Promise<De
 
 export async function requestDevelopmentReload(operatorToken: string): Promise<void> {
   await authenticatedFetch(operatorToken, "/api/v1/runtime/development/reload", { method: "POST" });
+}
+
+export async function restartSupersededWorkers(operatorToken: string): Promise<{ restarted_workers: number }> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/providers/restart", { method: "POST" });
+  return response.json() as Promise<{ restarted_workers: number }>;
 }
 
 export async function fetchProviderCapabilities(operatorToken: string): Promise<ProviderCapabilities> {

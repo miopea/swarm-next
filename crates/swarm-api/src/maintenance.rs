@@ -61,6 +61,82 @@ pub(super) async fn maintain_worker_engine(
     Ok(Json(response).into_response())
 }
 
+#[derive(Debug, Serialize)]
+pub(super) struct RestartWorkersResponse {
+    restarted_workers: usize,
+}
+
+/// Restarts the workers still running a superseded provider release.
+///
+/// Claude and Codex update themselves and a running process keeps executing the
+/// release it started with, so an update installed while workers are up is not
+/// running anywhere until each one restarts. This is the same stop-and-revive
+/// the worker engine update performs, without replacing anything: the roster is
+/// written down before a worker is stopped, so an interruption still gets the
+/// workers back.
+pub(super) async fn restart_superseded_workers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let _guard = state.worker_lifecycle.lock().await;
+    let HostResponse::ProviderCapabilities {
+        claude_release,
+        codex_release,
+        ..
+    } = request_host(&state, HostRequest::ProviderCapabilities).await?
+    else {
+        return Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "unexpected_host_response",
+            "terminal host returned an unexpected provider response",
+        ));
+    };
+    let store = task_store(&state)?;
+    let sessions = store
+        .active_worker_sessions()
+        .map_err(|error| task_store_error(&error))?;
+    let superseded = sessions
+        .into_iter()
+        .filter(|session| {
+            let release = match session.provider {
+                swarm_domain::ProviderKind::ClaudeCode => claude_release.as_ref(),
+                swarm_domain::ProviderKind::Codex => codex_release.as_ref(),
+            };
+            swarm_terminal::provider_release_superseded(release, session.started_at)
+        })
+        .map(|session| session.worker_id)
+        .collect::<Vec<_>>();
+    if superseded.is_empty() {
+        return Ok(Json(RestartWorkersResponse {
+            restarted_workers: 0,
+        })
+        .into_response());
+    }
+    store
+        .record_worker_revival_intents(&superseded, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    for worker_id in &superseded {
+        let Ok(profile) = store.get_worker_profile(*worker_id) else {
+            continue;
+        };
+        let Some(session_id) = profile.active_session_id else {
+            continue;
+        };
+        request_host(&state, HostRequest::Stop { session_id }).await?;
+        store
+            .release_worker_session(session_id)
+            .map_err(|error| task_store_error(&error))?;
+        store
+            .release_session_assignments(session_id)
+            .map_err(|error| task_store_error(&error))?;
+    }
+    state.control_room_notify.notify_waiters();
+    let restarted_workers = revive_loaded_workers(&state, &superseded).await;
+    state.control_room_notify.notify_waiters();
+    Ok(Json(RestartWorkersResponse { restarted_workers }).into_response())
+}
+
 pub(super) async fn request_development_reload(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

@@ -12,6 +12,7 @@ import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenA
 import { engineUpdateCost, workerEngineUpdateRequired, workersMidCommand } from "../runtime/workerEngine";
 import ApiarySettings from "./ApiarySettings";
 import DevelopmentReloadAction from "./DevelopmentReloadAction";
+import ProviderReleaseAction from "./ProviderReleaseAction";
 import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
 import EmailSettings from "./EmailSettings";
@@ -56,12 +57,13 @@ type Props = {
   onUpdateWorker: (workerId: string, name: string, description: string, provider: ProviderKind, autostart: boolean) => Promise<void>;
   onRemoveWorker: (workerId: string) => Promise<void>;
   onReorderWorkers: (workerIds: string[]) => Promise<void>;
+  onRestartProviders: () => Promise<void>;
   onUpdateWorkerEngine: () => Promise<void>;
   onReloadDevelopment: () => Promise<void>;
   onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
-export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
+export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -464,6 +466,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
             )}</> : <><p>The installed worker engine is compatible with this App/API release. Running workers do not need to restart.</p><small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small></>}
           </article>
           <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} reachable={developmentReachable} healthVersion={health?.version} onReload={onReloadDevelopment} />
+          <ProviderReleaseAction superseded={providers?.superseded ?? []} busy={busy} onRestart={onRestartProviders} />
         </div>
       </section>
 
