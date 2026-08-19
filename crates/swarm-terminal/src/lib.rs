@@ -31,5 +31,5 @@ pub use provider_activity::{ProviderActivity, classify_provider_activity};
 pub use resources::{ProcessResourceSample, sample_current_process, sample_process_tree};
 pub use state::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, CanonicalTerminalState,
-    MAX_CANONICAL_SNAPSHOT_BYTES, Resume, TerminalSnapshot,
+    MAX_CANONICAL_SNAPSHOT_BYTES, Resume, TerminalSnapshot, snapshot_plain_text,
 };

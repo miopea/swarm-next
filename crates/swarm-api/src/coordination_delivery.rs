@@ -18,7 +18,7 @@ use swarm_domain::{ProviderKind, WorkerSessionId};
 use swarm_persistence::{
     DecisionDispatch, QueenAutomationDelivery, TaskDispatch, TaskOutcomeDispatch, TaskStore,
 };
-use swarm_terminal::{HostRequest, HostResponse, ProviderActivity};
+use swarm_terminal::{HostRequest, HostResponse, ProviderActivity, snapshot_plain_text};
 use tokio::time::sleep;
 
 use crate::{HostClient, TerminalWriteProvenance, provider_activity};
@@ -98,6 +98,70 @@ pub(super) async fn submit_coordination_message(
     submit_terminal_message(client, session_id, provider, bytes, marker).await
 }
 
+/// What a read of the terminal says about writing to it now.
+enum Baseline {
+    Ready {
+        sequence: u64,
+        paste_placeholder: Option<Vec<u8>>,
+    },
+    Refused(TerminalSubmission),
+}
+
+/// Reads the terminal and decides whether coordination may write to it.
+///
+/// Coordination owns only a truly empty resting prompt. Active turns, provider
+/// questions, unknown screens, and resting prompts carrying typed text all
+/// defer durably rather than appending a message beneath whatever is there.
+///
+/// The paste placeholder already on screen is captured here so a later one can
+/// be told apart from it, and is read from the replayed screen for the same
+/// reason the later comparison is: the phrase is drawn with cursor moves and
+/// does not exist in the stream as text.
+async fn delivery_baseline(
+    client: &HostClient,
+    session_id: WorkerSessionId,
+    provider: ProviderKind,
+) -> Result<Baseline, swarm_terminal::IpcError> {
+    Ok(
+        match client
+            .request(&HostRequest::Read {
+                session_id,
+                after_sequence: None,
+            })
+            .await?
+        {
+            HostResponse::Output {
+                resume: swarm_terminal::Resume::Snapshot { snapshot },
+                running: true,
+                ..
+            } => {
+                let activity = provider_activity::classify_observed_activity(provider, &snapshot);
+                if activity != ProviderActivity::Resting
+                    || provider_activity::has_open_provider_input(provider, &snapshot)
+                {
+                    return Ok(Baseline::Refused(TerminalSubmission::Deferred));
+                }
+                Baseline::Ready {
+                    sequence: snapshot.sequence,
+                    paste_placeholder: latest_claude_paste_placeholder(
+                        snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns)
+                            .as_bytes(),
+                    )
+                    .map(<[u8]>::to_vec),
+                }
+            }
+            HostResponse::Output { resume, .. } => Baseline::Ready {
+                sequence: resume_sequence(&resume),
+                paste_placeholder: None,
+            },
+            HostResponse::Error { code, message } => {
+                Baseline::Refused(TerminalSubmission::Rejected { code, message })
+            }
+            _ => Baseline::Refused(TerminalSubmission::Uncertain),
+        },
+    )
+}
+
 async fn submit_terminal_message(
     client: &HostClient,
     session_id: WorkerSessionId,
@@ -109,38 +173,14 @@ async fn submit_terminal_message(
     if submit {
         bytes.pop();
     }
-    let (baseline, baseline_paste_placeholder) = match client
-        .request(&HostRequest::Read {
-            session_id,
-            after_sequence: None,
-        })
-        .await?
-    {
-        HostResponse::Output {
-            resume: swarm_terminal::Resume::Snapshot { snapshot },
-            running: true,
-            ..
-        } => {
-            let activity = provider_activity::classify_observed_activity(provider, &snapshot);
-            // Coordination owns only a truly empty resting prompt. Active
-            // turns, provider questions, unknown screens, and resting prompts
-            // with typed text all defer durably instead of appending messages.
-            if activity != ProviderActivity::Resting
-                || provider_activity::has_open_provider_input(provider, &snapshot)
-            {
-                return Ok(TerminalSubmission::Deferred);
-            }
-            (
-                snapshot.sequence,
-                latest_claude_paste_placeholder(&snapshot.bytes).map(<[u8]>::to_vec),
-            )
-        }
-        HostResponse::Output { resume, .. } => (resume_sequence(&resume), None),
-        HostResponse::Error { code, message } => {
-            return Ok(TerminalSubmission::Rejected { code, message });
-        }
-        _ => return Ok(TerminalSubmission::Uncertain),
-    };
+    let (baseline, baseline_paste_placeholder) =
+        match delivery_baseline(client, session_id, provider).await? {
+            Baseline::Ready {
+                sequence,
+                paste_placeholder,
+            } => (sequence, paste_placeholder),
+            Baseline::Refused(outcome) => return Ok(outcome),
+        };
     let response = client
         .request(&HostRequest::Write {
             session_id,
@@ -246,9 +286,10 @@ async fn observe_stable_marker(
             }
             _ => return Ok(MarkerObservation::Uncertain),
         };
+        let visible = snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
         let marker_is_visible = snapshot.sequence > baseline
-            && snapshot
-                .bytes
+            && visible
+                .as_bytes()
                 .windows(marker.len())
                 .any(|part| part == marker);
         // Claude deliberately collapses a long paste into a numbered
@@ -259,7 +300,7 @@ async fn observe_stable_marker(
         // mistaken for the current coordination message.
         let new_claude_paste = (provider == ProviderKind::ClaudeCode
             && snapshot.sequence > baseline)
-            .then(|| latest_claude_paste_placeholder(&snapshot.bytes))
+            .then(|| latest_claude_paste_placeholder(visible.as_bytes()))
             .flatten()
             .filter(|placeholder| Some(*placeholder) != baseline_paste_placeholder);
         let new_claude_paste_is_visible = new_claude_paste.is_some();
@@ -337,13 +378,14 @@ async fn observe_terminal_submission(
         if activity == ProviderActivity::Active {
             return Ok(SubmissionObservation::Accepted);
         }
+        let visible = snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
         let submitted_paste_is_still_open = submitted_claude_paste_is_still_open(
             provider,
-            &snapshot.bytes,
+            visible.as_bytes(),
             submitted_paste_placeholder,
         );
         let visible_marker_is_still_input = activity != ProviderActivity::Unknown
-            && claude_input_marker_is_still_open(provider, &snapshot.bytes, marker);
+            && claude_input_marker_is_still_open(provider, visible.as_bytes(), marker);
         if submitted_paste_is_still_open || visible_marker_is_still_input {
             if resting_stability.observe(
                 snapshot.sequence,
@@ -364,7 +406,7 @@ async fn observe_terminal_submission(
             }
             ProviderActivity::Resting
                 if snapshot.sequence > observed_sequence
-                    && resting_prompt_follows_marker(&snapshot.bytes, marker) =>
+                    && resting_prompt_follows_marker(visible.as_bytes(), marker) =>
             {
                 return Ok(SubmissionObservation::Accepted);
             }
@@ -511,6 +553,37 @@ mod tests {
         let TerminalSnapshot { bytes, .. } = state.snapshot();
         let marker = marker.as_bytes();
         bytes.windows(marker.len()).any(|part| part == marker)
+    }
+
+    #[test]
+    fn a_paste_chip_drawn_with_cursor_moves_is_still_recognised() {
+        // Claude does not draw the chip with spaces. Captured from a live Queen
+        // terminal: it writes "[Pasted", moves the cursor right, writes "text",
+        // moves again, then "#1]". The literal bytes "[Pasted text #" never
+        // reach the stream, so a search for them cannot match however long it
+        // waits — which is why a delivery sat unsubmitted for ten seconds and
+        // then reported uncertainty.
+        let mut state = CanonicalTerminalState::new(
+            JournalLimits::new(64 * 1024, 64),
+            TerminalSize::new(24, 80),
+        );
+        state.push(b"\xe2\x9d\xaf [Pasted\x1b[Ctext\x1b[C#1]".to_vec());
+        let TerminalSnapshot {
+            bytes,
+            rows,
+            columns,
+            ..
+        } = state.snapshot();
+
+        // Searching the stream directly cannot work: the phrase is not in it.
+        assert!(latest_claude_paste_placeholder(&bytes).is_none());
+
+        // Replaying it into a screen restores what the operator can read.
+        let visible = snapshot_plain_text(&bytes, rows, columns);
+        assert!(
+            latest_claude_paste_placeholder(visible.as_bytes()).is_some(),
+            "the chip is on screen, so it must be recognisable once replayed"
+        );
     }
 
     #[test]

@@ -223,6 +223,35 @@ fn write_color_sgr(bytes: &mut Vec<u8>, color: vt100::Color, foreground: bool) {
     }
 }
 
+/// Renders a canonical snapshot back to the plain text a person sees.
+///
+/// A snapshot is a terminal stream, so text in it is not searchable as text.
+/// Providers position with cursor moves rather than spaces — Claude draws its
+/// collapsed paste chip as `[Pasted`, cursor forward, `text`, cursor forward,
+/// `#1]` — so a phrase that is plainly on screen may exist nowhere in the
+/// bytes. Anything matching against what the operator can see has to replay the
+/// stream first, which is what a terminal is for.
+///
+/// Scrollback is included, so text that has scrolled above the visible rows is
+/// still found.
+#[must_use]
+pub fn snapshot_plain_text(bytes: &[u8], rows: u16, columns: u16) -> String {
+    let mut parser = vt100::Parser::new(rows.max(1), columns.max(1), CANONICAL_SCROLLBACK_ROWS);
+    parser.process(bytes);
+    let mut screen = parser.screen().clone();
+    screen.set_scrollback(usize::MAX);
+    let retained = screen.scrollback();
+    let mut rendered = String::new();
+    for offset in (1..=retained).rev() {
+        screen.set_scrollback(offset);
+        rendered.push_str(&screen.contents());
+        rendered.push('\n');
+    }
+    screen.set_scrollback(0);
+    rendered.push_str(&screen.contents());
+    rendered
+}
+
 fn formatted_scrollback(screen: &vt100::Screen, max_bytes: usize) -> Vec<u8> {
     let mut history = screen.clone();
     history.set_scrollback(usize::MAX);
