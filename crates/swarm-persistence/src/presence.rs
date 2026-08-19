@@ -6,13 +6,54 @@ use swarm_domain::{
     PresenceMode, PresenceObservationState, PresenceSource,
 };
 
-use super::{TaskStore, TaskStoreError, insert_control_room_event};
+use super::{
+    PRESENCE_LAST_ACTIVE_SCHEMA_VERSION, TaskStore, TaskStoreError, insert_control_room_event,
+};
 
 const MAX_PRESENCE_DEVICES: i64 = 16;
 const ACTIVE_TTL_SECONDS: i64 = 150;
 const INACTIVE_TTL_SECONDS: i64 = 300;
-const LOCKED_TTL_SECONDS: i64 = 86_400;
+// A locked desktop keeps reporting: measured on the dogfood host, a locked
+// browser heartbeats every sixty seconds. A day-long lifetime therefore did not
+// keep a locked machine visible, it kept a machine that had been switched off
+// looking locked for a day. Both read as away, so the answer was never wrong,
+// but the reason given for it was, and a stale row also outranked a fresher one
+// from a device still reporting. Five minutes is the existing inactive
+// lifetime and five times the observed heartbeat.
+const LOCKED_TTL_SECONDS: i64 = INACTIVE_TTL_SECONDS;
 const HIDDEN_TTL_SECONDS: i64 = 90;
+
+/// Records when a device was last actually interacted with.
+///
+/// A forward step rather than an edit to the migration that created the table:
+/// every installed database has already passed that one.
+pub(super) fn migrate_presence_last_active(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    // A database old enough not to have the table yet reaches this step on its
+    // way up, and creates the table complete further along.
+    let table_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'operator_presence_devices')",
+        [],
+        |row| row.get(0),
+    )?;
+    let exists: bool = table_exists
+        && transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('operator_presence_devices') WHERE name = 'last_active_at')",
+            [],
+            |row| row.get(0),
+        )?;
+    if table_exists && !exists {
+        transaction.execute_batch(
+            "ALTER TABLE operator_presence_devices ADD COLUMN last_active_at INTEGER;",
+        )?;
+        // An existing device has been interacted with at some point; its last
+        // observation is the closest honest answer available.
+        transaction
+            .execute_batch("UPDATE operator_presence_devices SET last_active_at = updated_at;")?;
+    }
+    transaction.pragma_update(None, "user_version", PRESENCE_LAST_ACTIVE_SCHEMA_VERSION)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PresenceMutation {
@@ -108,11 +149,15 @@ impl TaskStore {
         let expires_at = now.saturating_add(observation_ttl(state));
         transaction.execute(
             "INSERT INTO operator_presence_devices (
-                 id, operator_id, device_class, state, expires_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 id, operator_id, device_class, state, expires_at, updated_at, last_active_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET operator_id = excluded.operator_id,
                  device_class = excluded.device_class, state = excluded.state,
-                 expires_at = excluded.expires_at, updated_at = excluded.updated_at",
+                 expires_at = excluded.expires_at, updated_at = excluded.updated_at,
+                 last_active_at = MAX(
+                     COALESCE(operator_presence_devices.last_active_at, 0),
+                     COALESCE(excluded.last_active_at, 0)
+                 )",
             params![
                 device_id.to_string(),
                 operator_id.to_string(),
@@ -120,6 +165,7 @@ impl TaskStore {
                 state.to_string(),
                 expires_at,
                 now,
+                (state == PresenceObservationState::Active).then_some(now),
             ],
         )?;
         let after = operator_presence_from_connection(&transaction, now)?;
@@ -172,13 +218,24 @@ pub(super) fn operator_presence_from_connection(
     }
     let state = connection
         .query_row(
-            "SELECT state FROM operator_presence_devices
+            // A device interacted with inside the active window still counts as
+            // active. Backgrounding an app reports hidden, which describes the
+            // screen rather than the person holding it, and treating the two as
+            // the same made presence flip every time an operator changed apps.
+            // The window is the existing active lifetime rather than a new
+            // number: an active observation is already treated as meaningful
+            // for exactly that long.
+            "SELECT CASE
+                 WHEN last_active_at IS NOT NULL AND last_active_at + ?3 > ?2 THEN 'active'
+                 ELSE state
+             END AS state
+             FROM operator_presence_devices
              WHERE operator_id = ?1 AND expires_at > ?2
              ORDER BY CASE state
                  WHEN 'active' THEN 0 WHEN 'locked' THEN 1
                  WHEN 'idle' THEN 2 ELSE 3 END,
                  updated_at DESC LIMIT 1",
-            params![operator_id.to_string(), now],
+            params![operator_id.to_string(), now, ACTIVE_TTL_SECONDS],
             |row| row.get::<_, String>(0),
         )
         .optional()?
@@ -225,6 +282,94 @@ pub(super) fn local_operator_id(connection: &Connection) -> Result<OperatorId, T
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_machine_that_stopped_reporting_stops_being_called_locked() {
+        // A locked desktop heartbeats, so silence means the machine is gone
+        // rather than locked. Swarm should stop claiming to know which.
+        let store = TaskStore::in_memory().unwrap();
+        let desktop = PresenceDeviceId::new();
+
+        let locked = store
+            .record_presence_observation(
+                desktop,
+                PresenceDeviceClass::Desktop,
+                PresenceObservationState::Locked,
+                1_000,
+            )
+            .unwrap();
+        assert_eq!(locked.presence.mode, PresenceMode::Away);
+        assert_eq!(locked.presence.source, PresenceSource::ScreenLocked);
+
+        // Still within the lifetime: the report stands.
+        assert_eq!(
+            store
+                .operator_presence(1_000 + LOCKED_TTL_SECONDS - 1)
+                .unwrap()
+                .source,
+            PresenceSource::ScreenLocked
+        );
+
+        // Past it, Swarm says it no longer knows rather than repeating a claim
+        // about a machine it has not heard from.
+        let stale = store
+            .operator_presence(1_000 + LOCKED_TTL_SECONDS + 1)
+            .unwrap();
+        assert_eq!(stale.mode, PresenceMode::Away);
+        assert_eq!(stale.source, PresenceSource::TimedOut);
+    }
+
+    #[test]
+    fn switching_apps_on_a_phone_does_not_read_as_leaving() {
+        // The operator's own account: "if I am on my phone and it is active, it
+        // is perfectly normal to jump between apps, but I never left my phone."
+        // A backgrounded app reports hidden, which is a statement about the
+        // screen rather than about the person holding it. Measured on the
+        // dogfood host, a phone in use flipped active/hidden four times in
+        // ninety seconds, which flipped derived presence just as often.
+        let store = TaskStore::in_memory().unwrap();
+        let phone = PresenceDeviceId::new();
+
+        let active = store
+            .record_presence_observation(
+                phone,
+                PresenceDeviceClass::Mobile,
+                PresenceObservationState::Active,
+                1_000,
+            )
+            .unwrap();
+        assert_eq!(active.presence.mode, PresenceMode::AtHive);
+
+        // Switching apps a few seconds later.
+        let hidden = store
+            .record_presence_observation(
+                phone,
+                PresenceDeviceClass::Mobile,
+                PresenceObservationState::Hidden,
+                1_010,
+            )
+            .unwrap();
+        assert_eq!(
+            hidden.presence.mode,
+            PresenceMode::AtHive,
+            "a device active moments ago is still the operator's device"
+        );
+        assert!(
+            !hidden.changed,
+            "presence did not change, so nothing downstream should be told it did"
+        );
+
+        // Long enough with no interaction and it is a real absence again.
+        let gone = store
+            .record_presence_observation(
+                phone,
+                PresenceDeviceClass::Mobile,
+                PresenceObservationState::Hidden,
+                1_000 + ACTIVE_TTL_SECONDS + 1,
+            )
+            .unwrap();
+        assert_eq!(gone.presence.mode, PresenceMode::Away);
+    }
 
     #[test]
     fn device_observations_derive_presence_without_timer_owned_truth() {

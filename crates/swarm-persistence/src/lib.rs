@@ -114,7 +114,8 @@ const DEPLOYMENT_GRANT_SCHEMA_VERSION: i64 = 70;
 const LEGACY_PROVIDER_CONVERSATION_SCHEMA_VERSION: i64 = 71;
 const LEGACY_EXISTING_CONVERSATION_SCHEMA_VERSION: i64 = 72;
 const QUEEN_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 73;
-const CURRENT_SCHEMA_VERSION: i64 = QUEEN_DELIVERY_SESSION_SCHEMA_VERSION;
+const PRESENCE_LAST_ACTIVE_SCHEMA_VERSION: i64 = 74;
+const CURRENT_SCHEMA_VERSION: i64 = PRESENCE_LAST_ACTIVE_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1907,6 +1908,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < QUEEN_DELIVERY_SESSION_SCHEMA_VERSION {
         queen_conductor::migrate_queen_delivery_session(transaction)?;
+    }
+    if schema_version < PRESENCE_LAST_ACTIVE_SCHEMA_VERSION {
+        presence::migrate_presence_last_active(transaction)?;
     }
     Ok(())
 }
@@ -4616,7 +4620,7 @@ mod tests {
                 // here instead would describe a database that never existed,
                 // and would pass or fail for reasons unrelated to the ceiling.
                 .execute_batch(&format!(
-                    "ALTER TABLE queen_automation DROP COLUMN delivery_session_id;
+                    "ALTER TABLE operator_presence_devices DROP COLUMN last_active_at;
                      PRAGMA user_version = {};",
                     CURRENT_SCHEMA_VERSION - 1
                 ))
@@ -4656,6 +4660,8 @@ mod tests {
             )
             .unwrap();
         assert!(replacement_provenance_exists);
+        // Carried by the step below the ceiling, so a database one version
+        // short already has it.
         let delivery_session_exists: bool = connection
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('queen_automation')
@@ -4665,6 +4671,16 @@ mod tests {
             )
             .unwrap();
         assert!(delivery_session_exists);
+        // Added by the newest step, which is what this test exercises.
+        let last_active_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('operator_presence_devices')
+                 WHERE name = 'last_active_at')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(last_active_exists);
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
