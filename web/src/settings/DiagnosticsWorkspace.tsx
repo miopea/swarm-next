@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { readRoutePaints, routePaintSummary } from "../runtime/routePaint";
 
 import {
   downloadDogfoodScreenshot,
@@ -77,6 +78,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
 
   const launchFailures = workers.filter((worker) => Boolean(worker.runtime_error)).length;
   const providerStatus = launchFailures > 0 ? "Needs attention" : "Healthy";
+  const routePaint = routePaintSummary(readRoutePaints());
   const terminalStatus = !runtime.loaded ? "Checking…" : runtime.terminalHost
     ? runtime.terminalHost.draining ? "Updating safely" : `Healthy · ${runtimeVersionIdentity(runtime.terminalHost.host_version)}`
     : "Unavailable";
@@ -147,6 +149,9 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       </div>
       <dl className="diagnostic-list">
         <div><dt>Browser</dt><dd>{navigator.onLine ? "Online" : "Offline"}</dd></div>
+        <div><dt>View switching</dt><dd>{routePaint
+          ? `${routePaint.median_ms} ms typical · ${routePaint.slowest_ms} ms slowest of ${routePaint.samples}`
+          : "No view changes measured yet"}</dd></div>
         <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
         <div><dt>Database</dt><dd>{hiveIdentity ? "Healthy" : "Unavailable"}</dd></div>
         <div><dt>Terminal host</dt><dd>{terminalStatus}</dd></div>

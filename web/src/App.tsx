@@ -93,6 +93,7 @@ import { useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
 import { runtimeUpdateSummary, type RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
 import { openSurfaceWindow } from "./navigation/surfaceWindow";
+import { measureRoutePaint } from "./runtime/routePaint";
 import { workerEngineMatches } from "./runtime/workerEngine";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
@@ -952,6 +953,15 @@ export function App() {
   });
 
   useEffect(() => setPopoutBlocked(false), [surface]);
+
+  useEffect(
+    () => measureRoutePaint(
+      surface,
+      (callback) => requestAnimationFrame(callback),
+      (handle) => cancelAnimationFrame(handle),
+    ),
+    [surface],
+  );
 
   useEffect(() => {
     const workerId = activeWorker?.id;

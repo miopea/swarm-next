@@ -11,6 +11,7 @@ import type {
 } from "../api";
 import type { LiveFeedState } from "../controlRoom/ControlRoomLiveFeed";
 import { readClientFailures } from "../feedback/clientDiagnostics";
+import { readRoutePaints, routePaintSummary } from "../runtime/routePaint";
 
 export type RuntimeDiagnostics = {
   terminalHost?: TerminalHostStatus;
@@ -64,6 +65,7 @@ export function buildSanitizedDiagnosticReport({ context, health, hiveIdentity, 
       visibility: document.visibilityState,
       live_updates: liveFeedState,
       recent_failures: readClientFailures(),
+      route_paint: routePaintSummary(readRoutePaints()),
     },
     api: health ? { status: "healthy", version: health.version } : { status: "unavailable" },
     database: {
