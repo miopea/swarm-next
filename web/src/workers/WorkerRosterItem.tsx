@@ -56,18 +56,17 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
       >
         <span className="worker-avatar"><BeeMascot role={worker.role === "queen" ? "queen" : "worker"} expression={attention.expression} /></span>
         <span className="worker-copy">
-          <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.label}{silence ? <span className="worker-silence"> · {silence}</span> : null}</span></span>
+          <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.label}{silence ? <span className="worker-silence"> · {silence}</span> : null}{worker.unconfirmed_delivery ? (
+            <span
+              className="worker-unconfirmed"
+              role="img"
+              aria-label="Swarm could not confirm this worker received its briefing"
+              title="Swarm wrote a briefing to this worker and could not confirm it landed"
+            >!</span>
+          ) : null}</span></span>
           <small title={detail}>{detail}</small>
           {workSummary ? <span className="worker-work-summary" title={`Open work: ${workSummary}`}>{workSummary}</span> : null}
         </span>
-        {worker.unconfirmed_delivery ? (
-          <span
-            className="worker-unconfirmed"
-            role="img"
-            aria-label="Swarm could not confirm this worker received its briefing"
-            title="Swarm wrote a briefing to this worker and could not confirm it landed"
-          >!</span>
-        ) : null}
         <span className={`presence ${attention.presence}`} title={attention.label} aria-hidden="true" />
       </button>
       <button

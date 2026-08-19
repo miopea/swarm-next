@@ -83,6 +83,26 @@ test("returns to resting when the operator engagement lease expires", () => {
   vi.useRealTimers();
 });
 
+test("keeps the row on the three columns its grid defines", () => {
+  // The row grid is `34px minmax(0, 1fr) 8px`. A fourth direct child wraps onto
+  // an implicit second row and drags the presence dot with it, which is how the
+  // unconfirmed-delivery mark first broke the roster layout.
+  render(
+    <WorkerRosterItem
+      worker={{ ...queen, id: "worker", name: "Daisy", role: "worker", unconfirmed_delivery: true }}
+      selected={false}
+      detail="Running"
+      busy={false}
+      onOpen={vi.fn()}
+      onStart={vi.fn()}
+      onStop={vi.fn()}
+    />,
+  );
+
+  const row = document.querySelector(".worker-button");
+  expect(row?.children).toHaveLength(3);
+});
+
 test("marks a worker whose briefing Swarm could not confirm", () => {
   render(
     <WorkerRosterItem
