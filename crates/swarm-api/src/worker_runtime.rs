@@ -239,6 +239,17 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
         .release_missing_worker_sessions(&live_ids)
         .map_err(|error| task_store_error(&error))?;
     if released > 0 {
+        // Releasing a session detaches a worker from its profile: the roster
+        // shows it sleeping while its terminal keeps running under a generated
+        // name. That is a large, visible change to make silently, and it went
+        // unexplained for hours once because nothing recorded it. An empty
+        // report from the host releases every session at once, so the count the
+        // host gave is recorded beside the count released.
+        tracing::warn!(
+            released,
+            host_reported_running = live_ids.len(),
+            "worker sessions were released because the terminal host no longer reports them"
+        );
         state.control_room_notify.notify_waiters();
     }
     Ok(live)
