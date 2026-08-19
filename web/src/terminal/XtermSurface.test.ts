@@ -234,7 +234,7 @@ test("turns an upward one-finger drag into older terminal scrollback", () => {
 
   expect(move.defaultPrevented).toBe(true);
   expect(xterm.scrollLines).toHaveBeenCalledOnce();
-  expect(xterm.scrollLines).toHaveBeenCalledWith(-3);
+  expect(xterm.scrollLines).toHaveBeenCalledWith(3);
   surface.dispose();
 });
 
@@ -269,7 +269,7 @@ test("uses the Android primary pointer path without handing the drag back to xte
   expect(move.defaultPrevented).toBe(true);
   expect(downstreamMove).not.toHaveBeenCalled();
   expect(xterm.scrollLines).toHaveBeenCalledOnce();
-  expect(xterm.scrollLines).toHaveBeenCalledWith(-3);
+  expect(xterm.scrollLines).toHaveBeenCalledWith(3);
   surface.dispose();
 });
 
@@ -295,7 +295,7 @@ test("captures a real xterm-child drag even when the child stops bubbling", () =
   xtermChild.dispatchEvent(move);
 
   expect(move.defaultPrevented).toBe(true);
-  expect(xterm.scrollLines).toHaveBeenCalledWith(-2);
+  expect(xterm.scrollLines).toHaveBeenCalledWith(2);
   surface.dispose();
 });
 
@@ -316,9 +316,42 @@ test("accumulates small touch movement and scrolls in both directions", () => {
   element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 91 }]));
   expect(xterm.scrollLines).not.toHaveBeenCalled();
   element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 82 }]));
-  expect(xterm.scrollLines).toHaveBeenLastCalledWith(-1);
-  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 108 }]));
   expect(xterm.scrollLines).toHaveBeenLastCalledWith(1);
+  element.dispatchEvent(touchEvent("touchmove", [{ identifier: 3, clientY: 108 }]));
+  expect(xterm.scrollLines).toHaveBeenLastCalledWith(-1);
+  surface.dispose();
+});
+
+test("drags the terminal content with the finger, not against it", () => {
+  // This sign has regressed before, and a bare number in an assertion does not
+  // say which way the screen moved. Stated as direct manipulation: dragging up
+  // pulls content up and reveals newer output below; dragging down pulls
+  // content down and reveals older scrollback above.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const element = document.createElement("div");
+  const surface = new XtermSurface();
+  surface.open(element);
+
+  const drag = (from: number, to: number) => {
+    xterm.scrollLines.mockClear();
+    element.dispatchEvent(touchEvent("touchstart", [{ identifier: 21, clientY: from }]));
+    element.dispatchEvent(touchEvent("touchmove", [{ identifier: 21, clientY: to }]));
+    element.dispatchEvent(touchEvent("touchend", [{ identifier: 21, clientY: to }]));
+    return xterm.scrollLines.mock.calls.at(-1)?.[0] as number | undefined;
+  };
+
+  const draggingUp = drag(300, 200);
+  const draggingDown = drag(200, 300);
+
+  // xterm reads positive scrollLines as moving toward newer output.
+  expect(draggingUp).toBeGreaterThan(0);
+  expect(draggingDown).toBeLessThan(0);
   surface.dispose();
 });
 
