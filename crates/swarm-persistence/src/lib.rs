@@ -119,7 +119,8 @@ const LEGACY_EXISTING_CONVERSATION_SCHEMA_VERSION: i64 = 72;
 const QUEEN_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 73;
 const PRESENCE_LAST_ACTIVE_SCHEMA_VERSION: i64 = 74;
 const TASK_OPERATOR_INSTRUCTION_SCHEMA_VERSION: i64 = 75;
-const CURRENT_SCHEMA_VERSION: i64 = TASK_OPERATOR_INSTRUCTION_SCHEMA_VERSION;
+const WORKER_REVIVAL_INTENT_SCHEMA_VERSION: i64 = 76;
+const CURRENT_SCHEMA_VERSION: i64 = WORKER_REVIVAL_INTENT_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1931,6 +1932,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < TASK_OPERATOR_INSTRUCTION_SCHEMA_VERSION {
         migrate_task_operator_instruction(transaction)?;
+    }
+    if schema_version < WORKER_REVIVAL_INTENT_SCHEMA_VERSION {
+        workers::migrate_worker_revival_intents(transaction)?;
     }
     Ok(())
 }
@@ -4680,7 +4684,7 @@ mod tests {
                 // here instead would describe a database that never existed,
                 // and would pass or fail for reasons unrelated to the ceiling.
                 .execute_batch(&format!(
-                    "ALTER TABLE tasks DROP COLUMN operator_instruction;
+                    "DROP TABLE worker_revival_intents;
                      PRAGMA user_version = {};",
                     CURRENT_SCHEMA_VERSION - 1
                 ))
@@ -4741,11 +4745,7 @@ mod tests {
             )
             .unwrap();
         assert!(last_active_exists);
-        // Added by the newest step, which is what this test exercises. This
-        // assertion and the column dropped above have to move with every new
-        // migration, which has caught three real mistakes and cost three
-        // edits; worth replacing with something that finds the newest step
-        // itself.
+        // Carried by a step below the ceiling.
         let operator_instruction_exists: bool = connection
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks')
@@ -4755,6 +4755,19 @@ mod tests {
             )
             .unwrap();
         assert!(operator_instruction_exists);
+        // Added by the newest step, which is what this test exercises. This
+        // assertion and the artifact dropped above have to move with every new
+        // migration, which has caught four real mistakes and cost four edits;
+        // worth replacing with something that finds the newest step itself.
+        let revival_intents_exist: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'worker_revival_intents')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(revival_intents_exist);
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))

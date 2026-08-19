@@ -129,6 +129,11 @@ const MAX_TERMINAL_WEBSOCKETS: usize = 32;
 const RESOURCE_ADVISORY_BYTES: u64 = 256 * 1024 * 1024;
 const RESOURCE_CRITICAL_BYTES: u64 = 512 * 1024 * 1024;
 const WORKER_RECOVERY_STABILITY_SECONDS: i64 = 5 * 60;
+/// How long a worker unloaded by a worker-engine replacement stays owed a
+/// revival. Long enough to outlast a slow engine swap and an API restart,
+/// short enough that it cannot wake workers the operator later chose to
+/// leave asleep.
+pub(crate) const WORKER_REVIVAL_INTENT_MAX_AGE_SECONDS: i64 = 15 * 60;
 const ASSIGNED_READY_START_GRACE_SECONDS: i64 = 5 * 60;
 const STALE_OWNED_WORK_SECONDS: i64 = 30 * 60;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
@@ -872,8 +877,74 @@ impl AppState {
                 tracing::warn!(worker_id = %profile.id, worker_name = %profile.name, message = %error.message, "autostart worker could not be started");
             }
         }
+        self.revive_workers_owed_a_return().await;
         self.deliver_coordination().await;
         self.deliver_notifications().await;
+    }
+
+    /// Starts the workers a worker-engine replacement unloaded and has not yet
+    /// brought back.
+    ///
+    /// The list is read from the database rather than carried by the request
+    /// that stopped them, so an update interrupted by a timeout, a proxy, or a
+    /// restart still returns the roster it took away — on this pass or a later
+    /// one.
+    ///
+    /// Skipped while a maintenance run holds the worker lifecycle, which is the
+    /// one time these workers are expected to be stopped.
+    async fn revive_workers_owed_a_return(&self) {
+        let Ok(lifecycle) = self.worker_lifecycle.try_lock() else {
+            return;
+        };
+        let Ok(store) = task_store(self) else {
+            return;
+        };
+        let owed = match store
+            .worker_revival_intents(unix_timestamp(), WORKER_REVIVAL_INTENT_MAX_AGE_SECONDS)
+        {
+            Ok(owed) => owed,
+            Err(error) => {
+                tracing::warn!(message = %error, "workers owed a return could not be read");
+                return;
+            }
+        };
+        if owed.is_empty() {
+            return;
+        }
+        // Only once the engine has settled. Reviving a worker onto the outgoing
+        // engine gives it back for as long as it takes the swap to finish, and
+        // the second stop records nothing, so the worker is lost for real.
+        match maintenance::host_status_snapshot(self).await {
+            Ok(status)
+                if maintenance::worker_engine_update_required(&status) || status.draining =>
+            {
+                return;
+            }
+            Ok(_) => {}
+            Err(_) => return,
+        }
+        for worker_id in owed {
+            let already_running = store
+                .get_worker_profile(worker_id)
+                .is_ok_and(|profile| profile.active_session_id.is_some());
+            if !already_running
+                && let Err(error) =
+                    worker_runtime::start_worker_process(self, worker_id, TerminalSize::default())
+                        .await
+            {
+                // The intent is cleared either way. The roster shows the error
+                // where the operator can act on it, which is a better answer
+                // than starting the same worker every half minute in silence.
+                self.worker_errors
+                    .write()
+                    .await
+                    .insert(worker_id, error.message.clone());
+                tracing::warn!(worker_id = %worker_id, message = %error.message, "worker owed a return after a worker-engine replacement could not be started");
+            }
+            let _ = store.clear_worker_revival_intent(worker_id);
+        }
+        drop(lifecycle);
+        self.control_room_notify.notify_waiters();
     }
 
     /// Delivers durable coordination only to running workers without a live operator lease.
@@ -12814,6 +12885,78 @@ mod tests {
         let replacement_task = replacement_receiver.await.unwrap();
         replacement_task.abort();
         let _ = replacement_task.await;
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_worker_engine_update_still_owes_the_workers_a_return() {
+        let runtime = TempDir::new().unwrap();
+        let workspace = env::temp_dir().canonicalize().unwrap();
+        let registry = Arc::new(
+            SessionRegistry::new(JournalLimits::new(4096, 64), 2, [workspace.clone()]).unwrap(),
+        );
+        let session = registry
+            .spawn(
+                &ProviderCommand {
+                    executable: PathBuf::from("/bin/sh"),
+                    arguments: vec!["-lc".into(), "sleep 10".into()],
+                    working_directory: workspace.clone(),
+                },
+                TerminalSize::default(),
+            )
+            .unwrap();
+        let socket = runtime.path().join("terminal.sock");
+        // This host is never replaced, so the update never reports in and the
+        // request gives up — the case that used to lose the roster.
+        let server = HostServer::bind_with_identity(
+            &socket,
+            Arc::clone(&registry),
+            "old-host",
+            "old-engine",
+        )
+        .unwrap();
+        let server_task = tokio::spawn(server.run());
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Dahlia",
+                ProviderKind::ClaudeCode,
+                workspace.to_str().unwrap(),
+                false,
+                1,
+            )
+            .unwrap();
+        store.bind_worker_session(worker.id, session.id()).unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new(&socket), "secret")
+            .with_task_store(store.clone())
+            .with_maintenance_request_path(runtime.path().join("worker-engine-maintenance.request"))
+            .with_maintenance_timeout(Duration::from_millis(300));
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/runtime/terminal-host/maintenance")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+        // The worker was stopped, and who it was survived the request that
+        // stopped it, so the supervisor can still bring it back.
+        assert!(!session.is_running().unwrap());
+        assert_eq!(
+            store
+                .worker_revival_intents(unix_timestamp(), WORKER_REVIVAL_INTENT_MAX_AGE_SECONDS)
+                .unwrap(),
+            vec![worker.id]
+        );
+
+        server_task.abort();
+        let _ = server_task.await;
     }
 
     #[tokio::test]

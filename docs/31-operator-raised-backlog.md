@@ -23,7 +23,7 @@ part of the work.
 Wanted: a single overarching operator comment on a task, distinct from the
 description and from activity notes.
 
-### 10. A worker-engine update loses the roster it promised to restore
+### 10. A worker-engine update loses the roster it promised to restore — *fixed*
 
 Raised as: coming back from a worker engine update, the previously active
 workers did not return and had to be woken one at a time. An error was visible
@@ -40,6 +40,13 @@ the rest did not.
 
 The promise on the card is "briefly stops 7 active workers, then revives them".
 That promise cannot be kept by a value that dies with the request.
+
+Fixed: the roster is written to the database before anything is stopped, and
+the supervisor brings back whatever is still owed, on this pass or a later one.
+Recording it is now a precondition — if it cannot be written, no worker is
+stopped. Revival waits for the engine to settle, so a worker is never handed
+back onto the engine being replaced. Intents age out after fifteen minutes so
+they cannot wake workers the operator later chose to leave asleep.
 
 ### 11. The update indicator does not use the words the settings page uses
 
@@ -63,7 +70,7 @@ second. Seen shortly after a worker-engine update, so an API restart mid-upload
 is a candidate, but the retry-succeeds shape means this needs reproducing before
 it is diagnosed.
 
-### 14. Three workers claim the operator at once
+### 14. Three workers claim the operator at once — *fixed*
 
 Raised as: three workers show "with you" while the operator is plainly in one
 session. Observed as BFG Operations `WITH YOU · 4M`, BudgetBug `WITH YOU · 4M`,
@@ -77,6 +84,9 @@ not fresh, so age is already known and simply not acted on.
 
 Related to the presence work in `892e439`, but distinct: that fixed *whether the
 operator is present*, this is *which worker they are present with*.
+
+Fixed in `f98ee29`: typing into a worker ends that device's engagement
+everywhere else.
 
 ### 6. Worker engine upgrades need care proportional to their harm
 

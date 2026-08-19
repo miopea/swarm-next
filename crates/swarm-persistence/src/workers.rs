@@ -10,7 +10,38 @@ use swarm_domain::{
 };
 use uuid::Uuid;
 
-use super::{MAX_WORKSPACE_BYTES, TaskStore, TaskStoreError, insert_control_room_event};
+use super::{
+    MAX_WORKSPACE_BYTES, TaskStore, TaskStoreError, WORKER_REVIVAL_INTENT_SCHEMA_VERSION,
+    insert_control_room_event,
+};
+
+/// Records which workers a worker-engine replacement unloaded, so they can be
+/// brought back by whoever is running next rather than only by the request that
+/// stopped them.
+///
+/// A forward step, and guarded on `worker_profiles`, because a database old
+/// enough to predate the roster passes through here on its way up.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+pub(super) fn migrate_worker_revival_intents(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let workers_exist: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'worker_profiles')",
+        [],
+        |row| row.get(0),
+    )?;
+    if workers_exist {
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS worker_revival_intents (
+                worker_id TEXT PRIMARY KEY REFERENCES worker_profiles(id) ON DELETE CASCADE,
+                recorded_at INTEGER NOT NULL
+            );",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", WORKER_REVIVAL_INTENT_SCHEMA_VERSION)
+}
 
 const MAX_WORKER_NAME_BYTES: usize = 80;
 const MAX_WORKER_DESCRIPTION_BYTES: usize = 2_000;
@@ -919,6 +950,79 @@ impl TaskStore {
         Ok(released)
     }
 
+    /// Remembers the workers a worker-engine replacement is about to unload.
+    ///
+    /// Recorded before anything is stopped and kept in the database rather than
+    /// in the request that stops them, because the operator is promised those
+    /// workers back and the request can die — on a timeout, behind a proxy, or
+    /// with the process itself — after the workers are already gone.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn record_worker_revival_intents(
+        &self,
+        worker_ids: &[WorkerId],
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        for worker_id in worker_ids {
+            transaction.execute(
+                "INSERT INTO worker_revival_intents (worker_id, recorded_at)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(worker_id) DO UPDATE SET recorded_at = excluded.recorded_at",
+                params![worker_id.to_string(), now],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// The workers still owed a revival, discarding any older than `max_age_seconds`.
+    ///
+    /// Ageing them out matters: an intent that outlives the maintenance it
+    /// belongs to would wake workers the operator has since chosen to leave
+    /// asleep.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn worker_revival_intents(
+        &self,
+        now: i64,
+        max_age_seconds: i64,
+    ) -> Result<Vec<WorkerId>, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM worker_revival_intents WHERE recorded_at + ?2 <= ?1",
+            params![now, max_age_seconds],
+        )?;
+        let intents = transaction
+            .prepare(
+                "SELECT worker_id FROM worker_revival_intents
+                 ORDER BY recorded_at, worker_id",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        transaction.commit()?;
+        Ok(intents
+            .into_iter()
+            .filter_map(|id| WorkerId::from_str(&id).ok())
+            .collect())
+    }
+
+    /// Forgets one revival intent, whether it was honoured or refused.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn clear_worker_revival_intent(&self, worker_id: WorkerId) -> Result<(), TaskStoreError> {
+        self.connection()?.execute(
+            "DELETE FROM worker_revival_intents WHERE worker_id = ?1",
+            [worker_id.to_string()],
+        )?;
+        Ok(())
+    }
+
     /// Releases database bindings that are absent from the terminal host snapshot.
     ///
     /// # Errors
@@ -1639,6 +1743,37 @@ mod tests {
         assert!(!store.worker_accepts_injection(worker.id, 103).unwrap());
         assert!(store.release_worker_engagement(session, phone).unwrap());
         assert!(store.worker_accepts_injection(worker.id, 103).unwrap());
+    }
+
+    #[test]
+    fn workers_owed_a_return_outlive_the_request_that_stopped_them() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store
+            .create_worker("Elder", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let second = store
+            .create_worker("Fennel", ProviderKind::ClaudeCode, "/workspace", false, 2)
+            .unwrap();
+
+        store
+            .record_worker_revival_intents(&[first.id, second.id], 1_000)
+            .unwrap();
+        assert_eq!(
+            store.worker_revival_intents(1_100, 900).unwrap(),
+            vec![first.id, second.id]
+        );
+
+        // Honouring one leaves the other owed.
+        store.clear_worker_revival_intent(first.id).unwrap();
+        assert_eq!(
+            store.worker_revival_intents(1_100, 900).unwrap(),
+            vec![second.id]
+        );
+
+        // An intent that outlives its maintenance is dropped rather than
+        // waking a worker the operator has since left asleep.
+        assert!(store.worker_revival_intents(1_901, 900).unwrap().is_empty());
+        assert!(store.worker_revival_intents(1_902, 900).unwrap().is_empty());
     }
 
     #[test]

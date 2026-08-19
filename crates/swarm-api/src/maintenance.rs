@@ -188,21 +188,13 @@ async fn maintain_worker_engine_locked(
             .map(|session| session.session_id)
             .collect::<std::collections::HashSet<_>>(),
     );
-    for session in &running {
-        request_host(
-            state,
-            HostRequest::Stop {
-                session_id: session.session_id,
-            },
-        )
-        .await?;
-        task_store(state)?
-            .release_worker_session(session.session_id)
-            .map_err(|error| task_store_error(&error))?;
-        task_store(state)?
-            .release_session_assignments(session.session_id)
-            .map_err(|error| task_store_error(&error))?;
-    }
+    // Written down before anything is stopped, and fails the whole operation
+    // if it cannot be: the card promises these workers back, and stopping them
+    // with no durable record of who they were is how that promise was broken.
+    task_store(state)?
+        .record_worker_revival_intents(&loaded_worker_ids, unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    stop_running_sessions(state, &running).await?;
     state.control_room_notify.notify_waiters();
     std::fs::write(
         request_path.as_ref(),
@@ -237,10 +229,12 @@ async fn maintain_worker_engine_locked(
         ApiError::new(
             StatusCode::GATEWAY_TIMEOUT,
             "worker_engine_maintenance_timed_out",
-            "the worker engine did not report the expected release, so the workers it unloaded were not brought back. Check the worker engine, then start them from the roster.",
+            "the worker engine has not yet reported the expected release. The workers it unloaded are still recorded as owed a return and will be started once the engine reports in; check the roster in a moment.",
         )
     })?;
     let restarted_workers = revive_loaded_workers(state, &loaded_worker_ids).await;
+    // Anything this pass could not revive stays owed, so the supervisor picks
+    // it up rather than the operator having to.
     state.control_room_notify.notify_waiters();
     Ok(WorkerEngineMaintenanceResponse {
         previous_version: previous.host_version,
@@ -248,6 +242,30 @@ async fn maintain_worker_engine_locked(
         stopped_sessions: running.len(),
         restarted_workers,
     })
+}
+
+/// Stops every session the engine replacement is about to invalidate, and lets
+/// go of the work each one owned.
+async fn stop_running_sessions(
+    state: &AppState,
+    running: &[swarm_terminal::HostSessionSummary],
+) -> Result<(), ApiError> {
+    for session in running {
+        request_host(
+            state,
+            HostRequest::Stop {
+                session_id: session.session_id,
+            },
+        )
+        .await?;
+        task_store(state)?
+            .release_worker_session(session.session_id)
+            .map_err(|error| task_store_error(&error))?;
+        task_store(state)?
+            .release_session_assignments(session.session_id)
+            .map_err(|error| task_store_error(&error))?;
+    }
+    Ok(())
 }
 
 /// The workers holding the sessions about to be stopped.
@@ -287,11 +305,19 @@ async fn revive_loaded_workers(state: &AppState, worker_ids: &[swarm_domain::Wor
         });
         if already_running == Some(true) {
             restarted += 1;
+            if let Ok(store) = task_store(state) {
+                let _ = store.clear_worker_revival_intent(*worker_id);
+            }
             continue;
         }
         match worker_runtime::start_worker_process(state, *worker_id, TerminalSize::default()).await
         {
-            Ok(_) => restarted += 1,
+            Ok(_) => {
+                restarted += 1;
+                if let Ok(store) = task_store(state) {
+                    let _ = store.clear_worker_revival_intent(*worker_id);
+                }
+            }
             Err(error) => {
                 state
                     .worker_errors
@@ -305,14 +331,14 @@ async fn revive_loaded_workers(state: &AppState, worker_ids: &[swarm_domain::Wor
     restarted
 }
 
-fn worker_engine_update_required(status: &TerminalHostStatus) -> bool {
+pub(crate) fn worker_engine_update_required(status: &TerminalHostStatus) -> bool {
     status.host_build_id.as_deref().map_or_else(
         || status.host_version != build_version(),
         |host_build_id| host_build_id != worker_engine_build_id(),
     )
 }
 
-async fn host_status_snapshot(state: &AppState) -> Result<TerminalHostStatus, ApiError> {
+pub(crate) async fn host_status_snapshot(state: &AppState) -> Result<TerminalHostStatus, ApiError> {
     let HostResponse::HostStatus { status } = request_host(state, HostRequest::HostStatus).await?
     else {
         return Err(ApiError::new(
