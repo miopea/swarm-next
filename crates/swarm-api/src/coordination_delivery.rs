@@ -279,6 +279,20 @@ async fn observe_stable_marker(
             rendered_stability.reset();
         }
         if Instant::now() >= render_deadline {
+            // A delivery that gives up here leaves its message sitting unsent in
+            // the operator's prompt, and the reason has so far only been
+            // reconstructed afterwards from terminal history. Say what was
+            // actually observed. Content-free: sequences and whether the marker
+            // was found, never what the terminal was showing.
+            tracing::warn!(
+                baseline_sequence = baseline,
+                observed_sequence = snapshot.sequence,
+                marker_is_visible,
+                new_claude_paste_is_visible,
+                had_baseline_paste = baseline_paste_placeholder.is_some(),
+                snapshot_bytes = snapshot.bytes.len(),
+                "coordination message render was not confirmed before the deadline"
+            );
             return Ok(MarkerObservation::Uncertain);
         }
     }
