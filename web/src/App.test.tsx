@@ -660,7 +660,6 @@ test("creates a persisted task draft from the task board", async () => {
     autostart: false, position: 1, active_session_id: null, running: false, created_at: 1, updated_at: 1,
   };
   const responses = [
-    ok({ status: "ok", version: "0.1.0" }),
     unauthorized(),
     ok({}),
     ok(hiveIdentity()),
@@ -718,6 +717,18 @@ test("creates a persisted task draft from the task board", async () => {
     }
     if (String(url).endsWith("/api/v1/tasks/removed")) {
       return Promise.resolve(ok([]));
+    }
+    // The runtime indicator polls these on its own schedule, so they must not
+    // draw from the ordered list below — an extra poll would shift every
+    // remaining response onto the wrong request.
+    if (String(url) === "/health") {
+      return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    }
+    if (String(url).includes("/api/v1/runtime/terminal-host")) {
+      return Promise.resolve(ok({ type: "host_status", status: { host_version: "0.1.0", draining: false } }));
+    }
+    if (String(url).includes("/api/v1/runtime/development")) {
+      return Promise.resolve(ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false }));
     }
     const response = responses.shift();
     if (!response) throw new Error(`Unexpected request: ${String(url)}`);

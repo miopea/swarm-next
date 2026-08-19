@@ -231,6 +231,54 @@ endpoint with an empty object is worse than not answering it, because the
 component then renders against a shape it cannot read. The test that navigates
 into Settings keeps its ordered mock for that reason, and says so.
 
+### 17. The control room never said an update was waiting — *fixed*
+
+Raised as: Settings shows an App and API reload available, and nothing at the
+top right says so for either subsystem.
+
+Root cause: the indicator was set only as a side effect of `refreshControlRoom`,
+which nothing calls on load or on a timer — only a manual refresh, a Jira sync,
+or a task-board import. Settings knew because it polls; the header did not,
+because it did not. Item 7's original complaint that "the operator did not find
+it" was frequently the indicator simply not being there.
+
+Fixed by giving the indicator its own polling, the same way the settings card
+has, keeping the last answer when a refresh learns nothing.
+
+### 18. The update pill is in the wrong place — *fixed*
+
+Raised as: it belongs at the bottom in the runtime area, beside the `Runtime
+0.1.0-dev-…` line, rather than in the control-room lockup at the top.
+
+Moved. It now sits under the runtime version it is about.
+
+One consequence to note: `.rail-footer` is hidden on the phone, so the pill no
+longer appears there at all. Settings still reports the update. Worth an
+operator ruling if the phone should keep a way to see it.
+
+### 19. "Put worker to sleep" should leave the terminal bar — *fixed*
+
+Raised as: dangerous to misclick for something that would rarely be used, and
+prime real estate that could serve other purposes.
+
+Sleep already lives in the worker-list menu, which is where an earlier operator
+ruling put it — see the reversal of `d2c2eb2` recorded in `docs/29`. The
+terminal bar copy is the one to remove, not the only path.
+
+Removed, along with the `onStop` prop it was the only user of. The bar keeps
+the Queen chips and the "Always active" marker, which is now gated on the
+worker being unstoppable rather than on which branch of a ternary rendered.
+
+### 20. A popped-out worker window loops adjusting the terminal
+
+Raised as: popping out the worker window produces a repeating "adjusting
+terminal" loop, and this is exactly what happened on mobile.
+
+Two viewers of one server-owned PTY negotiating size against each other is what
+[ADR 0045](decisions/0045-engaged-device-terminal-geometry.md) exists to
+prevent, so the pop-out is likely reaching the resize path without the geometry
+ownership rule applying. Not yet diagnosed.
+
 ## Landed
 
 - The unconfirmed-delivery mark now explains itself where the operator lands.

@@ -93,7 +93,7 @@ import { normalizeRosterQuery, orphanSessionMatchesRosterQuery, repositoryName, 
 import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 import { useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
-import { nextRuntimeUpdate, type RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
+import { useRuntimeUpdate } from "./runtime/useRuntimeUpdate";
 import { openSurfaceWindow } from "./navigation/surfaceWindow";
 import { measureRoutePaint } from "./runtime/routePaint";
 import { workerEngineMatches } from "./runtime/workerEngine";
@@ -141,7 +141,7 @@ export function App() {
   const [workerVisibility, setWorkerVisibility] = useState<WorkerVisibility>(readWorkerVisibility);
   const [workerQuery, setWorkerQuery] = useState("");
   const [terminalConnection, setTerminalConnection] = useState<string>();
-  const [runtimeUpdate, setRuntimeUpdate] = useState<RuntimeUpdateSummary>();
+  const { runtimeUpdate, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
   const [repository, setRepository] = useState<RepositoryState | null>();
   const [popoutBlocked, setPopoutBlocked] = useState(false);
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
@@ -427,16 +427,15 @@ export function App() {
   async function refreshControlRoom(recoverTerminal = false) {
     if (!operatorToken) return;
     await perform(async () => {
-      const [controlRoom, automation, health, host, development] = await Promise.all([
+      const [controlRoom, automation] = await Promise.all([
         loadControlRoom(operatorToken),
         fetchQueenAutomationStatus(operatorToken).catch(() => undefined),
-        fetchHealth().catch(() => undefined),
-        fetchTerminalHostStatus(operatorToken).catch(() => undefined),
-        fetchDevelopmentRuntime(operatorToken).catch(() => undefined),
       ]);
       controlRoomModel.replace(controlRoom);
       if (automation) setQueenAutomation(automation);
-      setRuntimeUpdate((previous) => nextRuntimeUpdate(previous, health, host, development));
+      // The indicator keeps itself current on a timer; this is so an operator
+      // who presses refresh does not wait out the next tick.
+      void refreshRuntimeUpdate();
       if (recoverTerminal && activeSessionId) {
         terminalWorkspace.resetSessionRenderer(activeSessionId);
         setTerminalRevision((current) => current + 1);
@@ -992,18 +991,6 @@ export function App() {
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
           <div className="brand-copy"><p className="eyebrow">Swarm Next</p><h1>Control room</h1><HiveContextIndicator identity={hiveIdentity} /></div>
-          {operatorToken && runtimeUpdate && runtimeUpdate.kind !== "none" ? (
-            <button
-              type="button"
-              className={`runtime-update runtime-update-${runtimeUpdate.kind}`}
-              title={runtimeUpdate.detail}
-              aria-label={`${runtimeUpdate.label}. ${runtimeUpdate.detail}`}
-              onClick={() => openSettings("settings-runtime")}
-            >
-              {runtimeUpdate.busy ? <span className="runtime-update-spinner" aria-hidden="true" /> : null}
-              {runtimeUpdate.label}
-            </button>
-          ) : null}
           {operatorToken ? (
             <button
               type="button"
@@ -1122,7 +1109,25 @@ export function App() {
           </>
         ) : <p className="empty-rail">Unlock this runtime to access tasks and workers.</p>}
 
-        <div className="rail-footer"><RuntimeStatus state={loadState} /></div>
+        {/* Beside the runtime line rather than in the lockup: this is what the
+            version it sits next to is about, and the lockup is a row the
+            operator reaches for often enough that a rarely-used control there
+            is mostly a misclick risk. */}
+        <div className="rail-footer">
+          <RuntimeStatus state={loadState} />
+          {operatorToken && runtimeUpdate && runtimeUpdate.kind !== "none" ? (
+            <button
+              type="button"
+              className={`runtime-update runtime-update-${runtimeUpdate.kind}`}
+              title={runtimeUpdate.detail}
+              aria-label={`${runtimeUpdate.label}. ${runtimeUpdate.detail}`}
+              onClick={() => openSettings("settings-runtime")}
+            >
+              {runtimeUpdate.busy ? <span className="runtime-update-spinner" aria-hidden="true" /> : null}
+              {runtimeUpdate.label}
+            </button>
+          ) : null}
+        </div>
         <div className="rail-resize-handle" role="separator" aria-label="Resize worker area" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={480} aria-valuenow={workerRail.width} tabIndex={0} onPointerDown={workerRail.start} onPointerMove={workerRail.move} onPointerUp={workerRail.finish} onPointerCancel={workerRail.finish} onKeyDown={workerRail.resizeWithKeyboard} />
       </aside>
 
@@ -1379,7 +1384,7 @@ export function App() {
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}:${terminalRevision}`}>
             <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
-              <TerminalView operatorToken={operatorToken} session={activeSession} onStop={() => void stopSession(activeSession.session_id)} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} queenAutomation={activeWorker?.role === "queen" ? queenAutomation : undefined} queenAutonomy={activeWorker?.role === "queen" ? queenPolicy?.[presence?.mode ?? "at_hive"] : undefined} onOpenQueenSettings={activeWorker?.role === "queen" ? () => openSettings("settings-queen") : undefined} onConnectionStateChange={setTerminalConnection} />
+              <TerminalView operatorToken={operatorToken} session={activeSession} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} queenAutomation={activeWorker?.role === "queen" ? queenAutomation : undefined} queenAutonomy={activeWorker?.role === "queen" ? queenPolicy?.[presence?.mode ?? "at_hive"] : undefined} onOpenQueenSettings={activeWorker?.role === "queen" ? () => openSettings("settings-queen") : undefined} onConnectionStateChange={setTerminalConnection} />
             </Suspense>
           </TerminalLoadBoundary>
         ) : (

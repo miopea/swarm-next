@@ -43,7 +43,6 @@ test("captures Ctrl-V text before the provider receives a terminal control chara
     <div onKeyDown={parentKeyDown}>
       <TerminalView
         busy={false}
-        onStop={vi.fn()}
         operatorToken="browser-session-cookie"
         session={{ session_id: "session-1", running: true }}
       />
@@ -66,7 +65,7 @@ test("captures Ctrl-V text before the provider receives a terminal control chara
 });
 
 test("offers a jump to latest action only while viewing scrollback", () => {
-  render(<TerminalView busy={false} onStop={vi.fn()} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
   expect(screen.queryByRole("button", { name: "Jump to latest ↓" })).not.toBeInTheDocument();
   act(() => controller.scrollListener?.(false));
   fireEvent.click(screen.getByRole("button", { name: "Jump to latest ↓" }));
@@ -80,7 +79,6 @@ test("keeps Queen automation visible beside her terminal without changing it", (
       busy={false}
       canStop={false}
       onOpenQueenSettings={onOpenQueenSettings}
-      onStop={vi.fn()}
       operatorToken="browser-session-cookie"
       queenAutomation={{
         enabled: true,
@@ -108,7 +106,7 @@ test("keeps Queen automation visible beside her terminal without changing it", (
 });
 
 test("keeps the internal terminal id behind session details", () => {
-  render(<TerminalView busy={false} onStop={vi.fn()} operatorToken="browser-session-cookie" session={{ session_id: "private-session-id", running: true }} />);
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "private-session-id", running: true }} />);
   expect(screen.getByText("Session details")).toBeInTheDocument();
   expect(screen.getByText("private-session-id").closest("details")).not.toHaveAttribute("open");
   expect(screen.getByText("Swarm terminal session")).toBeInTheDocument();
@@ -118,10 +116,19 @@ test("keeps the internal terminal id behind session details", () => {
 test("copies the internal terminal id only when the operator asks", async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   vi.stubGlobal("navigator", { clipboard: { writeText } });
-  render(<TerminalView busy={false} onStop={vi.fn()} operatorToken="browser-session-cookie" session={{ session_id: "private-session-id", running: true }} />);
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "private-session-id", running: true }} />);
 
   fireEvent.click(screen.getByRole("button", { name: "Copy session ID" }));
 
   expect(writeText).toHaveBeenCalledWith("private-session-id");
   expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+});
+
+test("keeps the destructive sleep control off the terminal bar", () => {
+  // Raised as prime real estate spent on something rarely used, where the cost
+  // of reaching for it by mistake is a stopped worker. Sleep lives in the
+  // worker-list menu, which is where an earlier ruling put it.
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+
+  expect(screen.queryByRole("button", { name: "Put worker to sleep" })).not.toBeInTheDocument();
 });

@@ -13,7 +13,6 @@ import { queenAutomationCompactLabel, queenAutomationStateDetail, queenAutomatio
 export interface TerminalViewProps {
   session: { session_id: string; running: boolean };
   operatorToken: string;
-  onStop: () => void;
   busy: boolean;
   canStop?: boolean;
   mobileKeysVisible?: boolean;
@@ -24,7 +23,7 @@ export interface TerminalViewProps {
   onConnectionStateChange?: (state: TerminalConnectionState) => void;
 }
 
-export default function TerminalView({ session, operatorToken, onStop, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, queenAutomation, queenAutonomy, onOpenQueenSettings, onConnectionStateChange }: TerminalViewProps) {
+export default function TerminalView({ session, operatorToken, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, queenAutomation, queenAutonomy, onOpenQueenSettings, onConnectionStateChange }: TerminalViewProps) {
   const mount = useRef<HTMLDivElement>(null);
   const controller = useMemo<TerminalController>(() => {
     terminalWorkspace.authenticate(operatorToken);
@@ -136,9 +135,10 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
             </small>
           )}
         </div>
-        {canStop ? (
-          <button className="danger-button" onClick={onStop} disabled={busy}>Put worker to sleep</button>
-        ) : <div className="terminal-worker-controls">
+        {/* Sleep lives in the worker-list menu only. A destructive control on
+            the terminal bar is prime space spent on something rarely used, and
+            the cost of reaching for it by mistake is a stopped worker. */}
+        <div className="terminal-worker-controls">
           {queenAutonomy && onOpenQueenSettings ? (
             <button type="button" className="queen-autonomy-chip" title={queenAutonomyDetail(queenAutonomy)} onClick={onOpenQueenSettings}>
               {queenAutonomyLabel(queenAutonomy)}
@@ -155,8 +155,8 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
               {queenAutomationCompactLabel(queenAutomation)}
             </button>
           ) : null}
-          <span className="protected-worker">Always active</span>
-        </div>}
+          {!canStop ? <span className="protected-worker">Always active</span> : null}
+        </div>
       </div>
       <div className="terminal-stage">
         <div className="terminal-mount" ref={mount} />

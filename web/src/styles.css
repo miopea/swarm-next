@@ -241,7 +241,9 @@ button:hover:not(:disabled) { border-color: var(--accent-strong); background: co
 button:active:not(:disabled) { transform: translateY(1px); }
 .surface-nav button:hover:not(:disabled), .worker-button:hover:not(:disabled) { border-color: transparent; color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
 .surface-nav button.selected:hover:not(:disabled), .worker-button[aria-current="page"]:hover:not(:disabled) { border-color: color-mix(in srgb, var(--good) 40%, transparent); background: color-mix(in srgb, var(--good-soft) 68%, transparent); }
-.rail-footer { padding: 13px 8px 2px; border-top: 1px solid var(--line); }
+.rail-footer { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 7px; padding: 13px 8px 2px; border-top: 1px solid var(--line); }
+.rail-footer .runtime-status { min-width: 0; }
+.rail-footer .runtime-update { max-width: 100%; }
 .runtime-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .72rem; }
 .runtime-status.error { color: var(--bad); }
 
