@@ -405,6 +405,7 @@ pub struct TaskDetailsUpdate {
     pub description: Option<String>,
     pub priority: Option<TaskPriority>,
     pub workspace: Option<String>,
+    pub operator_instruction: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -413,6 +414,11 @@ pub struct Task {
     pub hive_id: HiveId,
     pub title: String,
     pub description: String,
+    /// One line from the operator about how this task should be approached,
+    /// rather than about what it contains. "Interview me first" and "analyse
+    /// this, do not act on it" govern the work without being part of it, and
+    /// putting them in the description makes them read as part of it.
+    pub operator_instruction: String,
     pub priority: TaskPriority,
     pub workspace: String,
     pub state: TaskState,

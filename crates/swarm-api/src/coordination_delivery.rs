@@ -494,9 +494,17 @@ pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> Vec<u8> 
 
 pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
     let title = terminal_safe_text(&delivery.title);
+    // The operator's instruction governs how the work is approached, so it is
+    // stated before the work rather than left to be discovered in the record.
+    let instruction = terminal_safe_text(&delivery.operator_instruction);
+    let instruction = if instruction.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" Operator instruction for this task: {instruction}.")
+    };
     format!(
-        "[Swarm task {} assigned] {}. Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
-        delivery.task_id, title,
+        "[Swarm task {} assigned] {}.{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
+        delivery.task_id, title, instruction,
     )
     .into_bytes()
 }

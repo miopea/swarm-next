@@ -6773,6 +6773,11 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "jira_state_not_mapped",
             error.to_string(),
         ),
+        TaskStoreError::InvalidOperatorInstruction => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_operator_instruction",
+            error.to_string(),
+        ),
         TaskStoreError::JiraProjectBindingNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "jira_project_binding_not_found",
@@ -7071,8 +7076,15 @@ mod tests {
             description: "keep\u{1b}[31m context\rstable".into(),
             priority: TaskPriority::High,
             workspace: "/workspace/petal".into(),
+            // Carries the same hostile characters as the rest: an instruction
+            // reaches the terminal by the same path and gets the same sanitising.
+            operator_instruction: "interview\u{1b}[31m me\rfirst".into(),
         };
         let message = task_dispatch_message(&dispatch);
+        // The operator's instruction governs how the work is approached, so a
+        // worker has to receive it with the brief rather than have to go and
+        // look for it.
+        assert!(String::from_utf8_lossy(&message).contains("interview"));
         assert_eq!(message.last(), Some(&b'\r'));
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));

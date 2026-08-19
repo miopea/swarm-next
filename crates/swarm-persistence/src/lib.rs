@@ -105,6 +105,9 @@ pub(crate) const MAX_TASK_TITLE_BYTES: usize = 240;
 pub(crate) const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
 pub const MAX_TASK_ACTIVITY_NOTE_BYTES: usize = 4_000;
+/// One line of operator direction. Long enough for "interview me before acting"
+/// and short enough that it cannot quietly become a second description.
+pub const MAX_OPERATOR_INSTRUCTION_BYTES: usize = 280;
 const MAX_WORKSPACE_BYTES: usize = 4096;
 const TERMINAL_GEOMETRY_SCHEMA_VERSION: i64 = 66;
 const LEGACY_MIGRATION_SCHEMA_VERSION: i64 = 67;
@@ -115,7 +118,8 @@ const LEGACY_PROVIDER_CONVERSATION_SCHEMA_VERSION: i64 = 71;
 const LEGACY_EXISTING_CONVERSATION_SCHEMA_VERSION: i64 = 72;
 const QUEEN_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 73;
 const PRESENCE_LAST_ACTIVE_SCHEMA_VERSION: i64 = 74;
-const CURRENT_SCHEMA_VERSION: i64 = PRESENCE_LAST_ACTIVE_SCHEMA_VERSION;
+const TASK_OPERATOR_INSTRUCTION_SCHEMA_VERSION: i64 = 75;
+const CURRENT_SCHEMA_VERSION: i64 = TASK_OPERATOR_INSTRUCTION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -254,6 +258,10 @@ pub enum TaskStoreError {
     NotificationQueueFull,
     #[error("the installation notification signing key is invalid")]
     InvalidVapidKey,
+    #[error(
+        "operator instruction must be a single line of at most {MAX_OPERATOR_INSTRUCTION_BYTES} bytes"
+    )]
+    InvalidOperatorInstruction,
     #[error("task handoff note must not exceed {MAX_TASK_ACTIVITY_NOTE_BYTES} bytes")]
     InvalidTaskActivityNote,
     #[error("completed work requires concise verification evidence")]
@@ -827,7 +835,7 @@ impl TaskStore {
                    (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
                     AND outcome.target_state = t.state
                     ORDER BY outcome.activity_sequence DESC LIMIT 1),
-                   t.position, t.created_at, t.updated_at
+                   t.position, t.created_at, t.updated_at, t.operator_instruction
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -861,7 +869,7 @@ impl TaskStore {
                    (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
                     AND outcome.target_state = t.state
                     ORDER BY outcome.activity_sequence DESC LIMIT 1),
-                   t.position, t.created_at, t.updated_at
+                   t.position, t.created_at, t.updated_at, t.operator_instruction
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -892,7 +900,7 @@ impl TaskStore {
                    (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
                     AND outcome.target_state = t.state
                     ORDER BY outcome.activity_sequence DESC LIMIT 1),
-                       t.position, t.created_at, t.updated_at
+                       t.position, t.created_at, t.updated_at, t.operator_instruction
                 FROM tasks t
                 LEFT JOIN task_assignments a
                   ON a.task_id = t.id AND a.released_at IS NULL
@@ -1167,6 +1175,7 @@ impl TaskStore {
             && update.description.is_none()
             && update.priority.is_none()
             && update.workspace.is_none()
+            && update.operator_instruction.is_none()
         {
             return Err(TaskStoreError::EmptyTaskDetailsUpdate);
         }
@@ -1174,7 +1183,8 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let current = transaction
             .query_row(
-                "SELECT title, description, priority, workspace FROM tasks WHERE id = ?1 AND removed_at IS NULL",
+                "SELECT title, description, priority, workspace, operator_instruction
+                 FROM tasks WHERE id = ?1 AND removed_at IS NULL",
                 [id.to_string()],
                 |row| {
                     Ok((
@@ -1182,6 +1192,7 @@ impl TaskStore {
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
                     ))
                 },
             )
@@ -1203,19 +1214,25 @@ impl TaskStore {
             .workspace
             .as_deref()
             .map_or(current.3.as_str(), str::trim);
+        let operator_instruction = update
+            .operator_instruction
+            .as_deref()
+            .map_or(current.4.as_str(), str::trim);
         validate_text(title, workspace)?;
         validate_description(description)?;
+        validate_operator_instruction(operator_instruction)?;
         transaction.execute(
             "UPDATE tasks
              SET title = ?2, description = ?3, priority = ?4, workspace = ?5,
-                 updated_at = unixepoch()
+                 operator_instruction = ?6, updated_at = unixepoch()
              WHERE id = ?1",
             params![
                 id.to_string(),
                 title,
                 description,
                 priority.to_string(),
-                workspace
+                workspace,
+                operator_instruction
             ],
         )?;
         transaction.execute(
@@ -1912,7 +1929,40 @@ fn migrate_named_schema_steps(
     if schema_version < PRESENCE_LAST_ACTIVE_SCHEMA_VERSION {
         presence::migrate_presence_last_active(transaction)?;
     }
+    if schema_version < TASK_OPERATOR_INSTRUCTION_SCHEMA_VERSION {
+        migrate_task_operator_instruction(transaction)?;
+    }
     Ok(())
+}
+
+/// Carries one operator line about how a task should be approached.
+///
+/// A forward step, and guarded on the table, because a database old enough to
+/// predate `tasks` passes through here on its way up.
+fn migrate_task_operator_instruction(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let tasks_exist: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks')",
+        [],
+        |row| row.get(0),
+    )?;
+    let column_exists: bool = tasks_exist
+        && transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks') WHERE name = 'operator_instruction')",
+            [],
+            |row| row.get(0),
+        )?;
+    if tasks_exist && !column_exists {
+        transaction.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN operator_instruction TEXT NOT NULL DEFAULT '';",
+        )?;
+    }
+    transaction.pragma_update(
+        None,
+        "user_version",
+        TASK_OPERATOR_INSTRUCTION_SCHEMA_VERSION,
+    )
 }
 
 fn migrate_task_removal(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -2900,6 +2950,15 @@ fn validate_text(title: &str, workspace: &str) -> Result<(), TaskStoreError> {
     Ok(())
 }
 
+/// One line, so it stays an instruction rather than becoming a second
+/// description competing with the first.
+fn validate_operator_instruction(instruction: &str) -> Result<(), TaskStoreError> {
+    if instruction.len() > MAX_OPERATOR_INSTRUCTION_BYTES || instruction.contains('\n') {
+        return Err(TaskStoreError::InvalidOperatorInstruction);
+    }
+    Ok(())
+}
+
 fn validate_description(description: &str) -> Result<(), TaskStoreError> {
     if description.len() > MAX_TASK_DESCRIPTION_BYTES {
         return Err(TaskStoreError::InvalidDescription);
@@ -2972,6 +3031,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
                     Box::new(error),
                 )
             })?,
+        operator_instruction: row.get(14)?,
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))
             .transpose()
@@ -4620,7 +4680,7 @@ mod tests {
                 // here instead would describe a database that never existed,
                 // and would pass or fail for reasons unrelated to the ceiling.
                 .execute_batch(&format!(
-                    "ALTER TABLE operator_presence_devices DROP COLUMN last_active_at;
+                    "ALTER TABLE tasks DROP COLUMN operator_instruction;
                      PRAGMA user_version = {};",
                     CURRENT_SCHEMA_VERSION - 1
                 ))
@@ -4671,7 +4731,7 @@ mod tests {
             )
             .unwrap();
         assert!(delivery_session_exists);
-        // Added by the newest step, which is what this test exercises.
+        // Carried by a step below the ceiling.
         let last_active_exists: bool = connection
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('operator_presence_devices')
@@ -4681,6 +4741,20 @@ mod tests {
             )
             .unwrap();
         assert!(last_active_exists);
+        // Added by the newest step, which is what this test exercises. This
+        // assertion and the column dropped above have to move with every new
+        // migration, which has caught three real mistakes and cost three
+        // edits; worth replacing with something that finds the newest step
+        // itself.
+        let operator_instruction_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks')
+                 WHERE name = 'operator_instruction')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(operator_instruction_exists);
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))

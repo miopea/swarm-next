@@ -19,6 +19,9 @@ pub struct TaskDispatch {
     pub description: String,
     pub priority: TaskPriority,
     pub workspace: String,
+    /// The operator's line about how this work should be approached. It governs
+    /// the brief, so it travels with it.
+    pub operator_instruction: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,7 +64,8 @@ impl TaskStore {
         let candidates = {
             let mut statement = transaction.prepare(
                 "SELECT td.assignment_id, td.task_id, td.worker_id, a.worker_session_id,
-                        t.title, t.description, t.priority, t.workspace
+                        t.title, t.description, t.priority, t.workspace,
+                        t.operator_instruction
                  FROM task_dispatches td
                  JOIN task_assignments a ON a.id = td.assignment_id AND a.released_at IS NULL
                  JOIN tasks t ON t.id = td.task_id
@@ -109,6 +113,7 @@ impl TaskStore {
                         description: row.get(5)?,
                         priority,
                         workspace: row.get(7)?,
+                        operator_instruction: row.get(8)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?
