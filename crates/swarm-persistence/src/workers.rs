@@ -1,4 +1,7 @@
-use std::{collections::HashSet, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
@@ -461,6 +464,44 @@ impl TaskStore {
         ProviderKind::from_str(&provider).map_err(|_| {
             TaskStoreError::IntegrityFailure("active worker session has an invalid provider".into())
         })
+    }
+
+    /// Maps each engaged worker to the device currently holding input and
+    /// terminal geometry, with that device's class.
+    ///
+    /// Geometry follows the engaged device, so a desktop rendering at phone
+    /// width is correct behaviour that looks like a fault. Naming the owner is
+    /// what makes it explainable.
+    ///
+    /// # Errors
+    /// Returns a persistence or data-integrity error.
+    pub fn engaged_devices_by_worker(
+        &self,
+        now: i64,
+    ) -> Result<HashMap<WorkerId, (String, String)>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT engagement.worker_id, engagement.owner_device_id, device.device_class
+             FROM worker_engagements engagement
+             JOIN operator_presence_devices device ON device.id = engagement.owner_device_id
+             WHERE engagement.expires_at > ?1 AND engagement.owner_device_id IS NOT NULL",
+        )?;
+        let rows = statement.query_map([now], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut engaged = HashMap::new();
+        for row in rows {
+            let (worker_id, device_id, device_class) = row?;
+            let worker_id = WorkerId::from_str(&worker_id).map_err(|_| {
+                TaskStoreError::IntegrityFailure("invalid engaged worker identity".into())
+            })?;
+            engaged.insert(worker_id, (device_id, device_class));
+        }
+        Ok(engaged)
     }
 
     /// Atomically binds a new immutable process session to a stable worker profile.

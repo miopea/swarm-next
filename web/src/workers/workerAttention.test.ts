@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { Worker } from "../api";
-import { workerAttention, workerSilence, workerSwitcherDetail } from "./workerAttention";
+import { foreignEngagement, workerAttention, workerSilence, workerSwitcherDetail } from "./workerAttention";
 
 const worker: Worker = {
   id: "worker", hive_id: "hive", name: "Daisy", role: "worker", provider: "claude_code",
@@ -47,4 +47,20 @@ test("says nothing about silence it cannot know", () => {
   expect(workerSilence({ ...worker, running: false, last_output_at: now / 1000 - 9999 }, now)).toBeUndefined();
   // A terminal host that predates the field reports nothing rather than zero.
   expect(workerSilence({ ...worker, running: true }, now)).toBeUndefined();
+});
+
+test("names the other device holding a worker's terminal", () => {
+  const engaged = { ...worker, engaged_device_id: "phone", engaged_device_class: "mobile" as const };
+
+  expect(foreignEngagement(engaged, "desktop-1")?.deviceClass).toBe("mobile");
+  expect(foreignEngagement(engaged, "desktop-1")?.detail).toContain("a phone");
+  expect(foreignEngagement(engaged, "desktop-1")?.detail).toContain("take over");
+});
+
+test("stays quiet when this device already holds the terminal", () => {
+  const mine = { ...worker, engaged_device_id: "desktop-1", engaged_device_class: "desktop" as const };
+
+  expect(foreignEngagement(mine, "desktop-1")).toBeUndefined();
+  // Nobody engaged is not the same as somebody else engaged.
+  expect(foreignEngagement(worker, "desktop-1")).toBeUndefined();
 });

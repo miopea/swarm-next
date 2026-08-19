@@ -30,6 +30,9 @@ export type Worker = {
   last_output_at?: number;
   /** Swarm wrote a briefing to this worker and could not confirm it landed. */
   unconfirmed_delivery?: boolean;
+  /** The device currently holding input and terminal geometry for this worker. */
+  engaged_device_id?: string;
+  engaged_device_class?: "desktop" | "mobile";
   engagement_expires_at?: number;
   runtime_error?: string;
 };

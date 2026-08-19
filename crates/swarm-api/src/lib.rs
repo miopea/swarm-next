@@ -1980,6 +1980,12 @@ struct WorkerView {
     /// Swarm wrote a briefing to this worker and could not confirm it landed.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     unconfirmed_delivery: bool,
+    /// The device currently holding input and terminal geometry for this
+    /// worker, so a browser can say whether that device is this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    engaged_device_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    engaged_device_class: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2175,6 +2181,7 @@ struct WorkerViewFacts {
     system_role: Option<&'static str>,
     last_output_at: Option<i64>,
     unconfirmed_delivery: bool,
+    engaged_device: Option<(String, String)>,
 }
 
 impl Default for WorkerViewFacts {
@@ -2187,6 +2194,7 @@ impl Default for WorkerViewFacts {
             system_role: None,
             last_output_at: None,
             unconfirmed_delivery: false,
+            engaged_device: None,
         }
     }
 }
@@ -2200,7 +2208,12 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         system_role,
         last_output_at,
         unconfirmed_delivery,
+        engaged_device,
     } = facts;
+    let (engaged_device_id, engaged_device_class) = match engaged_device {
+        Some((device_id, device_class)) => (Some(device_id), Some(device_class)),
+        None => (None, None),
+    };
     let engagement_expires_at = profile.engagement_expires_at;
     let attention_state = if runtime_error.is_some() {
         WorkerAttentionState::Blocked
@@ -2224,6 +2237,8 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         system_role,
         last_output_at,
         unconfirmed_delivery,
+        engaged_device_id,
+        engaged_device_class,
     }
 }
 

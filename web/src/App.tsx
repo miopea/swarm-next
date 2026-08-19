@@ -68,7 +68,7 @@ import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
-import { workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
+import { foreignEngagement, workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
 import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
@@ -883,6 +883,7 @@ export function App() {
     return new Map([...grouped].map(([workerId, assigned]) => [workerId, workerWork(assigned)]));
   }, [tasks]);
   const activeWorkerWork = activeWorker ? workByWorker.get(activeWorker.id) : undefined;
+  const activeWorkerEngagement = activeWorker ? foreignEngagement(activeWorker, presenceDeviceId()) : undefined;
   const taskProjects = useMemo(() => [...new Map(jiraTaskLinks.map((link) => [link.project_key, {
     key: link.project_key,
     name: link.project_name,
@@ -1120,6 +1121,13 @@ export function App() {
                 <span className={`task-state state-${activeWorkerWork.current.state}`}>{taskStateLabel(activeWorkerWork.current)}</span>
                 <span className="worker-context-title">{activeWorkerWork.current.title}</span>
               </button>
+              {activeWorkerEngagement ? (
+                <span
+                  className={`worker-engaged-elsewhere device-${activeWorkerEngagement.deviceClass}`}
+                  role="status"
+                  title={activeWorkerEngagement.detail}
+                >{activeWorkerEngagement.deviceClass === "mobile" ? "On phone" : "On another desktop"}</span>
+              ) : null}
               {activeWorkerWork.openCount > 1 ? (
                 <button
                   type="button"

@@ -81,6 +81,9 @@ pub(super) async fn list_workers(
     let unconfirmed = task_store(&state)?
         .workers_with_unconfirmed_delivery()
         .map_err(|error| task_store_error(&error))?;
+    let mut engaged = task_store(&state)?
+        .engaged_devices_by_worker(crate::unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
     let errors = state.worker_errors.read().await;
     let scout_id = task_store(&state)?
         .scout_worker_id()
@@ -113,6 +116,7 @@ pub(super) async fn list_workers(
                     system_role: is_scout.then_some("scout"),
                     last_output_at,
                     unconfirmed_delivery: unconfirmed.contains(&profile_id),
+                    engaged_device: engaged.remove(&profile_id),
                 },
             )
         })

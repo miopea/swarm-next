@@ -45,6 +45,26 @@ export function workerSilence(worker: Worker, now = Date.now()): string | undefi
   return `${Math.floor(hours / 24)}d`;
 }
 
+/**
+ * Says when a *different* device holds this worker's input and terminal width.
+ *
+ * Terminal geometry follows the engaged device, so a desktop rendering at phone
+ * width is the rule working rather than a fault. Naming the owner is what makes
+ * that difference visible; sending input claims it back.
+ */
+export function foreignEngagement(
+  worker: Worker,
+  thisDeviceId: string,
+): { deviceClass: "desktop" | "mobile"; detail: string } | undefined {
+  if (!worker.engaged_device_id || worker.engaged_device_id === thisDeviceId) return undefined;
+  const deviceClass = worker.engaged_device_class ?? "desktop";
+  const where = deviceClass === "mobile" ? "a phone" : "another desktop";
+  return {
+    deviceClass,
+    detail: `${where} is driving this worker, so its terminal width follows that device. Type here to take over.`,
+  };
+}
+
 export function workerSwitcherDetail(worker: Worker, assignedTaskTitle?: string): string {
   const state = worker.running ? workerAttention(worker).label : "Sleeping";
   if (assignedTaskTitle) return `${state} · ${assignedTaskTitle}`;
