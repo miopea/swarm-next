@@ -896,7 +896,6 @@ export function App() {
     name: link.project_name,
     url: jiraProjectUrl(link),
   }])).values()].sort((left, right) => left.name.localeCompare(right.name)), [jiraTaskLinks]);
-  const activeTask = activeSession ? tasksBySession.get(activeSession.session_id) : undefined;
   const openSettings = (section: SettingsSection = "settings-crew") => {
     navigateToSettingsSection(section);
     setSurface("settings");
@@ -1131,7 +1130,7 @@ export function App() {
       <section className="workspace" key={surface}>
         <header className="workspace-header">
           <div>
-            <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "tasks" ? "Plan and dispatch" : surface === "apiary" ? "Organization without noise" : surface === "settings" ? "Preferences and diagnostics" : activeTask?.title ?? "Persistent terminal"}</p>
+            <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "tasks" ? "Plan and dispatch" : surface === "apiary" ? "Organization without noise" : surface === "settings" ? "Preferences and diagnostics" : "Persistent terminal"}</p>
             <h2>{surface === "decisions" ? "Needs you" : surface === "tasks" ? "Task board" : surface === "apiary" ? keeper ? "Keeper" : "Member Hive" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
             <HiveContextIndicator identity={hiveIdentity} compact />
           </div>

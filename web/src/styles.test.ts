@@ -92,3 +92,27 @@ test("keeps the phone terminal free of context chrome it does not need", () => {
   );
   expect(stylesheet).toContain(".header-actions .popout-button { display: none; }");
 });
+
+test("reads worker state as a scale rather than a palette", () => {
+  // Green is work happening, amber is work stopped and wanting the operator,
+  // red is work that cannot proceed. Previously resting held the green and
+  // buzzing the amber, and the two states most needing to differ — waiting on
+  // the operator, and held by the operator — shared one colour.
+  expect(stylesheet).toContain(".worker-state-buzzing { --worker-state: var(--good); }");
+  expect(stylesheet).toContain(".worker-state-awaiting_operator { --worker-state: var(--warn); }");
+  expect(stylesheet).toContain(".worker-state-with_operator { --worker-state: var(--accent-strong); }");
+  expect(stylesheet).toContain(".worker-state-blocked { --worker-state: var(--bad); }");
+  // Sleeping and resting are separated by fill, not hue, so the distinction
+  // survives where colour does not.
+  expect(stylesheet).toContain(
+    ".worker-row.worker-state-sleeping .presence { background: transparent;",
+  );
+});
+
+test("moves only the worker state that is actually doing something", () => {
+  expect(stylesheet).toContain(
+    ".worker-row.worker-state-buzzing .presence { animation: worker-buzz 1.8s ease-in-out infinite; }",
+  );
+  // Motion is never the only signal, and never forced on someone who asked for less.
+  expect(stylesheet).toContain(".worker-row.worker-state-buzzing .presence { animation: none; }");
+});

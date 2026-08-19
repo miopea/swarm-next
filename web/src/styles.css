@@ -197,14 +197,35 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .presence.offline { background: var(--bad); }
 .presence.engaged { background: var(--accent-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .presence.blocked { background: var(--blocked); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blocked) 18%, transparent); }
-.presence.waiting { background: var(--blocked); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blocked) 18%, transparent); }
+.presence.waiting { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
 .worker-attention-label { flex: 0 0 auto; padding: 2px 6px; border-radius: 999px; color: var(--worker-state, var(--quiet)); background: color-mix(in srgb, var(--worker-state, var(--quiet)) 12%, transparent); font-size: .58rem; font-weight: 700; letter-spacing: .035em; text-transform: uppercase; }
+/* Worker state reads as a scale, because that is how the colours are read
+   whether or not they were meant that way: green is work happening, amber is
+   work stopped and wanting the operator, red is work that cannot proceed. The
+   two neutrals are for a worker doing nothing wrong, and the accent is for the
+   worker the operator is holding, which is a relationship rather than a rung on
+   the scale. Hue never carries this alone: every row also states its status in
+   words, and only the live state moves. */
 .worker-state-sleeping { --worker-state: var(--quiet); }
-.worker-state-resting { --worker-state: var(--good); }
-.worker-state-buzzing { --worker-state: var(--warn); }
-.worker-state-with_operator, .worker-state-awaiting_operator { --worker-state: var(--blocked); }
+.worker-state-resting { --worker-state: var(--muted); }
+.worker-state-buzzing { --worker-state: var(--good); }
+.worker-state-awaiting_operator { --worker-state: var(--warn); }
+.worker-state-with_operator { --worker-state: var(--accent-strong); }
 .worker-state-blocked { --worker-state: var(--bad); }
 .worker-row .presence { background: var(--worker-state); box-shadow: 0 0 0 3px color-mix(in srgb, var(--worker-state) 14%, transparent); }
+/* An unloaded worker is hollow. Sleeping and resting are both quiet greens, so
+   fill rather than hue separates them, which survives being printed, dimmed, or
+   read by someone who does not distinguish the two. */
+.worker-row.worker-state-sleeping .presence { background: transparent; box-shadow: inset 0 0 0 2px var(--worker-state); }
+/* Only the state that is actually doing something moves. */
+.worker-row.worker-state-buzzing .presence { animation: worker-buzz 1.8s ease-in-out infinite; }
+@keyframes worker-buzz {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--worker-state) 14%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--worker-state) 26%, transparent); }
+}
+/* Waiting on the operator is the one state the roster should be able to find at
+   a glance, so it carries weight as well as hue. */
+.worker-row.worker-state-awaiting_operator .worker-attention-label { color: var(--warn); font-weight: 600; }
 
 .start-worker { display: grid; gap: 8px; margin: 14px 0 4px; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
 .start-worker-disclosure > button { display: none; }
@@ -1880,4 +1901,4 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .maintenance-progress span { color: var(--muted); font-size: .75rem; line-height: 1.45; }
 .maintenance-spinner { width: .9rem; height: .9rem; flex: 0 0 auto; margin-top: .12rem; border: 2px solid color-mix(in srgb, var(--honey) 30%, transparent); border-top-color: var(--honey-deep); border-radius: 50%; animation: maintenance-spin .8s linear infinite; }
 @keyframes maintenance-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .maintenance-spinner { animation: none; border-top-color: var(--honey-deep); } .runtime-update-spinner { animation: none; border-top-color: var(--accent-strong); } }
+@media (prefers-reduced-motion: reduce) { .maintenance-spinner { animation: none; border-top-color: var(--honey-deep); } .runtime-update-spinner { animation: none; border-top-color: var(--accent-strong); } .worker-row.worker-state-buzzing .presence { animation: none; } }

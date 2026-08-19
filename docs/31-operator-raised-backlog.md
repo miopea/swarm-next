@@ -13,23 +13,6 @@ This file is the durable record until then.
 
 ## Open
 
-### 1. Worker state colours do not read as a scale
-
-Today: resting is green, buzzing is yellow, and both *awaiting you* and *with
-you* are grey. Green–yellow–red reads as go–caution–stop, so the current mapping
-puts the calmest state on the strongest colour and the state most needing
-attention on the weakest.
-
-The operator's direction: buzzing should be green, and possibly pulsing to show
-it is live. Resting is a true idle worker. Awaiting you is a stopped agent that
-needs attention and must stand out, though probably not red, because red reads
-as error rather than as a request. Blocked is the state that has a claim on red.
-
-Open question the operator asked directly: what other visual channels are
-available besides hue — pulse, weight, outline, position — so the scale does not
-have to carry every distinction alone. Accessibility matters here: hue alone is
-not sufficient signal, and the product targets WCAG 2.1 AA.
-
 ### 2. The unconfirmed-delivery mark is a dead end
 
 The mustard `!` on a worker row explains itself on hover, but clicking through
@@ -37,16 +20,6 @@ to that worker offers nothing about what it means or how to clear it. A marker
 that names a problem without offering a next action moves the confusion rather
 than resolving it. Raised alongside the observation that the glyph alone does
 not say what it is.
-
-### 3. The terminal header names the worker, and two different tasks
-
-Observed: the header eyebrow carried one task title, the heading carried the
-worker name, and the worker context chip carried a *different* task. Two
-statements about what the worker is doing, disagreeing, in one bar.
-
-The two come from different owners — one resolves the task by session, the other
-by worker — which is the duplicate-owner problem `docs/25` exists to prevent.
-The context chip is the newer of the two and introduced the conflict.
 
 ### 4. A task needs one operator instruction line
 
@@ -97,6 +70,15 @@ would return the vertical chrome the phone layout reclaimed, so this needs a
 deliberate choice rather than a default.
 
 ## Landed
+
+- Worker state now reads as a scale: green is work happening, amber is work
+  waiting on the operator, red is work that cannot proceed, with neutrals for a
+  worker doing nothing wrong and the accent for the worker the operator holds.
+  Only the live state moves, and sleeping is separated from resting by fill
+  rather than hue so the distinction does not depend on colour.
+- The terminal header no longer names a second task. The eyebrow was resolving
+  work by session while the context chip resolved it by worker, so one bar
+  carried two disagreeing answers.
 
 - Presence no longer flips to Away when a phone changes apps, and a locked
   desktop that stops reporting stops being described as locked.
