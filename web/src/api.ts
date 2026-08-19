@@ -1333,16 +1333,20 @@ export async function fetchDecisions(operatorToken: string): Promise<DecisionReq
   return response.json() as Promise<DecisionRequest[]>;
 }
 
+/** Which control the operator used, recorded so a disputed answer can be traced. */
+export type DecisionSurface = "inbox_action" | "inbox_dismiss";
+
 export async function resolveDecision(
   operatorToken: string,
   decisionId: string,
   action: string,
   note = "",
+  surface: DecisionSurface | "" = "",
 ): Promise<DecisionRequest> {
   const response = await authenticatedFetch(
     operatorToken,
     `/api/v1/decisions/${encodeURIComponent(decisionId)}/resolution`,
-    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, note }) },
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, note, surface }) },
   );
   return response.json() as Promise<DecisionRequest>;
 }

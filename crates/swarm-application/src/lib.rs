@@ -2208,9 +2208,10 @@ impl TaskService {
         id: DecisionRequestId,
         action: &str,
         note: &str,
+        surface: &str,
     ) -> Result<DecisionRequest, ApplicationError> {
         self.store
-            .resolve_decision_request(id, action, note)
+            .resolve_decision_request(id, action, note, surface)
             .map_err(Into::into)
     }
 }

@@ -12174,7 +12174,7 @@ mod tests {
             })
             .unwrap();
         store
-            .resolve_decision_request(decision.id, "ship", "Proceed")
+            .resolve_decision_request(decision.id, "ship", "Proceed", "test")
             .unwrap();
         let state = AppState::default()
             .with_terminal_host(client.clone(), "secret")

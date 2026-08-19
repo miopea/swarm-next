@@ -19,6 +19,11 @@ pub(super) struct ResolveDecisionRequest {
     action: String,
     #[serde(default)]
     note: String,
+    /// Which control the operator used, so a disputed resolution can be traced
+    /// to where it came in. Reported by the client and recorded as given; it
+    /// answers "where did this arrive from", not "who was allowed to send it".
+    #[serde(default)]
+    surface: String,
 }
 
 pub(super) async fn list_decisions(
@@ -41,8 +46,19 @@ pub(super) async fn resolve_decision(
     authorize(&state, &headers)?;
     let decision_id = parse_decision_id(&decision_id)?;
     let resolved = task_service(&state)?
-        .resolve_operator_decision(decision_id, &request.action, &request.note)
+        .resolve_operator_decision(
+            decision_id,
+            &request.action,
+            &request.note,
+            &request.surface,
+        )
         .map_err(application_error)?;
+    tracing::info!(
+        decision_id = %decision_id,
+        action = %request.action,
+        surface = %if request.surface.is_empty() { "unreported" } else { &request.surface },
+        "operator resolved a decision"
+    );
     // Answering a worker is an explicit operator action. Wake that exact worker
     // so the durable reply does not sit indefinitely behind a sleeping process.
     // A failed wake remains visible on the worker and the queued reply stays

@@ -120,7 +120,8 @@ const QUEEN_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 73;
 const PRESENCE_LAST_ACTIVE_SCHEMA_VERSION: i64 = 74;
 const TASK_OPERATOR_INSTRUCTION_SCHEMA_VERSION: i64 = 75;
 const WORKER_REVIVAL_INTENT_SCHEMA_VERSION: i64 = 76;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_REVIVAL_INTENT_SCHEMA_VERSION;
+const DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION: i64 = 77;
+const CURRENT_SCHEMA_VERSION: i64 = DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1935,6 +1936,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < WORKER_REVIVAL_INTENT_SCHEMA_VERSION {
         workers::migrate_worker_revival_intents(transaction)?;
+    }
+    if schema_version < DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION {
+        decisions::migrate_decision_resolution_surface(transaction)?;
     }
     Ok(())
 }
@@ -4669,6 +4673,89 @@ mod tests {
         migrated.verify_integrity().unwrap();
     }
 
+    /// One named migration step, described well enough for a test to undo it
+    /// and check it comes back.
+    ///
+    /// Adding a migration means adding a line here rather than rewriting the
+    /// test below. Editing that test by hand has caught four real mistakes and
+    /// cost four edits; the check is worth keeping and the rewriting is not.
+    struct SchemaStep {
+        table: &'static str,
+        /// The column the step adds, or empty when the step adds the table.
+        artifact: &'static str,
+    }
+
+    impl SchemaStep {
+        /// SQL that removes this step's artifact, to model a database that
+        /// never ran it.
+        fn undo(&self) -> String {
+            if self.artifact.is_empty() {
+                format!("DROP TABLE {}", self.table)
+            } else {
+                format!("ALTER TABLE {} DROP COLUMN {}", self.table, self.artifact)
+            }
+        }
+
+        /// SQL returning whether this step's artifact is present.
+        fn probe(&self) -> String {
+            if self.artifact.is_empty() {
+                format!(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                     WHERE type = 'table' AND name = '{}')",
+                    self.table
+                )
+            } else {
+                format!(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('{}')
+                     WHERE name = '{}')",
+                    self.table, self.artifact
+                )
+            }
+        }
+    }
+
+    /// Recent named steps, oldest first. The last is the ceiling.
+    const RECENT_SCHEMA_STEPS: &[SchemaStep] = &[
+        SchemaStep {
+            table: "queen_automation",
+            artifact: "delivery_session_id",
+        },
+        SchemaStep {
+            table: "operator_presence_devices",
+            artifact: "last_active_at",
+        },
+        SchemaStep {
+            table: "tasks",
+            artifact: "operator_instruction",
+        },
+        SchemaStep {
+            table: "worker_revival_intents",
+            artifact: "",
+        },
+        SchemaStep {
+            table: "decision_requests",
+            artifact: "resolution_surface",
+        },
+    ];
+
+    fn newest_step() -> &'static SchemaStep {
+        RECENT_SCHEMA_STEPS
+            .last()
+            .expect("the migration chain has a newest step")
+    }
+
+    #[test]
+    fn the_newest_recorded_step_is_the_declared_ceiling() {
+        // A migration added without a line in RECENT_SCHEMA_STEPS would leave
+        // the test below exercising the step before it, silently.
+        let store = TaskStore::in_memory().unwrap();
+        let connection = store.connection().unwrap();
+        let present: bool = connection
+            .query_row(&newest_step().probe(), [], |row| row.get(0))
+            .unwrap();
+        assert!(present, "the newest step listed is not in the schema");
+    }
+
     #[test]
     fn migrates_the_immediately_previous_schema_to_the_declared_ceiling() {
         let directory = tempfile::tempdir().unwrap();
@@ -4684,8 +4771,9 @@ mod tests {
                 // here instead would describe a database that never existed,
                 // and would pass or fail for reasons unrelated to the ceiling.
                 .execute_batch(&format!(
-                    "DROP TABLE worker_revival_intents;
+                    "{};
                      PRAGMA user_version = {};",
+                    newest_step().undo(),
                     CURRENT_SCHEMA_VERSION - 1
                 ))
                 .unwrap();
@@ -4735,39 +4823,14 @@ mod tests {
             )
             .unwrap();
         assert!(delivery_session_exists);
-        // Carried by a step below the ceiling.
-        let last_active_exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('operator_presence_devices')
-                 WHERE name = 'last_active_at')",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(last_active_exists);
-        // Carried by a step below the ceiling.
-        let operator_instruction_exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('tasks')
-                 WHERE name = 'operator_instruction')",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(operator_instruction_exists);
-        // Added by the newest step, which is what this test exercises. This
-        // assertion and the artifact dropped above have to move with every new
-        // migration, which has caught four real mistakes and cost four edits;
-        // worth replacing with something that finds the newest step itself.
-        let revival_intents_exist: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master
-                 WHERE type = 'table' AND name = 'worker_revival_intents')",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(revival_intents_exist);
+        // Every recent step's artifact, the newest of which is the one this
+        // test dropped and expects the migration to put back.
+        for step in RECENT_SCHEMA_STEPS {
+            let restored: bool = connection
+                .query_row(&step.probe(), [], |row| row.get(0))
+                .unwrap();
+            assert!(restored, "{} did not survive the migration", step.artifact);
+        }
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))

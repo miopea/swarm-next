@@ -7,6 +7,7 @@ import {
   createTask,
   fetchDevelopmentRuntime,
   resolveDecision,
+  type DecisionSurface,
   createWorker,
   fetchHealth,
   fetchTerminalHostStatus,
@@ -626,10 +627,10 @@ export function App() {
     await perform(async () => setTasks(await reorderTasks(operatorToken, taskIds)));
   }
 
-  async function resolveInboxDecision(decision: DecisionRequest, action: string, note: string) {
+  async function resolveInboxDecision(decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) {
     if (!operatorToken) return;
     await perform(async () => {
-      const updated = await resolveDecision(operatorToken, decision.id, action, note);
+      const updated = await resolveDecision(operatorToken, decision.id, action, note, surface);
       setDecisions((current) => current.map((item) => item.id === updated.id ? updated : item));
     });
   }

@@ -96,6 +96,7 @@ test("returns the selected action with the operator note", () => {
     pending,
     "durable_path",
     "Use the migration-safe option",
+    "inbox_action",
   );
 });
 
@@ -153,6 +154,7 @@ test("requires confirmation before dismissing without a proposed action", () => 
     pending,
     "dismissed",
     "The queue changed; review current work again.",
+    "inbox_dismiss",
   );
 });
 
@@ -172,4 +174,72 @@ test("counts and displays first-class attention that does not originate as a wor
   expect(screen.getByRole("tab", { name: "Needs you 1" })).toBeInTheDocument();
   expect(screen.getByText("Queen needs you")).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Nothing needs your attention" })).not.toBeInTheDocument();
+});
+
+test("does not move the card under the operator every time the inbox refreshes", async () => {
+  // The operator reported resolving a decision with an action they did not
+  // choose. The card was being scrolled and refocused on every change to the
+  // decision list, not only when navigation asked for it — so on a busy Hive
+  // the card moves between reading an action and clicking it.
+  const scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView = scrollIntoView;
+  const view = render(
+    <DecisionInbox
+      decisions={[pending]}
+      tasks={[task]}
+      workers={[worker]}
+      busy={false}
+      focusDecisionId={pending.id}
+      focusRequest={1}
+      onResolve={vi.fn()}
+    />,
+  );
+  // The scroll is scheduled on an animation frame, so the assertion has to
+  // outlive one or it measures nothing.
+  await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+  scrollIntoView.mockClear();
+
+  // Same focus request, new data — an ordinary live refresh.
+  view.rerender(
+    <DecisionInbox
+      decisions={[pending, resolved]}
+      tasks={[task]}
+      workers={[worker]}
+      busy={false}
+      focusDecisionId={pending.id}
+      focusRequest={1}
+      onResolve={vi.fn()}
+    />,
+  );
+
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  expect(scrollIntoView).not.toHaveBeenCalled();
+});
+
+test("names which control the operator used, so a disputed answer can be traced", () => {
+  // A decision was recorded with an action the operator says they did not
+  // choose, and nothing captured where the answer arrived from.
+  const onResolve = vi.fn().mockResolvedValue(undefined);
+  render(
+    <DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={onResolve} />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Durable path" }));
+  expect(onResolve).toHaveBeenCalledWith(pending, "durable_path", "", "inbox_action");
+
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss request" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm dismiss" }));
+  expect(onResolve).toHaveBeenCalledWith(pending, "dismissed", "", "inbox_dismiss");
+});
+
+test("offers actions as buttons that cannot submit anything", () => {
+  // A button with no type is a submit button. The dismiss control beside these
+  // already says so explicitly; the action buttons did not.
+  render(
+    <DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />,
+  );
+
+  for (const label of ["Durable path", "Minimal path"]) {
+    expect(screen.getByRole("button", { name: label })).toHaveAttribute("type", "button");
+  }
 });

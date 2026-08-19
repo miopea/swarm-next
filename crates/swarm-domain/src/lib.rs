@@ -609,6 +609,11 @@ pub struct DecisionRequest {
     pub state: DecisionRequestState,
     pub resolution_action: Option<String>,
     pub resolution_note: String,
+    /// Which surface submitted the resolution, for diagnosis after the fact.
+    /// Empty on records written before this was captured. Reported by the
+    /// client, so it identifies where an answer came from; it is not evidence
+    /// of who was allowed to give it.
+    pub resolution_surface: String,
     pub resolved_by_operator_id: Option<OperatorId>,
     pub created_at: i64,
     pub updated_at: i64,

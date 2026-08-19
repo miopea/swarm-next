@@ -6,13 +6,52 @@ use swarm_domain::{
     DecisionRequestKind, DecisionRequestState, DecisionUrgency, TaskId, WorkerId, WorkerSessionId,
 };
 
-use super::{TaskStore, TaskStoreError, insert_control_room_event};
+use super::{
+    DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION, TaskStore, TaskStoreError,
+    insert_control_room_event,
+};
+
+/// Records which surface submitted a resolution.
+///
+/// A resolution the operator says they did not choose could not be traced,
+/// because nothing recorded where the answer came in. A forward step, guarded
+/// on the table, because a database older than decisions passes through here.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+pub(super) fn migrate_decision_resolution_surface(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let decisions_exist: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_requests')",
+        [],
+        |row| row.get(0),
+    )?;
+    let column_exists: bool = decisions_exist
+        && transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('decision_requests')
+             WHERE name = 'resolution_surface')",
+            [],
+            |row| row.get(0),
+        )?;
+    if decisions_exist && !column_exists {
+        transaction.execute_batch(
+            "ALTER TABLE decision_requests ADD COLUMN resolution_surface TEXT NOT NULL DEFAULT '';",
+        )?;
+    }
+    transaction.pragma_update(
+        None,
+        "user_version",
+        DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION,
+    )
+}
 
 pub const MAX_PENDING_DECISIONS: i64 = 256;
 pub const MAX_DECISION_RESULTS: i64 = 200;
 const MAX_TITLE_BYTES: usize = 240;
 const MAX_DETAIL_BYTES: usize = 10_000;
 const MAX_ACTION_BYTES: usize = 80;
+const MAX_RESOLUTION_SURFACE_BYTES: usize = 40;
 const MAX_ACTIONS: usize = 6;
 const MAX_RESOLUTION_NOTE_BYTES: usize = 4_000;
 const MAX_DELIVERY_CLAIMS: i64 = 16;
@@ -154,6 +193,7 @@ impl TaskStore {
                 "SELECT id, hive_id, requesting_worker_id, task_id, kind, urgency, title,
                         reason, risk, evidence, suggested_action, allowed_actions, deadline,
                         state, resolution_action, resolution_note, resolved_by_operator_id,
+                        resolution_surface,
                         created_at, updated_at, resolved_at,
                         (SELECT state FROM decision_deliveries WHERE decision_id = decision_requests.id)
                  FROM decision_requests WHERE id = ?1",
@@ -174,6 +214,7 @@ impl TaskStore {
             "SELECT d.id, d.hive_id, d.requesting_worker_id, d.task_id, d.kind, d.urgency, d.title,
                     reason, risk, evidence, suggested_action, allowed_actions, deadline,
                     state, resolution_action, resolution_note, resolved_by_operator_id,
+                    resolution_surface,
                     created_at, updated_at, resolved_at,
                     (SELECT state FROM decision_deliveries WHERE decision_id = d.id)
              FROM decision_requests d
@@ -197,10 +238,12 @@ impl TaskStore {
         id: DecisionRequestId,
         action: &str,
         note: &str,
+        surface: &str,
     ) -> Result<DecisionRequest, TaskStoreError> {
         if action.is_empty()
             || action.len() > MAX_ACTION_BYTES
             || note.len() > MAX_RESOLUTION_NOTE_BYTES
+            || surface.len() > MAX_RESOLUTION_SURFACE_BYTES
         {
             return Err(TaskStoreError::InvalidDecisionResolution);
         }
@@ -232,13 +275,14 @@ impl TaskStore {
         let updated = transaction.execute(
             "UPDATE decision_requests SET
                  state = 'resolved', resolution_action = ?2, resolution_note = ?3,
+                 resolution_surface = ?4,
                  resolved_by_operator_id = (
                      SELECT h.operator_id FROM local_hive_identity l
                      JOIN hives h ON h.id = l.hive_id WHERE l.singleton = 1
                  ),
                  resolved_at = unixepoch(), updated_at = unixepoch()
              WHERE id = ?1 AND state = 'pending'",
-            params![id.to_string(), action, note],
+            params![id.to_string(), action, note, surface],
         )?;
         if updated != 1 {
             return Err(TaskStoreError::DecisionAlreadyResolved);
@@ -492,11 +536,12 @@ fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionReques
             .get::<_, Option<String>>(16)?
             .map(|value| parse_id(&value))
             .transpose()?,
-        created_at: row.get(17)?,
-        updated_at: row.get(18)?,
-        resolved_at: row.get(19)?,
+        resolution_surface: row.get(17)?,
+        created_at: row.get(18)?,
+        updated_at: row.get(19)?,
+        resolved_at: row.get(20)?,
         delivery_state: row
-            .get::<_, Option<String>>(20)?
+            .get::<_, Option<String>>(21)?
             .map(|value| DecisionDeliveryState::from_str(&value))
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
@@ -538,18 +583,18 @@ mod tests {
         assert_eq!(created.state, DecisionRequestState::Pending);
         assert_eq!(created.allowed_actions, actions);
         assert!(matches!(
-            store.resolve_decision_request(created.id, "other", ""),
+            store.resolve_decision_request(created.id, "other", "", "test"),
             Err(TaskStoreError::InvalidDecisionResolution)
         ));
 
         let resolved = store
-            .resolve_decision_request(created.id, "wait", "Operator is still testing.")
+            .resolve_decision_request(created.id, "wait", "Operator is still testing.", "test")
             .unwrap();
         assert_eq!(resolved.state, DecisionRequestState::Resolved);
         assert_eq!(resolved.resolution_action.as_deref(), Some("wait"));
         assert!(resolved.resolved_by_operator_id.is_some());
         assert!(matches!(
-            store.resolve_decision_request(created.id, "wait", "again"),
+            store.resolve_decision_request(created.id, "wait", "again", "test"),
             Err(TaskStoreError::DecisionAlreadyResolved)
         ));
         let events = store.list_control_room_events(0).unwrap().events;
@@ -576,6 +621,7 @@ mod tests {
                 created.id,
                 OPERATOR_DISMISS_ACTION,
                 "The queue changed; review current work again.",
+                "test",
             )
             .unwrap();
 
@@ -585,6 +631,51 @@ mod tests {
             Some(OPERATOR_DISMISS_ACTION)
         );
         assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
+    }
+
+    #[test]
+    fn a_resolution_records_where_it_came_from() {
+        // An operator reported a decision recorded with an action they did not
+        // choose, and nothing said where the answer arrived from, so it could
+        // not be traced to a surface.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = ["continue".to_owned(), "hold".to_owned()];
+        let created = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+
+        let resolved = store
+            .resolve_decision_request(created.id, "hold", "", "inbox_action")
+            .unwrap();
+
+        assert_eq!(resolved.resolution_surface, "inbox_action");
+        assert_eq!(
+            store
+                .get_decision_request(created.id)
+                .unwrap()
+                .resolution_surface,
+            "inbox_action"
+        );
+    }
+
+    #[test]
+    fn a_resolution_from_an_unnamed_surface_is_still_accepted() {
+        // Recording where an answer came from is for diagnosis. A client that
+        // says nothing must still be able to answer, or the record becomes a
+        // gate on resolving work.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = ["continue".to_owned(), "hold".to_owned()];
+        let created = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+
+        let resolved = store
+            .resolve_decision_request(created.id, "hold", "", "")
+            .unwrap();
+
+        assert_eq!(resolved.resolution_surface, "");
     }
 
     #[test]
@@ -601,7 +692,7 @@ mod tests {
         );
 
         store
-            .resolve_decision_request(decision.id, "continue", "")
+            .resolve_decision_request(decision.id, "continue", "", "test")
             .unwrap();
         assert!(store.workers_awaiting_operator().unwrap().is_empty());
     }
@@ -661,7 +752,7 @@ mod tests {
             .create_decision_request(&request(queen.id, &actions))
             .unwrap();
         let resolved = store
-            .resolve_decision_request(decision.id, "continue", "Ship after tests.")
+            .resolve_decision_request(decision.id, "continue", "Ship after tests.", "test")
             .unwrap();
         assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
 
@@ -703,7 +794,7 @@ mod tests {
             .create_decision_request(&request(queen.id, &actions))
             .unwrap();
         store
-            .resolve_decision_request(decision.id, "continue", "")
+            .resolve_decision_request(decision.id, "continue", "", "test")
             .unwrap();
         assert_eq!(store.claim_decision_deliveries(100).unwrap().len(), 1);
         assert_eq!(store.recover_inflight_decision_deliveries().unwrap(), 1);

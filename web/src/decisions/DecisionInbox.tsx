@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
-import type { DecisionRequest, Task, TaskActivityPage, Worker } from "../api";
+import type { DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import WorkActivity from "./WorkActivity";
 
@@ -23,7 +23,7 @@ type Props = {
   attentionCards?: ReactNode;
   onOpenTask?: (taskId: string) => void;
   onFetchActivity?: () => Promise<TaskActivityPage>;
-  onResolve: (decision: DecisionRequest, action: string, note: string) => Promise<void>;
+  onResolve: (decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) => Promise<void>;
 };
 
 export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, onOpenTask, onFetchActivity, onResolve }: Props) {
@@ -43,13 +43,24 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   useEffect(() => {
     if (!focusDecisionId) return;
     if (decisions.some((decision) => decision.id === focusDecisionId && decision.state === "resolved")) setShowResolved(true);
+  }, [decisions, focusDecisionId]);
+
+  // Deliberately not keyed on `decisions`. Navigation asking for a decision is
+  // what should move the page, and `focusRequest` is how it asks; every live
+  // refresh of the list is not. Keyed on the list, this scrolled and refocused
+  // the card whenever anything in the Hive changed, which on a busy Hive moves
+  // the card between the operator reading an action and clicking it.
+  // `showResolved` stays because revealing history is what puts the card in the
+  // document in the first place.
+  useEffect(() => {
+    if (!focusDecisionId) return;
     const frame = requestAnimationFrame(() => {
       const card = document.querySelector<HTMLElement>(`[data-decision-id="${CSS.escape(focusDecisionId)}"]`);
       card?.scrollIntoView({ behavior: "smooth", block: "center" });
       card?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [decisions, focusDecisionId, focusRequest]);
+  }, [focusDecisionId, focusRequest, showResolved]);
 
   const loadActivity = async () => {
     if (!onFetchActivity) return;
@@ -118,7 +129,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     <label><span>Optional note</span><textarea value={note} maxLength={4000} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
                     <div className="decision-actions">
                       {decision.allowed_actions.map((action, index) => (
-                        <button key={action} className={index === 0 ? "primary-action" : "secondary-button"} disabled={busy} onClick={() => { setDismissConfirmId(undefined); void onResolve(decision, action, note); }}>{humanize(action)}</button>
+                        <button key={action} type="button" className={index === 0 ? "primary-action" : "secondary-button"} disabled={busy} onClick={() => { setDismissConfirmId(undefined); void onResolve(decision, action, note, "inbox_action"); }}>{humanize(action)}</button>
                       ))}
                       <button
                         type="button"
@@ -131,7 +142,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                             return;
                           }
                           setDismissConfirmId(undefined);
-                          void onResolve(decision, "dismissed", note);
+                          void onResolve(decision, "dismissed", note, "inbox_dismiss");
                         }}
                       >
                         {dismissConfirmId === decision.id ? "Confirm dismiss" : "Dismiss request"}
