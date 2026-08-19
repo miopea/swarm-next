@@ -269,15 +269,36 @@ Removed, along with the `onStop` prop it was the only user of. The bar keeps
 the Queen chips and the "Always active" marker, which is now gated on the
 worker being unstoppable rather than on which branch of a ternary rendered.
 
-### 20. A popped-out worker window loops adjusting the terminal
+### 20. A popped-out worker window loops adjusting the terminal — *fixed*
 
 Raised as: popping out the worker window produces a repeating "adjusting
 terminal" loop, and this is exactly what happened on mobile.
 
-Two viewers of one server-owned PTY negotiating size against each other is what
-[ADR 0045](decisions/0045-engaged-device-terminal-geometry.md) exists to
-prevent, so the pop-out is likely reaching the resize path without the geometry
-ownership rule applying. Not yet diagnosed.
+Root cause: the presence device id lives in `localStorage`, which every window
+and tab of one browser shares. A popped-out window and the window it came from
+are therefore **one device** as far as the server is concerned, and
+`claim_unowned_worker_geometry` grants geometry when the row is unowned *or
+already owned by this device* — so both windows pass the ownership check and
+both resizes are applied.
+
+The loop then runs through the snapshot path: any resize produces a canonical
+snapshot, each window restores at the other's size, re-fits to its own viewport,
+and resizes back.
+
+[ADR 0045](decisions/0045-engaged-device-terminal-geometry.md) is not wrong, it
+is too coarse: it reasons about devices, and two windows on one machine are two
+viewers of one device.
+
+Fixed without changing the protocol, by keying the client on
+`document.hasFocus()` rather than `visibilityState`. Exactly one window has
+focus browser-wide, whereas a pop-out and its opener are both visible. An
+unfocused window no longer re-fits after a snapshot and no longer claims
+geometry, so it accepts the canonical size instead of arguing with it.
+
+Left open: the server still cannot distinguish two viewers of one device, so
+this is enforced by the client's good behaviour rather than by the rule. A
+per-viewer geometry identity would make it structural, and belongs in an
+amendment to ADR 0045.
 
 ## Landed
 

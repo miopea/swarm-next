@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { BROWSER_SESSION_AUTH } from "../api";
 import { TerminalConnection, type TerminalConnectionHandlers } from "./TerminalConnection";
@@ -108,7 +108,16 @@ function harness(
   return { connection, fetch, handlers, sockets };
 }
 
+// jsdom reports the document as unfocused, and every case below except the
+// pop-out one is a single focused window.
+beforeEach(() => {
+  document.hasFocus = () => true;
+});
+
+const documentHasFocus = document.hasFocus.bind(document);
+
 afterEach(() => {
+  document.hasFocus = documentHasFocus;
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -141,7 +150,7 @@ test("requests a no-store grant and applies a snapshot before sequenced deltas",
   expect(Array.from(vi.mocked(handlers.onOutput).mock.calls[0][0])).toEqual([111, 110, 101]);
 });
 
-test("visible viewport resizes reclaim geometry while hidden observers stay passive", async () => {
+test("only the focused window claims the geometry of a shared terminal", async () => {
   const { connection, handlers, sockets } = harness();
   connection.start(handlers);
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
@@ -155,7 +164,11 @@ test("visible viewport resizes reclaim geometry while hidden observers stay pass
     claim_geometry: true,
   });
 
-  vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  // A popped-out window and the window it came from are both visible, and
+  // share one device id because it lives in localStorage — so the server sees
+  // one device and would apply both their resizes. Focus picks exactly one
+  // window browser-wide.
+  document.hasFocus = () => false;
   connection.resize(20, 72);
   expect(JSON.parse(sockets[0].sent.at(-1) ?? "null")).toEqual({
     type: "resize",

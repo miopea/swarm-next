@@ -117,11 +117,11 @@ export class TerminalConnection {
       type: "resize",
       rows,
       columns,
-      // A viewport change in the visible Swarm window is an explicit operator
-      // action just like selecting or refreshing the worker. Let it repair a
-      // PTY size left by another device without allowing a hidden PWA's
-      // ResizeObserver to steal geometry in the background.
-      claim_geometry: document.visibilityState === "visible",
+      // A viewport change in the window the operator is acting in is an
+      // explicit operator action, just like selecting or refreshing the worker.
+      // Focus rather than visibility, because a pop-out and the window it came
+      // from are both visible at once and would each claim the same PTY.
+      claim_geometry: document.hasFocus(),
     });
   }
 
@@ -204,11 +204,12 @@ export class TerminalConnection {
         rows: size.rows,
         columns: size.columns,
         device_id: this.#deviceId,
-        // The selected foreground terminal is the operator's current viewport.
-        // Claiming only during a visible attachment lets refresh and worker
-        // selection repair stale geometry without allowing a background PWA
-        // to fight the active desktop or mobile view.
-        claim_geometry: document.visibilityState === "visible",
+        // The selected terminal in the focused window is the operator's
+        // current viewport. Claiming on attachment lets refresh and worker
+        // selection repair stale geometry, and keying on focus rather than
+        // visibility stops a pop-out and its opener — which the server sees as
+        // one device — from each claiming the same PTY on connect.
+        claim_geometry: document.hasFocus(),
       }),
     );
   }

@@ -184,7 +184,21 @@ export class TerminalController {
         const restoreFocus = document.activeElement === this.#host
           || Boolean(document.activeElement && this.#host.contains(document.activeElement));
         await this.#surface.restore(snapshot);
+        // Only the window the operator is actually in re-asserts its own size.
+        //
+        // Two viewers of one PTY on the same machine are one device — the
+        // device id lives in localStorage and is shared by every window and tab
+        // — so the server cannot tell them apart and applies both their
+        // resizes. Each then restores at the other's size, re-fits to its own,
+        // and resizes back: a pop-out and its opener adjust the terminal
+        // forever. `hasFocus` picks exactly one window browser-wide, so the
+        // other accepts the canonical size instead of arguing with it.
+        //
+        // Ungated below this: the fit before `start`, so a fresh mount still
+        // sizes itself, and ResizeObserver, which reports a real viewport
+        // change rather than an echo of someone else's.
         try {
+          if (!documentHasFocus()) return this.#applyRestoredFocus(restoreFocus);
           const fitted = await this.#surface.fit();
           this.#connection.resize(fitted.rows, fitted.columns);
         } catch {
@@ -192,8 +206,7 @@ export class TerminalController {
           // without measurable font metrics. The canonical snapshot is already
           // restored; ResizeObserver will publish the settled dimensions.
         }
-        if (restoreFocus && this.#lastRequestedFocus) this.#pendingFocus = this.#lastRequestedFocus;
-        this.#applyPendingFocus();
+        this.#applyRestoredFocus(restoreFocus);
       },
       onState: (state, detail) => this.#setState(state, detail),
       onRunningChange: (running) => {
@@ -206,6 +219,11 @@ export class TerminalController {
       ),
     );
     this.#started = true;
+    this.#applyPendingFocus();
+  }
+
+  #applyRestoredFocus(restoreFocus: boolean): void {
+    if (restoreFocus && this.#lastRequestedFocus) this.#pendingFocus = this.#lastRequestedFocus;
     this.#applyPendingFocus();
   }
 
@@ -272,4 +290,15 @@ export class TerminalControllerRegistry {
   get size(): number {
     return this.#controllers.size;
   }
+}
+
+/**
+ * Whether this window is the one the operator is acting in.
+ *
+ * Exactly one window has focus browser-wide, which is what makes it usable to
+ * pick a single geometry owner among viewers the server sees as one device.
+ * `visibilityState` cannot: a pop-out and its opener are both visible.
+ */
+function documentHasFocus(): boolean {
+  return typeof document === "undefined" || typeof document.hasFocus !== "function" || document.hasFocus();
 }

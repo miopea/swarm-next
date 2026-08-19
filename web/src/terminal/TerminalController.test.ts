@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import {
   TerminalController,
@@ -6,6 +6,17 @@ import {
   type TerminalConnectionLike,
   type TerminalSurface,
 } from "./TerminalController";
+
+// jsdom reports the document as unfocused. Every case here is the window the
+// operator is acting in, except the one that says otherwise.
+const documentHasFocus = document.hasFocus.bind(document);
+beforeEach(() => {
+  document.hasFocus = () => true;
+});
+afterEach(() => {
+  document.hasFocus = documentHasFocus;
+});
+
 
 function fakeSurface(): TerminalSurface {
   return {
@@ -253,6 +264,32 @@ test("canonical snapshots reset the renderer through its controller", async () =
   expect(surface.fit).toHaveBeenCalledTimes(2);
   expect(connection.resize).toHaveBeenLastCalledWith(38, 132);
   expect(surface.write).not.toHaveBeenCalled();
+});
+
+test("an unfocused window accepts the canonical size instead of arguing with it", async () => {
+  // A popped-out worker window and the window it came from both restore each
+  // other's snapshots, re-fit to their own viewport, and resize back — the
+  // terminal adjusts forever. They share one device id, because it lives in
+  // localStorage, so the server cannot tell them apart and applies both.
+  // Focus picks exactly one window browser-wide.
+  const surface = fakeSurface();
+  vi.mocked(surface.fit).mockResolvedValue({ rows: 24, columns: 80 });
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  vi.mocked(connection.resize).mockClear();
+  vi.mocked(surface.fit).mockClear();
+  document.hasFocus = () => false;
+
+  const snapshot = { sequence: 9, rows: 30, columns: 100, truncated: false, bytes: new Uint8Array() };
+  await handlers.onSnapshot(snapshot);
+
+  // Restored at the size the other window set, and nothing pushed back.
+  expect(surface.restore).toHaveBeenCalledWith(snapshot);
+  expect(surface.fit).not.toHaveBeenCalled();
+  expect(connection.resize).not.toHaveBeenCalled();
 });
 
 test("a canonical restore survives transient responsive renderer metrics", async () => {
