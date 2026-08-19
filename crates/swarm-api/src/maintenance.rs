@@ -13,8 +13,9 @@ use tokio::time::{sleep, timeout};
 
 use crate::{
     ApiError, AppState, authorize, build_version, runtime, task_store, task_store_error,
-    terminal_host::request_host, unix_timestamp, worker_engine_build_id,
+    terminal_host::request_host, unix_timestamp, worker_engine_build_id, worker_runtime,
 };
+use swarm_terminal::TerminalSize;
 
 #[derive(Debug, Serialize)]
 pub(super) struct WorkerEngineMaintenanceResponse {
@@ -174,6 +175,19 @@ async fn maintain_worker_engine_locked(
         .into_iter()
         .filter(|session| session.running)
         .collect::<Vec<_>>();
+    // Replacing the engine unloads every worker. Remember which ones the
+    // operator had loaded so they can be brought back afterwards: a warned
+    // maintenance action should cost a restart, not a roster the operator has
+    // to wake one worker at a time.
+    let loaded_worker_ids = loaded_workers(
+        &task_store(state)?
+            .list_worker_profiles()
+            .map_err(|error| task_store_error(&error))?,
+        &running
+            .iter()
+            .map(|session| session.session_id)
+            .collect::<std::collections::HashSet<_>>(),
+    );
     for session in &running {
         request_host(
             state,
@@ -223,15 +237,72 @@ async fn maintain_worker_engine_locked(
         ApiError::new(
             StatusCode::GATEWAY_TIMEOUT,
             "worker_engine_maintenance_timed_out",
-            "the worker engine did not report the expected release; configured workers were revived on the available host",
+            "the worker engine did not report the expected release, so the workers it unloaded were not brought back. Check the worker engine, then start them from the roster.",
         )
     })?;
+    let restarted_workers = revive_loaded_workers(state, &loaded_worker_ids).await;
+    state.control_room_notify.notify_waiters();
     Ok(WorkerEngineMaintenanceResponse {
         previous_version: previous.host_version,
         current_version: current.host_version,
         stopped_sessions: running.len(),
-        restarted_workers: 0,
+        restarted_workers,
     })
+}
+
+/// The workers holding the sessions about to be stopped.
+///
+/// Matched by the exact session each profile currently holds, so a worker that
+/// was already asleep is not woken by maintenance it was not part of, and a
+/// session with no profile behind it revives nothing.
+fn loaded_workers(
+    profiles: &[swarm_domain::WorkerProfile],
+    running_sessions: &std::collections::HashSet<swarm_domain::WorkerSessionId>,
+) -> Vec<swarm_domain::WorkerId> {
+    profiles
+        .iter()
+        .filter(|profile| {
+            profile
+                .active_session_id
+                .is_some_and(|session_id| running_sessions.contains(&session_id))
+        })
+        .map(|profile| profile.id)
+        .collect()
+}
+
+/// Brings back the workers a worker-engine replacement unloaded, and reports how
+/// many returned.
+///
+/// One worker failing to start does not abandon the rest: the failure is
+/// recorded against that worker, where the roster already shows it, and the
+/// remaining workers are still revived.
+async fn revive_loaded_workers(state: &AppState, worker_ids: &[swarm_domain::WorkerId]) -> usize {
+    let mut restarted = 0;
+    for worker_id in worker_ids {
+        let already_running = task_store(state).ok().and_then(|store| {
+            store
+                .get_worker_profile(*worker_id)
+                .ok()
+                .map(|profile| profile.active_session_id.is_some())
+        });
+        if already_running == Some(true) {
+            restarted += 1;
+            continue;
+        }
+        match worker_runtime::start_worker_process(state, *worker_id, TerminalSize::default()).await
+        {
+            Ok(_) => restarted += 1,
+            Err(error) => {
+                state
+                    .worker_errors
+                    .write()
+                    .await
+                    .insert(*worker_id, error.message.clone());
+                tracing::warn!(worker_id = %worker_id, message = %error.message, "worker could not be revived after the worker engine was replaced");
+            }
+        }
+    }
+    restarted
 }
 
 fn worker_engine_update_required(status: &TerminalHostStatus) -> bool {
@@ -251,4 +322,50 @@ async fn host_status_snapshot(state: &AppState) -> Result<TerminalHostStatus, Ap
         ));
     };
     Ok(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swarm_domain::{ProviderKind, WorkerId, WorkerProfile, WorkerRole, WorkerSessionId};
+
+    fn profile(active_session_id: Option<WorkerSessionId>) -> WorkerProfile {
+        WorkerProfile {
+            id: WorkerId::new(),
+            hive_id: swarm_domain::HiveId::new(),
+            name: "Worker".into(),
+            description: String::new(),
+            role: WorkerRole::Worker,
+            provider: ProviderKind::ClaudeCode,
+            workspace: "/repo".into(),
+            autostart: false,
+            position: 0,
+            active_session_id,
+            provider_conversation_id: None,
+            has_session_history: false,
+            engagement_expires_at: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn revives_only_the_workers_that_were_loaded() {
+        let loaded_session = WorkerSessionId::new();
+        let loaded = profile(Some(loaded_session));
+        let sleeping = profile(None);
+        let elsewhere = profile(Some(WorkerSessionId::new()));
+        let running = std::iter::once(loaded_session).collect();
+
+        let revive = loaded_workers(&[loaded.clone(), sleeping, elsewhere], &running);
+
+        assert_eq!(revive, vec![loaded.id]);
+    }
+
+    #[test]
+    fn revives_nothing_when_the_engine_held_no_workers() {
+        let running = std::collections::HashSet::new();
+
+        assert!(loaded_workers(&[profile(Some(WorkerSessionId::new()))], &running).is_empty());
+    }
 }
