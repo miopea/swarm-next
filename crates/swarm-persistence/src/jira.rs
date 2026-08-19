@@ -1083,7 +1083,21 @@ pub(super) fn queue_jira_transition(
             .collect::<Result<Vec<String>, _>>()?
     };
     if target_status_ids.is_empty() {
-        return Err(TaskStoreError::InvalidJiraWorkflowMapping);
+        // Name the project and the state. The generic message said neither, and
+        // an operator reading it could not tell whether the mapping was broken,
+        // missing, or simply not covering the state they asked for.
+        let project_key = transaction
+            .query_row(
+                "SELECT project_key FROM jira_project_bindings WHERE id = ?1",
+                [&binding_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| "This Jira project".to_owned());
+        return Err(TaskStoreError::JiraStateNotMapped {
+            project_key,
+            task_state: target,
+        });
     }
     if target_status_ids
         .iter()
@@ -1226,6 +1240,73 @@ fn valid_issue(issue: &JiraIssueSnapshot<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_unmapped_lifecycle_state_names_the_project_and_the_state() {
+        // Reproduces the reported failure: a binding mapped only to the three
+        // states Jira's status categories can produce cannot express blocked,
+        // review, or draft, and transitioning to one of them fails. The message
+        // has to say which project and which state, because the original said
+        // neither and cost a round trip to the operator to interpret.
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10009",
+                project_key: "WWD",
+                project_name: "WS: Website Development",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[
+                    JiraStatusMapping {
+                        jira_status_id: "10040".into(),
+                        jira_status_name: "To Do".into(),
+                        task_state: TaskState::Ready,
+                    },
+                    JiraStatusMapping {
+                        jira_status_id: "10041".into(),
+                        jira_status_name: "In Progress".into(),
+                        task_state: TaskState::Active,
+                    },
+                ],
+            )
+            .unwrap();
+        let task = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "20009",
+                    issue_key: "WWD-1",
+                    summary: "Contribution new D/CW",
+                    description: "",
+                    status_id: "10040",
+                    status_name: "To Do",
+                    assignee_account_id: None,
+                    assignee_name: None,
+                    remote_updated_at: "2026-08-18T12:00:00.000+0000",
+                }],
+            )
+            .unwrap()
+            .remove(0);
+
+        let failure = store
+            .transition_task(task.id, TaskState::Blocked)
+            .unwrap_err();
+
+        let message = failure.to_string();
+        assert!(message.contains("WWD"), "must name the project: {message}");
+        assert!(
+            message.contains("blocked"),
+            "must name the state: {message}"
+        );
+        // A state the binding does cover still moves, so the fault is the
+        // missing mapping rather than Jira-backed transitions as a whole.
+        assert!(store.transition_task(task.id, TaskState::Active).is_ok());
+    }
+
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskDetailsUpdate, TaskState};
 

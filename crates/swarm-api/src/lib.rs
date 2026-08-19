@@ -6765,6 +6765,14 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
                 error.to_string(),
             )
         }
+        // Distinct from a broken configuration: the mapping is sound and simply
+        // does not cover the state being asked for, which is a different thing
+        // for an operator to go and do about it.
+        TaskStoreError::JiraStateNotMapped { .. } => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "jira_state_not_mapped",
+            error.to_string(),
+        ),
         TaskStoreError::JiraProjectBindingNotFound => ApiError::new(
             StatusCode::NOT_FOUND,
             "jira_project_binding_not_found",

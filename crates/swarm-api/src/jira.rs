@@ -486,9 +486,9 @@ impl JiraReadinessProbe {
             statuses.insert(
                 status.id.clone(),
                 JiraProjectStatus {
+                    recommended_task_state: recommended_state(&category_key, &status.name),
                     id: status.id,
                     name: status.name,
-                    recommended_task_state: recommended_state(&category_key),
                     category_key,
                 },
             );
@@ -1160,9 +1160,40 @@ fn matches_image_signature(media_type: &str, bytes: &[u8]) -> bool {
     }
 }
 
-fn recommended_state(category_key: &str) -> TaskState {
+/// The lifecycle state a Jira status is offered as, before the operator edits it.
+///
+/// Jira exposes three status categories, so a recommendation drawn from the
+/// category alone can only ever produce three of the six lifecycle states, and
+/// blocked, review, and draft become unreachable from the defaults the settings
+/// page fills in. A binding built by accepting those defaults cannot express
+/// half its own lifecycle, and the failure only surfaces later, when someone
+/// tries to move a task to a state no status was mapped to.
+///
+/// The status name carries what the category cannot. It is only a default, and
+/// the operator overrides it in the same dropdown, so a wrong guess costs a
+/// correction rather than a broken workflow — which is what the alternative
+/// costs today.
+fn recommended_state(category_key: &str, status_name: &str) -> TaskState {
+    // A finished status is finished, whatever it is called. Jira's done
+    // category is unambiguous, and a name like "Approved" or "Reviewed"
+    // describes how the work ended rather than something still awaited.
+    if matches!(category_key, "done" | "completed") {
+        return TaskState::Completed;
+    }
+    // Below that, the name carries what the category cannot: two categories
+    // have to cover four remaining states.
+    let name = status_name.trim().to_ascii_lowercase();
+    if name.contains("review") || name.contains("proofing") || name.contains("approval") {
+        return TaskState::Review;
+    }
+    if name.contains("block")
+        || name.contains("waiting")
+        || name.contains("on hold")
+        || name.contains("impediment")
+    {
+        return TaskState::Blocked;
+    }
     match category_key {
-        "done" | "completed" => TaskState::Completed,
         "indeterminate" | "in-flight" | "in_progress" => TaskState::Active,
         _ => TaskState::Ready,
     }
@@ -1467,6 +1498,39 @@ mod tests {
         assert_eq!(issues[0].key, "WEB-42");
         assert_eq!(issues[0].description, "Verify desktop\nand mobile.");
         assert_eq!(issues[0].assignee_name.as_deref(), Some("Bea"));
+    }
+
+    #[test]
+    fn every_lifecycle_state_is_reachable_from_the_offered_defaults() {
+        // Jira has three status categories, so a recommendation drawn from the
+        // category alone can only offer three of the six lifecycle states. A
+        // binding built by accepting those defaults cannot express blocked or
+        // review, which is how project 10009 ended up untransitionable to
+        // either. These are the real status names from that project.
+        assert_eq!(
+            recommended_state("indeterminate", "In Review"),
+            TaskState::Review
+        );
+        assert_eq!(
+            recommended_state("indeterminate", "Proofing"),
+            TaskState::Review
+        );
+        assert_eq!(recommended_state("new", "Waiting On"), TaskState::Blocked);
+        assert_eq!(recommended_state("new", "Blocked"), TaskState::Blocked);
+
+        // The category still decides everything the name does not claim.
+        assert_eq!(recommended_state("new", "To Do"), TaskState::Ready);
+        assert_eq!(recommended_state("new", "Backlog"), TaskState::Ready);
+        assert_eq!(
+            recommended_state("indeterminate", "In Progress"),
+            TaskState::Active
+        );
+        assert_eq!(recommended_state("done", "Done"), TaskState::Completed);
+        // A done status keeps its category even when its name suggests review:
+        // finished work is not waiting on anyone. Written the other way round
+        // first, which is how the ordering flaw was found.
+        assert_eq!(recommended_state("done", "Approved"), TaskState::Completed);
+        assert_eq!(recommended_state("done", "Reviewed"), TaskState::Completed);
     }
 
     #[tokio::test]

@@ -339,6 +339,14 @@ pub enum TaskStoreError {
     InvalidJiraProject,
     #[error("Jira workflow mapping is invalid")]
     InvalidJiraWorkflowMapping,
+    #[error(
+        "{project_key} has no Jira status mapped to {task_state}, so this task cannot move there. \
+         Map a status to {task_state} in Settings, Integrations, {project_key}."
+    )]
+    JiraStateNotMapped {
+        project_key: String,
+        task_state: TaskState,
+    },
     #[error("Jira project binding was not found")]
     JiraProjectBindingNotFound,
     #[error("this Jira task already has an outbound workflow update pending")]
