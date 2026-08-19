@@ -131,3 +131,36 @@ test("holds its place while the API restarts under the build", () => {
   expect(status).toHaveTextContent("Reconnecting…");
   expect(status).toHaveTextContent("expected while a new build takes over");
 });
+
+test("confirms the last build landed, even while offering the next one", () => {
+  // The operator ran a build, watched it compile, and then saw the card
+  // offering a reload again. It was right to — newer commits existed — but
+  // nothing said whether the build they had asked for succeeded.
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "ready",
+    reload_available: true,
+    deployed_source_revision: "a50fcb465413",
+    source_revision: "9668d65abcde",
+    source_dirty: false,
+  }} />);
+
+  const status = screen.getByLabelText("App and API status");
+  expect(status).toHaveTextContent("The last build completed, and revision a50fcb4 is serving this page");
+  expect(status).toHaveTextContent("Build and switch the browser and API to working-copy revision 9668d65");
+});
+
+test("says nothing about a last build when none has run", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "idle",
+    reload_available: true,
+    deployed_source_revision: "a50fcb465413",
+    source_revision: "9668d65abcde",
+    source_dirty: false,
+  }} />);
+
+  expect(screen.getByLabelText("App and API status")).not.toHaveTextContent("The last build completed");
+});

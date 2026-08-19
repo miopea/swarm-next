@@ -1202,6 +1202,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-detail-editor section:first-child { display: grid; gap: 7px; }
 .task-detail-editor textarea { min-height: 8rem; resize: vertical; }
 .task-detail-editor select { max-width: 16rem; }
+.development-build-landed { margin: 0; font-size: .78rem; color: var(--good); font-weight: 500; }
 .engine-update-cost { margin: 0; font-size: .78rem; color: var(--muted); }
 .engine-update-cost.busy { color: var(--warn); font-weight: 500; }
 .task-detail-editor .field-help { margin-top: -3px; color: var(--muted); font-size: .72rem; }

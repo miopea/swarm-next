@@ -34,6 +34,14 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
   }
   const runningRevision = shortRevision(runtime.deployed_source_revision) ?? deployedRevision(runtime.version);
   const workingRevision = shortRevision(runtime.source_revision) ?? "the working copy";
+  // A finished build said nothing about having finished. The card went back to
+  // offering a reload — correctly, because newer commits exist — and the
+  // operator could not tell whether the build they asked for had landed.
+  const lastBuildLanded = runtime.state === "ready" ? (
+    <p className="development-build-landed" role="status">
+      The last build completed, and revision {runningRevision} is serving this page.
+    </p>
+  ) : null;
   if (runtime.state === "source_mismatch") return (
     <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="alert">
       <header><div><span className="runtime-component-name">App and API</span><strong>Development checkout needs to catch up</strong></div><span className="runtime-status-badge restart">Reload blocked</span></header>
@@ -74,6 +82,7 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
   return (
     <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status">
       <header><div><span className="runtime-component-name">App and API</span><strong>Development reload available</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header>
+      {lastBuildLanded}
       <p>Revision {runningRevision} is active. Build and switch the browser and API to working-copy revision {workingRevision}.</p>
       <small>A failed compile is rejected and {runningRevision} remains active. Claude, Codex, and the worker engine are not restarted.</small>
       {!confirming ? (

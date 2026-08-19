@@ -133,10 +133,10 @@ build takes over.
 The 502 is the same restart, seen from another surface. `5bdd8a8` already added
 502-and-family to the statuses that retry.
 
-Still open from this report: **a completed build never says it succeeded.** The
-card returns to offering a reload — correctly, because newer commits exist —
-but nothing confirms the build the operator asked for landed. The runtime has a
-`ready` state that the card does not surface distinctly.
+Also fixed: **a completed build now says it succeeded.** The card returns to
+offering a reload — correctly, because newer commits exist — but it states
+first that the last build completed and which revision is serving the page. The
+runtime already carried a `ready` state; nothing surfaced it.
 
 ### 6. Worker engine upgrades need care proportional to their harm — *fixed*
 
