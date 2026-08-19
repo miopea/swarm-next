@@ -21,9 +21,10 @@ export interface TerminalViewProps {
   queenAutomation?: QueenAutomationStatus;
   queenAutonomy?: QueenAutonomyLevel;
   onOpenQueenSettings?: () => void;
+  onConnectionStateChange?: (state: TerminalConnectionState) => void;
 }
 
-export default function TerminalView({ session, operatorToken, onStop, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, queenAutomation, queenAutonomy, onOpenQueenSettings }: TerminalViewProps) {
+export default function TerminalView({ session, operatorToken, onStop, busy, canStop = true, mobileKeysVisible, onMobileKeysVisibleChange, queenAutomation, queenAutonomy, onOpenQueenSettings, onConnectionStateChange }: TerminalViewProps) {
   const mount = useRef<HTMLDivElement>(null);
   const controller = useMemo<TerminalController>(() => {
     terminalWorkspace.authenticate(operatorToken);
@@ -37,6 +38,10 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
   const [detail, setDetail] = useState<string>();
   const [attachmentState, setAttachmentState] = useState<"idle" | "uploading" | "ready" | "error">("idle");
   const [atBottom, setAtBottom] = useState(true);
+  // Held in a ref so a new callback identity cannot detach and reattach the
+  // terminal: connection lifetime must not follow a React prop.
+  const report = useRef(onConnectionStateChange);
+  useEffect(() => { report.current = onConnectionStateChange; }, [onConnectionStateChange]);
   const [sessionCopyState, setSessionCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   useEffect(() => {
@@ -46,6 +51,7 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
     const subscription = controller.subscribe((state, nextDetail) => {
       setConnectionState(state);
       setDetail(nextDetail);
+      report.current?.(state);
     });
     const scrollSubscription = controller.subscribeScroll(setAtBottom);
     return () => {
@@ -54,6 +60,10 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
       controller.detach();
     };
   }, [controller]);
+
+  function dismissAttachmentNotice() {
+    setAttachmentState((state) => (state === "uploading" ? state : "idle"));
+  }
 
   async function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
     const image = clipboardImage(event.clipboardData);
@@ -87,15 +97,21 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
     }
   }
 
+  // On a phone the connection chip and the sleep action live in the workspace
+  // header instead. The toolbar then has nothing left to say unless something
+  // transient is happening, so it reports that and the layout reclaims the row.
+  const quiet = connectionState === "connected" && !detail && attachmentState === "idle";
+
   return (
     <div
       className="terminal-panel"
       onKeyDownCapture={(event) => {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") event.stopPropagation();
+        if (event.key === "Enter") dismissAttachmentNotice();
       }}
       onPasteCapture={(event) => void handlePaste(event)}
     >
-      <div className="terminal-toolbar">
+      <div className={`terminal-toolbar${quiet ? " terminal-toolbar-quiet" : ""}`}>
         <div className="terminal-connection-summary">
           <span className={`connection-state connection-${connectionState}`}>{connectionState.replace("_", " ")}</span>
           <details className="terminal-session-details">
@@ -141,7 +157,7 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
         <div className="terminal-mount" ref={mount} />
         {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
       </div>
-      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => controller.sendInput(text)} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onImage={addImage} attachmentState={attachmentState} />
+      <MobileTerminalComposer connectionState={connectionState} onInput={(text) => { controller.sendInput(text); if (text.includes("\r")) dismissAttachmentNotice(); }} keysExpanded={mobileKeysVisible} onKeysExpandedChange={onMobileKeysVisibleChange} onImage={addImage} attachmentState={attachmentState} />
     </div>
   );
 }

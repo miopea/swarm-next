@@ -61,3 +61,24 @@ test("keeps persistent phone navigation controls comfortably touchable", () => {
   expect(stylesheet).toContain(".task-mobile-controls summary { display: flex; min-height: 44px;");
   expect(stylesheet).toContain(".task-mobile-controls input, .task-mobile-controls select { width: 100%; min-height: 44px;");
 });
+
+test("keeps the roster controls still while only the worker list scrolls", () => {
+  expect(stylesheet).toContain(
+    ".rail-context { display: flex; min-height: 0; flex: 1; flex-direction: column; padding-top: 17px; overflow: hidden; }",
+  );
+  expect(stylesheet).toContain(".rail-controls { flex: 0 0 auto; }");
+  expect(stylesheet).toContain(
+    ".rail-context .worker-list, .rail-context .empty-rail { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }",
+  );
+  // Board view has no list under its controls, so there the controls scroll.
+  expect(stylesheet).toContain(
+    ".control-rail.surface-tasks .rail-controls { min-height: 0; flex: 1; overflow-y: auto; }",
+  );
+});
+
+test("gives the phone terminal its row back when the toolbar has nothing to report", () => {
+  expect(stylesheet).toContain(".terminal-toolbar-quiet { display: none; }");
+  // The folded controls belong to the phone layout only.
+  expect(stylesheet).toContain(".terminal-connection-dot, .terminal-sleep-button { display: none; }");
+  expect(stylesheet).toContain(".terminal-sleep-button { display: inline-flex; color: var(--bad); }");
+});
