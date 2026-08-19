@@ -854,6 +854,10 @@ export function App() {
     ),
     [tasks],
   );
+  function openTaskDetail(taskId: string) {
+    setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 }));
+    setSurface("tasks");
+  }
   const workByWorker = useMemo(() => {
     const grouped = new Map<string, Task[]>();
     tasks.forEach((task) => {
@@ -864,6 +868,7 @@ export function App() {
     });
     return new Map([...grouped].map(([workerId, assigned]) => [workerId, workerWork(assigned)]));
   }, [tasks]);
+  const activeWorkerWork = activeWorker ? workByWorker.get(activeWorker.id) : undefined;
   const taskProjects = useMemo(() => [...new Map(jiraTaskLinks.map((link) => [link.project_key, {
     key: link.project_key,
     name: link.project_name,
@@ -1069,6 +1074,28 @@ export function App() {
               <span aria-hidden="true">⌄</span>
             </button>
           ) : null}
+          {surface === "workers" && activeWorker && activeWorkerWork?.current ? (
+            <div className="worker-context" aria-label={`Work owned by ${activeWorker.name}`}>
+              <button
+                type="button"
+                className="worker-context-task"
+                title={activeWorkerWork.current.title}
+                onClick={() => { openTaskDetail(activeWorkerWork.current!.id); }}
+              >
+                <span className={`task-state state-${activeWorkerWork.current.state}`}>{taskStateLabel(activeWorkerWork.current)}</span>
+                <span className="worker-context-title">{activeWorkerWork.current.title}</span>
+              </button>
+              {activeWorkerWork.openCount > 1 ? (
+                <button
+                  type="button"
+                  className="worker-context-queue"
+                  aria-label={`Show all ${activeWorkerWork.openCount} open tasks for ${activeWorker.name}`}
+                  title={activeWorkerWork.summary}
+                  onClick={() => { setTaskWorkerFilter(activeWorker.id); setSurface("tasks"); }}
+                >+{activeWorkerWork.openCount - 1}</button>
+              ) : null}
+            </div>
+          ) : null}
           <div className="header-actions">
             {busy && <span className="saving-state">{busyLabel ?? "Saving…"}</span>}
             {surface === "workers" && activeSession && terminalConnection ? (
@@ -1084,9 +1111,6 @@ export function App() {
             {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
             <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" title="Refresh data and rebuild the visible terminal" onClick={() => void refreshControlRoom(true)} disabled={busy}><RefreshIcon /></button>}
-            {surface === "workers" && activeSession && activeWorker?.role !== "queen" ? (
-              <button className="icon-button terminal-sleep-button" aria-label="Put worker to sleep" title="Put worker to sleep" disabled={busy} onClick={() => void stopSession(activeSession.session_id)}><SleepIcon /></button>
-            ) : null}
             {operatorToken && <button className="secondary-button" onClick={() => void logout()} disabled={busy}>Lock</button>}
           </div>
         </header>
@@ -1381,7 +1405,6 @@ function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d
 function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
 function readSavedSurface(): Surface { try { if (readSettingsSection()) return "settings"; const linked = new URLSearchParams(window.location.search).get("surface"); if (linked === "decisions" || linked === "tasks" || linked === "workers" || linked === "apiary" || linked === "settings") return linked; const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "decisions" || saved === "workers" || saved === "apiary" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
 function saveSurface(surface: Surface) { try { window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface); } catch { /* Surface persistence is a non-critical convenience. */ } }
-function SleepIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v7"/><path d="M7.5 6.6a7 7 0 1 0 9 0"/></svg>; }
 function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }
 function SettingsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>; }
 function ApiaryIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 4 2.3v4.6L12 12.2 8 9.9V5.3L12 3Zm-4 6.9-4 2.3v4.6L8 19l4-2.2v-4.6L8 9.9Zm8 0-4 2.3v4.6l4 2.2 4-2.2v-4.6l-4-2.3Z"/></svg>; }

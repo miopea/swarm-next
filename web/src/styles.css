@@ -1253,6 +1253,13 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queen-automation-chip.online { border-color: color-mix(in srgb, var(--good) 48%, var(--line)); color: var(--good); background: var(--good-soft); }
 .queen-automation-chip.offline { border-color: color-mix(in srgb, var(--bad) 48%, var(--line)); color: var(--bad); background: var(--bad-soft); }
 .queen-autonomy-chip { min-height: 30px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 999px; color: var(--text); background: var(--accent-soft); font-size: .72rem; white-space: nowrap; }
+.worker-context { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 6px; }
+.worker-context-task { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: 8px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); }
+.worker-context-task:hover { border-color: var(--accent-strong); background: var(--panel-raised); }
+.worker-context-task .task-state { flex: 0 0 auto; }
+.worker-context-title { overflow: hidden; color: var(--text); font-size: .8rem; text-overflow: ellipsis; white-space: nowrap; }
+.worker-context-queue { min-height: 26px; flex: 0 0 auto; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--panel-soft); font-size: .72rem; }
+.worker-context-queue:hover { color: var(--text); border-color: var(--accent-strong); }
 .terminal-connection-dot, .terminal-sleep-button { display: none; }
 .connection-state { padding: 3px 7px; border-radius: 999px; color: var(--muted); background: var(--panel-soft); font-size: .66rem; text-transform: capitalize; }
 .connection-connected { color: var(--good); background: var(--good-soft); }
@@ -1600,6 +1607,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      a phone, so a toolbar with nothing transient left to report gives its row
      back to the terminal instead of showing an empty strip. */
   .terminal-toolbar-quiet { display: none; }
+  .worker-context { display: none; }
   .terminal-connection-dot { display: inline-block; width: 10px; height: 10px; flex: 0 0 auto; border-radius: 999px; background: var(--good); }
   .terminal-connection-dot.connection-connecting { background: var(--accent-strong); }
   .terminal-connection-dot.connection-disconnected, .terminal-connection-dot.connection-closed { background: var(--bad); }

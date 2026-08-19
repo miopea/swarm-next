@@ -5,6 +5,8 @@ const WORK_ORDER: Task["state"][] = ["active", "review", "blocked", "ready", "dr
 export type WorkerWork = {
   current?: Task;
   summary?: string;
+  /** Every open task this worker owns, including `current`. */
+  openCount: number;
 };
 
 export function workerWork(tasks: Task[]): WorkerWork {
@@ -15,7 +17,7 @@ export function workerWork(tasks: Task[]): WorkerWork {
       return stateOrder || left.position - right.position || left.created_at - right.created_at;
     });
 
-  if (open.length === 0) return {};
+  if (open.length === 0) return { openCount: 0 };
 
   const counts = new Map<Task["state"], number>();
   open.forEach((task) => counts.set(task.state, (counts.get(task.state) ?? 0) + 1));
@@ -27,5 +29,5 @@ export function workerWork(tasks: Task[]): WorkerWork {
     .filter(Boolean)
     .join(" · ");
 
-  return { current: open[0], summary };
+  return { current: open[0], summary, openCount: open.length };
 }

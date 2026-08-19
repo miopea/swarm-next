@@ -25,5 +25,24 @@ test("summarizes unfinished work in operational order", () => {
 });
 
 test("omits a work summary when the worker has no unfinished work", () => {
-  expect(workerWork([task("done", "completed", 0)])).toEqual({});
+  const work = workerWork([task("done", "completed", 0)]);
+
+  expect(work.summary).toBeUndefined();
+  expect(work.current).toBeUndefined();
+});
+
+test("counts every open task the worker owns so none stay invisible", () => {
+  const work = workerWork([
+    task("active", "active", 1),
+    task("ready", "ready", 2),
+    task("draft", "draft", 3),
+    task("done", "completed", 4),
+  ]);
+
+  expect(work.current?.id).toBe("active");
+  expect(work.openCount).toBe(3);
+});
+
+test("reports no open work rather than an absent count", () => {
+  expect(workerWork([task("done", "completed", 1)]).openCount).toBe(0);
 });
