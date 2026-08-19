@@ -139,10 +139,22 @@ adds an entry point, not a second surface rendering runtime evidence.
 
 **A new attention rule for unsubmitted prompt text.** Raising worker attention
 when text sits unsent at a prompt was proposed and rejected by the operator as
-engineering around a defect: the real cause is that server-side injection does
-not honour the submission contract the browser already implements, so briefs
-land as collapsed pasted text and are never submitted. The fix is the contract,
-not a detector for its failure.
+engineering around a defect. The fix belongs at the cause, not in a detector for
+its failure.
+
+The cause was first recorded here as server-side injection not honouring the
+submission contract the browser implements. That was wrong, and is corrected
+rather than quietly dropped: `submit_terminal_message` already strips the
+trailing carriage return, writes the message, waits for a stable render, and
+sends Enter as a separate write with bounded retries. The actual branch is
+narrower. A collapsed `[Pasted text #N]` chip counts as proof the write
+rendered, but only when it differs from the chip present before the write. When
+that comparison does not hold, marker observation reaches its deadline and the
+delivery is reported uncertain **before any Enter is sent**, which is exactly
+the observed symptom: the briefing sits in the prompt and an operator's own
+Enter submits it. Which comparison failed in the observed case is not yet
+established, and fixing it needs a reproduction rather than a further reading of
+the code.
 
 It would also have required amending an accepted invariant — that `Awaiting you`
 is driven by an explicit durable decision and never by terminal-text guessing —
