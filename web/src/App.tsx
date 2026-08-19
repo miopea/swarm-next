@@ -92,6 +92,7 @@ import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 import { useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
 import { runtimeUpdateSummary, type RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
+import { openSurfaceWindow } from "./navigation/surfaceWindow";
 import { workerEngineMatches } from "./runtime/workerEngine";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
@@ -139,6 +140,7 @@ export function App() {
   const [terminalConnection, setTerminalConnection] = useState<string>();
   const [runtimeUpdate, setRuntimeUpdate] = useState<RuntimeUpdateSummary>();
   const [repository, setRepository] = useState<RepositoryState | null>();
+  const [popoutBlocked, setPopoutBlocked] = useState(false);
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
@@ -949,6 +951,8 @@ export function App() {
     return () => window.removeEventListener("keydown", handleShortcut);
   });
 
+  useEffect(() => setPopoutBlocked(false), [surface]);
+
   useEffect(() => {
     const workerId = activeWorker?.id;
     if (!operatorToken || !workerId) {
@@ -1180,6 +1184,16 @@ export function App() {
               />
             ) : null}
             {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
+            {operatorToken && (
+              <button
+                type="button"
+                className="icon-button popout-button"
+                aria-label={`Open ${surfaceLabel(surface)} in a new window`}
+                title={`Open ${surfaceLabel(surface)} in a new window. Workers keep running; a window only views them.`}
+                onClick={() => setPopoutBlocked(!openSurfaceWindow(surface, (url, name, features) => window.open(url, name, features)))}
+              ><PopoutIcon /></button>
+            )}
+            {popoutBlocked && <span className="saving-state" role="alert">Your browser blocked the new window</span>}
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
             {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
             <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
@@ -1478,6 +1492,14 @@ function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d
 function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
 function readSavedSurface(): Surface { try { if (readSettingsSection()) return "settings"; const linked = new URLSearchParams(window.location.search).get("surface"); if (linked === "decisions" || linked === "tasks" || linked === "workers" || linked === "apiary" || linked === "settings") return linked; const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "decisions" || saved === "workers" || saved === "apiary" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
 function saveSurface(surface: Surface) { try { window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface); } catch { /* Surface persistence is a non-critical convenience. */ } }
+function surfaceLabel(surface: Surface): string {
+  return surface === "decisions" ? "Needs you"
+    : surface === "tasks" ? "Tasks"
+    : surface === "workers" ? "Workers"
+    : surface === "apiary" ? "Apiary"
+    : "Settings";
+}
+function PopoutIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>; }
 function DiagnosticsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.5-6 4 12L16 12h5"/></svg>; }
 function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }
 function SettingsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>; }

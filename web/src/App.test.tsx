@@ -634,9 +634,9 @@ test("keyboard shortcuts switch workspaces but pause while editing a field", asy
 
   fireEvent.keyDown(screen.getByRole("button", { name: "Tasks 0" }), { key: "4", altKey: true });
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /Settings/ })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Settings" })).toHaveAttribute("aria-current", "page");
 
-  fireEvent.keyDown(screen.getByRole("button", { name: /Settings/ }), { key: "3", altKey: true });
+  fireEvent.keyDown(screen.getByRole("button", { name: "Settings" }), { key: "3", altKey: true });
   expect(await screen.findByRole("heading", { name: "Worker terminal" })).toBeInTheDocument();
 });
 
