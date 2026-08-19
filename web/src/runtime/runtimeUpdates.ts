@@ -29,17 +29,32 @@ const IDLE: RuntimeUpdateSummary = {
  * stopped making progress on its own.
  *
  * The worker engine is reported separately from App and API because replacing
- * it interrupts running workers, while an App/API release does not.
+ * it interrupts running workers, while an App/API release does not. A worker
+ * engine replacement that is under way outranks everything, for the same
+ * reason: it is the only update that takes workers away while it runs.
+ *
+ * Both subsystems are named here exactly as the settings page names them.
+ * The indicator leads to that page, so a word that appears in one and not the
+ * other sends the operator looking for something that is not there.
  */
 export function runtimeUpdateSummary(
   health: Health | undefined,
   host: TerminalHostStatus | undefined,
   development: DevelopmentRuntime | undefined,
 ): RuntimeUpdateSummary {
+  if (host?.draining) {
+    return {
+      kind: "worker_engine",
+      label: "Updating worker engine",
+      detail: "The worker engine is being replaced. The workers it unloaded are brought back once it reports in.",
+      busy: true,
+    };
+  }
+
   if (development?.state === "failed") {
     return {
       kind: "failed",
-      label: "Update failed",
+      label: "App and API build failed",
       detail: "The development working copy did not compile. The current release is still running.",
       busy: false,
     };
@@ -49,7 +64,7 @@ export function runtimeUpdateSummary(
     const revision = development.source_revision?.slice(0, 7);
     return {
       kind: "building",
-      label: "Updating",
+      label: "Updating App and API",
       detail: revision
         ? `Building and checking revision ${revision}. Workers keep running.`
         : "Building and checking the development update. Workers keep running.",
@@ -60,7 +75,7 @@ export function runtimeUpdateSummary(
   if (workerEngineUpdateRequired(health, host)) {
     return {
       kind: "worker_engine",
-      label: "Engine update",
+      label: "Worker engine update",
       detail: "A worker engine update is installed but not running. Applying it restarts loaded workers.",
       busy: false,
     };
@@ -70,7 +85,7 @@ export function runtimeUpdateSummary(
     const revision = development.source_revision?.slice(0, 7);
     return {
       kind: "app",
-      label: "Update ready",
+      label: "App and API update",
       detail: revision
         ? `Revision ${revision} is ready to build. Workers stay online through an App and API release.`
         : "A development update is ready to build. Workers stay online through an App and API release.",

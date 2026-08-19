@@ -77,3 +77,38 @@ test("blocks an older or unrelated development checkout", () => {
   expect(status).toHaveTextContent("working-copy revision abcdef0 does not contain that deployed source");
   expect(screen.queryByRole("button", { name: /reload|build/i })).not.toBeInTheDocument();
 });
+
+test("shows a build in progress the way the worker engine card does", () => {
+  // The build ran with nothing but a change of wording to show for it, so the
+  // operator could not find it. It now carries the same live progress block as
+  // the worker engine update, in the card where they started it.
+  const { container } = render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "building",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "abcdef012345",
+    source_dirty: false,
+  }} />);
+
+  const status = screen.getByLabelText("App and API status");
+  expect(status).toHaveTextContent("Building App and API…");
+  expect(status).toHaveTextContent("Compiling and checking abcdef0");
+  expect(status).toHaveTextContent("Revision 7654321 keeps serving this page");
+  expect(container.querySelector(".maintenance-spinner")).not.toBeNull();
+});
+
+test("separates a build that has been asked for from one that is running", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "requested",
+    reload_available: false,
+    deployed_source_revision: "76543210fedc",
+    source_revision: "abcdef012345",
+    source_dirty: false,
+  }} />);
+
+  expect(screen.getByLabelText("App and API status")).toHaveTextContent("Starting the App and API build…");
+});

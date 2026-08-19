@@ -35,7 +35,7 @@ test("offers an App update that leaves workers online", () => {
   const summary = runtimeUpdateSummary(health("same"), host("same"), development({ reload_available: true }));
 
   expect(summary.kind).toBe("app");
-  expect(summary.label).toBe("Update ready");
+  expect(summary.label).toBe("App and API update");
   expect(summary.detail).toContain("abcdef1");
   expect(summary.busy).toBe(false);
 });
@@ -45,6 +45,30 @@ test("reports a worker engine update separately, because it interrupts workers",
 
   expect(summary.kind).toBe("worker_engine");
   expect(summary.detail).toContain("restarts loaded workers");
+});
+
+test("names both subsystems the way the settings page names them", () => {
+  // The indicator opens the settings page. A word that appears in one and not
+  // the other sends the operator looking for something that is not there.
+  const engine = runtimeUpdateSummary(health("new"), host("old"), development({}));
+  const app = runtimeUpdateSummary(health("same"), host("same"), development({ reload_available: true }));
+
+  expect(engine.label).toContain("Worker engine");
+  expect(app.label).toContain("App and API");
+});
+
+test("says a worker engine replacement is under way, and outranks everything while it is", () => {
+  // Nothing said this was happening: the only in-progress state was the app
+  // build, so the update that actually takes workers away ran unannounced.
+  const summary = runtimeUpdateSummary(
+    health("new"),
+    { ...host("old"), draining: true },
+    development({ state: "building", reload_available: true }),
+  );
+
+  expect(summary.kind).toBe("worker_engine");
+  expect(summary.label).toBe("Updating worker engine");
+  expect(summary.busy).toBe(true);
 });
 
 test("work in progress outranks work waiting", () => {

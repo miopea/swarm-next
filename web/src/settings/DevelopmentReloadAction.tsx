@@ -21,7 +21,22 @@ export default function DevelopmentReloadAction({ busy, runtime, healthVersion, 
     </article>
   );
   if (runtime.state === "requested" || runtime.state === "building") {
-    return <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status" role="status"><header><div><span className="runtime-component-name">App and API</span><strong>Building development changes</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header><p>Revision {runningRevision} remains active while Swarm compiles and checks {workingRevision}.</p><small>The page reconnects only after the new browser and API build is healthy. Claude, Codex, and the worker engine keep running.</small></article>;
+    // The same inline progress the worker engine card shows. A build that only
+    // changes the wording on a card reads as another resting state, which is
+    // why this one ran without the operator being able to find it.
+    return (
+      <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status" role="status">
+        <header><div><span className="runtime-component-name">App and API</span><strong>Building development changes</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header>
+        <div className="maintenance-progress" aria-live="polite">
+          <span className="maintenance-spinner" aria-hidden="true" />
+          <div>
+            <strong>{runtime.state === "requested" ? "Starting the App and API build…" : "Building App and API…"}</strong>
+            <span>Compiling and checking {workingRevision}. Revision {runningRevision} keeps serving this page until the new build is healthy.</span>
+          </div>
+        </div>
+        <small>The page reconnects only after the new browser and API build is healthy. Claude, Codex, and the worker engine keep running.</small>
+      </article>
+    );
   }
   if (runtime.state === "failed") return (
     <article className="runtime-subsystem-card runtime-subsystem-restart development-reload-action" aria-label="App and API status" role="alert">

@@ -48,20 +48,31 @@ stopped. Revival waits for the engine to settle, so a worker is never handed
 back onto the engine being replaced. Intents age out after fifteen minutes so
 they cannot wake workers the operator later chose to leave asleep.
 
-### 11. The update indicator does not use the words the settings page uses
+### 11. The update indicator does not use the words the settings page uses — *fixed*
 
 Raised as: there was no indication at the top that a *worker* update was
 running; there was one for the app, and it said "engine", which matches nothing
 on the settings page. Settings names two things: "Worker engine" and "App and
 API". The header must use those names, and must appear for both.
 
-### 12. The app updater should look like the worker-engine updater
+Fixed: the indicator now says "Worker engine update" and "App and API update",
+and it reports a worker-engine replacement while it is running — the only
+in-progress state it had was the app build, which is why the update that
+actually takes workers away ran unannounced. A running engine replacement
+outranks everything else in the indicator for the same reason.
+
+### 12. The app updater should look like the worker-engine updater — *fixed*
 
 Raised as: the worker-engine card is the better UI — it states what will happen,
 then shows inline progress in place ("Updating worker engine... Stopping active
 workers and preserving their conversations"). The app/API reload should work the
 same way. This supersedes item 7's open question of where to put progress: the
 answer is in the card, where the operator started the action.
+
+Fixed: the App and API card carries the same live progress block as the worker
+engine card while a build runs, and separates a build that has been asked for
+from one that is under way. Previously a build changed only the wording on the
+card, which reads as another resting state.
 
 ### 13. Adding an image fails once, then succeeds on retry
 
