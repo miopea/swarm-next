@@ -8,6 +8,12 @@ export type Task = {
   hive_id: string;
   title: string;
   description: string;
+  /**
+   * One line from the operator about how this task should be approached rather
+   * than what it contains — "interview me first", "analyse this, do not act on
+   * it". Empty when the operator has not said anything.
+   */
+  operator_instruction: string;
   priority: TaskPriority;
   workspace: string;
   state: TaskState;
@@ -44,7 +50,10 @@ export type TaskDraftInput = {
   worker_id: string;
 };
 
-export type TaskUpdateInput = Partial<Omit<TaskDraftInput, "worker_id">> & { workspace?: string };
+export type TaskUpdateInput = Partial<Omit<TaskDraftInput, "worker_id">> & {
+  workspace?: string;
+  operator_instruction?: string;
+};
 export type TaskCreateInput = Omit<TaskDraftInput, "worker_id"> & { workspace: string };
 
 export async function fetchTasks(operatorToken: string): Promise<Task[]> {

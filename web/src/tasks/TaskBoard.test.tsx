@@ -12,7 +12,7 @@ afterEach(() => {
 const task: Task = {
   id: "task-1",
   hive_id: "hive-1", title: "Make reload stable", workspace: "/workspace/swarm", state: "draft",
-  description: "Keep terminal history attached", priority: "high",
+  description: "Keep terminal history attached", operator_instruction: "", priority: "high",
   assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 1,
 };
 const worker: Worker = {
@@ -634,6 +634,7 @@ test("edits task details and retains a failed form for retry", async () => {
   await waitFor(() => expect(onUpdate).toHaveBeenCalledWith(task, {
     title: "Make every reload stable",
     description: task.description,
+    operator_instruction: task.operator_instruction,
     priority: "urgent",
   }));
   expect(screen.getByRole("dialog", { name: "Review and edit task" })).toBeInTheDocument();

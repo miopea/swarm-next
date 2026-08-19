@@ -5,7 +5,7 @@ import { workerWork } from "./workerWork";
 
 function task(id: string, state: Task["state"], position: number): Task {
   return {
-    id, hive_id: "hive", title: `${state} ${id}`, description: "", priority: "normal", workspace: "/repo",
+    id, hive_id: "hive", title: `${state} ${id}`, description: "", operator_instruction: "", priority: "normal", workspace: "/repo",
     state, assigned_worker_id: "worker", assigned_session_id: null, position, created_at: position, updated_at: position,
   };
 }

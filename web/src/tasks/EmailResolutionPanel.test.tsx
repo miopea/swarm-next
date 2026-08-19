@@ -12,7 +12,7 @@ afterEach(() => {
 
 const task: Task = {
   id: "task-1", hive_id: "hive-1", title: "Fix the reported form", workspace: "email://inbox", state: "completed",
-  description: "The phone field does not save.", priority: "normal", assigned_worker_id: "worker-1", assigned_session_id: null,
+  description: "The phone field does not save.", operator_instruction: "", priority: "normal", assigned_worker_id: "worker-1", assigned_session_id: null,
   position: 0, created_at: 1, updated_at: 1,
 };
 

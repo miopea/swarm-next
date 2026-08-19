@@ -8,7 +8,7 @@ afterEach(cleanup);
 
 const task: Task = {
   id: "task-1", hive_id: "hive-1", title: "Repair the worker picker", workspace: "/workspace/swarm",
-  state: "draft", description: "Keep the roster easy to scan", priority: "normal",
+  state: "draft", description: "Keep the roster easy to scan", operator_instruction: "", priority: "normal",
   assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 1,
 };
 
@@ -40,4 +40,21 @@ test("closes an unchanged task without an unnecessary warning", () => {
   fireEvent.keyDown(window, { key: "Escape" });
   expect(onClose).toHaveBeenCalledOnce();
   expect(screen.queryByRole("alertdialog", { name: "Unsaved task changes" })).not.toBeInTheDocument();
+});
+
+test("carries one operator instruction, apart from the brief", () => {
+  // The operator regularly needs to say how a task should be approached —
+  // "interview me first", "analyse this, do not act on it". Put in the brief it
+  // reads as part of the work, and a worker can reasonably treat it that way.
+  const save = vi.fn().mockResolvedValue(undefined);
+  render(<TaskDetailDialog task={task} operatorToken="token" busy={false} onClose={vi.fn()} onSave={save} onRemove={vi.fn()} />);
+
+  const instruction = screen.getByLabelText("How to approach this");
+  expect(instruction).toHaveAttribute("maxLength", "280");
+  fireEvent.change(instruction, { target: { value: "Interview me first" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({
+    operator_instruction: "Interview me first",
+  }));
 });

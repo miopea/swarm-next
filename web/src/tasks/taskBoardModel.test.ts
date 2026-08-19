@@ -10,10 +10,10 @@ const worker: Worker = {
 };
 
 const tasks: Task[] = [
-  { id: "local", hive_id: "hive", title: "Local notes", workspace: "/projects/a", state: "draft", description: "", priority: "low", assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 2 },
-  { id: "jira", hive_id: "hive", title: "Repair checkout", workspace: "/projects/a", state: "ready", description: "Cart fails", priority: "urgent", assigned_worker_id: worker.id, assigned_session_id: null, position: 1, created_at: 1, updated_at: 4 },
-  { id: "blocked", hive_id: "hive", title: "Await credentials", workspace: "/projects/a", state: "blocked", description: "", priority: "normal", assigned_worker_id: worker.id, assigned_session_id: null, position: 2, created_at: 1, updated_at: 3 },
-  { id: "done", hive_id: "hive", title: "Already shipped", workspace: "/projects/a", state: "completed", description: "", priority: "high", assigned_worker_id: worker.id, assigned_session_id: null, position: 3, created_at: 1, updated_at: 5 },
+  { id: "local", hive_id: "hive", title: "Local notes", workspace: "/projects/a", state: "draft", description: "", operator_instruction: "", priority: "low", assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 2 },
+  { id: "jira", hive_id: "hive", title: "Repair checkout", workspace: "/projects/a", state: "ready", description: "Cart fails", operator_instruction: "", priority: "urgent", assigned_worker_id: worker.id, assigned_session_id: null, position: 1, created_at: 1, updated_at: 4 },
+  { id: "blocked", hive_id: "hive", title: "Await credentials", workspace: "/projects/a", state: "blocked", description: "", operator_instruction: "", priority: "normal", assigned_worker_id: worker.id, assigned_session_id: null, position: 2, created_at: 1, updated_at: 3 },
+  { id: "done", hive_id: "hive", title: "Already shipped", workspace: "/projects/a", state: "completed", description: "", operator_instruction: "", priority: "high", assigned_worker_id: worker.id, assigned_session_id: null, position: 3, created_at: 1, updated_at: 5 },
 ];
 
 const jiraLink: JiraTaskLink = {

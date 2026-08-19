@@ -31,6 +31,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
   const formId = useId();
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description);
+  const [instruction, setInstruction] = useState(task.operator_instruction ?? "");
   const [sourceDescription, setSourceDescription] = useState("");
   const [priority, setPriority] = useState(task.priority);
   const [attachments, setAttachments] = useState<JiraTaskAttachment[]>([]);
@@ -45,7 +46,10 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
   const [attempt, setAttempt] = useState(0);
   const titleInput = useRef<HTMLInputElement>(null);
   const keepTaskButton = useRef<HTMLButtonElement>(null);
-  const dirty = title !== task.title || description !== task.description || priority !== task.priority;
+  const dirty = title !== task.title
+    || description !== task.description
+    || instruction !== (task.operator_instruction ?? "")
+    || priority !== task.priority;
   function requestClose() {
     if (removeConfirm) return setRemoveConfirm(false);
     if (closeConfirm) return setCloseConfirm(false);
@@ -114,7 +118,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
     if (!title.trim()) return;
     setSaveFailed(false);
     try {
-      await onSave({ title, description, priority });
+      await onSave({ title, description, priority, operator_instruction: instruction });
       onClose();
     } catch {
       setSaveFailed(true);
@@ -155,6 +159,16 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
             <input ref={titleInput} id={`detail-title-${task.id}`} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={240} />
             <label htmlFor={`detail-description-${task.id}`}>Work brief</label>
             <textarea id={`detail-description-${task.id}`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={10000} rows={6} placeholder="Add the outcome, context, and what done looks like" />
+            <label htmlFor={`detail-instruction-${task.id}`}>How to approach this</label>
+            <input
+              id={`detail-instruction-${task.id}`}
+              value={instruction}
+              onChange={(event) => setInstruction(event.target.value)}
+              maxLength={280}
+              placeholder="Interview me first · Analyse this, do not act on it"
+              aria-describedby={`detail-instruction-help-${task.id}`}
+            />
+            <small id={`detail-instruction-help-${task.id}`} className="field-help">One line, kept apart from the brief and read out to the worker before the work.</small>
             <label htmlFor={`detail-priority-${task.id}`}>Priority</label>
             <select id={`detail-priority-${task.id}`} value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
               <option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option>

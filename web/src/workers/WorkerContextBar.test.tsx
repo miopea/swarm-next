@@ -13,7 +13,7 @@ const worker: Worker = {
 };
 
 const task: Task = {
-  id: "task-1", hive_id: "hive", title: "Render content blocks", description: "", priority: "normal",
+  id: "task-1", hive_id: "hive", title: "Render content blocks", description: "", operator_instruction: "", priority: "normal",
   workspace: "/repo", state: "active", assigned_worker_id: "worker-1", assigned_session_id: null,
   position: 1, created_at: 1, updated_at: 1,
 };

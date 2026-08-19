@@ -20,7 +20,7 @@ const task: Task = {
   hive_id: "hive-1",
   title: "Polish worker states",
   description: "Keep the operator view clear",
-  priority: "normal",
+  operator_instruction: "", priority: "normal",
   workspace: "/projects/swarm-next",
   state: "ready",
   assigned_worker_id: null,
