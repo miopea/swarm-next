@@ -44,6 +44,7 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         expire_stale_run(&transaction, now)?;
+        resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
         let (_, actionable_count) = actionable_fingerprint(&transaction)?;
         let row = transaction.query_row(
             "SELECT enabled, state, run_id, trigger, attempts, requested_at,
@@ -130,6 +131,7 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         expire_stale_run(&transaction, now)?;
+        resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
         let state: String = transaction.query_row(
             "SELECT state FROM queen_automation WHERE id = 1",
             [],
@@ -179,6 +181,7 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         expire_stale_run(&transaction, now)?;
+        resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
         let (fingerprint, count) = actionable_fingerprint(&transaction)?;
         let (enabled, state, delivered): (bool, String, String) = transaction.query_row(
             "SELECT enabled, state, delivered_fingerprint FROM queen_automation WHERE id = 1",
@@ -215,6 +218,7 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         expire_stale_run(&transaction, now)?;
+        resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
         let candidate = transaction.query_row(
             "SELECT automation.run_id, session.session_id, automation.trigger, automation.actionable_count
              FROM queen_automation automation
@@ -233,8 +237,9 @@ impl TaskStore {
         };
         let changed = transaction.execute(
             "UPDATE queen_automation SET state = 'delivering', attempts = attempts + 1,
-                 attempted_at = ?2, updated_at = ?2 WHERE id = 1 AND run_id = ?1 AND state = 'queued'",
-            params![run_id, now],
+                 attempted_at = ?2, delivery_session_id = ?3, updated_at = ?2
+             WHERE id = 1 AND run_id = ?1 AND state = 'queued'",
+            params![run_id, now, session_id],
         )?;
         if changed != 1 {
             return Err(TaskStoreError::IntegrityFailure(
@@ -554,6 +559,43 @@ fn actionable_fingerprint(
     ))
 }
 
+/// Resumes a review whose delivery was written to a Queen terminal that has
+/// since ended.
+///
+/// An uncertain run is normally an operator judgment: Swarm could not confirm
+/// the review reached Queen, and replaying it blindly could double a briefing.
+/// The exact session it was written to having ended removes the ambiguity,
+/// because that terminal no longer exists and cannot be read from. Queen is
+/// never told the run id in that case, so she cannot finish the run herself and
+/// the review would otherwise wait for an operator forever.
+///
+/// This is deliberately keyed on session identity rather than on comparing an
+/// attempt time to a session start. Identity is exact, and the lifecycle
+/// already validates the exact session elsewhere for the same reason.
+fn resume_run_delivered_to_an_ended_queen_session(
+    transaction: &rusqlite::Transaction<'_>,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let changed = transaction.execute(
+        "UPDATE queen_automation
+         SET state = 'queued', attempts = 0, attempted_at = NULL,
+             delivery_session_id = NULL, delivered_at = NULL, finished_at = NULL,
+             outcome = NULL, updated_at = ?1
+         WHERE id = 1 AND state = 'uncertain' AND run_id IS NOT NULL
+           AND delivery_session_id IS NOT NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM worker_sessions session
+               WHERE session.session_id = queen_automation.delivery_session_id
+                 AND session.ended_at IS NULL
+           )",
+        [now],
+    )?;
+    if changed > 0 {
+        insert_control_room_event(transaction, ControlRoomEventKind::WorkersChanged)?;
+    }
+    Ok(())
+}
+
 fn expire_stale_run(
     transaction: &rusqlite::Transaction<'_>,
     now: i64,
@@ -630,7 +672,18 @@ pub(super) fn migrate_queen_conductor(
          );
          INSERT OR IGNORE INTO queen_automation (id) VALUES (1);
          PRAGMA user_version = 61;"
-    )
+    )?;
+    let has_delivery_session = transaction
+        .prepare("PRAGMA table_info(queen_automation)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|column| column == "delivery_session_id");
+    if !has_delivery_session {
+        transaction
+            .execute_batch("ALTER TABLE queen_automation ADD COLUMN delivery_session_id TEXT;")?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -708,6 +761,30 @@ mod tests {
             QueenAutomationState::Uncertain
         );
         assert!(store.claim_queen_automation(12).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_review_written_to_an_ended_queen_terminal_resumes_without_an_operator() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        let requested = store.request_queen_automation_run(10).unwrap();
+        let run_id = requested.run_id.unwrap();
+        store.claim_queen_automation(11).unwrap().unwrap();
+        assert_eq!(store.recover_inflight_queen_automation().unwrap(), 1);
+        assert_eq!(
+            store.queen_automation_status(12).unwrap().state,
+            QueenAutomationState::Uncertain
+        );
+
+        // The terminal the review was written to is gone, so the delivery
+        // provably was not read and Queen was never told the run id.
+        store.release_worker_session(session).unwrap();
+        let resumed = store.queen_automation_status(13).unwrap();
+
+        assert_eq!(resumed.state, QueenAutomationState::Queued);
+        assert_eq!(resumed.run_id.as_deref(), Some(run_id.as_str()));
     }
 
     #[test]
