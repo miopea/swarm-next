@@ -173,6 +173,23 @@ restart mid-delivery reproduces it whether or not the submission bug exists.
 The operator chose this order knowing the submission defect is live. It is
 recorded here so the second item is not lost.
 
+## Open: what a phone should show
+
+The desktop bar is deliberately absent from the phone, except for one part.
+
+The operator's standing complaint about the phone is vertical space, and a row
+of context chips would return the row the phone layout reclaimed. So the phone
+keeps only the fact it cannot work out for itself: that another device is
+driving this worker, and therefore owns the terminal width being rendered.
+Without that, a phone showing desktop-shaped output reads as a fault.
+
+What the phone still cannot see is which task the selected worker is carrying.
+It is reachable through the worker switcher, which lists work per worker, but
+not from the terminal the operator is looking at. Whether that is worth a row,
+worth folding into the switcher trigger that already has two lines, or worth
+leaving alone is a judgment about a surface the operator has strong views on,
+and it is recorded here rather than guessed at.
+
 ## Delivered
 
 Everything above is implemented and deployed except where noted.

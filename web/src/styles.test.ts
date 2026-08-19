@@ -82,3 +82,13 @@ test("gives the phone terminal its row back when the toolbar has nothing to repo
   expect(stylesheet).toContain(".terminal-connection-dot, .terminal-sleep-button { display: none; }");
   expect(stylesheet).toContain(".terminal-sleep-button { display: inline-flex; color: var(--bad); }");
 });
+
+test("keeps the phone terminal free of context chrome it does not need", () => {
+  // The phone reclaimed a row of chrome; a bar of context chips would give it
+  // straight back. Only the fact a phone cannot deduce survives: that another
+  // device is driving this worker, and so owns its terminal width.
+  expect(stylesheet).toContain(
+    ".worker-context-task, .worker-context-queue, .worker-repository { display: none; }",
+  );
+  expect(stylesheet).toContain(".header-actions .popout-button { display: none; }");
+});

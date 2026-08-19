@@ -1622,7 +1622,13 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      a phone, so a toolbar with nothing transient left to report gives its row
      back to the terminal instead of showing an empty strip. */
   .terminal-toolbar-quiet { display: none; }
-  .worker-context { display: none; }
+  /* The phone keeps the context bar only for the one thing it cannot work out
+     for itself: that another device holds this worker, and so its terminal
+     width follows that device rather than this screen. Everything else is
+     reachable through the worker switcher, and a row of chips here would give
+     back the vertical space the phone layout just reclaimed. */
+  .worker-context { flex: 0 0 auto; }
+  .worker-context-task, .worker-context-queue, .worker-repository { display: none; }
   .terminal-connection-dot { display: inline-block; width: 10px; height: 10px; flex: 0 0 auto; border-radius: 999px; background: var(--good); }
   .terminal-connection-dot.connection-connecting { background: var(--accent-strong); }
   .terminal-connection-dot.connection-disconnected, .terminal-connection-dot.connection-closed { background: var(--bad); }
