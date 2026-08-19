@@ -945,6 +945,15 @@ export function App() {
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
           <div className="brand-copy"><p className="eyebrow">Swarm Next</p><h1>Control room</h1><HiveContextIndicator identity={hiveIdentity} /></div>
+          {operatorToken ? (
+            <button
+              type="button"
+              className="icon-button brand-diagnostics"
+              aria-label="Open diagnostics"
+              title="Browser, API, database, terminal, provider and integration health"
+              onClick={() => openSettings("settings-diagnostics")}
+            ><DiagnosticsIcon /></button>
+          ) : null}
         </div>
 
         {operatorToken ? (
@@ -1405,6 +1414,7 @@ function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d
 function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
 function readSavedSurface(): Surface { try { if (readSettingsSection()) return "settings"; const linked = new URLSearchParams(window.location.search).get("surface"); if (linked === "decisions" || linked === "tasks" || linked === "workers" || linked === "apiary" || linked === "settings") return linked; const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "decisions" || saved === "workers" || saved === "apiary" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
 function saveSurface(surface: Surface) { try { window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface); } catch { /* Surface persistence is a non-critical convenience. */ } }
+function DiagnosticsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.5-6 4 12L16 12h5"/></svg>; }
 function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.4-2.4L20 9M4 15l2.5 2.4A7 7 0 0 0 17.9 15" /></svg>; }
 function SettingsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>; }
 function ApiaryIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 4 2.3v4.6L12 12.2 8 9.9V5.3L12 3Zm-4 6.9-4 2.3v4.6L8 19l4-2.2v-4.6L8 9.9Zm8 0-4 2.3v4.6l4 2.2 4-2.2v-4.6l-4-2.3Z"/></svg>; }

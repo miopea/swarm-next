@@ -1253,6 +1253,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queen-automation-chip.online { border-color: color-mix(in srgb, var(--good) 48%, var(--line)); color: var(--good); background: var(--good-soft); }
 .queen-automation-chip.offline { border-color: color-mix(in srgb, var(--bad) 48%, var(--line)); color: var(--bad); background: var(--bad-soft); }
 .queen-autonomy-chip { min-height: 30px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 999px; color: var(--text); background: var(--accent-soft); font-size: .72rem; white-space: nowrap; }
+.brand-lockup { position: relative; }
+.brand-diagnostics { position: absolute; top: 0; right: 0; width: 28px; height: 28px; color: var(--quiet); }
+.brand-diagnostics:hover { color: var(--text); background: var(--panel-raised); }
 .worker-context { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 6px; }
 .worker-context-task { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: 8px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); }
 .worker-context-task:hover { border-color: var(--accent-strong); background: var(--panel-raised); }
