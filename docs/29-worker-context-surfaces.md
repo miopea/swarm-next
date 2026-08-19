@@ -215,6 +215,18 @@ worth folding into the switcher trigger that already has two lines, or worth
 leaving alone is a judgment about a surface the operator has strong views on,
 and it is recorded here rather than guessed at.
 
+**Resolved: folded into the trigger, without adding a line.** On the worker
+surface the phone hides the header's own name and Hive line and lets the
+trigger stand in for both, so the trigger already carried a small line holding
+the Hive indicator. The task takes that line. Adding a third would have grown
+the header, which is the vertical space the phone layout was built to reclaim,
+and a row of chips was ruled out for the same reason.
+
+The trade is the Hive line on this one surface. It is on every other surface's
+header, and what the worker is carrying was not visible anywhere on the phone,
+so the line is worth more to the task than to the Hive. Reversing it is one
+conditional if the operator disagrees.
+
 ## Delivered
 
 Everything above is implemented and deployed except where noted.

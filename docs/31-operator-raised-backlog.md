@@ -184,12 +184,17 @@ Engagement now names the device driving a worker (`a39a95c`), but there is no
 control to take it back. Claiming engagement without sending input would be a
 new input-authority path and needs an ADR, not a button.
 
-### 9. A phone cannot see what a worker is carrying
+### 9. A phone cannot see what a worker is carrying — *fixed*
 
 Recorded in `docs/29`. The worker context bar is desktop-only, so a phone shows
 which worker is selected and nothing about its work. Reinstating the whole bar
 would return the vertical chrome the phone layout reclaimed, so this needs a
 deliberate choice rather than a default.
+
+Fixed by folding the task into the worker switcher trigger, which already
+carried a small line for the Hive indicator, so no row was added. The trade is
+the Hive line on the worker surface only; `docs/29` records the reasoning and
+how to reverse it.
 
 ### 16. The web suite passed or failed depending on the order it ran in — *fixed*
 

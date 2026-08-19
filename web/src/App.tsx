@@ -1136,9 +1136,22 @@ export function App() {
             <HiveContextIndicator identity={hiveIdentity} compact />
           </div>
           {surface === "workers" && operatorToken ? (
-            <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" aria-label={`Switch worker, current ${activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "none")}`} onClick={() => { setMobileWorkerQuery(""); setShowMobileWorkers(true); }}>
+            <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" aria-label={`Switch worker, current ${activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "none")}${activeWorkerWork?.current ? `, carrying ${activeWorkerWork.current.title}` : ""}`} onClick={() => { setMobileWorkerQuery(""); setShowMobileWorkers(true); }}>
               <span className="worker-avatar"><BeeMascot expression={activeWorker ? workerExpression(activeWorker) : "sleeping"} /></span>
-              <span><HiveContextIndicator identity={hiveIdentity} compact /><strong>{activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "Choose worker")}</strong></span>
+              {/* On a phone this trigger replaces the header's worker name and
+                  Hive line entirely, and the context bar's task chip is hidden
+                  because a row of chips would return the vertical space the
+                  phone layout reclaimed. So the task takes the small line the
+                  Hive indicator was using rather than adding one: on the worker
+                  surface, what the worker is carrying is the thing the phone
+                  could not see at all, and the Hive line is on every other
+                  surface's header. */}
+              <span>
+                {activeWorkerWork?.current
+                  ? <span className="mobile-worker-task">{activeWorkerWork.current.title}</span>
+                  : <HiveContextIndicator identity={hiveIdentity} compact />}
+                <strong>{activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "Choose worker")}</strong>
+              </span>
               <span aria-hidden="true">⌄</span>
             </button>
           ) : null}

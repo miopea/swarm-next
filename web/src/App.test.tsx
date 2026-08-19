@@ -813,6 +813,48 @@ function badGateway() {
  * call, and tests fail for reasons that have nothing to do with what they
  * assert.
  */
+test("the phone names the task its worker is carrying, without taking a row for it", async () => {
+  // A phone could see which worker was selected and nothing about its work: the
+  // context bar's task chip is hidden there, because a row of chips returns the
+  // vertical space the phone layout reclaimed. The task takes the small line the
+  // Hive indicator was using instead of adding one.
+  window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
+  const queenSession = "019fedfc-1c30-70e1-a5e2-9a3c94268094";
+  const workers = [{
+    id: "worker-queen", hive_id: "hive-1", name: "Queen", role: "queen", provider: "claude_code",
+    workspace: "/workspace/queen", autostart: true, position: 0, active_session_id: queenSession,
+    running: true, attention_state: "buzzing", created_at: 1, updated_at: 1,
+  }];
+  const tasks = [{
+    id: "task-1", hive_id: "hive-1", title: "Render content blocks", description: "", operator_instruction: "",
+    priority: "normal", workspace: "/workspace/queen", state: "active", assigned_worker_id: "worker-queen",
+    assigned_session_id: queenSession, position: 0, created_at: 1, updated_at: 1,
+  }];
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: queenSession, running: true }] }));
+    if (url === "/api/v1/workers") return Promise.resolve(ok(workers));
+    if (url === "/api/v1/tasks") return Promise.resolve(ok(tasks));
+    if (url === "/api/v1/workspaces" || url === "/api/v1/decisions") return Promise.resolve(ok([]));
+    if (url.includes("/api/v1/control-room/events")) {
+      return new Promise((_, reject) => init?.signal?.addEventListener(
+        "abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true },
+      ));
+    }
+    return Promise.resolve(ok({}));
+  }));
+
+  render(<App />);
+
+  const trigger = await screen.findByRole("button", { name: /Switch worker, current Queen/ });
+  expect(trigger).toHaveAccessibleName("Switch worker, current Queen, carrying Render content blocks");
+  expect(trigger).toHaveTextContent("Render content blocks");
+  expect(trigger).toHaveTextContent("Queen");
+});
+
 function bootFetch() {
   return vi.fn((input: string | URL | Request) => {
     const url = String(input);

@@ -1406,6 +1406,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .workspace-header .hive-context-indicator.compact { display: flex; max-width: min(190px, 46vw); margin-top: 2px; font-size: .58rem; }
   .workspace-header .hive-context-indicator.compact .hive-context-role { font-size: .5rem; }
   .workspace-header:has(.mobile-worker-switcher-trigger) > div:first-child { display: none; }
+  .mobile-worker-task { display: block; overflow: hidden; color: var(--muted); font-size: .58rem; text-overflow: ellipsis; white-space: nowrap; }
   .mobile-worker-switcher-trigger { display: grid; min-width: 0; max-width: min(190px, 48vw); min-height: 44px; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 7px; border-color: var(--line); color: var(--text); background: var(--panel-raised); text-align: left; }
   .mobile-worker-switcher-trigger .worker-avatar { width: 32px; height: 32px; }
   .mobile-worker-switcher-trigger .worker-avatar .bee-mascot { width: 35px; height: 35px; }
