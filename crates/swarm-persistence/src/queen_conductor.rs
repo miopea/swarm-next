@@ -7,7 +7,10 @@ use swarm_domain::{
 };
 use uuid::Uuid;
 
-use super::{TaskStore, TaskStoreError, events::insert_control_room_event};
+use super::{
+    QUEEN_DELIVERY_SESSION_SCHEMA_VERSION, TaskStore, TaskStoreError,
+    events::insert_control_room_event,
+};
 use crate::{
     orchestration::queen_autonomy_policy_from_connection,
     presence::operator_presence_from_connection,
@@ -672,18 +675,28 @@ pub(super) fn migrate_queen_conductor(
          );
          INSERT OR IGNORE INTO queen_automation (id) VALUES (1);
          PRAGMA user_version = 61;"
+    )
+}
+
+/// Records which terminal each review was written to.
+///
+/// A separate forward step rather than an edit to the migration that created
+/// the table. Every installed database has already passed that version, so a
+/// column added there reaches new databases only — which is how this column
+/// came to be queried in production before it existed.
+pub(super) fn migrate_queen_delivery_session(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let has_delivery_session: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('queen_automation') WHERE name = 'delivery_session_id')",
+        [],
+        |row| row.get(0),
     )?;
-    let has_delivery_session = transaction
-        .prepare("PRAGMA table_info(queen_automation)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|column| column == "delivery_session_id");
     if !has_delivery_session {
         transaction
             .execute_batch("ALTER TABLE queen_automation ADD COLUMN delivery_session_id TEXT;")?;
     }
-    Ok(())
+    transaction.pragma_update(None, "user_version", QUEEN_DELIVERY_SESSION_SCHEMA_VERSION)
 }
 
 #[cfg(test)]
@@ -761,6 +774,42 @@ mod tests {
             QueenAutomationState::Uncertain
         );
         assert!(store.claim_queen_automation(12).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_already_migrated_database_still_gains_the_delivery_session_column() {
+        // The column was first added inside the migration that creates this
+        // table, which every installed database had already passed. Fresh
+        // databases gained it and installed ones did not, so it was queried in
+        // production before it existed and every Queen automation read failed
+        // until a forward step was added. Only a step reaches both.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("swarm-next.sqlite3");
+        let store = TaskStore::open(&path).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute_batch(
+                "ALTER TABLE queen_automation DROP COLUMN delivery_session_id;
+                 PRAGMA user_version = 72;",
+            )
+            .unwrap();
+        drop(store);
+
+        let migrated = TaskStore::open(path).unwrap();
+
+        let has_column: bool = migrated
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('queen_automation') WHERE name = 'delivery_session_id')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_column, "an installed database must gain the column too");
+        // And the query that failed in production now works.
+        assert!(migrated.queen_automation_status(10).is_ok());
     }
 
     #[test]

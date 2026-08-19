@@ -113,7 +113,8 @@ const TASK_REMOVAL_SCHEMA_VERSION: i64 = 69;
 const DEPLOYMENT_GRANT_SCHEMA_VERSION: i64 = 70;
 const LEGACY_PROVIDER_CONVERSATION_SCHEMA_VERSION: i64 = 71;
 const LEGACY_EXISTING_CONVERSATION_SCHEMA_VERSION: i64 = 72;
-const CURRENT_SCHEMA_VERSION: i64 = LEGACY_EXISTING_CONVERSATION_SCHEMA_VERSION;
+const QUEEN_DELIVERY_SESSION_SCHEMA_VERSION: i64 = 73;
+const CURRENT_SCHEMA_VERSION: i64 = QUEEN_DELIVERY_SESSION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1862,6 +1863,19 @@ fn migrate_recent_schema(
     if schema_version < 65 {
         coordinator::migrate_coordinator_unstarted_work_attention(transaction)?;
     }
+    migrate_named_schema_steps(transaction, schema_version)?;
+    Ok(())
+}
+
+/// The steps identified by a named ceiling rather than a bare number.
+///
+/// Split from the numbered chain so each stays readable, following the same
+/// grouping the federation steps already use. Order still matters: every step
+/// runs against the schema the ones above it left behind.
+fn migrate_named_schema_steps(
+    transaction: &rusqlite::Transaction<'_>,
+    schema_version: i64,
+) -> rusqlite::Result<()> {
     if schema_version < TERMINAL_GEOMETRY_SCHEMA_VERSION {
         migrate_terminal_geometry_ownership(transaction)?;
     }
@@ -1882,6 +1896,9 @@ fn migrate_recent_schema(
     }
     if schema_version < LEGACY_EXISTING_CONVERSATION_SCHEMA_VERSION {
         migration::migrate_legacy_existing_conversations(transaction)?;
+    }
+    if schema_version < QUEEN_DELIVERY_SESSION_SCHEMA_VERSION {
+        queen_conductor::migrate_queen_delivery_session(transaction)?;
     }
     Ok(())
 }
@@ -4585,13 +4602,13 @@ mod tests {
             store
                 .connection()
                 .unwrap()
+                // Models a database that genuinely stopped one version short:
+                // it carries everything the steps below the ceiling created and
+                // lacks only what the newest one adds. Dropping older columns
+                // here instead would describe a database that never existed,
+                // and would pass or fail for reasons unrelated to the ceiling.
                 .execute_batch(&format!(
-                    "ALTER TABLE migration_worker_links DROP COLUMN previous_session_count;
-                     ALTER TABLE migration_worker_links DROP COLUMN imported_provider_conversation_id;
-                     ALTER TABLE migration_worker_links DROP COLUMN previous_updated_at;
-                     ALTER TABLE migration_worker_links DROP COLUMN previous_provider_conversation_resume;
-                     ALTER TABLE migration_worker_links DROP COLUMN previous_provider_conversation_id;
-                     ALTER TABLE migration_worker_links DROP COLUMN adopted_existing;
+                    "ALTER TABLE queen_automation DROP COLUMN delivery_session_id;
                      PRAGMA user_version = {};",
                     CURRENT_SCHEMA_VERSION - 1
                 ))
@@ -4631,6 +4648,15 @@ mod tests {
             )
             .unwrap();
         assert!(replacement_provenance_exists);
+        let delivery_session_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('queen_automation')
+                 WHERE name = 'delivery_session_id')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(delivery_session_exists);
         assert_eq!(
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
