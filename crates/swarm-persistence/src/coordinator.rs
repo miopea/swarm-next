@@ -452,6 +452,14 @@ impl TaskStore {
                      AND action.session_id = session.session_id
                      AND action.evidence_revision = task.updated_at
                )
+               -- Work stops changing while its answer is with the operator, and
+               -- that is the system working rather than a fault. Reporting it as
+               -- unchanged sends the operator to look at a worker that is
+               -- already waiting on them.
+               AND NOT EXISTS (
+                   SELECT 1 FROM decision_requests decision
+                   WHERE decision.task_id = task.id AND decision.state = 'pending'
+               )
              ORDER BY task.updated_at, task.id LIMIT ?3",
         )?;
         statement
@@ -1013,7 +1021,11 @@ pub(super) fn migrate_coordinator_unstarted_work_attention(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
+    use crate::decisions::NewDecisionRequest;
+    use swarm_domain::{
+        DecisionRequestKind, DecisionUrgency, ProviderKind, TaskActivityActor, TaskPriority,
+        TaskState,
+    };
 
     fn active_owned_work(
         store: &TaskStore,
@@ -1491,6 +1503,48 @@ mod tests {
             !store
                 .record_assigned_ready_work_not_started_attention(&candidate, 401, 300)
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn work_waiting_on_an_operator_decision_is_not_stale() {
+        // Observed on 2026-08-18: the detector raised stale attention against
+        // the BFG Operations worker while that worker was neither stuck nor
+        // crashed. It had filed a decision and correctly stopped, because the
+        // answer was not its to give. "Active work is unchanged while its
+        // loaded worker is resting" describes a fault; waiting on the operator
+        // is the system working.
+        let store = TaskStore::in_memory().unwrap();
+        let (worker, _session, task) = active_owned_work(&store, "Petal", 100);
+
+        assert_eq!(
+            store.stale_owned_work_candidates(1_000, 600).unwrap().len(),
+            1,
+            "unchanged active work is stale while nothing is pending"
+        );
+
+        store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: worker,
+                task_id: Some(task),
+                kind: DecisionRequestKind::Input,
+                urgency: DecisionUrgency::Normal,
+                title: "Which reading of the number is right?",
+                reason: "The console and the wire disagree.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Treat the wire as authoritative",
+                allowed_actions: &["Treat the wire as authoritative".to_owned()],
+                deadline: None,
+            })
+            .unwrap();
+
+        assert!(
+            store
+                .stale_owned_work_candidates(1_000, 600)
+                .unwrap()
+                .is_empty(),
+            "work waiting on an operator answer must not be reported as stale"
         );
     }
 
