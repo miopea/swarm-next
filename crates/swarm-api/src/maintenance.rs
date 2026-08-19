@@ -79,7 +79,7 @@ pub(super) async fn restart_superseded_workers(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let _guard = state.worker_lifecycle.lock().await;
+    let guard = state.worker_lifecycle.lock().await;
     let HostResponse::ProviderCapabilities {
         claude_release,
         codex_release,
@@ -132,6 +132,9 @@ pub(super) async fn restart_superseded_workers(
             .map_err(|error| task_store_error(&error))?;
     }
     state.control_room_notify.notify_waiters();
+    // Released before reviving: starting a worker takes this same mutex, and
+    // it is not reentrant.
+    drop(guard);
     let restarted_workers = revive_loaded_workers(&state, &superseded).await;
     state.control_room_notify.notify_waiters();
     Ok(Json(RestartWorkersResponse { restarted_workers }).into_response())
@@ -308,15 +311,16 @@ async fn maintain_worker_engine_locked(
             "the worker engine has not yet reported the expected release. The workers it unloaded are still recorded as owed a return and will be started once the engine reports in; check the roster in a moment.",
         )
     })?;
-    let restarted_workers = revive_loaded_workers(state, &loaded_worker_ids).await;
-    // Anything this pass could not revive stays owed, so the supervisor picks
-    // it up rather than the operator having to.
+    // Not revived here. This runs under the worker lifecycle, and starting a
+    // worker takes that same non-reentrant mutex, so reviving inside it would
+    // deadlock the API against itself. The caller revives after releasing it,
+    // and anything still owed is picked up by the supervisor.
     state.control_room_notify.notify_waiters();
     Ok(WorkerEngineMaintenanceResponse {
         previous_version: previous.host_version,
         current_version: current.host_version,
         stopped_sessions: running.len(),
-        restarted_workers,
+        restarted_workers: 0,
     })
 }
 

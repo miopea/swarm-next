@@ -893,9 +893,18 @@ impl AppState {
     /// Skipped while a maintenance run holds the worker lifecycle, which is the
     /// one time these workers are expected to be stopped.
     async fn revive_workers_owed_a_return(&self) {
-        let Ok(lifecycle) = self.worker_lifecycle.try_lock() else {
+        // Checked, then released immediately. `start_worker_process` takes this
+        // same mutex, and it is not reentrant, so holding it here deadlocked
+        // the API against itself: the first revival waited forever for a lock
+        // it already held, and every later request that needed the lifecycle —
+        // including the one behind the login screen — waited behind that.
+        //
+        // Releasing it leaves a window where maintenance could begin between
+        // the check and the start. That is safe: starting a worker takes the
+        // lock itself, so the two still serialise.
+        if self.worker_lifecycle.try_lock().is_err() {
             return;
-        };
+        }
         let Ok(store) = task_store(self) else {
             return;
         };
@@ -943,7 +952,6 @@ impl AppState {
             }
             let _ = store.clear_worker_revival_intent(worker_id);
         }
-        drop(lifecycle);
         self.control_room_notify.notify_waiters();
     }
 
