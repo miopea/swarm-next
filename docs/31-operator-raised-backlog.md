@@ -23,6 +23,61 @@ part of the work.
 Wanted: a single overarching operator comment on a task, distinct from the
 description and from activity notes.
 
+### 10. A worker-engine update loses the roster it promised to restore
+
+Raised as: coming back from a worker engine update, the previously active
+workers did not return and had to be woken one at a time. An error was visible
+at the same time (`Runtime request returned 524`).
+
+Root cause: the list of workers to revive exists only as a local variable inside
+the maintenance request handler. The handler stops every worker *first*, then
+waits up to 45s for the engine to report the new release, and only revives on
+the success path. Any interruption — our own timeout, a proxy timeout, or the
+API process restarting — discards the list permanently, and the workers are
+already stopped. What still runs on the failure path is `supervise_workers`,
+which starts *autostart* workers only, which is why one worker came back and
+the rest did not.
+
+The promise on the card is "briefly stops 7 active workers, then revives them".
+That promise cannot be kept by a value that dies with the request.
+
+### 11. The update indicator does not use the words the settings page uses
+
+Raised as: there was no indication at the top that a *worker* update was
+running; there was one for the app, and it said "engine", which matches nothing
+on the settings page. Settings names two things: "Worker engine" and "App and
+API". The header must use those names, and must appear for both.
+
+### 12. The app updater should look like the worker-engine updater
+
+Raised as: the worker-engine card is the better UI — it states what will happen,
+then shows inline progress in place ("Updating worker engine... Stopping active
+workers and preserving their conversations"). The app/API reload should work the
+same way. This supersedes item 7's open question of where to put progress: the
+answer is in the card, where the operator started the action.
+
+### 13. Adding an image fails once, then succeeds on retry
+
+Raised as: "image could not be added" on the first attempt, worked on the
+second. Seen shortly after a worker-engine update, so an API restart mid-upload
+is a candidate, but the retry-succeeds shape means this needs reproducing before
+it is diagnosed.
+
+### 14. Three workers claim the operator at once
+
+Raised as: three workers show "with you" while the operator is plainly in one
+session. Observed as BFG Operations `WITH YOU · 4M`, BudgetBug `WITH YOU · 4M`,
+and Swarm Next `WITH YOU` together.
+
+"With you" is the one worker state that is exclusive by definition — the
+operator is in one place. Three simultaneous claims mean the engagement lease is
+not being released when the operator moves on, and nothing enforces that only
+the newest holder can claim it. The `4M` on the stale two says they are aged,
+not fresh, so age is already known and simply not acted on.
+
+Related to the presence work in `892e439`, but distinct: that fixed *whether the
+operator is present*, this is *which worker they are present with*.
+
 ### 6. Worker engine upgrades need care proportional to their harm
 
 Raised as: this is the most harmful operation and currently has the least
@@ -40,7 +95,8 @@ loaded from busy.
 
 The control-room indicator added in `64e2f13` shows a spinner and the revision
 being built, but the operator did not find it, which means it is not doing its
-job where they actually look. Worth reworking rather than defending.
+job where they actually look. Item 12 records the answer the operator gave:
+put the progress in the card, not only in the header.
 
 ### 8. Takeover is visibility only
 

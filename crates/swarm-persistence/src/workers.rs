@@ -670,9 +670,27 @@ impl TaskStore {
             .optional()?;
         let renewal_threshold = now.saturating_add(lease_seconds / 2);
         let owner_device_id = owner_device_id.map(|device_id| device_id.to_string());
-        if current.is_some_and(|(expiry, current_owner)| {
-            expiry >= renewal_threshold && current_owner == owner_device_id
-        }) {
+        // An operator is in one place. Engaging a worker therefore ends this
+        // device's engagement everywhere else, rather than leaving the worker
+        // it just left holding a claim until the lease runs out. Without this
+        // the roster shows several workers "with you" at once, and each stale
+        // claim also holds back the coordination those workers are owed.
+        //
+        // Only a device that identifies itself can be swept: engagements with
+        // no owner cannot be told apart, so they are left alone.
+        let released_elsewhere = match &owner_device_id {
+            Some(device_id) => transaction.execute(
+                "DELETE FROM worker_engagements
+                 WHERE owner_device_id = ?1 AND worker_id <> ?2",
+                params![device_id, worker_id],
+            )?,
+            None => 0,
+        };
+        if released_elsewhere == 0
+            && current.is_some_and(|(expiry, current_owner)| {
+                expiry >= renewal_threshold && current_owner == owner_device_id
+            })
+        {
             return Ok(false);
         }
         let expires_at = now.saturating_add(lease_seconds);
@@ -1621,6 +1639,74 @@ mod tests {
         assert!(!store.worker_accepts_injection(worker.id, 103).unwrap());
         assert!(store.release_worker_engagement(session, phone).unwrap());
         assert!(store.worker_accepts_injection(worker.id, 103).unwrap());
+    }
+
+    #[test]
+    fn one_device_engages_one_worker_at_a_time() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store
+            .create_worker("Aster", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let second = store
+            .create_worker("Borage", ProviderKind::ClaudeCode, "/workspace", false, 2)
+            .unwrap();
+        let first_session = WorkerSessionId::new();
+        let second_session = WorkerSessionId::new();
+        store.bind_worker_session(first.id, first_session).unwrap();
+        store
+            .bind_worker_session(second.id, second_session)
+            .unwrap();
+        let desktop = PresenceDeviceId::new();
+
+        store
+            .renew_worker_engagement(first_session, Some(desktop), 100, 300)
+            .unwrap();
+        assert!(!store.worker_accepts_injection(first.id, 101).unwrap());
+
+        // Moving to another worker gives the first one back, well inside the
+        // lease it was holding. Three workers reading "with you" at once is
+        // what this prevents.
+        store
+            .renew_worker_engagement(second_session, Some(desktop), 102, 300)
+            .unwrap();
+        assert!(store.worker_accepts_injection(first.id, 103).unwrap());
+        assert!(!store.worker_accepts_injection(second.id, 103).unwrap());
+
+        // A second operator device is a separate claim, not a competing one.
+        let phone = PresenceDeviceId::new();
+        store
+            .renew_worker_engagement(first_session, Some(phone), 104, 300)
+            .unwrap();
+        assert!(!store.worker_accepts_injection(first.id, 105).unwrap());
+        assert!(!store.worker_accepts_injection(second.id, 105).unwrap());
+    }
+
+    #[test]
+    fn an_unattributed_engagement_is_left_alone_by_the_sweep() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store
+            .create_worker("Cosmos", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let second = store
+            .create_worker("Dill", ProviderKind::ClaudeCode, "/workspace", false, 2)
+            .unwrap();
+        let first_session = WorkerSessionId::new();
+        let second_session = WorkerSessionId::new();
+        store.bind_worker_session(first.id, first_session).unwrap();
+        store
+            .bind_worker_session(second.id, second_session)
+            .unwrap();
+
+        // Engagements with no device behind them cannot be told apart, so
+        // clearing them on someone else's behalf would be a guess.
+        store
+            .renew_worker_engagement(first_session, None, 100, 300)
+            .unwrap();
+        store
+            .renew_worker_engagement(second_session, None, 102, 300)
+            .unwrap();
+        assert!(!store.worker_accepts_injection(first.id, 103).unwrap());
+        assert!(!store.worker_accepts_injection(second.id, 103).unwrap());
     }
 
     #[test]
