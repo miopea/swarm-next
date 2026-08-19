@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { DevelopmentRuntime, Health, TerminalHostStatus } from "../api";
-import { runtimeUpdateSummary } from "./runtimeUpdates";
+import { nextRuntimeUpdate, runtimeUpdateSummary } from "./runtimeUpdates";
 
 const health = (buildId: string): Health => ({
   status: "ok",
@@ -106,4 +106,21 @@ test("stays quiet when development mode is off", () => {
 
 test("reports nothing rather than guessing before runtime facts arrive", () => {
   expect(runtimeUpdateSummary(undefined, undefined, undefined).kind).toBe("none");
+});
+
+test("keeps the last answer when a refresh learns nothing", () => {
+  // The App and API build restarts the API, so a refresh that returns nothing
+  // is the expected middle of the operation this indicator is reporting.
+  // Treating silence as "nothing to update" took the indicator off the header
+  // exactly then.
+  const building = runtimeUpdateSummary(health("same"), host("same"), development({ state: "building" }));
+
+  expect(nextRuntimeUpdate(building, undefined, undefined, undefined)).toBe(building);
+});
+
+test("replaces the answer as soon as any subsystem reports", () => {
+  const building = runtimeUpdateSummary(health("same"), host("same"), development({ state: "building" }));
+  const settled = nextRuntimeUpdate(building, health("same"), host("same"), development({}));
+
+  expect(settled?.kind).toBe("none");
 });

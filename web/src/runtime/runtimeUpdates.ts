@@ -95,3 +95,22 @@ export function runtimeUpdateSummary(
 
   return IDLE;
 }
+
+/**
+ * The summary to show after a refresh, given what that refresh managed to learn.
+ *
+ * A refresh that learned nothing about any subsystem keeps the previous answer
+ * rather than reporting silence as "nothing to update". The App and API build
+ * restarts the API, so a refresh returning nothing is the expected middle of
+ * the operation the indicator is reporting — the same reason the settings card
+ * holds its place instead of disappearing.
+ */
+export function nextRuntimeUpdate(
+  previous: RuntimeUpdateSummary | undefined,
+  health: Health | undefined,
+  host: TerminalHostStatus | undefined,
+  development: DevelopmentRuntime | undefined,
+): RuntimeUpdateSummary | undefined {
+  if (!health && !host && !development) return previous;
+  return runtimeUpdateSummary(health, host, development);
+}

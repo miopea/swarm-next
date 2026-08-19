@@ -160,12 +160,23 @@ operator commits, not only where they first read it.
 The count of sessions still comes from the host, which is what stops them;
 which of those are busy comes from the roster, which is what knows.
 
-### 7. App upgrade progress is close to invisible
+### 7. App upgrade progress is close to invisible — *fixed*
 
 The control-room indicator added in `64e2f13` shows a spinner and the revision
 being built, but the operator did not find it, which means it is not doing its
 job where they actually look. Item 12 records the answer the operator gave:
 put the progress in the card, not only in the header.
+
+Closed by items 11, 12 and 15 together — the header names the subsystem and
+reports a run in progress, the card carries live progress where the operator
+started the action, it no longer disappears mid-build, and a finished build
+says so.
+
+One piece was left: the header indicator had the same defect the card did. A
+refresh during the restart returned nothing for every subsystem, and an empty
+answer was treated as "nothing to update", so the indicator vanished at the
+same moment the card did. It now keeps its last answer until something is
+actually learned.
 
 ### 8. Takeover is visibility only
 

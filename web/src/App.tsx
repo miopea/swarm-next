@@ -93,7 +93,7 @@ import { normalizeRosterQuery, orphanSessionMatchesRosterQuery, repositoryName, 
 import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 import { useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
-import { runtimeUpdateSummary, type RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
+import { nextRuntimeUpdate, type RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
 import { openSurfaceWindow } from "./navigation/surfaceWindow";
 import { measureRoutePaint } from "./runtime/routePaint";
 import { workerEngineMatches } from "./runtime/workerEngine";
@@ -436,7 +436,7 @@ export function App() {
       ]);
       controlRoomModel.replace(controlRoom);
       if (automation) setQueenAutomation(automation);
-      setRuntimeUpdate(runtimeUpdateSummary(health, host, development));
+      setRuntimeUpdate((previous) => nextRuntimeUpdate(previous, health, host, development));
       if (recoverTerminal && activeSessionId) {
         terminalWorkspace.resetSessionRenderer(activeSessionId);
         setTerminalRevision((current) => current + 1);
