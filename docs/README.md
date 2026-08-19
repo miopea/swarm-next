@@ -35,6 +35,7 @@ Read and review these documents in order:
 31. [Legacy atlas completion audit](legacy/atlas-completion-audit.md)
 32. [Ring 1 observation log](legacy/ring1-observation-log.md)
 33. [Transparent developer guidance](decisions/0047-transparent-developer-guidance.md)
+34. [Worker context surfaces](29-worker-context-surfaces.md)
 
 `decisions/` contains architecture decision records. `legacy/` contains
 measured facts about the existing system. Legacy facts inform decisions but do
