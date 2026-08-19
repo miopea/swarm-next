@@ -136,9 +136,11 @@ export function App() {
   const [feedbackRevision, setFeedbackRevision] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
   const [showMobileWorkers, setShowMobileWorkers] = useState(false);
-  const [mobileWorkerQuery, setMobileWorkerQuery] = useState("");
-  const mobileWorkerSearch = useRef<HTMLInputElement>(null);
-  const mobileWorkerDialog = useModalFocus<HTMLElement>(() => setShowMobileWorkers(false), showMobileWorkers, mobileWorkerSearch);
+  // No search field on the phone, and so no initial focus to give one. Opening
+  // the picker used to focus a text input, which raised the keyboard over the
+  // list the operator had just asked to see. Focus falls to the first control
+  // in the dialog instead, which does not.
+  const mobileWorkerDialog = useModalFocus<HTMLElement>(() => setShowMobileWorkers(false), showMobileWorkers);
   const [workerVisibility, setWorkerVisibility] = useState<WorkerVisibility>(readWorkerVisibility);
   const [workerQuery, setWorkerQuery] = useState("");
   const [terminalConnection, setTerminalConnection] = useState<string>();
@@ -850,21 +852,8 @@ export function App() {
       : false,
     [normalizedWorkerQuery, workerVisibility, workers],
   );
-  const normalizedMobileWorkerQuery = normalizeRosterQuery(mobileWorkerQuery);
-  const mobileVisibleWorkers = useMemo(
-    () => visibleWorkers.filter((worker) => workerMatchesRosterQuery(worker, normalizedMobileWorkerQuery)),
-    [normalizedMobileWorkerQuery, visibleWorkers],
-  );
-  const mobileVisibleOrphanSessions = useMemo(
-    () => orphanSessions.filter((session) => orphanSessionMatchesRosterQuery(workerName(session.session_id), normalizedMobileWorkerQuery)),
-    [normalizedMobileWorkerQuery, orphanSessions],
-  );
-  const sleepingWorkerMatchesMobileQuery = useMemo(
-    () => workerVisibility === "awake" && normalizedMobileWorkerQuery
-      ? workers.some((worker) => !worker.running && workerMatchesRosterQuery(worker, normalizedMobileWorkerQuery))
-      : false,
-    [normalizedMobileWorkerQuery, workerVisibility, workers],
-  );
+  const mobileVisibleWorkers = visibleWorkers;
+  const mobileVisibleOrphanSessions = orphanSessions;
   const liveWorkerCount = workers.filter((worker) => worker.running).length
     + orphanSessions.filter((session) => session.running).length;
   const rosterWorkerCount = workers.length + orphanSessions.length;
@@ -1150,7 +1139,7 @@ export function App() {
             <HiveContextIndicator identity={hiveIdentity} compact />
           </div>
           {surface === "workers" && operatorToken ? (
-            <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" aria-label={`Switch worker, current ${activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "none")}${activeWorkerWork?.current ? `, carrying ${activeWorkerWork.current.title}` : ""}`} onClick={() => { setMobileWorkerQuery(""); setShowMobileWorkers(true); }}>
+            <button className="mobile-worker-switcher-trigger" type="button" aria-haspopup="dialog" aria-label={`Switch worker, current ${activeWorker?.name ?? (activeSession ? workerName(activeSession.session_id) : "none")}${activeWorkerWork?.current ? `, carrying ${activeWorkerWork.current.title}` : ""}`} onClick={() => setShowMobileWorkers(true)}>
               <span className="worker-avatar"><BeeMascot expression={activeWorker ? workerExpression(activeWorker) : "sleeping"} /></span>
               {/* On a phone this trigger replaces the header's worker name and
                   Hive line entirely, and the context bar's task chip is hidden
@@ -1225,24 +1214,10 @@ export function App() {
                   <button type="button" aria-pressed={workerVisibility === "awake"} onClick={() => changeWorkerVisibility("awake")}>Awake</button>
                 </div>
               </div>
-              <input
-                ref={mobileWorkerSearch}
-                className="mobile-worker-search"
-                type="search"
-                aria-label="Find a worker"
-                autoComplete="off"
-                placeholder="Find by worker or repository"
-                value={mobileWorkerQuery}
-                onChange={(event) => setMobileWorkerQuery(event.target.value)}
-              />
               <div className="mobile-worker-dialog-list">
                 {mobileVisibleWorkers.length === 0 && mobileVisibleOrphanSessions.length === 0 ? (
                   workers.length === 0 && orphanSessions.length === 0 ? (
                     <div className="mobile-worker-empty"><strong>No workers configured yet</strong><span>Add a repository worker in Settings, then return here to wake her.</span><button type="button" onClick={() => { setShowMobileWorkers(false); openSettings("settings-crew"); }}>Manage workers</button></div>
-                  ) : sleepingWorkerMatchesMobileQuery ? (
-                    <div className="mobile-worker-empty"><strong>That worker is sleeping</strong><span>Show the full roster to wake the matching worker.</span><button type="button" onClick={() => changeWorkerVisibility("all")}>Show all workers</button></div>
-                  ) : normalizedMobileWorkerQuery ? (
-                    <div className="mobile-worker-empty"><strong>No worker matches “{mobileWorkerQuery.trim()}”</strong><span>Try a worker name, repository name, or path.</span></div>
                   ) : (
                     <div className="mobile-worker-empty"><strong>All {workers.length} workers are sleeping</strong><span>Show the full roster to wake one.</span><button type="button" onClick={() => changeWorkerVisibility("all")}>Show all workers</button></div>
                   )

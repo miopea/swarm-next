@@ -54,7 +54,9 @@ test("keeps persistent phone navigation controls comfortably touchable", () => {
   expect(stylesheet).toContain(".task-jira-origin a { min-height: 44px; }");
   expect(stylesheet).toContain(".worker-order-actions button { width: 44px; min-height: 44px; }");
   expect(stylesheet).toContain(".mobile-terminal-keys button { min-width: 44px; min-height: 44px;");
-  expect(stylesheet).toContain(".mobile-worker-search { width: 100%; min-height: 44px; }");
+  // The phone picker has no search field: it took focus on open and raised the
+  // keyboard over the roster the operator had just asked to see.
+  expect(stylesheet).not.toContain(".mobile-worker-search");
   expect(stylesheet).toContain(".mobile-worker-empty button { min-height: 44px;");
   expect(stylesheet).toContain('.settings-workspace input:not([type="checkbox"]):not([type="radio"]),');
   expect(stylesheet).toContain(".settings-workspace textarea { min-height: 44px; }");

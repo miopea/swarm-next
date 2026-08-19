@@ -279,7 +279,6 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .mobile-worker-dialog-heading h3 { margin: 0; font-size: 1.12rem; }
 .mobile-worker-dialog-summary { margin: 0; color: var(--muted); font-size: .76rem; }
 .mobile-worker-dialog-toolbar { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; }
-.mobile-worker-search { width: 100%; min-height: 44px; }
 .mobile-worker-dialog-list { display: grid; min-height: 0; overflow-y: auto; gap: 5px; overscroll-behavior: contain; }
 .mobile-worker-empty { display: grid; justify-items: start; gap: 6px; padding: 18px 12px; color: var(--muted); font-size: .84rem; line-height: 1.45; }
 .mobile-worker-empty strong { color: var(--text); font-size: .94rem; }

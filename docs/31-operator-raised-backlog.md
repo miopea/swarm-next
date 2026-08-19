@@ -376,7 +376,22 @@ wanted" from "revival has been broken for a while", which is worth revisiting.
 Covered by a test that fails against the bug: with the guard held, supervising
 an owed worker does not return within twenty seconds.
 
-## Landed
+### 23. The phone worker picker raised the keyboard over itself — *fixed*
+
+Raised as: on mobile, opening the worker picker focuses the text field, so the
+keyboard comes up; remove the text field filter on mobile completely.
+
+The picker opened with focus on a search input, so asking to see the roster
+covered the roster with a keyboard. Every worker was one scroll away and the
+operator had to dismiss a keyboard to reach it.
+
+Removed, along with everything that existed only to serve it: the query state,
+the filtered lists, and the two empty states that explained a search returning
+nothing. Focus now falls to the first control in the dialog, which is not a text
+field. Narrowing the list is the Awake/All toggle's job, which needs no typing.
+
+The desktop rail keeps its own filter, and the shared roster-matching helpers
+are still used there.
 
 - The unconfirmed-delivery mark now explains itself where the operator lands.
   Opening the worker states what it means and that the briefing is in the

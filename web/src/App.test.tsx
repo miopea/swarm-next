@@ -425,7 +425,7 @@ test("filters sleeping workers and remembers the choice on this device", async (
   expect(within(screen.getByRole("group", { name: "Workers shown" })).getByRole("button", { name: "Awake" })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("searches a large worker roster by worker or repository in the mobile switcher", async () => {
+test("opens the mobile worker picker without raising the keyboard over it", async () => {
   window.sessionStorage.setItem("swarm-next.surface.v1", "workers");
   const queenSession = "019fedfc-1c30-70e1-a5e2-9a3c94268094";
   const workers = [
@@ -465,16 +465,24 @@ test("searches a large worker roster by worker or repository in the mobile switc
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "Switch worker, current Queen" }));
   const dialog = screen.getByRole("dialog", { name: "Where do you want to work?" });
-  fireEvent.change(within(dialog).getByRole("searchbox", { name: "Find a worker" }), { target: { value: "platform-api" } });
 
+  // The picker carried a search field that took focus on open, so asking to see
+  // the roster covered it with a keyboard. There is no field on the phone now,
+  // and nothing here focuses a text control.
+  expect(within(dialog).queryByRole("searchbox")).not.toBeInTheDocument();
+  expect(document.activeElement?.tagName).not.toBe("INPUT");
+  expect(document.activeElement?.tagName).not.toBe("TEXTAREA");
+
+  // The whole roster is reachable by scrolling instead.
   expect(within(dialog).getByRole("button", { name: /Platform API/ })).toBeInTheDocument();
-  expect(within(dialog).queryByRole("button", { name: /Sculpt Studio/ })).not.toBeInTheDocument();
-  expect(within(dialog).queryByRole("button", { name: /^Queen/ })).not.toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: /Sculpt Studio/ })).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: /^Queen/ })).toBeInTheDocument();
 
+  // Narrowing it is the Awake toggle's job, which needs no typing.
   fireEvent.click(within(dialog).getByRole("button", { name: "Awake" }));
-  fireEvent.change(within(dialog).getByRole("searchbox", { name: "Find a worker" }), { target: { value: "sculpt" } });
-  expect(within(dialog).getByText("That worker is sleeping")).toBeInTheDocument();
-  fireEvent.click(within(dialog).getByRole("button", { name: "Show all workers" }));
+  expect(within(dialog).getByRole("button", { name: /^Queen/ })).toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: /Sculpt Studio/ })).not.toBeInTheDocument();
+  fireEvent.click(within(dialog).getByRole("button", { name: "All" }));
   expect(within(dialog).getByRole("button", { name: /Sculpt Studio/ })).toBeInTheDocument();
 });
 
