@@ -393,6 +393,10 @@ field. Narrowing the list is the Awake/All toggle's job, which needs no typing.
 The desktop rail keeps its own filter, and the shared roster-matching helpers
 are still used there.
 
+## Landed
+
+Earlier items, kept as a record rather than a queue.
+
 - The unconfirmed-delivery mark now explains itself where the operator lands.
   Opening the worker states what it means and that the briefing is in the
   terminal below. Nothing is retried automatically: a briefing delivered twice
