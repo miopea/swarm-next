@@ -26,6 +26,8 @@ export type Worker = {
   updated_at: number;
   running: boolean;
   attention_state: WorkerAttentionState;
+  /** Wall-clock second this worker's terminal last produced output. */
+  last_output_at?: number;
   engagement_expires_at?: number;
   runtime_error?: string;
 };

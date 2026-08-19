@@ -812,7 +812,11 @@ impl AppState {
             tracing::warn!("worker supervisor could not load the durable roster");
             return;
         };
-        provider_activity::refresh(self, &profiles, &live).await;
+        let live_ids = live
+            .keys()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        provider_activity::refresh(self, &profiles, &live_ids).await;
         let now = unix_timestamp();
         {
             let mut attempts = self.worker_recovery_attempts.write().await;
@@ -1969,6 +1973,10 @@ struct WorkerView {
     runtime_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system_role: Option<&'static str>,
+    /// Wall-clock second this worker's terminal last produced output, so the
+    /// roster can show how long it has been silent without opening it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_output_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2157,6 +2165,7 @@ fn worker_view(
     runtime_error: Option<String>,
     provider_activity: ProviderActivity,
     is_scout: bool,
+    last_output_at: Option<i64>,
 ) -> WorkerView {
     let engagement_expires_at = profile.engagement_expires_at;
     let attention_state = if runtime_error.is_some() {
@@ -2179,6 +2188,7 @@ fn worker_view(
         engagement_expires_at,
         runtime_error,
         system_role: is_scout.then_some("scout"),
+        last_output_at,
     }
 }
 
@@ -10447,6 +10457,7 @@ mod tests {
                 None,
                 ProviderActivity::Resting,
                 false,
+                None,
             )
             .attention_state,
             WorkerAttentionState::AwaitingOperator
@@ -10454,8 +10465,16 @@ mod tests {
         let mut engaged = profile;
         engaged.engagement_expires_at = Some(400);
         assert_eq!(
-            worker_view(engaged, true, true, None, ProviderActivity::Resting, false)
-                .attention_state,
+            worker_view(
+                engaged,
+                true,
+                true,
+                None,
+                ProviderActivity::Resting,
+                false,
+                None
+            )
+            .attention_state,
             WorkerAttentionState::WithOperator
         );
     }
@@ -10472,6 +10491,7 @@ mod tests {
                 None,
                 ProviderActivity::Resting,
                 false,
+                None,
             )
             .attention_state,
             WorkerAttentionState::Resting
@@ -10484,13 +10504,22 @@ mod tests {
                 None,
                 ProviderActivity::Active,
                 false,
+                None,
             )
             .attention_state,
             WorkerAttentionState::Buzzing
         );
         assert_eq!(
-            worker_view(profile, false, false, None, ProviderActivity::Active, false)
-                .attention_state,
+            worker_view(
+                profile,
+                false,
+                false,
+                None,
+                ProviderActivity::Active,
+                false,
+                None
+            )
+            .attention_state,
             WorkerAttentionState::Sleeping
         );
     }

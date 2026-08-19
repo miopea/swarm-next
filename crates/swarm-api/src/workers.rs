@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -73,7 +73,8 @@ pub(super) async fn list_workers(
     let profiles = task_store(&state)?
         .list_worker_profiles()
         .map_err(|error| task_store_error(&error))?;
-    let provider_activity = provider_activity::refresh(&state, &profiles, &live).await;
+    let live_ids = live.keys().copied().collect::<HashSet<_>>();
+    let provider_activity = provider_activity::refresh(&state, &profiles, &live_ids).await;
     let awaiting_operator = task_store(&state)?
         .workers_awaiting_operator()
         .map_err(|error| task_store_error(&error))?;
@@ -86,7 +87,7 @@ pub(super) async fn list_workers(
         .map(|profile| {
             let running = profile
                 .active_session_id
-                .is_some_and(|session_id| live.contains(&session_id));
+                .is_some_and(|session_id| live.contains_key(&session_id));
             let runtime_error = errors.get(&profile.id).cloned();
             let needs_operator = awaiting_operator.contains(&profile.id);
             let activity = profile
@@ -94,6 +95,10 @@ pub(super) async fn list_workers(
                 .and_then(|session_id| provider_activity.get(&session_id).copied())
                 .unwrap_or(ProviderActivity::Unknown);
             let is_scout = scout_id == Some(profile.id);
+            let last_output_at = profile
+                .active_session_id
+                .and_then(|session_id| live.get(&session_id).copied())
+                .flatten();
             worker_view(
                 profile,
                 running,
@@ -101,6 +106,7 @@ pub(super) async fn list_workers(
                 runtime_error,
                 activity,
                 is_scout,
+                last_output_at,
             )
         })
         .collect::<Vec<_>>();
@@ -297,6 +303,7 @@ pub(super) async fn create_worker(
             None,
             ProviderActivity::Unknown,
             false,
+            None,
         )),
     )
         .into_response())
@@ -353,6 +360,7 @@ pub(super) async fn update_worker(
         None,
         ProviderActivity::Unknown,
         is_scout,
+        None,
     ))
     .into_response())
 }
@@ -726,6 +734,7 @@ pub(super) async fn stop_worker(
         None,
         ProviderActivity::Unknown,
         is_scout,
+        None,
     ))
     .into_response())
 }

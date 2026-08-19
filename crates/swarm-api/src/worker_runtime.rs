@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -26,8 +26,9 @@ pub(super) async fn start_worker_process(
         .map_err(|error| task_store_error(&error))?;
     let is_scout = worker_is_scout(state, worker_id)?;
     if let Some(session_id) = profile.active_session_id
-        && live.contains(&session_id)
+        && live.contains_key(&session_id)
     {
+        let last_output_at = live.get(&session_id).copied().flatten();
         return Ok(worker_view(
             profile,
             true,
@@ -35,6 +36,7 @@ pub(super) async fn start_worker_process(
             None,
             ProviderActivity::Unknown,
             is_scout,
+            last_output_at,
         ));
     }
     let mcp_config = if profile.provider == ProviderKind::ClaudeCode {
@@ -80,6 +82,7 @@ pub(super) async fn start_worker_process(
         None,
         ProviderActivity::Unknown,
         is_scout,
+        None,
     ))
 }
 
@@ -209,16 +212,16 @@ fn worker_is_scout(state: &AppState, worker_id: WorkerId) -> Result<bool, ApiErr
         .map_err(|error| task_store_error(&error))
 }
 
-pub(super) async fn reconcile_worker_bindings(
-    state: &AppState,
-) -> Result<HashSet<WorkerSessionId>, ApiError> {
+/// Live worker sessions and, where the terminal host reports it, the wall-clock
+/// second each one last produced output.
+pub(super) type LiveSessions = HashMap<WorkerSessionId, Option<i64>>;
+
+pub(super) async fn reconcile_worker_bindings(state: &AppState) -> Result<LiveSessions, ApiError> {
     let _guard = state.worker_lifecycle.lock().await;
     reconcile_worker_bindings_unlocked(state).await
 }
 
-async fn reconcile_worker_bindings_unlocked(
-    state: &AppState,
-) -> Result<HashSet<WorkerSessionId>, ApiError> {
+async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSessions, ApiError> {
     let response = request_host(state, HostRequest::ListSessions).await?;
     let HostResponse::Sessions { sessions } = response else {
         return Err(ApiError::new(
@@ -230,10 +233,11 @@ async fn reconcile_worker_bindings_unlocked(
     let live = sessions
         .into_iter()
         .filter(|session| session.running)
-        .map(|session| session.session_id)
-        .collect::<HashSet<_>>();
+        .map(|session| (session.session_id, session.last_output_at))
+        .collect::<LiveSessions>();
+    let live_ids = live.keys().copied().collect::<HashSet<_>>();
     let released = task_store(state)?
-        .release_missing_worker_sessions(&live)
+        .release_missing_worker_sessions(&live_ids)
         .map_err(|error| task_store_error(&error))?;
     if released > 0 {
         state.control_room_notify.notify_waiters();

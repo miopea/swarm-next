@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import CursorMenu, { pointFromElement, type MenuPoint } from "../shared/CursorMenu";
-import { workerAttention } from "./workerAttention";
+import { workerAttention, workerSilence } from "./workerAttention";
 
 type Props = {
   worker: Worker;
@@ -22,6 +22,7 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
   const primaryAction = worker.running ? onOpen : onStart;
   const primaryActionLabel = worker.running ? "Open terminal" : worker.runtime_error ? "Retry worker" : "Wake worker";
   const attention = workerAttention(worker);
+  const silence = workerSilence(worker);
 
   useEffect(() => {
     if (worker.attention_state !== "with_operator" || worker.engagement_expires_at === undefined) return;
@@ -55,7 +56,7 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
       >
         <span className="worker-avatar"><BeeMascot role={worker.role === "queen" ? "queen" : "worker"} expression={attention.expression} /></span>
         <span className="worker-copy">
-          <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.label}</span></span>
+          <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.label}{silence ? <span className="worker-silence"> · {silence}</span> : null}</span></span>
           <small title={detail}>{detail}</small>
           {workSummary ? <span className="worker-work-summary" title={`Open work: ${workSummary}`}>{workSummary}</span> : null}
         </span>

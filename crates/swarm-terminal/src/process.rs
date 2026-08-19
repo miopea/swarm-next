@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicI64, Ordering},
     },
     thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
@@ -100,6 +100,24 @@ pub enum SessionRegistryError {
     LockPoisoned,
 }
 
+/// What the host knows about one live terminal without reading its contents.
+#[derive(Clone, Copy, Debug)]
+pub struct SessionResourceState {
+    pub session_id: WorkerSessionId,
+    pub running: bool,
+    pub resources: Option<crate::ProcessResourceSample>,
+    /// Wall-clock second of this terminal's most recent output.
+    pub last_output_at: i64,
+}
+
+/// Seconds since the Unix epoch, saturating rather than panicking on a clock
+/// set before it.
+fn unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs().cast_signed())
+}
+
 pub struct ProcessTerminalSession {
     id: WorkerSessionId,
     child: Mutex<Box<dyn Child + Send + Sync>>,
@@ -110,6 +128,10 @@ pub struct ProcessTerminalSession {
     reader_running: Arc<AtomicBool>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
     history: Option<Arc<HistoryStore>>,
+    /// Wall-clock second of the most recent PTY output. The reader already sees
+    /// every byte, so this is the one owner of how long a worker has been
+    /// silent; nothing has to poll a terminal to find out.
+    last_output_at: Arc<AtomicI64>,
 }
 
 impl std::fmt::Debug for ProcessTerminalSession {
@@ -189,6 +211,8 @@ impl ProcessTerminalSession {
         let reader_output_state = output_state.clone();
         let reader_running = Arc::new(AtomicBool::new(true));
         let reader_state = Arc::clone(&reader_running);
+        let last_output_at = Arc::new(AtomicI64::new(unix_seconds()));
+        let reader_last_output_at = Arc::clone(&last_output_at);
         let reader_thread = thread::Builder::new()
             .name(format!("terminal-reader-{id:?}"))
             .spawn(move || {
@@ -198,6 +222,7 @@ impl ProcessTerminalSession {
                         Ok(0) | Err(_) => break,
                         Ok(read) => {
                             let output = &buffer[..read];
+                            reader_last_output_at.store(unix_seconds(), Ordering::Release);
                             let sequence =
                                 if let Ok(mut terminal_state) = reader_terminal_state.lock() {
                                     terminal_state.push(output.to_vec())
@@ -246,6 +271,7 @@ impl ProcessTerminalSession {
             reader_running,
             reader_thread: Mutex::new(Some(reader_thread)),
             history,
+            last_output_at,
         })
     }
 
@@ -349,6 +375,12 @@ impl ProcessTerminalSession {
     ) -> Result<Option<crate::ProcessResourceSample>, SessionRegistryError> {
         let process_id = lock(&self.child)?.process_id();
         Ok(process_id.map(crate::sample_process_tree))
+    }
+
+    /// Wall-clock second of the most recent output this terminal produced.
+    #[must_use]
+    pub fn last_output_at(&self) -> i64 {
+        self.last_output_at.load(Ordering::Acquire)
     }
 
     /// Stops the child process explicitly.
@@ -782,19 +814,17 @@ impl SessionRegistry {
     /// Returns an error for a poisoned registry or failed OS process query.
     pub fn session_resource_states(
         &self,
-    ) -> Result<
-        Vec<(WorkerSessionId, bool, Option<crate::ProcessResourceSample>)>,
-        SessionRegistryError,
-    > {
+    ) -> Result<Vec<SessionResourceState>, SessionRegistryError> {
         let sessions = lock(&self.sessions)?;
         sessions
             .values()
             .map(|session| {
-                Ok((
-                    session.id(),
-                    session.is_running()?,
-                    session.resource_sample()?,
-                ))
+                Ok(SessionResourceState {
+                    session_id: session.id(),
+                    running: session.is_running()?,
+                    resources: session.resource_sample()?,
+                    last_output_at: session.last_output_at(),
+                })
             })
             .collect()
     }

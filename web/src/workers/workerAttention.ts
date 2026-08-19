@@ -27,6 +27,24 @@ export function workerAttention(worker: Worker, now = Date.now()): WorkerAttenti
   return { state, ...presentation[state] };
 }
 
+/**
+ * How long this worker's terminal has been silent, for the roster badge, so the
+ * operator can spot a stalled worker without opening it.
+ *
+ * Absent while a worker is unloaded, before the terminal host reports the fact
+ * at all, and for the first minute, where a number would only ever be noise.
+ */
+export function workerSilence(worker: Worker, now = Date.now()): string | undefined {
+  if (!worker.running || worker.last_output_at === undefined) return undefined;
+  const seconds = Math.floor(now / 1000) - worker.last_output_at;
+  if (seconds < 60) return undefined;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
 export function workerSwitcherDetail(worker: Worker, assignedTaskTitle?: string): string {
   const state = worker.running ? workerAttention(worker).label : "Sleeping";
   if (assignedTaskTitle) return `${state} · ${assignedTaskTitle}`;

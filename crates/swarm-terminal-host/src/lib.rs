@@ -365,10 +365,11 @@ fn dispatch_blocking(
             .map(|sessions| HostResponse::Sessions {
                 sessions: sessions
                     .into_iter()
-                    .map(|(session_id, running, resources)| HostSessionSummary {
-                        session_id,
-                        running,
-                        resources,
+                    .map(|state| HostSessionSummary {
+                        session_id: state.session_id,
+                        running: state.running,
+                        resources: state.resources,
+                        last_output_at: Some(state.last_output_at),
                     })
                     .collect(),
             })

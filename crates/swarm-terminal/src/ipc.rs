@@ -200,6 +200,10 @@ pub struct HostSessionSummary {
     pub running: bool,
     #[serde(default)]
     pub resources: Option<ProcessResourceSample>,
+    /// Wall-clock second of this terminal's most recent output. Absent from a
+    /// host that predates the field, so a rolling update stays compatible.
+    #[serde(default)]
+    pub last_output_at: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
