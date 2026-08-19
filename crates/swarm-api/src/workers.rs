@@ -824,3 +824,148 @@ mod description_tests {
         assert!(!context.contains("Cross-repository coordination stays with Queen or Scout"));
     }
 }
+
+/// Reports the repository state of one worker.
+///
+/// Scoped to a single worker on purpose. The context bar that shows this is
+/// per-selected-worker, so the read is too: a roster of thirty-two workers
+/// never turns into thirty-two subprocesses on refresh.
+///
+/// # Errors
+/// Returns an error when the worker is unknown or its repository cannot be read.
+pub(super) async fn worker_repository(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(worker_id): AxumPath<WorkerId>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let profile = task_store(&state)?
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?;
+    let status = repository_status(&profile.workspace).await;
+    let body = status.as_deref().map(parse_repository_status);
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response())
+}
+
+/// Runs one bounded porcelain status. A repository that is missing, is not a
+/// Git checkout, or takes too long reports nothing rather than failing the
+/// worker view that asked.
+async fn repository_status(workspace: &str) -> Option<String> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args(["status", "--porcelain", "--branch"])
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// What `git status --porcelain --branch` says about a worker's repository.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub(super) struct RepositoryState {
+    /// The checked-out branch, or `None` while `HEAD` is detached.
+    branch: Option<String>,
+    detached: bool,
+    /// Paths differing from `HEAD`, staged or not.
+    changed_paths: usize,
+}
+
+/// Reads one repository's state from a single porcelain status.
+///
+/// Parsed rather than shelled out to twice: the branch header and the change
+/// list come from the same invocation, so the two can never disagree, and a
+/// worker costs one subprocess rather than two.
+fn parse_repository_status(status: &str) -> RepositoryState {
+    let mut branch = None;
+    let mut detached = false;
+    let mut changed_paths = 0;
+    for line in status.lines() {
+        let Some(header) = line.strip_prefix("## ") else {
+            if !line.trim().is_empty() {
+                changed_paths += 1;
+            }
+            continue;
+        };
+        if header.starts_with("HEAD (no branch)") {
+            detached = true;
+            continue;
+        }
+        // `main...origin/main [ahead 1]` names the local branch first.
+        let name = header
+            .split("...")
+            .next()
+            .unwrap_or(header)
+            .split_whitespace()
+            .next()
+            .unwrap_or_default();
+        if !name.is_empty() {
+            branch = Some(name.to_owned());
+        }
+    }
+    RepositoryState {
+        branch,
+        detached,
+        changed_paths,
+    }
+}
+
+#[cfg(test)]
+mod repository_tests {
+    use super::*;
+
+    #[test]
+    fn reads_a_clean_branch() {
+        let state = parse_repository_status("## main...origin/main");
+
+        assert_eq!(state.branch.as_deref(), Some("main"));
+        assert_eq!(state.changed_paths, 0);
+        assert!(!state.detached);
+    }
+
+    #[test]
+    fn counts_every_differing_path_whether_staged_or_not() {
+        let state = parse_repository_status(
+            "## work/thing...origin/work/thing [ahead 2]\n M src/lib.rs\nA  src/new.rs\n?? notes.md\n",
+        );
+
+        assert_eq!(state.branch.as_deref(), Some("work/thing"));
+        assert_eq!(state.changed_paths, 3);
+    }
+
+    #[test]
+    fn reports_a_branch_with_no_upstream() {
+        assert_eq!(
+            parse_repository_status("## local-only").branch.as_deref(),
+            Some("local-only")
+        );
+    }
+
+    #[test]
+    fn names_no_branch_while_head_is_detached() {
+        let state = parse_repository_status("## HEAD (no branch)\n M src/lib.rs");
+
+        assert!(state.detached);
+        assert_eq!(state.branch, None);
+        assert_eq!(state.changed_paths, 1);
+    }
+
+    #[test]
+    fn treats_an_empty_status_as_a_repository_with_nothing_to_say() {
+        assert_eq!(
+            parse_repository_status(""),
+            RepositoryState {
+                branch: None,
+                detached: false,
+                changed_paths: 0,
+            }
+        );
+    }
+}

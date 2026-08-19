@@ -2922,6 +2922,10 @@ fn api_router(state: AppState) -> Router {
             patch(workers::update_worker).delete(workers::remove_worker),
         )
         .route(
+            "/api/v1/workers/{worker_id}/repository",
+            get(workers::worker_repository),
+        )
+        .route(
             "/api/v1/workers/{worker_id}/description-draft",
             post(workers::draft_worker_description),
         )

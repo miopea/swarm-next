@@ -1258,6 +1258,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .runtime-update-worker_engine { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
 .runtime-update-failed { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
 .runtime-update-spinner { width: 10px; height: 10px; border: 2px solid color-mix(in srgb, var(--accent-strong) 35%, transparent); border-top-color: var(--accent-strong); border-radius: 50%; animation: maintenance-spin .9s linear infinite; }
+.worker-repository { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .68rem; white-space: nowrap; }
+.worker-repository-branch { overflow: hidden; max-width: 14ch; text-overflow: ellipsis; font-family: "Atkinson Hyperlegible Mono Variable", Consolas, monospace; }
+.worker-repository-dirty { display: inline-flex; min-width: 15px; height: 15px; align-items: center; justify-content: center; padding: 0 3px; border-radius: 999px; color: var(--panel); background: var(--warn); font-size: .6rem; font-weight: 700; }
 .worker-engaged-elsewhere { flex: 0 0 auto; padding: 2px 9px; border: 1px solid color-mix(in srgb, var(--accent-strong) 45%, var(--line)); border-radius: 999px; color: var(--muted); font-size: .68rem; white-space: nowrap; }
 .worker-unconfirmed { display: inline-flex; width: 16px; height: 16px; flex: 0 0 auto; align-items: center; justify-content: center; border-radius: 50%; color: var(--panel); background: var(--warn); font-size: .62rem; font-weight: 700; }
 .worker-silence { color: var(--quiet); font-weight: 400; font-variant-numeric: tabular-nums; }

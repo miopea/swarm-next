@@ -61,6 +61,8 @@ import {
   type TaskDraftInput,
   type TaskState,
   type TaskUpdateInput,
+  fetchWorkerRepository,
+  type RepositoryState,
   type Worker,
   type WorkspaceChoice,
 } from "./api";
@@ -136,6 +138,7 @@ export function App() {
   const [workerQuery, setWorkerQuery] = useState("");
   const [terminalConnection, setTerminalConnection] = useState<string>();
   const [runtimeUpdate, setRuntimeUpdate] = useState<RuntimeUpdateSummary>();
+  const [repository, setRepository] = useState<RepositoryState | null>();
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
@@ -947,6 +950,20 @@ export function App() {
   });
 
   useEffect(() => {
+    const workerId = activeWorker?.id;
+    if (!operatorToken || !workerId) {
+      setRepository(undefined);
+      return;
+    }
+    let current = true;
+    setRepository(undefined);
+    void fetchWorkerRepository(operatorToken, workerId)
+      .then((state) => { if (current) setRepository(state); })
+      .catch(() => { if (current) setRepository(null); });
+    return () => { current = false; };
+  }, [operatorToken, activeWorker?.id]);
+
+  useEffect(() => {
     if (surface !== "workers" || !activeSessionId) return;
     const frame = requestAnimationFrame(() => {
       terminalWorkspace.focusSession(activeSessionId, shouldFocusTerminalInput());
@@ -1121,6 +1138,19 @@ export function App() {
                 <span className={`task-state state-${activeWorkerWork.current.state}`}>{taskStateLabel(activeWorkerWork.current)}</span>
                 <span className="worker-context-title">{activeWorkerWork.current.title}</span>
               </button>
+              {repository?.branch || repository?.detached ? (
+                <span
+                  className="worker-repository"
+                  title={repository.detached
+                    ? `${repositoryName(activeWorker.workspace)} has a detached HEAD${repository.changed_paths ? `, with ${repository.changed_paths} path(s) differing from HEAD` : ""}`
+                    : `${repositoryName(activeWorker.workspace)} on ${repository.branch}${repository.changed_paths ? `, with ${repository.changed_paths} path(s) differing from HEAD` : ", matching HEAD"}`}
+                >
+                  <span className="worker-repository-branch">{repository.detached ? "detached" : repository.branch}</span>
+                  {repository.changed_paths ? (
+                    <span className="worker-repository-dirty">{repository.changed_paths}</span>
+                  ) : null}
+                </span>
+              ) : null}
               {activeWorkerEngagement ? (
                 <span
                   className={`worker-engaged-elsewhere device-${activeWorkerEngagement.deviceClass}`}

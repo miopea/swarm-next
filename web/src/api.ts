@@ -29,6 +29,7 @@ export type {
 export {
   createWorker,
   draftWorkerDescription,
+  fetchWorkerRepository,
   fetchWorkers,
   fetchWorkspaces,
   improveWorkerDescription,
@@ -160,6 +161,7 @@ export type {
   CreateWorkerInput,
   ProviderKind,
   UpdateWorkerInput,
+  RepositoryState,
   Worker,
   WorkerAttentionState,
   WorkerRole,

@@ -59,6 +59,28 @@ export type UpdateWorkerInput = {
   autostart?: boolean;
 };
 
+export type RepositoryState = {
+  branch: string | null;
+  detached: boolean;
+  changed_paths: number;
+};
+
+/**
+ * Repository state for one worker. Scoped to a single worker deliberately: the
+ * surface that shows it is per-selected-worker, so a large roster never turns
+ * into one Git invocation per row.
+ */
+export async function fetchWorkerRepository(
+  operatorToken: string,
+  workerId: string,
+): Promise<RepositoryState | null> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/workers/${encodeURIComponent(workerId)}/repository`,
+  );
+  return response.json() as Promise<RepositoryState | null>;
+}
+
 export async function fetchWorkers(operatorToken: string): Promise<Worker[]> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/workers");
   return response.json() as Promise<Worker[]>;
