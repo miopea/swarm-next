@@ -180,6 +180,35 @@ which worker is selected and nothing about its work. Reinstating the whole bar
 would return the vertical chrome the phone layout reclaimed, so this needs a
 deliberate choice rather than a default.
 
+### 16. The web suite passed or failed depending on the order it ran in — *fixed*
+
+Not operator-raised. Found while verifying something else: a run reported one
+failure, three re-runs passed, and under `--sequence.shuffle` the failures moved
+around. A suite that passes in one order and fails in another is not evidence
+that anything works.
+
+Three causes, all in the tests:
+
+- Five test files rendered components and never unmounted them. Vitest runs
+  without `globals`, so Testing Library never installs its own cleanup, and
+  those files did not install one either — each test queried a document that
+  still held the previous test's render. Cleanup now happens once in the shared
+  setup, for every file.
+- Three tests answered `fetch` by call order through chained
+  `mockResolvedValueOnce`, which assumes the app issues one fixed sequence of
+  requests. They now answer by URL.
+- Two assertions pinned exact call counts on components that also poll, so a
+  poll landing inside the test rather than after it failed a test about
+  recovery for reasons of scheduling.
+
+Verified by twelve consecutive shuffled runs and one single-worker shuffled run,
+all 404 passing, plus the default order.
+
+One thing this turned up that is worth keeping in mind: answering an unmodelled
+endpoint with an empty object is worse than not answering it, because the
+component then renders against a shape it cannot read. The test that navigates
+into Settings keeps its ordered mock for that reason, and says so.
+
 ## Landed
 
 - The unconfirmed-delivery mark now explains itself where the operator lands.
