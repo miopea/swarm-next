@@ -142,19 +142,44 @@ when text sits unsent at a prompt was proposed and rejected by the operator as
 engineering around a defect. The fix belongs at the cause, not in a detector for
 its failure.
 
-The cause was first recorded here as server-side injection not honouring the
-submission contract the browser implements. That was wrong, and is corrected
-rather than quietly dropped: `submit_terminal_message` already strips the
-trailing carriage return, writes the message, waits for a stable render, and
-sends Enter as a separate write with bounded retries. The actual branch is
-narrower. A collapsed `[Pasted text #N]` chip counts as proof the write
-rendered, but only when it differs from the chip present before the write. When
-that comparison does not hold, marker observation reaches its deadline and the
-delivery is reported uncertain **before any Enter is sent**, which is exactly
-the observed symptom: the briefing sits in the prompt and an operator's own
-Enter submits it. Which comparison failed in the observed case is not yet
-established, and fixing it needs a reproduction rather than a further reading of
-the code.
+The cause has been recorded wrongly here twice, and is corrected again from
+evidence rather than from further reading of the code.
+
+It was first recorded as server-side injection not honouring the submission
+contract the browser implements. That was wrong: `submit_terminal_message`
+already strips the trailing carriage return, waits for a render, and sends Enter
+separately with bounded retries. It was then recorded as the collapsed
+`[Pasted text #N]` comparison failing. That is also wrong for the observed case.
+
+What the evidence establishes, from the durable terminal history and the
+delivery tables on 2026-08-19:
+
+- Two different failures were being treated as one. The Queen automation review
+  that sits on the operator's card was never written to a terminal at all: it
+  deferred every thirty seconds for four minutes because the prompt was
+  occupied, exactly as designed, and was then marked uncertain when an App/API
+  release restarted mid-flight. Its run id appears nowhere in Queen's history,
+  while five earlier run ids do.
+- The unsubmitted briefing the operator saw is a worker outcome, not that
+  review. It was written at 22:04:22 and marked uncertain at 22:04:32 — the ten
+  second marker deadline exactly — with no Enter ever sent. Its text is present
+  in Queen's history, so the write landed and only the confirmation failed.
+
+Three candidate mechanisms have been eliminated rather than assumed:
+
+- The paste chip was not involved. No `[Pasted text #N]` placeholder appears
+  anywhere in that session's history.
+- The marker did not fall outside a size bound. The message is 3,575 bytes
+  against a two megabyte snapshot.
+- The marker did not scroll out of view. The snapshot carries scrollback, not
+  only the visible screen.
+- Output was not preventing the stability window. A resting Queen terminal was
+  measured completely silent across six seconds, so the 750ms stable render it
+  waits for is reachable.
+
+What remains unexplained is why a marker present in the snapshot was not
+observed within ten seconds. The next step is a reproduction with the delivery
+path logging what it actually saw, not another reading of the code.
 
 It would also have required amending an accepted invariant — that `Awaiting you`
 is driven by an explicit durable decision and never by terminal-text guessing —
