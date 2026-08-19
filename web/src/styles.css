@@ -1253,6 +1253,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queen-automation-chip.online { border-color: color-mix(in srgb, var(--good) 48%, var(--line)); color: var(--good); background: var(--good-soft); }
 .queen-automation-chip.offline { border-color: color-mix(in srgb, var(--bad) 48%, var(--line)); color: var(--bad); background: var(--bad-soft); }
 .queen-autonomy-chip { min-height: 30px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 999px; color: var(--text); background: var(--accent-soft); font-size: .72rem; white-space: nowrap; }
+.runtime-update { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--panel-soft); font-size: .68rem; font-weight: 500; }
+.runtime-update:hover { border-color: var(--accent-strong); background: var(--panel-raised); }
+.runtime-update-worker_engine { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.runtime-update-failed { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
+.runtime-update-spinner { width: 10px; height: 10px; border: 2px solid color-mix(in srgb, var(--accent-strong) 35%, transparent); border-top-color: var(--accent-strong); border-radius: 50%; animation: maintenance-spin .9s linear infinite; }
 .worker-silence { color: var(--quiet); font-weight: 400; font-variant-numeric: tabular-nums; }
 .brand-lockup { position: relative; }
 .brand-diagnostics { position: absolute; top: 0; right: 0; width: 28px; height: 28px; color: var(--quiet); }
@@ -1863,4 +1868,4 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .maintenance-progress span { color: var(--muted); font-size: .75rem; line-height: 1.45; }
 .maintenance-spinner { width: .9rem; height: .9rem; flex: 0 0 auto; margin-top: .12rem; border: 2px solid color-mix(in srgb, var(--honey) 30%, transparent); border-top-color: var(--honey-deep); border-radius: 50%; animation: maintenance-spin .8s linear infinite; }
 @keyframes maintenance-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .maintenance-spinner { animation: none; border-top-color: var(--honey-deep); } }
+@media (prefers-reduced-motion: reduce) { .maintenance-spinner { animation: none; border-top-color: var(--honey-deep); } .runtime-update-spinner { animation: none; border-top-color: var(--accent-strong); } }

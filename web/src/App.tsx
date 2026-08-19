@@ -89,6 +89,7 @@ import { normalizeRosterQuery, orphanSessionMatchesRosterQuery, repositoryName, 
 import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 import { useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
+import { runtimeUpdateSummary, type RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
 import { workerEngineMatches } from "./runtime/workerEngine";
 
 const loadTerminalView = () => import("./terminal/TerminalView");
@@ -134,6 +135,7 @@ export function App() {
   const [workerVisibility, setWorkerVisibility] = useState<WorkerVisibility>(readWorkerVisibility);
   const [workerQuery, setWorkerQuery] = useState("");
   const [terminalConnection, setTerminalConnection] = useState<string>();
+  const [runtimeUpdate, setRuntimeUpdate] = useState<RuntimeUpdateSummary>();
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
@@ -417,12 +419,16 @@ export function App() {
   async function refreshControlRoom(recoverTerminal = false) {
     if (!operatorToken) return;
     await perform(async () => {
-      const [controlRoom, automation] = await Promise.all([
+      const [controlRoom, automation, health, host, development] = await Promise.all([
         loadControlRoom(operatorToken),
         fetchQueenAutomationStatus(operatorToken).catch(() => undefined),
+        fetchHealth().catch(() => undefined),
+        fetchTerminalHostStatus(operatorToken).catch(() => undefined),
+        fetchDevelopmentRuntime(operatorToken).catch(() => undefined),
       ]);
       controlRoomModel.replace(controlRoom);
       if (automation) setQueenAutomation(automation);
+      setRuntimeUpdate(runtimeUpdateSummary(health, host, development));
       if (recoverTerminal && activeSessionId) {
         terminalWorkspace.resetSessionRenderer(activeSessionId);
         setTerminalRevision((current) => current + 1);
@@ -854,8 +860,16 @@ export function App() {
     ),
     [tasks],
   );
-  function openTaskDetail(taskId: string) {
-    setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 }));
+  /// Shows the board as this worker's queue: filtered to that worker and
+  /// ordered by state, which is the order the roster and the context chip
+  /// already imply. A focused task is pointless behind a filter that hides it,
+  /// so both entry points set the filter rather than only the chip's target.
+  function openWorkerQueue(workerId: string, focusTaskId?: string) {
+    setTaskWorkerFilter(workerId);
+    setTaskSort("status");
+    if (focusTaskId) {
+      setTaskFocus((current) => ({ id: focusTaskId, request: (current?.request ?? 0) + 1 }));
+    }
     setSurface("tasks");
   }
   const workByWorker = useMemo(() => {
@@ -945,6 +959,18 @@ export function App() {
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
           <div className="brand-copy"><p className="eyebrow">Swarm Next</p><h1>Control room</h1><HiveContextIndicator identity={hiveIdentity} /></div>
+          {operatorToken && runtimeUpdate && runtimeUpdate.kind !== "none" ? (
+            <button
+              type="button"
+              className={`runtime-update runtime-update-${runtimeUpdate.kind}`}
+              title={runtimeUpdate.detail}
+              aria-label={`${runtimeUpdate.label}. ${runtimeUpdate.detail}`}
+              onClick={() => openSettings("settings-runtime")}
+            >
+              {runtimeUpdate.busy ? <span className="runtime-update-spinner" aria-hidden="true" /> : null}
+              {runtimeUpdate.label}
+            </button>
+          ) : null}
           {operatorToken ? (
             <button
               type="button"
@@ -1089,7 +1115,7 @@ export function App() {
                 type="button"
                 className="worker-context-task"
                 title={activeWorkerWork.current.title}
-                onClick={() => { openTaskDetail(activeWorkerWork.current!.id); }}
+                onClick={() => { openWorkerQueue(activeWorker.id, activeWorkerWork.current!.id); }}
               >
                 <span className={`task-state state-${activeWorkerWork.current.state}`}>{taskStateLabel(activeWorkerWork.current)}</span>
                 <span className="worker-context-title">{activeWorkerWork.current.title}</span>
@@ -1100,7 +1126,7 @@ export function App() {
                   className="worker-context-queue"
                   aria-label={`Show all ${activeWorkerWork.openCount} open tasks for ${activeWorker.name}`}
                   title={activeWorkerWork.summary}
-                  onClick={() => { setTaskWorkerFilter(activeWorker.id); setSurface("tasks"); }}
+                  onClick={() => { openWorkerQueue(activeWorker.id); }}
                 >+{activeWorkerWork.openCount - 1}</button>
               ) : null}
             </div>
