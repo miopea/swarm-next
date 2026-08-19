@@ -518,7 +518,11 @@ test("opens an editable task detail with Jira description and image on double cl
 });
 
 test("makes a partial Jira image failure visible and retryable", async () => {
-  let attachmentAttempts = 0;
+  // Keyed on whether the operator has retried, not on how many times the
+  // component happened to fetch. Counting calls made this test race: a second
+  // fetch before the assertion would recover the image and the failure state
+  // under test would never appear.
+  let imagesRecovered = false;
   Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn().mockReturnValue("blob:recovered-image") });
   Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
   vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
@@ -530,9 +534,9 @@ test("makes a partial Jira image failure visible and retryable", async () => {
       }), { status: 200, headers: { "Content-Type": "application/json" } }));
     }
     if (url.includes("/attachments/")) {
-      attachmentAttempts += 1;
-      if (attachmentAttempts === 1) return Promise.resolve(new Response("temporary failure", { status: 502 }));
-      return Promise.resolve(new Response(new Blob(["image"], { type: "image/png" }), { status: 200 }));
+      return imagesRecovered
+        ? Promise.resolve(new Response(new Blob(["image"], { type: "image/png" }), { status: 200 }))
+        : Promise.resolve(new Response("temporary failure", { status: 502 }));
     }
     return Promise.resolve(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }));
   }));
@@ -541,7 +545,10 @@ test("makes a partial Jira image failure visible and retryable", async () => {
   fireEvent.doubleClick(screen.getByRole("article", { name: task.title }));
   const dialog = await screen.findByRole("dialog", { name: "Review and edit task" });
   expect(await within(dialog).findByRole("alert")).toHaveTextContent("1 linked image could not be loaded");
-  expect(within(dialog).getByText("evidence.png")).toBeInTheDocument();
+  // Scoped to the attachment list: once the retry succeeds the same filename
+  // also captions the recovered image, and an unscoped query then matches both.
+  expect(within(within(dialog).getByRole("list", { name: "Attachments" })).getByText("evidence.png")).toBeInTheDocument();
+  imagesRecovered = true;
   fireEvent.click(within(dialog).getByRole("button", { name: "Retry images" }));
   expect(await within(dialog).findByRole("img", { name: "evidence.png" })).toHaveAttribute("src", "blob:recovered-image");
   expect(within(dialog).queryByText(/linked image could not be loaded/)).not.toBeInTheDocument();

@@ -175,7 +175,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
           {attachments.length > 0 && (
             <section>
               <h3>Attachments <span>{attachments.length}</span></h3>
-              <ul className="task-detail-attachments">
+              <ul className="task-detail-attachments" aria-label="Attachments">
                 {attachments.map((attachment) => <li key={attachment.id}><span>{attachment.filename}</span><small>{formatBytes(attachment.byte_size)} · {attachment.media_type}</small></li>)}
               </ul>
             </section>
