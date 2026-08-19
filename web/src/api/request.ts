@@ -1,6 +1,11 @@
 export const BROWSER_SESSION_AUTH = "browser-session-cookie";
 
-const TRANSIENT_RUNTIME_STATUSES = new Set([502, 503, 504]);
+// 502/503/504 are the origin restarting or slow. 522/523/524 are the same
+// family reported by a proxy in front of it — connection timed out, origin
+// unreachable, origin took too long. A 524 is what an operator saw while the
+// API was being replaced, on a request that was never retried because this set
+// did not recognise it.
+const TRANSIENT_RUNTIME_STATUSES = new Set([502, 503, 504, 522, 523, 524]);
 
 export class RuntimeRequestError extends Error {
   constructor(public readonly status: number, message: string) {

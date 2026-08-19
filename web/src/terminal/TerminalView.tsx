@@ -37,6 +37,9 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
   const [connectionState, setConnectionState] = useState<TerminalConnectionState>("connecting");
   const [detail, setDetail] = useState<string>();
   const [attachmentState, setAttachmentState] = useState<"idle" | "uploading" | "ready" | "error">("idle");
+  // Why it failed, not just that it did. "Image could not be added" on its own
+  // left an operator with nothing to act on and nothing to report.
+  const [attachmentError, setAttachmentError] = useState<string>();
   const [atBottom, setAtBottom] = useState(true);
   // Held in a ref so a new callback identity cannot detach and reattach the
   // terminal: connection lifetime must not follow a React prop.
@@ -79,11 +82,13 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
 
   async function addImage(image: File) {
     setAttachmentState("uploading");
+    setAttachmentError(undefined);
     try {
       const path = await uploadTerminalImage(operatorToken, session.session_id, image);
       controller.sendInput(terminalAttachmentPaste(path));
       setAttachmentState("ready");
-    } catch {
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : undefined);
       setAttachmentState("error");
     }
   }
@@ -127,7 +132,7 @@ export default function TerminalView({ session, operatorToken, onStop, busy, can
           {detail && <small>{detail}</small>}
           {attachmentState !== "idle" && (
             <small className={`attachment-state attachment-${attachmentState}`} role="status">
-              {attachmentState === "uploading" ? "Adding image…" : attachmentState === "ready" ? "Image added · press Enter when ready" : "Image could not be added"}
+              {attachmentState === "uploading" ? "Adding image…" : attachmentState === "ready" ? "Image added · press Enter when ready" : attachmentError ? `Image could not be added — ${attachmentError}. Try again.` : "Image could not be added. Try again."}
             </small>
           )}
         </div>

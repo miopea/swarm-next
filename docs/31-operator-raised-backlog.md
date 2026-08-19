@@ -74,12 +74,23 @@ engine card while a build runs, and separates a build that has been asked for
 from one that is under way. Previously a build changed only the wording on the
 card, which reads as another resting state.
 
-### 13. Adding an image fails once, then succeeds on retry
+### 13. Adding an image fails once, then succeeds on retry — *partly fixed*
 
 Raised as: "image could not be added" on the first attempt, worked on the
 second. Seen shortly after a worker-engine update, so an API restart mid-upload
 is a candidate, but the retry-succeeds shape means this needs reproducing before
 it is diagnosed.
+
+Two things found without reproducing it. The upload was the one runtime call
+that did not go through the shared transient-failure recovery, so an API
+restarting underneath it failed outright while every other call rode it out —
+the operator was retrying by hand what the runtime already does for itself.
+And the proxy timeout the operator saw the same afternoon, `524`, was not in
+the set of statuses treated as transient at all, so nothing retried it either.
+
+The cause of this particular failure is still unproven: the reason was
+discarded by an empty `catch`. It is now shown, so the next occurrence
+identifies itself.
 
 ### 14. Three workers claim the operator at once — *fixed*
 

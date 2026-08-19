@@ -105,6 +105,18 @@ test("recovers a saved browser session after bounded gateway failures", async ()
   expect(operation).toHaveBeenCalledTimes(3);
 });
 
+test("treats a proxy timeout in front of the API as transient", async () => {
+  // An operator saw "Runtime request returned 524" while the API was being
+  // replaced. Nothing retried it, because only the origin's own 502/503/504
+  // counted as transient.
+  const operation = vi.fn()
+    .mockRejectedValueOnce(new RuntimeRequestError(524, "Runtime request returned 524"))
+    .mockResolvedValue("restored");
+
+  await expect(recoverTransientRuntime(operation, [0, 0])).resolves.toBe("restored");
+  expect(operation).toHaveBeenCalledTimes(2);
+});
+
 test("does not retry invalid credentials", async () => {
   const operation = vi.fn().mockRejectedValue(new RuntimeRequestError(401, "unauthorized"));
 
