@@ -196,3 +196,61 @@ indistinguishable.
 Operator answers were collected in a four-question interview on 2026-08-18 —
 using the very mechanism this spec asks to be built into the system, which is the
 argument for it.
+
+
+---
+
+## 7. Delivered — 2026-08-20
+
+Built across `82b5912` (record and store), `87b4bd2` (inbox surface),
+`ed715fe` (delivery), `8b0044b` (held-session visibility and deadlines),
+`d9dfe10` (the summary field), and `d702c9d`.
+
+### Acceptance, measured
+
+| Criterion (section 4) | Status |
+| --- | --- |
+| A worker files a request carrying `questions`, the operator answers, the answers reach the asking worker intact — end to end | **Demonstrated.** Decision `01a01ffc` filed by this worker, answered in the inbox, delivered to its terminal at 16:41:09 with the answers matching the record. |
+| A request without `questions` behaves identically to today | **Demonstrated.** Every other decision resolved today used that path unchanged. |
+| A free-text answer matching none of the declared options survives unmodified | **Unit-proven only.** The operator chose offered options both times. The storage and rendering are covered by tests; the delivery path is the same one proven above, so the untested variable is the string content. |
+| An open interview is not reported as stale, with the old behaviour shown first | **Demonstrated.** `f224968` asserts one stale candidate before the request exists and none after. |
+| A held session resumes on answer delivery without a manual wake | **Demonstrated.** The answer arrived with no wake. |
+| Answering is visible in the audit trail at button fidelity | **Demonstrated.** `resolution_action: answered`, the surface, and the answers are all recorded. |
+| The section 2.2 open questions are each answered explicitly | **Done.** All four, in code and in tests. |
+
+### The section 2.2 answers
+
+1. **Questions and actions are mutually exclusive.** A record is a ruling or an
+   interview. Both would allow a record whose button says one thing and whose
+   answers say another, with no defined precedence.
+2. **Bounded to 4 questions, 2–4 options each**, mirroring `AskUserQuestion`.
+   Headers must be unique because they key the answers.
+3. **Free text survives.** An answer matching nothing offered is the case the
+   asker failed to guess, which is why interviews exist.
+4. **Partial answers do not resolve.** A worker holding its session waits for
+   the whole set; half an answer resumes it with an incomplete picture and no
+   way to ask for the rest.
+
+Section 3.3 is answered too: dismissing an interview requires a reason, which
+is the failure that opened this spec.
+
+### What this cost to learn
+
+Two defects surfaced only because the demonstration was attempted, and neither
+was visible to any unit test:
+
+- Requiring `summary` broke **every already-connected worker**, because a
+  worker's tool schema is fixed when its MCP session connects. Tests construct
+  the input struct directly and never see it.
+- `parse` reported every unreadable argument as an authorisation failure, so
+  the symptom was "this agent is not authorized" for a missing field.
+
+Both fixed in `d702c9d`. The spec's insistence that unit tests are not evidence
+for this criterion was correct.
+
+### Extended beyond the spec
+
+Any pending request — not only an interview — can now be answered in the
+operator's own words, after they hit exactly the failure this spec describes on
+a button-shaped request. Recorded under one reserved key with the same
+`answered` action and the same delivery.
