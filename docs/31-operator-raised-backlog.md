@@ -442,6 +442,21 @@ indicator stops reporting that case at all: uncommitted changes at the same
 revision are work in progress, not an update waiting, and an indicator that
 cannot go quiet while anyone is editing the checkout is not an indicator.
 
+### 30. The runtime pill said nothing about a provider update — *fixed*
+
+Raised as: a Claude update notification arrived, the settings page detected it
+properly, and the header pill said nothing — there should be one for a
+Claude/Codex update in that same area.
+
+This was item 21's detection working on real data for the first time: the card
+correctly reported Claude 2.1.237 installed with 8 running workers started
+before it. Only the pill was missing.
+
+Added, ranked below a worker engine update and above App and API. All three ask
+for a restart, but replacing the engine also restarts the providers, and unlike
+an App and API release a provider update is installed and running **nowhere**
+until each worker restarts.
+
 ### 26. An imported email task woke its worker and then nothing happened — *fixed*
 
 Raised as: an email task was imported for a sleeping worker; the wake worked and

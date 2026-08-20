@@ -1,7 +1,7 @@
-import type { DevelopmentRuntime, Health, TerminalHostStatus } from "../api";
+import type { DevelopmentRuntime, Health, SupersededProvider, TerminalHostStatus } from "../api";
 import { workerEngineUpdateRequired } from "./workerEngine";
 
-export type RuntimeUpdateKind = "none" | "building" | "failed" | "app" | "worker_engine";
+export type RuntimeUpdateKind = "none" | "building" | "failed" | "app" | "worker_engine" | "provider";
 
 export type RuntimeUpdateSummary = {
   kind: RuntimeUpdateKind;
@@ -41,6 +41,7 @@ export function runtimeUpdateSummary(
   health: Health | undefined,
   host: TerminalHostStatus | undefined,
   development: DevelopmentRuntime | undefined,
+  superseded: SupersededProvider[] = [],
 ): RuntimeUpdateSummary {
   if (host?.draining) {
     return {
@@ -87,6 +88,22 @@ export function runtimeUpdateSummary(
   // while anyone is editing the checkout.
   const onlyUncommitted = development?.source_dirty
     && development.source_revision === development.deployed_source_revision;
+  // Ranked below the worker engine and above App and API: like an engine
+  // replacement it needs a restart to take effect, and unlike an App and API
+  // release it is not running anywhere until each worker restarts.
+  if (superseded.length > 0) {
+    const workers = new Set(superseded.flatMap((entry) => entry.worker_ids)).size;
+    const named = superseded
+      .map((entry) => `${entry.provider === "codex" ? "Codex" : "Claude"}${entry.version ? ` ${entry.version}` : ""}`)
+      .join(" and ");
+    return {
+      kind: "provider",
+      label: "Provider update",
+      detail: `${named} is installed, and ${workers} running worker${workers === 1 ? "" : "s"} started before that, so ${workers === 1 ? "it is" : "they are"} still running the older release.`,
+      busy: false,
+    };
+  }
+
   if (development?.enabled && development.reload_available && !onlyUncommitted) {
     const revision = development.source_revision?.slice(0, 7);
     return {
@@ -116,7 +133,8 @@ export function nextRuntimeUpdate(
   health: Health | undefined,
   host: TerminalHostStatus | undefined,
   development: DevelopmentRuntime | undefined,
+  superseded: SupersededProvider[] = [],
 ): RuntimeUpdateSummary | undefined {
   if (!health && !host && !development) return previous;
-  return runtimeUpdateSummary(health, host, development);
+  return runtimeUpdateSummary(health, host, development, superseded);
 }

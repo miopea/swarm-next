@@ -148,3 +148,36 @@ test("still reports an update when the working copy is a different commit", () =
 
   expect(summary.kind).toBe("app");
 });
+
+test("reports a provider update, which is installed and running nowhere", () => {
+  // The settings card detected Claude 2.1.237 with eight workers behind it and
+  // the header said nothing. A provider update is the one that is installed and
+  // running nowhere until each worker restarts.
+  const summary = runtimeUpdateSummary(health("same"), host("same"), development({}), [
+    { provider: "claude_code", version: "2.1.237", installed_at: 1_000, worker_ids: ["a", "b", "c"] },
+  ]);
+
+  expect(summary.kind).toBe("provider");
+  expect(summary.label).toBe("Provider update");
+  expect(summary.detail).toContain("Claude 2.1.237 is installed");
+  expect(summary.detail).toContain("3 running workers started before that");
+});
+
+test("ranks a worker engine update above a provider one", () => {
+  // Both need a restart; replacing the engine is the more fundamental of the
+  // two, and doing it also restarts the providers.
+  const summary = runtimeUpdateSummary(health("new"), host("old"), development({}), [
+    { provider: "claude_code", version: "2.1.237", installed_at: 1_000, worker_ids: ["a"] },
+  ]);
+
+  expect(summary.kind).toBe("worker_engine");
+});
+
+test("counts a worker once when both providers are behind", () => {
+  const summary = runtimeUpdateSummary(health("same"), host("same"), development({}), [
+    { provider: "claude_code", version: "2.1.237", installed_at: 1, worker_ids: ["a", "b"] },
+    { provider: "codex", version: null, installed_at: 1, worker_ids: ["b"] },
+  ]);
+
+  expect(summary.detail).toContain("2 running workers");
+});
