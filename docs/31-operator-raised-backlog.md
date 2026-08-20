@@ -826,6 +826,41 @@ while chasing a timing failure, is two changes at once.
 
 Verified by five full runs and three shuffled runs, all 451 passing.
 
+### 41. Requiring a new field broke every already-connected worker — *fixed*
+
+Not operator-raised. Found by attempting the end-to-end demonstration spec
+section 4 requires for `01a016be`, which is exactly what that demonstration
+exists to catch: every unit test passed, because they build the input struct
+directly and never through a client holding an older schema.
+
+Filing a decision through MCP returned **"this agent is not authorized for that
+outcome"**. Authority was never in question — the same refusal came back with
+the `task_id` removed, which skips the only authority check on that path.
+
+Two defects, one inside the other.
+
+**`parse` reported every unreadable argument as an authorisation failure.** A
+caller told it lacks authority does not retry with a corrected payload; it
+escalates or gives up. This cost a long investigation into permissions that
+were never involved. It now says what could not be read and points at the
+schema.
+
+**Requiring `summary` made the decision path unusable for running workers.**
+Added in `d9dfe10` with no serde default, so a client that connected before the
+field existed — holding a schema without it, and `additionalProperties: false`
+— strips the field, and deserialization fails. Every already-running worker was
+unable to file *any* decision until its MCP session reconnected. That was live
+across the fleet from the moment `d9dfe10` deployed.
+
+The field is now tolerated at deserialization and still refused by the store,
+which already had a message saying what is wanted. Required for clients that
+can see it, actionable for clients that cannot.
+
+Worth carrying forward: a worker's tool schema is fixed when its MCP session
+connects. Any change that makes a field required is a breaking change for every
+worker already running, and no test that constructs the input struct directly
+can see it.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.

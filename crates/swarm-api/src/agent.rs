@@ -811,8 +811,19 @@ fn structured<T: serde::Serialize>(value: T) -> Result<CallToolResult, Applicati
         })
 }
 
+/// Reads a tool's arguments, saying what was wrong with them when it cannot.
+///
+/// This used to report every malformed argument as an authorisation failure.
+/// That is a different claim, and a misleading one: a caller told it is not
+/// authorized does not retry with a corrected payload, it escalates or gives
+/// up. A missing field cost a long investigation into permissions that were
+/// never in question.
 fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, ApplicationError> {
-    serde_json::from_value(value).map_err(|_| ApplicationError::NotAuthorized)
+    serde_json::from_value(value).map_err(|error| {
+        ApplicationError::Store(TaskStoreError::IntegrityFailure(format!(
+            "The arguments for this tool could not be read: {error}. Check the tool's schema; a field may be missing or the wrong type."
+        )))
+    })
 }
 
 #[derive(Deserialize)]
@@ -918,6 +929,13 @@ struct RequestDecisionInput {
     /// turns on it. Required, and short: the reason, risk and evidence around
     /// it may each run to ten thousand characters, and the operator reads this
     /// first.
+    ///
+    /// Defaulted at this layer even though it is required, because a client
+    /// that connected before the field existed holds a schema without it and
+    /// strips it from the call. Rejecting at deserialization made every such
+    /// worker unable to file any decision at all; the store still refuses an
+    /// empty one, and says so in terms the caller can act on.
+    #[serde(default)]
     summary: String,
     suggested_action: String,
     /// Empty when the record is an interview: a record is one or the other.
@@ -1738,6 +1756,44 @@ mod tests {
         );
         let status = store.queen_automation_status(13).unwrap();
         assert_eq!(status.outcome, Some(QueenAutomationOutcome::NeedsOperator));
+    }
+
+    #[test]
+    fn unreadable_arguments_say_what_is_wrong_rather_than_claiming_no_authority() {
+        // Observed live: a worker filing a decision was told "this agent is not
+        // authorized for that outcome". Its authority was never in question —
+        // its client held a tool schema from before `summary` existed and
+        // stripped the field, so deserialization failed and every failure here
+        // was reported as an authorisation problem. A caller told it lacks
+        // authority does not retry with a corrected payload.
+        let refused = parse::<RequestDecisionInput>(json!({ "kind": "input" }));
+
+        let message = match refused {
+            Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(message))) => message,
+            Err(other) => panic!("expected a readable argument error, got {other:?}"),
+            Ok(_) => panic!("arguments with no title should not parse"),
+        };
+        assert!(message.contains("could not be read"));
+        assert!(message.contains("schema"));
+    }
+
+    #[test]
+    fn a_client_that_predates_the_summary_field_can_still_file() {
+        // A client connected before a field was added holds a schema without it
+        // and strips it from the call. Rejecting that at deserialization left
+        // every already-running worker unable to file any decision at all, so
+        // the field is tolerated here and refused by the store with a message
+        // the caller can act on.
+        let parsed = parse::<RequestDecisionInput>(json!({
+            "kind": "input",
+            "title": "Something to decide",
+            "reason": "Because",
+            "suggested_action": "Ship",
+            "allowed_actions": ["Ship"],
+        }))
+        .expect("an older client's call is readable");
+
+        assert_eq!(parsed.summary, "");
     }
 
     #[tokio::test]
