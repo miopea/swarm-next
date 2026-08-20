@@ -45,6 +45,19 @@ enum MarkerObservation {
         sequence: u64,
         paste_placeholder: Option<Vec<u8>>,
     },
+    /// Seen on screen, but never still for long enough to call settled.
+    ///
+    /// The message is demonstrably in the prompt — the operator can read it —
+    /// and the bytes were already written and acknowledged before any of this
+    /// began. Giving up here does not undo the write; it leaves the message
+    /// sitting in the prompt for a person to press Enter on, which is exactly
+    /// what was reported three times. Sending Enter cannot make that worse: it
+    /// either lands, or the delivery reports the same uncertainty it would
+    /// have reported anyway.
+    RenderedUnsettled {
+        sequence: u64,
+        paste_placeholder: Option<Vec<u8>>,
+    },
     Rejected {
         code: String,
         message: String,
@@ -307,6 +320,18 @@ async fn submit_terminal_message(
             sequence,
             paste_placeholder,
         } => (sequence, paste_placeholder),
+        // Never settled, but plainly there. Finish the delivery rather than
+        // leaving the operator a prompt to press Enter on.
+        MarkerObservation::RenderedUnsettled {
+            sequence,
+            paste_placeholder,
+        } => {
+            tracing::info!(
+                observed_sequence = sequence,
+                "coordination message never settled; submitting it rather than stranding it"
+            );
+            (sequence, paste_placeholder)
+        }
         MarkerObservation::Rejected { code, message } => {
             return Ok(TerminalSubmission::Rejected { code, message });
         }
@@ -361,6 +386,11 @@ async fn observe_stable_marker(
 ) -> Result<MarkerObservation, swarm_terminal::IpcError> {
     let render_deadline = Instant::now() + Duration::from_secs(10);
     let mut rendered_stability = RenderStability::default();
+    // Whether the message was ever on screen, as opposed to never arriving at
+    // all. The two failures are different: one leaves a prompt a person must
+    // press Enter on, the other leaves nothing to press Enter for.
+    let mut ever_rendered = false;
+    let mut last_rendered: Option<(u64, Option<Vec<u8>>)> = None;
     loop {
         sleep(Duration::from_millis(50)).await;
         let snapshot = match client
@@ -406,7 +436,10 @@ async fn observe_stable_marker(
                 paste_placeholder: new_claude_paste.map(<[u8]>::to_vec),
             });
         }
-        if !marker_is_visible && !new_claude_paste_is_visible {
+        if marker_is_visible || new_claude_paste_is_visible {
+            ever_rendered = true;
+            last_rendered = Some((snapshot.sequence, new_claude_paste.map(<[u8]>::to_vec)));
+        } else {
             rendered_stability.reset();
         }
         if Instant::now() >= render_deadline {
@@ -422,9 +455,16 @@ async fn observe_stable_marker(
                 new_claude_paste_is_visible,
                 had_baseline_paste = baseline_paste_placeholder.is_some(),
                 snapshot_bytes = snapshot.bytes.len(),
+                ever_rendered,
                 "coordination message render was not confirmed before the deadline"
             );
-            return Ok(MarkerObservation::Uncertain);
+            return Ok(match last_rendered {
+                Some((sequence, paste_placeholder)) => MarkerObservation::RenderedUnsettled {
+                    sequence,
+                    paste_placeholder,
+                },
+                None => MarkerObservation::Uncertain,
+            });
         }
     }
 }
@@ -980,5 +1020,51 @@ mod tests {
             groups[0].iter().map(|(_, n)| *n).collect::<Vec<_>>(),
             [1, 2, 3]
         );
+    }
+
+    /// Reported three times, most recently live: "The prompt was sitting in the
+    /// command line without enter being hit. I hit enter and she is working on
+    /// it right now."
+    ///
+    /// The bytes are written and acknowledged before the render is ever
+    /// watched. So giving up on an unsettled render does not undo anything —
+    /// it leaves the message in the prompt for a person to submit by hand,
+    /// which is precisely what kept happening on a terminal too busy to hold
+    /// still for 750ms inside a ten-second window.
+    ///
+    /// The distinction that matters is whether it was ever on screen at all.
+    #[test]
+    fn a_message_seen_but_never_still_is_submitted_rather_than_stranded() {
+        let seen = MarkerObservation::RenderedUnsettled {
+            sequence: 42,
+            paste_placeholder: None,
+        };
+        // The caller treats this as rendered: it proceeds to send Enter.
+        assert!(matches!(
+            seen,
+            MarkerObservation::RenderedUnsettled { sequence: 42, .. }
+        ));
+
+        // Never on screen is a different answer, and still refuses to guess:
+        // there is nothing demonstrably in the prompt to submit.
+        assert!(matches!(
+            MarkerObservation::Uncertain,
+            MarkerObservation::Uncertain
+        ));
+    }
+
+    /// The stability window itself is unchanged: a settled render is still what
+    /// the happy path waits for, and a gap still resets it.
+    #[test]
+    fn a_render_that_flickers_does_not_count_as_settled() {
+        let start = Instant::now();
+        let required = Duration::from_millis(750);
+        let mut stability = RenderStability::default();
+        assert!(!stability.observe(start, required));
+        assert!(!stability.observe(start + Duration::from_millis(500), required));
+        stability.reset();
+        // The clock restarts from the reset, so the earlier time no longer counts.
+        assert!(!stability.observe(start + Duration::from_millis(900), required));
+        assert!(stability.observe(start + Duration::from_millis(1_700), required));
     }
 }
