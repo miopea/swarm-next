@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
@@ -41,7 +41,30 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   const [activityFailed, setActivityFailed] = useState(false);
   const taskNames = useMemo(() => new Map(tasks.map((task) => [task.id, task.title])), [tasks]);
   const workerNames = useMemo(() => new Map(workers.map((worker) => [worker.id, worker.name])), [workers]);
-  const visible = decisions.filter((decision) => showResolved || decision.state === "pending");
+  // A pending card the operator can already see keeps its place. The server
+  // orders decisions newest first, so without this an arrival during an
+  // ordinary refresh is inserted ABOVE the card being read and shoves it down
+  // a whole card height — between reading an action and pressing it. Scroll
+  // and focus were held still earlier; the list itself was still reflowing.
+  //
+  // New arrivals land at the bottom and announce themselves through the count.
+  // Resolved history keeps the server's order, which is the useful one there.
+  const pendingOrder = useRef<string[]>([]);
+  const visible = useMemo(() => {
+    const shown = decisions.filter((decision) => showResolved || decision.state === "pending");
+    const stillPending = new Set(
+      shown.filter((decision) => decision.state === "pending").map((decision) => decision.id),
+    );
+    pendingOrder.current = pendingOrder.current.filter((id) => stillPending.has(id));
+    for (const decision of shown) {
+      if (decision.state === "pending" && !pendingOrder.current.includes(decision.id)) {
+        pendingOrder.current.push(decision.id);
+      }
+    }
+    const place = (decision: DecisionRequest) =>
+      decision.state === "pending" ? pendingOrder.current.indexOf(decision.id) : Number.MAX_SAFE_INTEGER;
+    return [...shown].sort((first, second) => place(first) - place(second));
+  }, [decisions, showResolved]);
   const pending = decisions.filter((decision) => decision.state === "pending").length;
   const pendingTotal = pending + additionalPendingCount;
 

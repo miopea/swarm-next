@@ -367,3 +367,32 @@ test("leads with what is being decided and folds the argument behind it", () => 
   expect(argument).toBeInTheDocument();
   expect(argument.closest("details")).not.toHaveAttribute("open");
 });
+
+test("does not push a card the operator is reaching for down the page", () => {
+  // The remaining half of the same defect. Scroll and focus were fixed; the
+  // list itself still reflowed. The server orders pending decisions newest
+  // first, so a decision arriving during an ordinary refresh is inserted ABOVE
+  // the ones already on screen and shoves every card below it down by a whole
+  // card. An operator mid-reach for an action has that action move, and the
+  // click lands on whatever slid into its place — which is exactly the report
+  // that opened this task.
+  const arriving = { ...pending, id: "decision-9", title: "Arrived while reading", created_at: 9, updated_at: 9 };
+  const { rerender } = render(
+    <DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />,
+  );
+  expect(order()).toEqual([pending.id]);
+
+  // The server's order, newest first, as it would arrive from a poll.
+  rerender(
+    <DecisionInbox decisions={[arriving, pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />,
+  );
+
+  // The card that was already on screen has not moved; the new one is below it.
+  expect(order()).toEqual([pending.id, arriving.id]);
+});
+
+function order() {
+  return Array.from(document.querySelectorAll("[data-decision-id]")).map(
+    (card) => card.getAttribute("data-decision-id"),
+  );
+}

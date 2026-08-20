@@ -985,6 +985,33 @@ blanket denial.
 A worker's MCP tool schema is fixed when the session connects, so Scout keeps
 the old list until it is restarted.
 
+### 48. The decision list reflows under the operator — *fixed, with a second door still open*
+
+Continues task `01a016d2`. `9668d65` held scroll and focus still; the list
+itself was still moving.
+
+The server orders decisions `created_at DESC`, newest first. A decision
+arriving during an ordinary poll is therefore inserted **above** the cards
+already on screen and shoves every one of them down by a whole card — between
+the operator reading an action and pressing it. On a busy Hive that is not an
+edge case. Shown failing first: with one card on screen and one arriving, the
+arrival took the top slot.
+
+Fixed: a pending card the operator can already see keeps its place, and
+arrivals land at the bottom and announce themselves through the count.
+Resolved history keeps the server's order, which is the useful one there.
+
+**Still open, same failure through a different door.** Three attention cards
+sit above the decision list in `web/src/App.tsx:1367` — unanswered email, Queen
+automation, and Apiary assistance. Each appears and disappears on live state,
+and Queen's status changes on its own cycle. Any of them mounting pushes the
+entire decision list down exactly as an inserted card did.
+
+Not fixed here because the fix is a layout decision rather than a bug fix:
+either the cards move below the list, which reads oddly against the "nothing
+needs your attention" empty state, or the list gets an anchored position. That
+is the operator's call on how the page should read, not mine to take silently.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.
