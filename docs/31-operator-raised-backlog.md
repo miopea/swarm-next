@@ -506,10 +506,27 @@ header, the Settings automation panel, and a Needs-you card — and none of them
 move it forward on their own. Meanwhile Queen sits idle rather than running on a
 cycle, and the counters read `17` stale/exited cases with `0` needing judgment.
 
-Three distinct complaints inside one report, worth separating when this is
-picked up: automation does not resume on its own; the same message is repeated
-in three surfaces without any of them being the place to act; and the Needs-you
-card offers no action that resolves it.
+Three distinct complaints inside one report: automation does not resume on its
+own; the same message is repeated in three surfaces without any of them being
+the place to act; and the Needs-you card offers no action that resolves it.
+
+**First one fixed.** Read from the live record: the run went uncertain at
+22:59:32 and was still parked ninety minutes later. The session it was delivered
+to — `01a01bff` — had never ended, so the resume-on-ended-session rule correctly
+did not fire, and nothing else could move it.
+
+Uncertain means Swarm could not *confirm* the review reached Queen, not that it
+failed. The existing rule's own reasoning said an ended terminal "cannot be read
+from", which implies a live one can. The prompt carries the run id, so Swarm now
+reads that exact terminal and, finding the marker, records the delivery as
+landed: Queen has it and can finish the run herself.
+
+It only ever resolves uncertainty toward "it landed". An absent marker proves
+nothing — it may have scrolled out — and replaying a review that did arrive
+would double it, which is what the uncertain state exists to prevent.
+
+Still open here: the message appearing in three surfaces with none of them the
+place to act, and the Needs-you card offering no resolving action.
 
 ## Landed
 

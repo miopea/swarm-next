@@ -21,7 +21,9 @@ use swarm_persistence::{
 use swarm_terminal::{HostRequest, HostResponse, ProviderActivity, snapshot_plain_text};
 use tokio::time::sleep;
 
-use crate::{HostClient, TerminalWriteProvenance, provider_activity};
+use crate::{
+    AppState, HostClient, TerminalWriteProvenance, provider_activity, task_store, unix_timestamp,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum TerminalSubmission {
@@ -528,6 +530,55 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
     )
     .into_bytes()
 }
+/// Settles an uncertain Queen review by reading the terminal it was written to.
+///
+/// Uncertain means Swarm could not confirm the review reached Queen, not that
+/// it failed. The prompt carries the run id, so finding it in that exact
+/// terminal answers the question: Queen has it and can finish the run herself.
+///
+/// Only ever resolves uncertainty in the direction of "it landed". A marker
+/// that is absent proves nothing — it may have scrolled out of the window —
+/// and replaying a review that did land would double it, which is the failure
+/// the uncertain state exists to prevent.
+pub(super) async fn settle_uncertain_queen_review(state: &AppState) {
+    let Ok(store) = task_store(state) else {
+        return;
+    };
+    let Ok(Some((run_id, session_id))) = store.uncertain_queen_delivery() else {
+        return;
+    };
+    let Some(client) = &state.terminal_host else {
+        return;
+    };
+    let Ok(HostResponse::Output {
+        resume: swarm_terminal::Resume::Snapshot { snapshot },
+        ..
+    }) = client
+        .request(&HostRequest::Read {
+            session_id,
+            after_sequence: None,
+        })
+        .await
+    else {
+        return;
+    };
+    let marker = format!("[Swarm automation {run_id}]");
+    let visible = snapshot_plain_text(&snapshot.bytes, snapshot.rows, snapshot.columns);
+    if !visible.contains(&marker) {
+        return;
+    }
+    match store.confirm_queen_automation_delivered(&run_id, session_id, unix_timestamp()) {
+        Ok(true) => {
+            state.control_room_notify.notify_waiters();
+            tracing::info!(run_id = %run_id, "uncertain Queen review was found in its terminal and resumed");
+        }
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(run_id = %run_id, message = %error, "uncertain Queen review could not be settled");
+        }
+    }
+}
+
 pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Vec<u8> {
     format!(
         "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. When operator judgment is needed, create one swarm_request_decision per concrete task. Link its task_id, make the suggested_action exactly one allowed_actions button, and never group unrelated tasks or a fleet review into one approval. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",

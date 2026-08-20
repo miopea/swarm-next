@@ -878,6 +878,10 @@ impl AppState {
             }
         }
         self.revive_workers_owed_a_return().await;
+        // Before delivering anything new, settle a review Swarm could not
+        // confirm. Without this it waits for the operator indefinitely, which
+        // is what left one parked for ninety minutes while Queen sat idle.
+        coordination_delivery::settle_uncertain_queen_review(self).await;
         self.deliver_coordination().await;
         self.deliver_notifications().await;
     }

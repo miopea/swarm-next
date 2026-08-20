@@ -277,6 +277,73 @@ impl TaskStore {
         self.finish_delivery(run_id, now, None)
     }
 
+    /// The run and session of an uncertain delivery whose terminal is still
+    /// live, so the delivery can be checked rather than waited on.
+    ///
+    /// Returns nothing when no run is uncertain, or when the session it was
+    /// written to has ended — that case is already resumed on its own, because
+    /// a terminal that no longer exists cannot be read.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or holds an invalid ID.
+    pub fn uncertain_queen_delivery(
+        &self,
+    ) -> Result<Option<(String, WorkerSessionId)>, TaskStoreError> {
+        let connection = self.connection()?;
+        let row = connection
+            .query_row(
+                "SELECT a.run_id, a.delivery_session_id
+                 FROM queen_automation a
+                 JOIN worker_sessions s ON s.session_id = a.delivery_session_id
+                     AND s.ended_at IS NULL
+                 WHERE a.id = 1 AND a.state = 'uncertain' AND a.run_id IS NOT NULL",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        row.map(|(run_id, session)| {
+            WorkerSessionId::from_str(&session)
+                .map(|session| (run_id, session))
+                .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))
+        })
+        .transpose()
+    }
+
+    /// Resolves an uncertain run whose delivery is now known to have landed.
+    ///
+    /// Uncertainty here means Swarm could not *confirm* the review reached
+    /// Queen, not that it failed. The prompt carries the run id, so finding it
+    /// in the terminal it was written to settles the question: Queen has it and
+    /// can finish the run herself.
+    ///
+    /// Keyed on the exact run and the exact session it was delivered to, so a
+    /// marker from an older run in the same scrollback cannot resolve a newer
+    /// one.
+    ///
+    /// # Errors
+    /// Returns an error when the delivery marker cannot be updated atomically.
+    pub fn confirm_queen_automation_delivered(
+        &self,
+        run_id: &str,
+        session_id: WorkerSessionId,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE queen_automation
+             SET state = 'running', delivered_at = COALESCE(delivered_at, ?3), updated_at = ?3
+             WHERE id = 1 AND run_id = ?1 AND state = 'uncertain'
+               AND delivery_session_id = ?2",
+            params![run_id, session_id.to_string(), now],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
     /// Records a bounded retryable or uncertain prompt-delivery failure.
     ///
     /// # Errors
@@ -774,6 +841,87 @@ mod tests {
             QueenAutomationState::Uncertain
         );
         assert!(store.claim_queen_automation(12).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_uncertain_review_on_a_live_terminal_can_be_settled_by_reading_it() {
+        // Observed 2026-08-19: a review went uncertain at 22:59 and was still
+        // parked ninety minutes later. The session it was written to never
+        // ended, so the resume-on-ended-session rule correctly did not fire,
+        // and nothing else could move it. Uncertain means Swarm could not
+        // confirm the review arrived — not that it failed — and the terminal it
+        // was written to can be read.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.request_queen_automation_run(10).unwrap();
+        let claimed = store.claim_queen_automation(11).unwrap().unwrap();
+        store
+            .fail_queen_automation_delivery(&claimed.run_id, 12, QueenAutomationFailure::Uncertain)
+            .unwrap();
+
+        // The live session is offered for checking, with the run it belongs to.
+        let pending = store.uncertain_queen_delivery().unwrap();
+        assert_eq!(pending, Some((claimed.run_id.clone(), session)));
+
+        assert!(
+            store
+                .confirm_queen_automation_delivered(&claimed.run_id, session, 13)
+                .unwrap()
+        );
+        let status = store.queen_automation_status(14).unwrap();
+        assert_eq!(status.state, QueenAutomationState::Running);
+        assert_eq!(status.delivered_at, Some(13));
+    }
+
+    #[test]
+    fn settling_is_keyed_on_the_exact_run_and_session() {
+        // A marker from an older run sitting in the same scrollback must not
+        // resolve a newer one, and a different terminal proves nothing about
+        // this delivery.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.request_queen_automation_run(10).unwrap();
+        let claimed = store.claim_queen_automation(11).unwrap().unwrap();
+        store
+            .fail_queen_automation_delivery(&claimed.run_id, 12, QueenAutomationFailure::Uncertain)
+            .unwrap();
+
+        assert!(
+            !store
+                .confirm_queen_automation_delivered("some-older-run", session, 13)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .confirm_queen_automation_delivered(&claimed.run_id, WorkerSessionId::new(), 13)
+                .unwrap()
+        );
+        assert_eq!(
+            store.queen_automation_status(14).unwrap().state,
+            QueenAutomationState::Uncertain
+        );
+    }
+
+    #[test]
+    fn a_review_on_an_ended_terminal_is_not_offered_for_reading() {
+        // That case resumes on its own, because a terminal that no longer
+        // exists cannot be read from.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.request_queen_automation_run(10).unwrap();
+        let claimed = store.claim_queen_automation(11).unwrap().unwrap();
+        store
+            .fail_queen_automation_delivery(&claimed.run_id, 12, QueenAutomationFailure::Uncertain)
+            .unwrap();
+        store.release_worker_session(session).unwrap();
+
+        assert_eq!(store.uncertain_queen_delivery().unwrap(), None);
     }
 
     #[test]
