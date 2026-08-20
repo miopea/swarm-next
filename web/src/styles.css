@@ -274,6 +274,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
   overflow: hidden;
 }
 .workspace-header { display: flex; min-height: 78px; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 17px 27px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 94%, transparent); }
+.workspace-heading { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.workspace-heading .popout-button { flex: 0 0 auto; }
 .workspace-header h2 { margin: 0; font-size: 1.3rem; letter-spacing: -.02em; }
 .mobile-worker-switcher-trigger { display: none; }
 .header-actions { display: flex; align-items: center; gap: 8px; }

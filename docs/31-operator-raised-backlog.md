@@ -743,6 +743,10 @@ Raised as three parts:
 - The pop-out control belongs in the board area rather than where it sits now.
 - A popped-out window should show **only the thing that was popped out**, not a
   second copy of the whole app.
+**Third part fixed** on the same answer: the control now sits beside the
+heading of the surface it detaches, rather than among the header's global
+controls. What it pops out is the thing named right there.
+
 - The item that was popped out should then be greyed out in the main window, or
   clicking it should focus the window that already holds it. Two copies of one
   surface is the outcome to avoid.
@@ -759,10 +763,10 @@ what a notification deep link carries. Reusing it for detaching would have
 opened notifications into a window with no navigation and no way out. An
 existing test caught it. Detaching now carries its own flag.
 
-The control's placement — the third part of the report — is unchanged and still
-open.
+The control's placement was answered by the operator on 2026-08-20 and is
+recorded above.
 
-### 28. Queen automation reports a stuck review, and nothing moves it — *two of three fixed*
+### 28. Queen automation reports a stuck review, and nothing moves it — *fixed*
 
 Raised as: "why isn't the Queen on a cron or polling cycle? When I go in, she is
 sitting idle but the pill badge at the top says the same thing and links to
@@ -801,10 +805,11 @@ resuming itself no longer lives two screens away in Settings. It is offered only
 for `uncertain`: a review blocked on an operator decision is resolved by
 answering it, not by running it again.
 
-Still open: the same message appearing in three surfaces at once. Each surface
-has a reason to exist — the Queen terminal, the settings panel, the Needs-you
-queue — so this is a presentation judgment rather than a defect, and the
-substance of the complaint was that none of them could act, which is now false.
+**Third part fixed**, on the operator's answer of 2026-08-20: keep all three
+surfaces, word each differently. They were sharing one sentence, and each is
+asking something different — "what is true of the terminal I am looking at",
+"how does this work and what can I change", "what wants me and what do I do".
+One sentence cannot answer three questions, so it answered none of them well.
 
 ### 40. One settings test failed under load and passed alone — *fixed*
 
@@ -860,6 +865,25 @@ Worth carrying forward: a worker's tool schema is fixed when its MCP session
 connects. Any change that makes a field required is a breaking change for every
 worker already running, and no test that constructs the input struct directly
 can see it.
+
+### 42. An unconfirmed briefing marked a worker forever — *fixed*
+
+Raised as: Public Website shows the unconfirmed-briefing mark and has been that
+way for ages, with no open tasks; Sculpt Studio the same, showing it in the
+header, with nothing in Needs you.
+
+Six unconfirmed briefings were outstanding, the oldest **eight days old**. Their
+tasks had since been completed, blocked, or sent to review — one belonged to a
+worker with no open work at all.
+
+"Swarm could not confirm this briefing landed" is a question about work still
+waiting to be done. Once the task has left ready or active, the question is
+answered or moot, and the mark is asking the operator to go and check a terminal
+about something already finished. Nothing cleared them, so the mark was
+permanent.
+
+They are now forgotten once their work moves on. The mark still means what it
+says for work still waiting.
 
 ## Landed
 

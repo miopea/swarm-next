@@ -26,7 +26,9 @@ test("routes an operator-blocked review to Queen or its settings", () => {
   render(<QueenAutomationAttentionCard status={status} onOpenQueen={onOpenQueen} onReviewSettings={onReviewSettings} />);
 
   expect(screen.getByRole("heading", { name: "Queen needs you" })).toBeInTheDocument();
-  expect(screen.getByText("Open Queen when you are ready to resolve her decision.")).toBeInTheDocument();
+  // Worded for this surface: the Needs-you card answers "what wants me and
+  // what do I do", not "how does automation work".
+  expect(screen.getByText("Queen filed a request and stopped. Open her to resolve it.")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Open Queen" }));
   fireEvent.click(screen.getByRole("button", { name: "Review automation" }));
   expect(onOpenQueen).toHaveBeenCalledOnce();
@@ -81,4 +83,14 @@ test("says so when resuming fails, without claiming anything changed", async () 
   fireEvent.click(screen.getByRole("button", { name: "Resume review" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent("Her current work was not changed");
+});
+
+test("says something different from the settings panel about the same state", () => {
+  // Operator answer, 2026-08-20: keep all three surfaces, word each
+  // differently. One sentence cannot answer "what is true of this terminal",
+  // "how does this work", and "what do I do", so it answered none of them well.
+  render(<QueenAutomationAttentionCard status={uncertain} onOpenQueen={vi.fn()} onReviewSettings={vi.fn()} onRetry={vi.fn()} />);
+
+  expect(screen.getByText(/Check her terminal, then resume it/)).toBeInTheDocument();
+  expect(screen.queryByText(/Retry resumes this same review/)).not.toBeInTheDocument();
 });

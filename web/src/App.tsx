@@ -1198,7 +1198,20 @@ export function App() {
         <header className="workspace-header">
           <div>
             <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "tasks" ? "Plan and dispatch" : surface === "apiary" ? "Organization without noise" : surface === "settings" ? "Preferences and diagnostics" : "Persistent terminal"}</p>
-            <h2>{surface === "decisions" ? "Needs you" : surface === "tasks" ? "Task board" : surface === "apiary" ? keeper ? "Keeper" : "Member Hive" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
+            {/* Beside the heading it detaches, rather than among the header's
+                global controls: what it pops out is the surface named here. */}
+            <div className="workspace-heading">
+              <h2>{surface === "decisions" ? "Needs you" : surface === "tasks" ? "Task board" : surface === "apiary" ? keeper ? "Keeper" : "Member Hive" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
+              {operatorToken && !detached && (
+                <button
+                  type="button"
+                  className="icon-button popout-button"
+                  aria-label={`Open ${surfaceLabel(surface)} in a new window`}
+                  title={`Open ${surfaceLabel(surface)} in a new window. Workers keep running; a window only views them.`}
+                  onClick={() => setPopoutBlocked(!openSurfaceWindow(surface, (url, name, features) => window.open(url, name, features)))}
+                ><PopoutIcon /></button>
+              )}
+            </div>
             <HiveContextIndicator identity={hiveIdentity} compact />
           </div>
           {surface === "workers" && operatorToken ? (
@@ -1245,15 +1258,6 @@ export function App() {
               />
             ) : null}
             {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
-            {operatorToken && !detached && (
-              <button
-                type="button"
-                className="icon-button popout-button"
-                aria-label={`Open ${surfaceLabel(surface)} in a new window`}
-                title={`Open ${surfaceLabel(surface)} in a new window. Workers keep running; a window only views them.`}
-                onClick={() => setPopoutBlocked(!openSurfaceWindow(surface, (url, name, features) => window.open(url, name, features)))}
-              ><PopoutIcon /></button>
-            )}
             {popoutBlocked && <span className="saving-state" role="alert">Your browser blocked the new window</span>}
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
             {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}

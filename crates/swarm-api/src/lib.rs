@@ -882,6 +882,23 @@ impl AppState {
         // confirm. Without this it waits for the operator indefinitely, which
         // is what left one parked for ninety minutes while Queen sat idle.
         coordination_delivery::settle_uncertain_queen_review(self).await;
+        // An unconfirmed briefing for work that has moved on is asking the
+        // operator to check a terminal about something already finished.
+        if let Ok(store) = task_store(self) {
+            match store.forget_moot_unconfirmed_briefings() {
+                Ok(forgotten) if forgotten > 0 => {
+                    self.control_room_notify.notify_waiters();
+                    tracing::info!(
+                        forgotten,
+                        "unconfirmed briefings for work that has moved on were cleared"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(message = %error, "moot unconfirmed briefings could not be cleared");
+                }
+            }
+        }
         self.deliver_coordination().await;
         self.deliver_notifications().await;
     }

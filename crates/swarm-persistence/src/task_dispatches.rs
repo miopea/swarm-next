@@ -36,6 +36,42 @@ pub enum TaskDispatchFailure {
 }
 
 impl TaskStore {
+    /// Forgets unconfirmed briefings for work that has since moved on.
+    ///
+    /// "Swarm could not confirm this briefing landed" is a question about work
+    /// that is still waiting to be done. Once the task has left ready or active
+    /// — completed, blocked, sent to review, removed, or reassigned — the
+    /// question is answered or moot, and the mark is telling the operator to go
+    /// and check a terminal about something already finished.
+    ///
+    /// Nothing cleared these. The oldest observed was eight days old, against a
+    /// task that had been completed, on a worker with no open work at all.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn forget_moot_unconfirmed_briefings(&self) -> Result<usize, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let forgotten = transaction.execute(
+            "DELETE FROM task_dispatches
+             WHERE state = 'uncertain'
+               AND NOT EXISTS (
+                   SELECT 1 FROM tasks t
+                   JOIN task_assignments a
+                       ON a.id = task_dispatches.assignment_id AND a.released_at IS NULL
+                   WHERE t.id = task_dispatches.task_id
+                     AND t.removed_at IS NULL
+                     AND t.state IN ('ready', 'active')
+               )",
+            [],
+        )?;
+        if forgotten > 0 {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(forgotten)
+    }
+
     /// Lists workers holding a briefing Swarm wrote but could not confirm.
     ///
     /// This is Swarm's own delivery evidence, not a reading of terminal
@@ -407,6 +443,47 @@ mod tests {
         assert_eq!(next_dispatch.len(), 1);
         assert_eq!(next_dispatch[0].task_id, second.id);
         assert_eq!(next_dispatch[0].worker_id, worker_id);
+    }
+
+    #[test]
+    fn an_unconfirmed_briefing_is_forgotten_once_its_work_moves_on() {
+        // Observed 2026-08-20: six unconfirmed briefings, the oldest eight days
+        // old, against tasks that had been completed, blocked, or sent to
+        // review. One belonged to a worker with no open work at all. The mark
+        // says "Swarm could not confirm this landed", which is a question about
+        // work still waiting to be done — once the task has moved on it is
+        // answered or moot, and nothing was clearing it.
+        let (store, task_id, _session) = assigned_task();
+        let claimed = store.claim_task_dispatches(100).unwrap();
+        store
+            .fail_task_dispatch(
+                &claimed[0].assignment_id,
+                101,
+                TaskDispatchFailure::Uncertain,
+            )
+            .unwrap();
+        assert_eq!(store.workers_with_unconfirmed_delivery().unwrap().len(), 1);
+
+        // Still waiting to be done: the question stands.
+        assert_eq!(store.forget_moot_unconfirmed_briefings().unwrap(), 0);
+        assert_eq!(store.workers_with_unconfirmed_delivery().unwrap().len(), 1);
+
+        for state in [
+            swarm_domain::TaskState::Active,
+            swarm_domain::TaskState::Review,
+            swarm_domain::TaskState::Completed,
+        ] {
+            store.transition_task(task_id, state).unwrap();
+        }
+
+        assert_eq!(store.forget_moot_unconfirmed_briefings().unwrap(), 1);
+        assert!(
+            store
+                .workers_with_unconfirmed_delivery()
+                .unwrap()
+                .is_empty(),
+            "a briefing about finished work stops marking the worker"
+        );
     }
 
     #[test]

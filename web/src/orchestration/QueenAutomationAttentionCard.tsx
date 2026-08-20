@@ -32,7 +32,7 @@ export default function QueenAutomationAttentionCard({ status, coveredBySpecific
       <div>
         <p className="eyebrow">Queen automation</p>
         <h3 id="queen-attention-heading">{queenAutomationStateLabel(status)}</h3>
-        <p>{queenAutomationStateDetail(status)}</p>
+        <p>{queenAutomationStateDetail(status, "attention")}</p>
       </div>
       <div className="queen-attention-actions">
         <button className="primary-action" type="button" onClick={onOpenQueen}>Open Queen</button>

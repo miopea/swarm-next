@@ -148,7 +148,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
             <button
               type="button"
               className={`queen-automation-chip ${queenAutomationStateTone(queenAutomation)}`}
-              title={queenAutomationStateDetail(queenAutomation)}
+              title={queenAutomationStateDetail(queenAutomation, "terminal")}
               onClick={onOpenQueenSettings}
             >
               <span className={`presence ${queenAutomationStateTone(queenAutomation)}`} />
