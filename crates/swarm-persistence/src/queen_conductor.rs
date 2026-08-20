@@ -535,43 +535,10 @@ fn actionable_count(connection: &rusqlite::Connection) -> Result<i64, rusqlite::
         [], |row| row.get(0),
     )?;
     let coordination_attention_count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM coordinator_actions action
-         JOIN tasks task ON task.id = action.task_id
-         JOIN worker_sessions session ON session.session_id = action.session_id
-         WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention')
-           AND action.state = 'completed'
-           AND task.assigned_worker_id = action.worker_id
-           AND task.updated_at = action.evidence_revision AND session.worker_id = action.worker_id
-           AND (
-               (action.kind = 'stale_owned_work_attention'
-                   AND task.state = 'active' AND session.ended_at IS NULL)
-               OR (action.kind = 'owned_work_worker_exited_attention'
-                   AND task.state = 'active'
-                   AND session.ended_at IS NOT NULL
-                   AND session.session_id = (
-                       SELECT latest.session_id FROM worker_sessions latest
-                       WHERE latest.worker_id = action.worker_id
-                         AND latest.ended_at IS NOT NULL
-                       ORDER BY latest.ended_at DESC, latest.started_at DESC, latest.session_id DESC
-                       LIMIT 1
-                   )
-                   AND NOT EXISTS (
-                       SELECT 1 FROM worker_sessions live
-                       WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
-                   ))
-               OR (action.kind = 'assigned_ready_work_not_started_attention'
-                   AND task.state = 'ready' AND session.ended_at IS NULL
-                   AND EXISTS (
-                       SELECT 1 FROM task_assignments assignment
-                       JOIN task_dispatches dispatch
-                         ON dispatch.assignment_id = assignment.id
-                            AND dispatch.state = 'delivered'
-                       WHERE assignment.task_id = task.id
-                         AND dispatch.worker_id = action.worker_id
-                         AND assignment.worker_session_id = action.session_id
-                         AND assignment.released_at IS NULL
-                   ))
-           )",
+        &format!(
+            "SELECT COUNT(*) {}",
+            crate::coordinator::LIVE_ATTENTION_SOURCE
+        ),
         [],
         |row| row.get(0),
     )?;
@@ -598,47 +565,12 @@ fn actionable_fingerprint(
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut attention_statement = connection.prepare(
+    let mut attention_statement = connection.prepare(&format!(
         "SELECT action.kind, action.id, task.id, action.evidence_revision
-         FROM coordinator_actions action
-         JOIN tasks task ON task.id = action.task_id
-         JOIN worker_sessions session ON session.session_id = action.session_id
-         WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention')
-           AND action.state = 'completed'
-           AND task.assigned_worker_id = action.worker_id
-           AND task.updated_at = action.evidence_revision AND session.worker_id = action.worker_id
-           AND (
-               (action.kind = 'stale_owned_work_attention'
-                   AND task.state = 'active' AND session.ended_at IS NULL)
-               OR (action.kind = 'owned_work_worker_exited_attention'
-                   AND task.state = 'active'
-                   AND session.ended_at IS NOT NULL
-                   AND session.session_id = (
-                       SELECT latest.session_id FROM worker_sessions latest
-                       WHERE latest.worker_id = action.worker_id
-                         AND latest.ended_at IS NOT NULL
-                       ORDER BY latest.ended_at DESC, latest.started_at DESC, latest.session_id DESC
-                       LIMIT 1
-                   )
-                   AND NOT EXISTS (
-                       SELECT 1 FROM worker_sessions live
-                       WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
-                   ))
-               OR (action.kind = 'assigned_ready_work_not_started_attention'
-                   AND task.state = 'ready' AND session.ended_at IS NULL
-                   AND EXISTS (
-                       SELECT 1 FROM task_assignments assignment
-                       JOIN task_dispatches dispatch
-                         ON dispatch.assignment_id = assignment.id
-                            AND dispatch.state = 'delivered'
-                       WHERE assignment.task_id = task.id
-                         AND dispatch.worker_id = action.worker_id
-                         AND assignment.worker_session_id = action.session_id
-                         AND assignment.released_at IS NULL
-                   ))
-           )
+         {source}
          ORDER BY action.id LIMIT ?1",
-    )?;
+        source = crate::coordinator::LIVE_ATTENTION_SOURCE,
+    ))?;
     rows.extend(
         attention_statement
             .query_map([MAX_FINGERPRINT_TASKS], |row| {
@@ -1325,5 +1257,56 @@ mod tests {
 
         let status = store.queen_automation_status(14).unwrap();
         assert_eq!(status.outcome, Some(QueenAutomationOutcome::NeedsOperator));
+    }
+
+    /// The operator: "Public Website created a bunch of tasks and the queen
+    /// never triggered to look. Doing it manually now."
+    ///
+    /// A worker filing work records an attention record Queen reads when she
+    /// reviews — but what decides she should review at all is a separate
+    /// fingerprint, and that carried its own copy of the predicate without the
+    /// new kind. So the record existed, Queen could have read it, and nothing
+    /// woke her. All three questions now read one definition.
+    #[test]
+    fn work_a_worker_files_is_enough_to_wake_queen() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        let worker = store
+            .create_worker(
+                "Public Website",
+                ProviderKind::ClaudeCode,
+                "/workspace/public-web",
+                false,
+                1,
+            )
+            .unwrap();
+        let worker_session = WorkerSessionId::new();
+        store
+            .bind_worker_session(worker.id, worker_session)
+            .unwrap();
+        store.set_queen_automation_enabled(true, 9).unwrap();
+        // Nothing outstanding: Queen has no reason to run.
+        assert!(!store.observe_queen_automation(10).unwrap());
+
+        let filed = store
+            .create_task_with_details_as(
+                "Sanitise the module HTML",
+                "",
+                TaskPriority::Normal,
+                "/workspace/public-web",
+                &TaskActivityActor::worker(worker.id),
+            )
+            .unwrap();
+        store
+            .record_worker_filed_draft_attention(filed.id, worker.id, worker_session)
+            .unwrap();
+
+        // Now she has a reason, and the trigger sees it.
+        assert!(
+            store.observe_queen_automation(11).unwrap(),
+            "a worker filing work should wake Queen"
+        );
     }
 }

@@ -14,6 +14,61 @@ const MAX_STALE_CANDIDATES: i64 = 32;
 const MAX_EXITED_WORK_CANDIDATES: i64 = 32;
 const MAX_UNSTARTED_WORK_CANDIDATES: i64 = 32;
 
+/// The one definition of a coordination-attention record that is still true.
+///
+/// Three questions are asked of it: what Queen sees when she reviews, how much
+/// is actionable, and — crucially — the fingerprint that decides she should run
+/// at all. They were three copies of one predicate, and a fourth kind added to
+/// only the first was missed by the other two. The result was exactly what the
+/// operator saw: a worker filed several tasks, the record existed, Queen could
+/// have read it, and nothing ever woke her to look.
+///
+/// Every branch re-verifies against live state, so a record whose reason has
+/// passed stops counting without anything having to delete it.
+pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
+             JOIN tasks task ON task.id = action.task_id
+             JOIN worker_profiles worker ON worker.id = action.worker_id
+             JOIN worker_sessions session ON session.session_id = action.session_id
+             WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention')
+               AND action.state = 'completed'
+               AND task.updated_at = action.evidence_revision
+               AND session.worker_id = action.worker_id
+               AND (
+                   (action.kind = 'worker_filed_draft_attention'
+                       AND task.state = 'draft' AND task.assigned_worker_id IS NULL)
+                   OR (action.kind = 'stale_owned_work_attention'
+                       AND task.assigned_worker_id = action.worker_id
+                       AND task.state = 'active' AND session.ended_at IS NULL)
+                   OR (action.kind = 'owned_work_worker_exited_attention'
+                       AND task.assigned_worker_id = action.worker_id
+                       AND task.state = 'active'
+                       AND session.ended_at IS NOT NULL
+                       AND session.session_id = (
+                           SELECT latest.session_id FROM worker_sessions latest
+                           WHERE latest.worker_id = action.worker_id
+                             AND latest.ended_at IS NOT NULL
+                           ORDER BY latest.ended_at DESC, latest.started_at DESC, latest.session_id DESC
+                           LIMIT 1
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM worker_sessions live
+                           WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
+                       ))
+                   OR (action.kind = 'assigned_ready_work_not_started_attention'
+                       AND task.assigned_worker_id = action.worker_id
+                       AND task.state = 'ready' AND session.ended_at IS NULL
+                       AND EXISTS (
+                           SELECT 1 FROM task_assignments assignment
+                           JOIN task_dispatches dispatch
+                             ON dispatch.assignment_id = assignment.id
+                                AND dispatch.state = 'delivered'
+                           WHERE assignment.task_id = task.id
+                             AND dispatch.worker_id = action.worker_id
+                             AND assignment.worker_session_id = action.session_id
+                             AND assignment.released_at IS NULL
+                       ))
+               )";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoordinatorWorkerWake {
     pub action_id: String,
@@ -631,57 +686,12 @@ impl TaskStore {
         &self,
     ) -> Result<Vec<CoordinatorAttention>, TaskStoreError> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare(&format!(
             "SELECT action.id, action.kind, worker.id, worker.name, task.id, task.title,
-                    action.reason, action.finished_at, action.observed_age_seconds
-             FROM coordinator_actions action
-             JOIN tasks task ON task.id = action.task_id
-             JOIN worker_profiles worker ON worker.id = action.worker_id
-             JOIN worker_sessions session ON session.session_id = action.session_id
-             WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention')
-               AND action.state = 'completed'
-               AND task.updated_at = action.evidence_revision
-               AND session.worker_id = action.worker_id
-               AND (
-                   -- A filed draft has no assignee yet: that is the whole point
-                   -- of it, and why the ownership condition the other kinds
-                   -- share cannot be asked of it.
-                   (action.kind = 'worker_filed_draft_attention'
-                       AND task.state = 'draft' AND task.assigned_worker_id IS NULL)
-                   OR (action.kind = 'stale_owned_work_attention'
-                       AND task.assigned_worker_id = action.worker_id
-                       AND task.state = 'active' AND session.ended_at IS NULL)
-                   OR (action.kind = 'owned_work_worker_exited_attention'
-                       AND task.assigned_worker_id = action.worker_id
-                       AND task.state = 'active'
-                       AND session.ended_at IS NOT NULL
-                       AND session.session_id = (
-                           SELECT latest.session_id FROM worker_sessions latest
-                           WHERE latest.worker_id = action.worker_id
-                             AND latest.ended_at IS NOT NULL
-                           ORDER BY latest.ended_at DESC, latest.started_at DESC, latest.session_id DESC
-                           LIMIT 1
-                       )
-                       AND NOT EXISTS (
-                           SELECT 1 FROM worker_sessions live
-                           WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
-                       ))
-                   OR (action.kind = 'assigned_ready_work_not_started_attention'
-                       AND task.assigned_worker_id = action.worker_id
-                       AND task.state = 'ready' AND session.ended_at IS NULL
-                       AND EXISTS (
-                           SELECT 1 FROM task_assignments assignment
-                           JOIN task_dispatches dispatch
-                             ON dispatch.assignment_id = assignment.id
-                                AND dispatch.state = 'delivered'
-                           WHERE assignment.task_id = task.id
-                             AND dispatch.worker_id = action.worker_id
-                             AND assignment.worker_session_id = action.session_id
-                             AND assignment.released_at IS NULL
-                       ))
-               )
-             ORDER BY action.finished_at DESC, action.id DESC LIMIT 32",
-        )?;
+                        action.reason, action.finished_at, action.observed_age_seconds
+                 {LIVE_ATTENTION_SOURCE}
+                 ORDER BY action.finished_at DESC, action.id DESC LIMIT 32"
+        ))?;
         statement
             .query_map([], |row| {
                 Ok((
