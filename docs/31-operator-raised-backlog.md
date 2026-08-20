@@ -919,7 +919,7 @@ Worth separating when this is picked up, because the risk is not evenly spread:
 The first is the rename the operator asked for. The second is a separate
 decision that should not ride along silently.
 
-### 45. Diagnostics does not read as a quick scan
+### 45. Diagnostics does not read as a quick scan — *fixed*
 
 Raised as: "the diagnostics page isn't terribly the quick scan."
 

@@ -63,3 +63,34 @@ test("states the machine's size and verdict above the rows it makes sense of", a
   // A machine that is not stalling must not have its layers called critical.
   expect(headline.className).toContain("normal");
 });
+
+test("answers the heading before showing the evidence for it", async () => {
+  // Fourteen rows of equal weight under "Know which layer needs attention" did
+  // not answer it. What is wrong leads; what is fine collapses behind a count.
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes("runtime/resources")) {
+      return new Response(JSON.stringify({
+        sampled_at: 0,
+        policy: { mode: "observe_only", advisory_percent: 15, critical_percent: 25 },
+        api: { resident_memory_bytes: 100, process_tree_resident_memory_bytes: 100, process_tree_process_count: 1, pressure: "normal" },
+        terminal_host: { resident_memory_bytes: 100, process_tree_resident_memory_bytes: 100, process_tree_process_count: 1, pressure: "normal" },
+        machine: {
+          memory_total_bytes: 32 * 1024 * 1024 * 1024, memory_available_bytes: null, memory_used_percent: 45,
+          swap_total_bytes: null, swap_used_bytes: null, swap_used_percent: null, load_average: [1, 1, 1],
+          logical_cpus: 8, memory_pressure_avg10: 0, cpu_pressure_avg10: 0, io_pressure_avg10: 0, pressure: "normal",
+        },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response("unavailable", { status: 503 });
+  }));
+
+  render(<DiagnosticsWorkspace feedbackRevision={0} operatorToken="secret" health={{ status: "ok", version: "0.1.0" } as never} hiveIdentity={{ hive: { id: "h", name: "Grand Garden" } } as never} liveFeedState="connected" recentEvents={[]} sessions={[]} workers={[]} jiraReadiness={undefined} jiraUnavailable={false} />);
+
+  // Healthy rows are not the page's answer, so they are not the page's content.
+  const showAll = await screen.findByRole("button", { name: /Show all \d+ checks/ });
+  expect(screen.queryByText("Machine memory")).not.toBeInTheDocument();
+
+  fireEvent.click(showAll);
+  expect(screen.getByText("Machine memory")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Show only what needs attention" })).toBeInTheDocument();
+});

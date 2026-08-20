@@ -47,6 +47,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
   const [savedReportsAttempt, setSavedReportsAttempt] = useState(0);
   const [copiedReportId, setCopiedReportId] = useState<string>();
   const [downloadingReportId, setDownloadingReportId] = useState<string>();
+  const [showEveryCheck, setShowEveryCheck] = useState(false);
   const [unavailableAttachmentId, setUnavailableAttachmentId] = useState<string>();
 
   useEffect(() => {
@@ -141,6 +142,37 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
     }
   }
 
+  /**
+   * Every check, each carrying its own verdict.
+   *
+   * The verdict is what makes the page scan: it decides what leads and what
+   * collapses. A row with no way to be wrong is healthy by construction rather
+   * than by omission, so nothing disappears from the full list.
+   */
+  const rows: { label: string; value: string; healthy: boolean; className?: string }[] = [
+    { label: "Browser", value: navigator.onLine ? "Online" : "Offline", healthy: navigator.onLine },
+    {
+      label: "View switching",
+      value: routePaint
+        ? `${routePaint.median_ms} ms typical · ${routePaint.slowest_ms} ms slowest of ${routePaint.samples}`
+        : "No view changes measured yet",
+      healthy: true,
+    },
+    { label: "API", value: health ? `Healthy · ${health.version}` : "Unavailable", healthy: Boolean(health) },
+    { label: "Database", value: hiveIdentity ? "Healthy" : "Unavailable", healthy: Boolean(hiveIdentity) },
+    { label: "Terminal host", value: terminalStatus, healthy: terminalStatus !== "Unavailable" },
+    { label: "API memory", value: apiMemory, healthy: healthyPressure(runtime.resources?.api.pressure), className: resourceClass(runtime.resources?.api.pressure) },
+    { label: "Terminal host service", value: hostMemory, healthy: true },
+    { label: "Loaded worker runtimes", value: workerMemory, healthy: healthyPressure(workerPressure), className: resourceClass(workerPressure) },
+    { label: "Machine memory", value: machineMemoryLabel(machine), healthy: healthyPressure(machine?.pressure), className: resourceClass(machine?.pressure) },
+    { label: "Memory stall", value: pressureLabel(machine?.memory_pressure_avg10), healthy: healthyPressure(machine?.pressure), className: resourceClass(machine?.pressure) },
+    { label: "Compute load", value: loadLabel(machine?.load_average, machine?.logical_cpus), healthy: healthyPressure(computePressure(machine)), className: resourceClass(computePressure(machine)) },
+    { label: "Standing swap", value: swapLabel(machine?.swap_used_bytes, machine?.swap_total_bytes, machine?.swap_used_percent), healthy: true },
+    { label: "Provider", value: providerStatus, healthy: launchFailures === 0 },
+    { label: "Jira", value: jiraStatusLabel(jiraReadiness, jiraUnavailable), healthy: !jiraStatusLabel(jiraReadiness, jiraUnavailable).includes("attention") },
+  ];
+  const needsAttention = rows.filter((row) => !row.healthy);
+
   return (
     <section id="settings-diagnostics" className="settings-card diagnostics-card" aria-labelledby="diagnostics-heading">
       <div><p className="eyebrow">Diagnostics</p><h3 id="diagnostics-heading">Know which layer needs attention</h3></div>
@@ -155,24 +187,25 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
       <p className={`diagnostic-machine ${resourceClass(machine?.pressure)}`} role="status">
         {machineHeadline(machine)}
       </p>
+      {/* Fourteen rows of equal weight under a heading promising to say which
+          layer needs attention did not answer it. What is wrong leads; what is
+          fine collapses. When nothing is wrong the honest page is one line. */}
+      {needsAttention.length === 0 ? (
+        <p className="diagnostic-verdict healthy" role="status">Nothing needs attention.</p>
+      ) : (
+        <p className="diagnostic-verdict attention" role="status">
+          {needsAttention.length === 1 ? "One check needs attention: " : `${needsAttention.length} checks need attention: `}
+          {needsAttention.map((row) => row.label).join(", ")}.
+        </p>
+      )}
       <dl className="diagnostic-list">
-        <div><dt>Browser</dt><dd>{navigator.onLine ? "Online" : "Offline"}</dd></div>
-        <div><dt>View switching</dt><dd>{routePaint
-          ? `${routePaint.median_ms} ms typical · ${routePaint.slowest_ms} ms slowest of ${routePaint.samples}`
-          : "No view changes measured yet"}</dd></div>
-        <div><dt>API</dt><dd>{health ? `Healthy · ${health.version}` : "Unavailable"}</dd></div>
-        <div><dt>Database</dt><dd>{hiveIdentity ? "Healthy" : "Unavailable"}</dd></div>
-        <div><dt>Terminal host</dt><dd>{terminalStatus}</dd></div>
-        <div><dt>API memory</dt><dd className={resourceClass(runtime.resources?.api.pressure)}>{apiMemory}</dd></div>
-        <div><dt>Terminal host service</dt><dd>{hostMemory}</dd></div>
-        <div><dt>Loaded worker runtimes</dt><dd className={resourceClass(workerPressure)}>{workerMemory}</dd></div>
-        <div><dt>Machine memory</dt><dd className={resourceClass(machine?.pressure)}>{machineMemoryLabel(machine)}</dd></div>
-        <div><dt>Memory stall</dt><dd className={resourceClass(machine?.pressure)}>{pressureLabel(machine?.memory_pressure_avg10)}</dd></div>
-        <div><dt>Compute load</dt><dd className={resourceClass(computePressure(machine))}>{loadLabel(machine?.load_average, machine?.logical_cpus)}</dd></div>
-        <div><dt>Standing swap</dt><dd>{swapLabel(machine?.swap_used_bytes, machine?.swap_total_bytes, machine?.swap_used_percent)}</dd></div>
-        <div><dt>Provider</dt><dd>{providerStatus}</dd></div>
-        <div><dt>Jira</dt><dd>{jiraStatusLabel(jiraReadiness, jiraUnavailable)}</dd></div>
+        {(showEveryCheck ? rows : needsAttention).map((row) => (
+          <div key={row.label}><dt>{row.label}</dt><dd className={row.className}>{row.value}</dd></div>
+        ))}
       </dl>
+      <button type="button" className="diagnostic-show-all" aria-expanded={showEveryCheck} onClick={() => setShowEveryCheck((current) => !current)}>
+        {showEveryCheck ? "Show only what needs attention" : `Show all ${rows.length} checks`}
+      </button>
       {measuredWorkers.length ? (
         <details className="worker-resource-breakdown">
           <summary>Memory by loaded worker</summary>
@@ -333,4 +366,9 @@ function computePressure(machine: MachineResources | undefined): ResourcePressur
   if (perCpu >= 2) return "critical";
   if (perCpu >= 1) return "advisory";
   return "normal";
+}
+
+/** Unavailable is not unhealthy: it is a measurement that could not be taken. */
+function healthyPressure(pressure: ResourcePressure | undefined): boolean {
+  return pressure !== "advisory" && pressure !== "critical";
 }
