@@ -1213,6 +1213,45 @@ kind therefore did nothing and said nothing until schema 81 admitted it. The
 writer now names its conflict target explicitly, so only a repeat filing is
 ignorable and an unadmitted kind fails loudly.
 
+### 54. Pasting an image failed because the store was "full" at 4.5% — *fixed*
+
+Raised as: "Image could not be added — Runtime request returned 507: private
+attachment storage is full." This is item 13, whose original evidence was
+discarded by an empty catch and which had been left as possibly unclosable. The
+507 named it.
+
+Measured on the live store: **64 files, exactly `MAX_ATTACHMENT_FILES`, holding
+5.8 MB against a 128 MB byte budget.** It refused writes at 4.5% of capacity.
+The seven-day expiry could not help either — the oldest file was two days old,
+so nothing would free up for another five.
+
+It also explains the earlier intermittent report, "it worked when I tried it a
+second time": attachments are content-addressed, so re-pasting the *same* image
+returns the existing file without needing room. Only a new image failed. The
+retry that appeared to work was the same picture.
+
+Two things were wrong. The file cap was the real bound while the byte cap did
+nothing — at 8 MiB per file, 64 files could never approach 128 MB — and a full
+store *refused* rather than making room, which is a cache that stops working the
+moment it is used.
+
+Fixed: the oldest attachments are evicted until the incoming one fits. Eviction
+can break an old image link, which the seven-day expiry already did; the
+difference is it now happens when the space is needed rather than on a calendar.
+
+**And the allowance now follows the disk**, on the operator's ruling: "The
+allowance should be a % of disk space, not 128. That is nothing with images
+coming in all the time especially on a large drive." It is 5% of free space,
+floored at the 128 MiB it replaces and capped at 8 GiB, re-read on every write.
+On this machine, with 11.9 GB free, that is 569 MiB rather than 128. It is also
+the right answer as a disk fills: the allowance shrinks with it and eviction
+gives the space back, where a fixed number would keep claiming space that is no
+longer there.
+
+Not changed: the email attachment store has the same shape but is nowhere near
+its bounds — 28 files and 4.3 MB against 2,048 files and 512 MB. It should get
+the same treatment, but it is not what failed.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.
