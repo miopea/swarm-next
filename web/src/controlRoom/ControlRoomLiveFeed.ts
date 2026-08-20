@@ -6,12 +6,23 @@ type Delay = (milliseconds: number, signal: AbortSignal) => Promise<void>;
 
 const RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000] as const;
 
+/// How long one poll may take before it is treated as hung rather than slow.
+///
+/// The server holds an unanswered poll for at most twenty seconds, so anything
+/// past this is not a slow answer. A backgrounded mobile tab can leave an
+/// in-flight fetch that never settles at all — it neither resolves nor rejects
+/// — and without a ceiling the loop waits on it forever while the last state it
+/// published stays "connected". The roster then shows work frozen where it
+/// stood, and nothing the operator does moves it.
+const POLL_CEILING_MS = 35_000;
+
 export class ControlRoomLiveFeed {
   #controller?: AbortController;
 
   constructor(
     private readonly fetchPage: FetchPage = fetchControlRoomEvents,
     private readonly delay: Delay = abortableDelay,
+    private readonly pollCeilingMs: number = POLL_CEILING_MS,
   ) {}
 
   start(
@@ -40,19 +51,33 @@ export class ControlRoomLiveFeed {
     let failures = 0;
     onStateChange("connecting");
     while (!signal.aborted) {
+      const poll = new AbortController();
+      const abortPoll = () => poll.abort();
+      signal.addEventListener("abort", abortPoll, { once: true });
+      let hung = false;
+      const ceiling = setTimeout(() => {
+        hung = true;
+        poll.abort();
+      }, this.pollCeilingMs);
       try {
-        const page = await this.fetchPage(operatorToken, cursor, signal);
+        const page = await this.fetchPage(operatorToken, cursor, poll.signal);
         if (signal.aborted) return;
         if (page.reset_required || page.events.length > 0) await onInvalidate(page);
         cursor = page.next_cursor;
         failures = 0;
         onStateChange("connected");
       } catch (error) {
-        if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
+        if (signal.aborted) return;
+        // A poll abandoned at the ceiling is a failure to retry, not the
+        // caller stopping the feed.
+        if (!hung && error instanceof DOMException && error.name === "AbortError") return;
         onStateChange("retrying");
         const delay = RETRY_DELAYS_MS[Math.min(failures, RETRY_DELAYS_MS.length - 1)];
         failures += 1;
         await this.delay(delay, signal).catch(() => undefined);
+      } finally {
+        clearTimeout(ceiling);
+        signal.removeEventListener("abort", abortPoll);
       }
     }
   }

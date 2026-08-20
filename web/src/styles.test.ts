@@ -156,3 +156,21 @@ test("keeps with-you and awaiting-you from reading as the same state", () => {
   // Borrowing the accent is what put it next to the warning tone.
   expect(stylesheet).not.toContain(".worker-state-with_operator { --worker-state: var(--accent-strong); }");
 });
+
+test("gives the worker picker as many rows as it has children, so its footer survives", () => {
+  // Reported from a phone: "The bottom 'Manage Workers' is cut off and I can't
+  // scroll up to see the button."
+  //
+  // The dialog has four children — heading, toolbar, list, footer button — and
+  // the template declared five rows. The list therefore landed in an `auto`
+  // row, which sizes to content and will not shrink, so a long roster grew past
+  // the dialog's max-height and pushed the footer out of a box that clips its
+  // overflow. The list's own `overflow-y: auto` never engaged because the row
+  // gave it all the height it asked for.
+  const dialog = /\.mobile-worker-dialog \{[^}]*\}/.exec(stylesheet)?.[0] ?? "";
+  const rows = /grid-template-rows:\s*([^;]+);/.exec(dialog)?.[1].trim();
+
+  expect(rows).toBe("auto auto minmax(0, 1fr) auto");
+  // The list is the row that gives way, and it scrolls rather than clipping.
+  expect(stylesheet).toContain(".mobile-worker-dialog-list { display: grid; min-height: 0; overflow-y: auto;");
+});

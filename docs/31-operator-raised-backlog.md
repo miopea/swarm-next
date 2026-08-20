@@ -1096,6 +1096,49 @@ workers never touch. Both properties are pinned by tests.
 The Hive-wide mutex stays. It serialises *cycles*, not messages within one, and
 it is what stops two overlapping cycles claiming the same delivery twice.
 
+### 51. Mobile: a frozen roster, and a picker whose footer was unreachable — *two fixed, two open*
+
+Seven emails, five with content. Taken together they are mostly one defect.
+
+**Frozen roster (fixed).** "It doesn't seem like the status of the workers are
+updating because scout is busy doing stuff and it's showing resting still. I've
+kicked all the workers in different ways and they're all still sitting in a
+resting state." With, from the day before, "there's no refresh button on mobile
+to force it to redraw" and "completely unusable on mobile right now" after
+locking the machine and walking away.
+
+Not a misclassification. The live feed is a long poll: the server holds an
+unanswered request for up to twenty seconds, and the client loops. A phone
+suspends a backgrounded tab, and the fetch it left in flight can never settle —
+it neither answers nor fails. The loop then waited on that promise forever,
+while the last state it published was `connected`. So the roster showed work
+frozen exactly where it stood, the pill claimed a healthy connection, and
+nothing the operator did moved it. Shown failing first.
+
+Fixed twice over: a poll is abandoned at a 35-second ceiling and retried, which
+is well clear of the server's twenty; and the feed reconnects the moment the
+page becomes visible, so returning to the tab is immediate rather than a wait
+for that ceiling.
+
+**Picker footer cut off (fixed).** "Scrolling doesn't seem to work on the picker
+modal. The bottom 'Manage Workers' is cut off and I can't scroll up to see the
+button." The dialog has four children and its template declared five rows, left
+over from an earlier layout. The roster list therefore landed in an `auto`
+track, which sizes to content and never shrinks, so a long roster grew past the
+dialog's `max-height` and pushed the footer out of a box that clips overflow.
+The list's own `overflow-y: auto` never engaged, because the row had given it
+every pixel it asked for. Shown failing first.
+
+**Still open — needs the operator's eye, not a guess.**
+
+- "On mobile, the selector gets bumped over by the open pill. Needs a
+  redesign." The operator says redesign, and a redesign is a layout decision
+  rather than a defect to fix silently. The two fixes above may change what
+  this looks like, so it is worth re-reading on a phone first.
+- A manual refresh control on mobile. Asked for explicitly. The reconnect above
+  removes the case that made it necessary, so the question is now whether it is
+  still wanted as an escape hatch or was only ever a workaround for the freeze.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.

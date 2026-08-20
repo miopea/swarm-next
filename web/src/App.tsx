@@ -332,7 +332,7 @@ export function App() {
     }
     const controller = new AbortController();
     const feed = new ControlRoomLiveFeed();
-    feed.start(
+    const connect = () => feed.start(
       operatorToken,
       async (page) => {
         const runtimeChanged = page.events.some((event) => event.kind === "runtime_changed");
@@ -383,7 +383,19 @@ export function App() {
       },
       setLiveFeedState,
     );
+    connect();
+    // A phone suspends a backgrounded tab, and the poll it left in flight may
+    // never settle — it neither answers nor fails. The feed abandons such a
+    // poll at its own ceiling, but reconnecting the moment the page comes back
+    // makes the roster current immediately instead of after that wait, which is
+    // the difference between returning to live work and returning to a screen
+    // frozen where it stood.
+    const reconnectOnReturn = () => {
+      if (document.visibilityState === "visible") connect();
+    };
+    document.addEventListener("visibilitychange", reconnectOnReturn);
     return () => {
+      document.removeEventListener("visibilitychange", reconnectOnReturn);
       controller.abort();
       feed.stop();
     };

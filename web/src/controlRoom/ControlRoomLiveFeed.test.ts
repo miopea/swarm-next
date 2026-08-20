@@ -72,3 +72,40 @@ test("does not acknowledge an event until snapshot invalidation succeeds", async
   expect(cursors).toEqual([0, 0]);
   expect(delay).toHaveBeenCalledWith(250, expect.any(AbortSignal));
 });
+test("a poll that never answers cannot wedge the feed", async () => {
+  // Reported from a phone: the roster kept showing every worker resting while
+  // they were plainly working, kicking them changed nothing, and the pill still
+  // read Connected. A backgrounded mobile tab can leave an in-flight fetch that
+  // never settles — it does not resolve and it does not reject — so the loop
+  // waited on it forever while the last state it published was "connected".
+  //
+  // The server holds a poll for at most twenty seconds, so anything past the
+  // ceiling is a hang rather than a slow answer.
+  const states: LiveFeedState[] = [];
+  const delay = vi.fn(async () => undefined);
+  const invalidated = vi.fn();
+  let attempt = 0;
+  const feed = new ControlRoomLiveFeed(
+    async (_token, _after, signal) => {
+      attempt += 1;
+      if (attempt === 1) {
+        // Never settles on its own, exactly like the suspended fetch.
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        });
+      }
+      return { events: [], next_cursor: 0, reset_required: true };
+    },
+    delay,
+    10,
+  );
+  invalidated.mockImplementation(async () => feed.stop());
+
+  feed.start("secret", invalidated, (state) => states.push(state));
+  await vi.waitFor(() => expect(invalidated).toHaveBeenCalledOnce());
+
+  // It gave up on the hung poll and got a real answer on the next one, rather
+  // than sitting on "connected" forever.
+  expect(attempt).toBe(2);
+  expect(states).toEqual(["connecting", "retrying", "connected"]);
+});
