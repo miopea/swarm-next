@@ -1204,6 +1204,15 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-detail-editor textarea { min-height: 8rem; resize: vertical; }
 .task-detail-editor select { max-width: 16rem; }
 .development-build-landed { margin: 0; font-size: .78rem; color: var(--good); font-weight: 500; }
+.decision-interview { display: grid; gap: 11px; }
+.decision-question { display: grid; gap: 7px; margin: 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-soft); }
+.decision-question legend { padding: 0 5px; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+.decision-question p { margin: 0; }
+.decision-question-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.decision-option { min-height: 36px; padding: 5px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-raised); font-size: .8rem; }
+.decision-option:hover { border-color: var(--accent-strong); }
+.decision-option.selected { border-color: var(--accent-strong); color: var(--bg); background: var(--accent-strong); font-weight: 600; }
+.decision-dismiss-reason { display: grid; min-width: 0; flex: 1 1 14rem; gap: 3px; }
 .engine-update-cost { margin: 0; font-size: .78rem; color: var(--muted); }
 .engine-update-cost.busy { color: var(--warn); font-weight: 500; }
 .task-detail-editor .field-help { margin-top: -3px; color: var(--muted); font-size: .72rem; }

@@ -16,7 +16,13 @@ use super::{
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ResolveDecisionRequest {
+    /// The chosen button. Empty when answering an interview, which has none.
+    #[serde(default)]
     action: String,
+    /// Answers keyed by question header. Present makes this an interview
+    /// answer rather than a ruling.
+    #[serde(default)]
+    answers: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(default)]
     note: String,
     /// Which control the operator used, so a disputed resolution can be traced
@@ -45,17 +51,30 @@ pub(super) async fn resolve_decision(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let decision_id = parse_decision_id(&decision_id)?;
-    let resolved = task_service(&state)?
-        .resolve_operator_decision(
+    let service = task_service(&state)?;
+    // Answers and an action are different resolutions of different record
+    // shapes, and the store rejects each against the wrong one, so this only
+    // has to route.
+    let resolved = if request.answers.is_empty() {
+        service.resolve_operator_decision(
             decision_id,
             &request.action,
             &request.note,
             &request.surface,
         )
-        .map_err(application_error)?;
+    } else {
+        service.answer_operator_decision(
+            decision_id,
+            &request.answers,
+            &request.note,
+            &request.surface,
+        )
+    }
+    .map_err(application_error)?;
     tracing::info!(
         decision_id = %decision_id,
-        action = %request.action,
+        action = %if request.answers.is_empty() { request.action.as_str() } else { "answered" },
+        answered_questions = request.answers.len(),
         surface = %if request.surface.is_empty() { "unreported" } else { &request.surface },
         "operator resolved a decision"
     );

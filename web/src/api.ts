@@ -713,6 +713,14 @@ export type DogfoodReport = {
   attachment_name: string | null;
   created_at: number;
 };
+/** One question in an interview-shaped decision request. */
+export type DecisionQuestion = {
+  header: string;
+  question: string;
+  options: string[];
+  multi_select?: boolean;
+};
+
 export type DecisionRequest = {
   id: string;
   hive_id: string;
@@ -726,9 +734,13 @@ export type DecisionRequest = {
   evidence: string;
   suggested_action: string;
   allowed_actions: string[];
+  /** Non-empty makes this an interview: answered by answering, not by a button. */
+  questions?: DecisionQuestion[];
   deadline: number | null;
   state: "pending" | "resolved";
   resolution_action: string | null;
+  /** The operator's answers, keyed by question header. Empty for a ruling. */
+  resolution_answers?: Record<string, string[]>;
   resolution_note: string;
   resolved_by_operator_id: string | null;
   created_at: number;
@@ -1346,7 +1358,7 @@ export async function fetchDecisions(operatorToken: string): Promise<DecisionReq
 }
 
 /** Which control the operator used, recorded so a disputed answer can be traced. */
-export type DecisionSurface = "inbox_action" | "inbox_dismiss";
+export type DecisionSurface = "inbox_action" | "inbox_dismiss" | "inbox_interview";
 
 export async function resolveDecision(
   operatorToken: string,
@@ -1359,6 +1371,22 @@ export async function resolveDecision(
     operatorToken,
     `/api/v1/decisions/${encodeURIComponent(decisionId)}/resolution`,
     { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, note, surface }) },
+  );
+  return response.json() as Promise<DecisionRequest>;
+}
+
+/** Answers an interview. Every declared question must carry an answer. */
+export async function answerDecision(
+  operatorToken: string,
+  decisionId: string,
+  answers: Record<string, string[]>,
+  note = "",
+  surface: DecisionSurface | "" = "inbox_interview",
+): Promise<DecisionRequest> {
+  const response = await authenticatedFetch(
+    operatorToken,
+    `/api/v1/decisions/${encodeURIComponent(decisionId)}/resolution`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ answers, note, surface }) },
   );
   return response.json() as Promise<DecisionRequest>;
 }

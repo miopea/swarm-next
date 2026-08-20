@@ -2200,6 +2200,23 @@ impl TaskService {
             .map_err(Into::into)
     }
 
+    /// Answers a pending interview as the authenticated local operator.
+    ///
+    /// # Errors
+    /// Propagates invalid identity, state, completeness, integrity, or
+    /// persistence failures.
+    pub fn answer_operator_decision(
+        &self,
+        id: DecisionRequestId,
+        answers: &std::collections::BTreeMap<String, Vec<String>>,
+        note: &str,
+        surface: &str,
+    ) -> Result<DecisionRequest, ApplicationError> {
+        self.store
+            .answer_decision_request(id, answers, note, surface)
+            .map_err(Into::into)
+    }
+
     /// Resolves one pending decision as the authenticated local operator.
     ///
     /// # Errors

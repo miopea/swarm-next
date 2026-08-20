@@ -273,3 +273,50 @@ test("cannot resolve a decision from the keyboard without choosing an action", a
   fireEvent.click(screen.getByRole("button", { name: "Minimal path" }));
   expect(onResolve).toHaveBeenCalledWith(pending, "minimal_path", "", "inbox_action");
 });
+
+test("answers an interview instead of offering buttons the asker had to guess", () => {
+  // A record carrying questions has no allowed_actions: the asker did not know
+  // what to offer, which is why it asked.
+  const onAnswer = vi.fn().mockResolvedValue(undefined);
+  const interview: DecisionRequest = {
+    ...pending,
+    id: "decision-interview",
+    title: "How wide should the mapping fix go?",
+    allowed_actions: [],
+    questions: [
+      { header: "Scope", question: "How wide?", options: ["This project", "Every project"] },
+    ],
+  };
+  render(
+    <DecisionInbox decisions={[interview]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} onAnswer={onAnswer} />,
+  );
+
+  expect(screen.getByText("How wide?")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Every project" }));
+  fireEvent.click(screen.getByRole("button", { name: "Send answers" }));
+
+  expect(onAnswer).toHaveBeenCalledWith(interview, { Scope: ["Every project"] }, "");
+});
+
+test("declining an interview requires a reason the worker can act on", () => {
+  // The recorded failure: dismissed with an empty note, so "hold for now" and
+  // "stop asking me" were stored identically.
+  const onResolve = vi.fn().mockResolvedValue(undefined);
+  const interview: DecisionRequest = {
+    ...pending,
+    id: "decision-interview-2",
+    allowed_actions: [],
+    questions: [{ header: "Scope", question: "How wide?", options: ["One", "All"] }],
+  };
+  render(
+    <DecisionInbox decisions={[interview]} tasks={[task]} workers={[worker]} busy={false} onResolve={onResolve} onAnswer={vi.fn()} />,
+  );
+
+  const decline = screen.getByRole("button", { name: "Decline with a reason" });
+  expect(decline).toBeDisabled();
+
+  fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "Holding until the mapping is fixed." } });
+  expect(decline).toBeEnabled();
+  fireEvent.click(decline);
+  expect(onResolve).toHaveBeenCalledWith(interview, "dismissed", "Holding until the mapping is fixed.", "inbox_dismiss");
+});

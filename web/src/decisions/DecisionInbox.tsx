@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
+import DecisionInterview from "./DecisionInterview";
 import WorkActivity from "./WorkActivity";
 
 const kindLabel = {
@@ -24,9 +25,10 @@ type Props = {
   onOpenTask?: (taskId: string) => void;
   onFetchActivity?: () => Promise<TaskActivityPage>;
   onResolve: (decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) => Promise<void>;
+  onAnswer?: (decision: DecisionRequest, answers: Record<string, string[]>, note: string) => Promise<void>;
 };
 
-export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, onOpenTask, onFetchActivity, onResolve }: Props) {
+export default function DecisionInbox({ decisions, tasks, workers, busy, focusDecisionId, focusRequest, additionalPendingCount = 0, attentionCards, onOpenTask, onFetchActivity, onResolve, onAnswer }: Props) {
   const [view, setView] = useState<"attention" | "activity">("attention");
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -124,7 +126,32 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                   {decision.evidence && <div><dt>Evidence</dt><dd>{decision.evidence}</dd></div>}
                   <div><dt>Suggested</dt><dd>{decision.suggested_action}</dd></div>
                 </dl>
-                {decision.state === "pending" ? (
+                {decision.state === "pending" && decision.questions?.length ? (
+                  <div className="decision-resolution">
+                    {/* An interview offers no buttons: the asker did not know
+                        what to offer, which is why it asked. Dismissal stays
+                        available, and needs a reason, so "hold for now" and
+                        "stop asking me" cannot be recorded identically. */}
+                    <DecisionInterview
+                      questions={decision.questions}
+                      busy={busy}
+                      onAnswer={(answers, answerNote) => { setDismissConfirmId(undefined); void onAnswer?.(decision, answers, answerNote); }}
+                    />
+                    <div className="decision-actions">
+                      <button
+                        type="button"
+                        className="secondary-button decision-dismiss"
+                        disabled={busy || !note.trim()}
+                        title={note.trim() ? "Decline to answer, telling the worker why" : "Dismissing an interview needs a reason the worker can act on"}
+                        onClick={() => { setDismissConfirmId(undefined); void onResolve(decision, "dismissed", note, "inbox_dismiss"); }}
+                      >Decline with a reason</button>
+                      <label className="decision-dismiss-reason">
+                        <span>Reason</span>
+                        <input value={note} maxLength={4000} disabled={busy} placeholder="Why you are not answering now" onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} />
+                      </label>
+                    </div>
+                  </div>
+                ) : decision.state === "pending" ? (
                   <div className="decision-resolution">
                     <label><span>Optional note</span><textarea value={note} maxLength={4000} onChange={(event) => setNotes((current) => ({ ...current, [decision.id]: event.target.value }))} placeholder="Add context for the worker" /></label>
                     <div className="decision-actions">

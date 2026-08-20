@@ -6,6 +6,7 @@ import {
   createBrowserSession,
   createTask,
   fetchDevelopmentRuntime,
+  answerDecision,
   resolveDecision,
   restartSupersededWorkers,
   type DecisionSurface,
@@ -627,6 +628,14 @@ export function App() {
   async function reorderOpenTasks(taskIds: string[]) {
     if (!operatorToken) return;
     await perform(async () => setTasks(await reorderTasks(operatorToken, taskIds)));
+  }
+
+  async function answerInboxDecision(decision: DecisionRequest, answers: Record<string, string[]>, note: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      const updated = await answerDecision(operatorToken, decision.id, answers, note);
+      setDecisions((current) => current.map((item) => item.id === updated.id ? updated : item));
+    }, "Sending your answers…");
   }
 
   async function resolveInboxDecision(decision: DecisionRequest, action: string, note: string, surface: DecisionSurface) {
@@ -1304,6 +1313,7 @@ export function App() {
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
               onFetchActivity={() => fetchRecentTaskActivity(operatorToken)}
               onResolve={resolveInboxDecision}
+              onAnswer={answerInboxDecision}
             />
           </div>
         ) : surface === "tasks" ? (
