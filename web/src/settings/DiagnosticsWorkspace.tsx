@@ -13,6 +13,8 @@ import {
   type HistoryDiagnostics,
   type HiveIdentity,
   type JiraReadiness,
+  type MachineResources,
+  type ResourcePressure,
   type RuntimeResources,
   type SessionSummary,
   type TerminalHostStatus,
@@ -147,6 +149,12 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
         <span><span className={`presence ${runtime.loaded ? "online" : ""}`} /><span><strong>{runtime.loaded ? "Live metrics" : "Checking metrics"}</strong><small>{runtime.resources ? `Sampled ${formatSampleTime(runtime.resources.sampled_at)} · refreshes every 10 seconds` : "Waiting for the runtime and terminal host"}</small></span></span>
         <button type="button" className="secondary-button" onClick={() => setRuntimeRevision((current) => current + 1)}>Refresh now</button>
       </div>
+      {/* What everything below is relative to. Six gigabytes of workers means
+          something different on a machine with thirty-two than on one with
+          eight, and every row underneath was being read without that. */}
+      <p className={`diagnostic-machine ${resourceClass(machine?.pressure)}`} role="status">
+        {machineHeadline(machine)}
+      </p>
       <dl className="diagnostic-list">
         <div><dt>Browser</dt><dd>{navigator.onLine ? "Online" : "Offline"}</dd></div>
         <div><dt>View switching</dt><dd>{routePaint
@@ -160,7 +168,7 @@ export default function DiagnosticsWorkspace({ feedbackRevision, operatorToken, 
         <div><dt>Loaded worker runtimes</dt><dd className={resourceClass(workerPressure)}>{workerMemory}</dd></div>
         <div><dt>Machine memory</dt><dd className={resourceClass(machine?.pressure)}>{machineMemoryLabel(machine)}</dd></div>
         <div><dt>Memory stall</dt><dd className={resourceClass(machine?.pressure)}>{pressureLabel(machine?.memory_pressure_avg10)}</dd></div>
-        <div><dt>Compute load</dt><dd>{loadLabel(machine?.load_average, machine?.logical_cpus)}</dd></div>
+        <div><dt>Compute load</dt><dd className={resourceClass(computePressure(machine))}>{loadLabel(machine?.load_average, machine?.logical_cpus)}</dd></div>
         <div><dt>Standing swap</dt><dd>{swapLabel(machine?.swap_used_bytes, machine?.swap_total_bytes, machine?.swap_used_percent)}</dd></div>
         <div><dt>Provider</dt><dd>{providerStatus}</dd></div>
         <div><dt>Jira</dt><dd>{jiraStatusLabel(jiraReadiness, jiraUnavailable)}</dd></div>
@@ -284,4 +292,45 @@ export function jiraStatusLabel(readiness: JiraReadiness | undefined, unavailabl
   if (readiness.connection === "credentials_invalid") return "Credentials need attention";
   if (readiness.connection === "permission_denied") return "Permission needs attention";
   return "Not connected";
+}
+
+/**
+ * What this machine is, and how it is coping.
+ *
+ * Stated once at the top because every memory figure below is only meaningful
+ * against it. The verdict comes from the kernel's own pressure reporting rather
+ * than from a byte count, which is what made ten healthy workers read as
+ * Critical on a machine that was not stalling at all.
+ */
+function machineHeadline(machine: MachineResources | undefined): string {
+  if (!machine || machine.memory_total_bytes == null) return "Machine capacity unavailable";
+  const cpus = machine.logical_cpus ? `${machine.logical_cpus} CPU${machine.logical_cpus === 1 ? "" : "s"}` : "unknown CPUs";
+  const verdict = machine.pressure === "critical"
+    ? "under memory pressure"
+    : machine.pressure === "advisory"
+      ? "starting to feel memory pressure"
+      : "not under pressure";
+  return `${formatBytes(machine.memory_total_bytes)} of memory · ${cpus} · ${verdict}`;
+}
+
+/**
+ * Whether the machine's processors are the thing to look at.
+ *
+ * Prefers the kernel's stall reporting; falls back to load against the number
+ * of processors, because a load of four means idle on forty cores and saturated
+ * on four.
+ */
+function computePressure(machine: MachineResources | undefined): ResourcePressure | undefined {
+  if (!machine) return undefined;
+  if (machine.cpu_pressure_avg10 != null) {
+    if (machine.cpu_pressure_avg10 >= 10) return "critical";
+    if (machine.cpu_pressure_avg10 >= 2) return "advisory";
+    return "normal";
+  }
+  const [oneMinute] = machine.load_average ?? [];
+  if (oneMinute == null || !machine.logical_cpus) return undefined;
+  const perCpu = oneMinute / machine.logical_cpus;
+  if (perCpu >= 2) return "critical";
+  if (perCpu >= 1) return "advisory";
+  return "normal";
 }

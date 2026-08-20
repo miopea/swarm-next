@@ -126,8 +126,6 @@ use auth::authorize;
 use terminal_socket::{TERMINAL_GRANT_PROTOCOL_PREFIX, TERMINAL_WEBSOCKET_PROTOCOL};
 
 const MAX_TERMINAL_WEBSOCKETS: usize = 32;
-const RESOURCE_ADVISORY_BYTES: u64 = 256 * 1024 * 1024;
-const RESOURCE_CRITICAL_BYTES: u64 = 512 * 1024 * 1024;
 const WORKER_RECOVERY_STABILITY_SECONDS: i64 = 5 * 60;
 /// How long a worker unloaded by a worker-engine replacement stays owed a
 /// revival. Long enough to outlast a slow engine swap and an API restart,
@@ -7638,30 +7636,36 @@ mod tests {
         );
     }
 
+    /// The whole-response path, with the boundaries themselves covered in
+    /// `runtime`'s own tests. What the operator saw was a layer holding a
+    /// large share of an idle machine being reported as Critical; a layer is
+    /// only worth naming when the machine it sits on is actually struggling.
     #[test]
-    fn resource_pressure_classification_is_explicit_at_each_boundary() {
-        let sample = |resident_memory_bytes| {
-            resource_response(Some(ProcessResourceSample {
-                resident_memory_bytes,
-                process_tree_resident_memory_bytes: resident_memory_bytes,
-                process_tree_process_count: resident_memory_bytes.map(|_| 1),
-            }))
+    fn a_layer_is_judged_against_the_machine_it_sits_on() {
+        let sample = |resident_memory_bytes, machine: &_| {
+            resource_response(
+                Some(ProcessResourceSample {
+                    resident_memory_bytes,
+                    process_tree_resident_memory_bytes: resident_memory_bytes,
+                    process_tree_process_count: resident_memory_bytes.map(|_| 1),
+                }),
+                machine,
+            )
         };
+        let idle = runtime::machine_of(32 * 1024 * 1024 * 1024, ResourcePressure::Normal);
+        let stalling = runtime::machine_of(8 * 1024 * 1024 * 1024, ResourcePressure::Critical);
+        let six_gibibytes = Some(6 * 1024 * 1024 * 1024);
         assert_eq!(
-            sample(Some(RESOURCE_ADVISORY_BYTES - 1)).pressure,
+            sample(six_gibibytes, &idle).pressure,
             ResourcePressure::Normal
         );
         assert_eq!(
-            sample(Some(RESOURCE_ADVISORY_BYTES)).pressure,
-            ResourcePressure::Advisory
-        );
-        assert_eq!(
-            sample(Some(RESOURCE_CRITICAL_BYTES)).pressure,
+            sample(six_gibibytes, &stalling).pressure,
             ResourcePressure::Critical
         );
-        assert_eq!(sample(None).pressure, ResourcePressure::Unavailable);
+        assert_eq!(sample(None, &idle).pressure, ResourcePressure::Unavailable);
         assert_eq!(
-            resource_response(None).pressure,
+            resource_response(None, &idle).pressure,
             ResourcePressure::Unavailable
         );
     }
@@ -12960,14 +12964,8 @@ mod tests {
         assert_eq!(resources.headers()[header::CACHE_CONTROL], "no-store");
         let resources = response_json(resources).await;
         assert_eq!(resources["policy"]["mode"], "observe_only");
-        assert_eq!(
-            resources["policy"]["advisory_bytes"],
-            RESOURCE_ADVISORY_BYTES
-        );
-        assert_eq!(
-            resources["policy"]["critical_bytes"],
-            RESOURCE_CRITICAL_BYTES
-        );
+        assert_eq!(resources["policy"]["advisory_percent"], 15);
+        assert_eq!(resources["policy"]["critical_percent"], 25);
         assert_eq!(resources["api"]["pressure"], "normal");
         assert_eq!(resources["terminal_host"]["pressure"], "normal");
         assert!(resources["api"]["resident_memory_bytes"].as_u64().is_some());

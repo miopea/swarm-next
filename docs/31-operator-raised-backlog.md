@@ -885,6 +885,82 @@ permanent.
 They are now forgotten once their work moves on. The mark still means what it
 says for work still waiting.
 
+### 43. Swarm Next needs a versioning system before others can use it
+
+Raised as: "we need to introduce a versioning system as we get close to opening
+Swarm Next to others."
+
+Today every build is `0.1.0-dev-<sha>-<timestamp>-<pid>` — a development
+identity, unique per build, with no ordering anyone outside this machine could
+use. Nothing distinguishes a release from a rebuild of the same commit.
+
+Related to item 34 and probably decided with it: a user-mode updater needs
+something to compare, so "which version is newer" has to have an answer before
+"is there an update" can.
+
+### 44. The product is now called Swarm
+
+Raised as: "At this point we can change it to just Swarm. I am going to update
+Swarm Legacy to start referring to it as that now too."
+
+So the naming becomes **Swarm** for this product and **Swarm Legacy** for the
+Python one, and the operator is making the matching change on that side.
+
+Worth separating when this is picked up, because the risk is not evenly spread:
+
+- **User-visible naming** — window title, control-room lockup, page copy,
+  documentation. Cheap and safe.
+- **On-disk and service identifiers** — `~/.local/state/swarm-next`, the
+  systemd unit names, the release directory, the MCP server key `swarm-next`,
+  crate names. Renaming these is a migration with real failure modes and no
+  user-visible benefit, and the two Swarms have to coexist on this machine
+  while Legacy is still running.
+
+The first is the rename the operator asked for. The second is a separate
+decision that should not ride along silently.
+
+### 45. Diagnostics does not read as a quick scan
+
+Raised as: "the diagnostics page isn't terribly the quick scan."
+
+Fourteen rows of equal visual weight, each a label and a value, with nothing
+saying which of them the operator should look at. The page's own heading is
+"Know which layer needs attention", and it does not answer that.
+
+### 46. Diagnostics judges layers without showing the machine — *fixed*
+
+Raised as: Critical on Loaded worker runtimes makes no sense on this machine;
+and separately, "the diag doesn't show the machine status — a machine with 32g
+of ram is very different than one with 8. Same with CPU load."
+
+Both are the same defect. Layer verdicts came from a fixed ceiling —
+`RESOURCE_CRITICAL_BYTES` of 512 MiB — applied to whatever was being measured.
+That was sized for one process and was being applied to the total of every
+loaded worker, where a single Claude process is already larger than the whole
+allowance. Ten healthy workers holding 6.0 GiB were therefore reported Critical
+on a machine using 45% of 31.3 GiB, while the kernel reported **0.0% memory
+stall**.
+
+The machine's own verdict was already being computed from PSI, correctly, and
+simply never shown.
+
+Fixed: a layer is judged as a share of the machine it is running on, and only
+named when the machine is actually under pressure. When nothing needs
+attention, the answer is nothing.
+
+The thresholds are 15% of the machine for advisory and 25% for critical, and
+neither fires while the machine itself reports Normal. The absolute byte
+constants are deleted rather than left unused, and the `policy` field of
+`/api/v1/runtime/resources` now reports the percentages it actually applies
+instead of byte ceilings it no longer consults.
+
+Diagnostics also states the machine once, above the rows: total memory,
+processor count, and whether it is under pressure. Every memory figure below is
+read against that number, and the page was not printing it. Compute load now
+carries a verdict too, from the kernel's CPU stall reporting where it exists and
+from load-per-processor where it does not — a load of four is idle on forty
+processors and saturated on four.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.

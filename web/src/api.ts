@@ -258,23 +258,24 @@ export type DevelopmentRuntime = {
 export type ResourcePressure = "normal" | "advisory" | "critical" | "unavailable";
 export type RuntimeResources = {
   sampled_at: number;
-  policy: { mode: "observe_only"; advisory_bytes: number; critical_bytes: number };
+  policy: { mode: "observe_only"; advisory_percent: number; critical_percent: number };
   api: ProcessResources & { pressure: ResourcePressure };
   terminal_host: ProcessResources & { pressure: ResourcePressure };
-  machine?: {
-    memory_total_bytes: number | null;
-    memory_available_bytes: number | null;
-    memory_used_percent: number | null;
-    swap_total_bytes: number | null;
-    swap_used_bytes: number | null;
-    swap_used_percent: number | null;
-    load_average: [number, number, number] | null;
-    logical_cpus: number | null;
-    memory_pressure_avg10: number | null;
-    cpu_pressure_avg10: number | null;
-    io_pressure_avg10: number | null;
-    pressure: ResourcePressure;
-  };
+  machine?: MachineResources;
+};
+export type MachineResources = {
+  memory_total_bytes: number | null;
+  memory_available_bytes: number | null;
+  memory_used_percent: number | null;
+  swap_total_bytes: number | null;
+  swap_used_bytes: number | null;
+  swap_used_percent: number | null;
+  load_average: [number, number, number] | null;
+  logical_cpus: number | null;
+  memory_pressure_avg10: number | null;
+  cpu_pressure_avg10: number | null;
+  io_pressure_avg10: number | null;
+  pressure: ResourcePressure;
 };
 export type HistoryDiagnostics = {
   retained_bytes: number;

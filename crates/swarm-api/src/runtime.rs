@@ -15,8 +15,8 @@ use swarm_terminal::{
 
 use crate::attach::MAX_ATTACH_GRANTS;
 use crate::{
-    ApiError, AppState, MAX_TERMINAL_WEBSOCKETS, RESOURCE_ADVISORY_BYTES, RESOURCE_CRITICAL_BYTES,
-    authorize, build_version, terminal_host::authorized_no_store_request, unix_timestamp,
+    ApiError, AppState, MAX_TERMINAL_WEBSOCKETS, authorize, build_version,
+    terminal_host::authorized_no_store_request, unix_timestamp,
 };
 
 const COORDINATOR_PROCESS_ADVISORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -61,8 +61,8 @@ struct RuntimeResourcesResponse {
     machine: MachineResourceResponse,
 }
 
-#[derive(Debug, Serialize)]
-struct MachineResourceResponse {
+#[derive(Debug, Default, Serialize)]
+pub(super) struct MachineResourceResponse {
     memory_total_bytes: Option<u64>,
     memory_available_bytes: Option<u64>,
     memory_used_percent: Option<f64>,
@@ -77,16 +77,33 @@ struct MachineResourceResponse {
     pressure: ResourcePressure,
 }
 
+/// A machine of a stated size and verdict, so tests can place a layer against
+/// one. The fields stay private: what a test needs to say is "a big idle
+/// machine" or "a small stalling one", not eleven readings.
+#[cfg(test)]
+pub(super) fn machine_of(total_bytes: u64, pressure: ResourcePressure) -> MachineResourceResponse {
+    MachineResourceResponse {
+        memory_total_bytes: Some(total_bytes),
+        pressure,
+        ..Default::default()
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ResourcePolicyResponse {
     mode: &'static str,
-    advisory_bytes: u64,
-    critical_bytes: u64,
+    /// Percentage of the machine's memory at which a layer becomes worth
+    /// naming, and at which it becomes the thing to look at. A share of the
+    /// machine rather than a byte ceiling: a fixed 512 MiB ceiling called ten
+    /// healthy workers Critical on a 32 GiB machine that was not stalling.
+    advisory_percent: u64,
+    critical_percent: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ResourcePressure {
+    #[default]
     Normal,
     Advisory,
     Critical,
@@ -319,24 +336,27 @@ pub(super) async fn resources(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let machine = sample_machine_resources();
     let terminal_host = if let Some(client) = &state.terminal_host {
         match client.request(&HostRequest::HostStatus).await {
-            Ok(HostResponse::HostStatus { status }) => resource_response(status.resources),
-            Ok(_) | Err(_) => resource_response(None),
+            Ok(HostResponse::HostStatus { status }) => {
+                resource_response(status.resources, &machine)
+            }
+            Ok(_) | Err(_) => resource_response(None, &machine),
         }
     } else {
-        resource_response(None)
+        resource_response(None, &machine)
     };
     let response = RuntimeResourcesResponse {
         sampled_at: unix_timestamp(),
         policy: ResourcePolicyResponse {
             mode: "observe_only",
-            advisory_bytes: RESOURCE_ADVISORY_BYTES,
-            critical_bytes: RESOURCE_CRITICAL_BYTES,
+            advisory_percent: LAYER_ADVISORY_PERCENT,
+            critical_percent: LAYER_CRITICAL_PERCENT,
         },
-        api: resource_response(Some(sample_current_process())),
+        api: resource_response(Some(sample_current_process()), &machine),
         terminal_host,
-        machine: sample_machine_resources(),
+        machine,
     };
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
 }
@@ -497,21 +517,135 @@ fn read_psi_avg10(path: &str) -> Option<f64> {
     })
 }
 
-pub(super) fn resource_response(sample: Option<ProcessResourceSample>) -> ProcessResourceResponse {
+/// A layer is judged by how much of the machine it holds, and only when the
+/// machine itself is under pressure. Below these shares the layer is not the
+/// reason for a stall even when the machine is stalling.
+const LAYER_ADVISORY_PERCENT: u64 = 15;
+const LAYER_CRITICAL_PERCENT: u64 = 25;
+
+/// How much of a machine one layer is holding, and whether that matters.
+///
+/// A byte count on its own says nothing. Six gigabytes across ten loaded
+/// workers is unremarkable on a machine with thirty-two and fatal on one with
+/// eight, and a fixed half-gigabyte ceiling reported ten healthy workers as
+/// Critical while the kernel was reporting no memory stall at all.
+///
+/// So pressure is read from the machine — how much it has left, and whether it
+/// is actually stalling — and a layer is named only when the machine is under
+/// pressure and that layer is a large enough share to be worth looking at. The
+/// question the page asks is which layer needs attention; when nothing does,
+/// the answer is nothing.
+fn layer_pressure(bytes: Option<u64>, machine: &MachineResourceResponse) -> ResourcePressure {
+    let Some(bytes) = bytes else {
+        return ResourcePressure::Unavailable;
+    };
+    // Integer percentage points rather than a ratio: the thresholds are whole
+    // percentages, and a float here buys nothing but a lossy cast.
+    let share = machine
+        .memory_total_bytes
+        .filter(|total| *total > 0)
+        .map(|total| bytes.saturating_mul(100) / total);
+    // Without the machine's size there is nothing to judge against, and a
+    // guess dressed as a verdict is worse than saying so.
+    let (Some(share), machine_pressure) = (share, machine.pressure) else {
+        return ResourcePressure::Unavailable;
+    };
+    match machine_pressure {
+        // A layer holding almost nothing is not the reason a machine is
+        // struggling, whatever the machine is doing.
+        ResourcePressure::Critical if share >= LAYER_CRITICAL_PERCENT => ResourcePressure::Critical,
+        ResourcePressure::Critical | ResourcePressure::Advisory
+            if share >= LAYER_ADVISORY_PERCENT =>
+        {
+            ResourcePressure::Advisory
+        }
+        _ => ResourcePressure::Normal,
+    }
+}
+
+pub(super) fn resource_response(
+    sample: Option<ProcessResourceSample>,
+    machine: &MachineResourceResponse,
+) -> ProcessResourceResponse {
     let resident_memory_bytes = sample.and_then(|sample| sample.resident_memory_bytes);
     let process_tree_resident_memory_bytes =
         sample.and_then(|sample| sample.process_tree_resident_memory_bytes);
     let process_tree_process_count = sample.and_then(|sample| sample.process_tree_process_count);
-    let pressure = match process_tree_resident_memory_bytes.or(resident_memory_bytes) {
-        Some(bytes) if bytes >= RESOURCE_CRITICAL_BYTES => ResourcePressure::Critical,
-        Some(bytes) if bytes >= RESOURCE_ADVISORY_BYTES => ResourcePressure::Advisory,
-        Some(_) => ResourcePressure::Normal,
-        None => ResourcePressure::Unavailable,
-    };
+    let pressure = layer_pressure(
+        process_tree_resident_memory_bytes.or(resident_memory_bytes),
+        machine,
+    );
     ProcessResourceResponse {
         resident_memory_bytes,
         process_tree_resident_memory_bytes,
         process_tree_process_count,
         pressure,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ResourcePressure, layer_pressure, machine_of as machine};
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// The report the operator sent: ten loaded worker runtimes holding six
+    /// gigabytes, on a machine with thirty-two and no memory stall at all,
+    /// were being called Critical against a fixed 512 MiB ceiling that a
+    /// single provider process passes on its own.
+    #[test]
+    fn a_large_share_of_an_unstressed_machine_is_normal() {
+        let machine = machine(32 * GIB, ResourcePressure::Normal);
+        assert_eq!(
+            layer_pressure(Some(6 * GIB), &machine),
+            ResourcePressure::Normal
+        );
+    }
+
+    /// The same six gigabytes on a machine a quarter the size, which is
+    /// actually stalling, is the thing to look at.
+    #[test]
+    fn a_large_share_of_a_stalling_machine_is_critical() {
+        let machine = machine(8 * GIB, ResourcePressure::Critical);
+        assert_eq!(
+            layer_pressure(Some(6 * GIB), &machine),
+            ResourcePressure::Critical
+        );
+    }
+
+    /// A layer holding almost nothing did not cause the stall and must not be
+    /// what the page points at.
+    #[test]
+    fn a_small_share_of_a_stalling_machine_is_normal() {
+        let machine = machine(32 * GIB, ResourcePressure::Critical);
+        assert_eq!(
+            layer_pressure(Some(GIB / 2), &machine),
+            ResourcePressure::Normal
+        );
+    }
+
+    /// Between the two: a meaningful share of a machine that is starting to
+    /// stall is worth flagging, but is not yet the emergency.
+    #[test]
+    fn a_meaningful_share_of_a_pressured_machine_is_advisory() {
+        let machine = machine(32 * GIB, ResourcePressure::Advisory);
+        assert_eq!(
+            layer_pressure(Some(6 * GIB), &machine),
+            ResourcePressure::Advisory
+        );
+    }
+
+    #[test]
+    fn a_layer_without_a_measurement_reports_nothing_rather_than_healthy() {
+        let healthy = machine(32 * GIB, ResourcePressure::Normal);
+        let unmeasured = machine(0, ResourcePressure::Normal);
+        assert_eq!(
+            layer_pressure(None, &healthy),
+            ResourcePressure::Unavailable
+        );
+        assert_eq!(
+            layer_pressure(Some(GIB), &unmeasured),
+            ResourcePressure::Unavailable
+        );
     }
 }

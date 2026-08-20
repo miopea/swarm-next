@@ -1170,6 +1170,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .apiary-blockers, .form-error { color: var(--bad); background: var(--bad-soft); }
 .task-board-retry { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .form-message { color: var(--good); background: var(--good-soft); }
+/* Stated once, above the rows, because every memory figure below is read
+   against it. Six gigabytes of workers is unremarkable on this machine and
+   ruinous on a smaller one, and the rows alone never said which. */
+.diagnostic-machine { margin: 0 0 10px; font-size: .8rem; font-weight: 600; }
 .diagnostic-list, .shortcut-list { display: grid; gap: 0; margin: 0; }
 .diagnostic-live-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .diagnostic-live-status > span { display: flex; min-width: 0; align-items: center; gap: 9px; }
