@@ -215,6 +215,8 @@ export type UnansweredEmailTask = {
   /** The drafted reply, so it can be read and sent without finding the task. */
   draft_id: string | null;
   draft_body: string | null;
+  /** The worker that carried this work. */
+  worker_name: string | null;
 };
 
 export async function fetchEmailTasksAwaitingReply(operatorToken: string): Promise<UnansweredEmailTask[]> {

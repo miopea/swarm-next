@@ -27,7 +27,9 @@ export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTas
     <section className="queen-attention-card" aria-labelledby="unanswered-email-heading">
       <span className="queen-attention-bee" aria-hidden="true"><BeeMascot expression="focused" /></span>
       <div>
-        <p className="eyebrow">Email</p>
+        {/* Whose work this was. The queue said something needed the operator
+            and never said who it belonged to, so every card looked the same. */}
+        <p className="eyebrow">{first.worker_name ? `${first.worker_name} · Email` : "Email"}</p>
         <h3 id="unanswered-email-heading">
           {awaiting.length === 1 ? "One finished task has not been answered" : `${awaiting.length} finished tasks have not been answered`}
         </h3>

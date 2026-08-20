@@ -14,6 +14,7 @@ const waiting = {
   drafted: false,
   draft_id: null,
   draft_body: null,
+  worker_name: "Public Website",
 };
 
 test("names the person still waiting and how to reach the task", () => {
@@ -78,4 +79,13 @@ test("puts the written reply where the operator already is, and sends it from th
   // Opening the task is still there for changing the wording, but it is no
   // longer the only way through.
   expect(screen.getByRole("button", { name: "Edit first" })).toBeInTheDocument();
+});
+
+test("names the worker whose work this was", () => {
+  // The operator: tasks on Needs you never say which worker they are directed
+  // to. A decision card names its requester; the attention cards named nobody,
+  // so every one of them looked like it belonged to no one.
+  render(<UnansweredEmailAttentionCard awaiting={[waiting]} onOpenTask={vi.fn()} />);
+
+  expect(screen.getByText("Public Website · Email")).toBeInTheDocument();
 });

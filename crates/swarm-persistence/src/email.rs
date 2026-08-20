@@ -162,6 +162,9 @@ pub struct UnansweredEmailTask {
     /// this that is theirs; the worker verifies that the work is running.
     pub draft_id: Option<String>,
     pub draft_body: Option<String>,
+    /// The worker that carried this work, so the queue says whose it was
+    /// rather than only that something is waiting.
+    pub worker_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -451,19 +454,30 @@ impl TaskStore {
         let mut statement = connection.prepare(
             "SELECT t.id, t.title, link.sender_name, link.sender_address,
                     MIN(link.received_at),
-                    EXISTS(SELECT 1 FROM email_reply_deliveries r WHERE r.task_id = t.id),
+                    EXISTS(SELECT 1 FROM email_reply_deliveries r
+                           WHERE r.task_id = t.id AND r.state = 'draft'),
                     (SELECT r.id FROM email_reply_deliveries r
                      WHERE r.task_id = t.id AND r.state = 'draft'
                      ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
                     (SELECT r.body FROM email_reply_deliveries r
                      WHERE r.task_id = t.id AND r.state = 'draft'
-                     ORDER BY r.created_at DESC, r.id DESC LIMIT 1)
+                     ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
+                    (SELECT w.name FROM worker_profiles w WHERE w.id = t.assigned_worker_id)
              FROM tasks t
              JOIN email_message_links link ON link.task_id = t.id
              WHERE t.state = 'completed' AND t.removed_at IS NULL
                AND NOT EXISTS (
                    SELECT 1 FROM email_reply_deliveries reply
                    WHERE reply.task_id = t.id AND reply.state = 'delivered'
+               )
+               -- A reply that failed permanently is not one waiting to be sent.
+               -- The operator deleted the source messages, so sending reported
+               -- the message was not found and the reply was cancelled; the
+               -- card then said someone was still waiting on a thread that no
+               -- longer exists, forever, with nothing able to clear it.
+               AND NOT EXISTS (
+                   SELECT 1 FROM email_reply_deliveries cancelled
+                   WHERE cancelled.task_id = t.id AND cancelled.state = 'cancelled'
                )
              GROUP BY t.id
              ORDER BY MIN(link.received_at), t.id",
@@ -479,6 +493,7 @@ impl TaskStore {
                     row.get::<_, bool>(5)?,
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -493,6 +508,7 @@ impl TaskStore {
                     drafted,
                     draft_id,
                     draft_body,
+                    worker_name,
                 )| {
                     Ok(UnansweredEmailTask {
                         task_id: TaskId::from_str(&id)
@@ -504,6 +520,7 @@ impl TaskStore {
                         drafted,
                         draft_id,
                         draft_body,
+                        worker_name,
                     })
                 },
             )
@@ -614,6 +631,14 @@ impl TaskStore {
         if queued >= MAX_PENDING_EMAIL_REPLIES {
             return Err(TaskStoreError::EmailReplyQueueFull);
         }
+        // One reply row per task, so a cancelled one blocks every future
+        // attempt until it is cleared. It was reachable from the UI in exactly
+        // one direction: into the dead end. Clearing it lets the operator write
+        // again if the thread comes back, and costs nothing if it does not.
+        transaction.execute(
+            "DELETE FROM email_reply_deliveries WHERE task_id = ?1 AND state = 'cancelled'",
+            [task_id.to_string()],
+        )?;
         let id = Uuid::now_v7().to_string();
         let idempotency_key = format!("email-resolution:{task_id}");
         let inserted = transaction.execute(
@@ -2263,5 +2288,68 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(reply.targets.len(), 1, "one person, one reply");
+    }
+
+    /// The operator deleted the source emails, so every send failed with the
+    /// message not being found and the reply was cancelled. The task then sat
+    /// in Needs you forever saying a reply was written and never sent — false
+    /// on both counts, and nothing in the product could clear it, because one
+    /// reply row per task means a cancelled one blocks every future attempt.
+    #[test]
+    fn a_thread_that_no_longer_exists_stops_being_reported_as_waiting() {
+        let store = TaskStore::in_memory().unwrap();
+        let imported = store
+            .import_email_message(&message(&[]), TaskPriority::Normal)
+            .unwrap();
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+        store
+            .record_task_deployment(imported.task.id, "production", "release-70", 1_786_730_100)
+            .unwrap();
+        let draft = store
+            .prepare_email_reply(imported.task.id, "Thank you — this is fixed.")
+            .unwrap();
+
+        // While it is a live draft, someone genuinely is waiting.
+        let waiting = store.completed_email_tasks_awaiting_a_reply().unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert!(waiting[0].drafted, "a live draft is written");
+
+        // The thread is gone, so sending fails permanently.
+        store.queue_email_reply(&draft.id).unwrap();
+        store.claim_email_reply().unwrap().unwrap();
+        store
+            .fail_email_reply(
+                &draft.id,
+                &EmailReplyFailure::Permanent("The email message was not found".into()),
+            )
+            .unwrap();
+
+        // Nobody is waiting on a thread that does not exist.
+        assert!(
+            store
+                .completed_email_tasks_awaiting_a_reply()
+                .unwrap()
+                .is_empty(),
+            "an unanswerable thread is not an unanswered one"
+        );
+
+        // And the dead end is no longer permanent: a new reply can be written.
+        store
+            .prepare_email_reply(imported.task.id, "Trying again on a thread that came back.")
+            .unwrap();
+        assert_eq!(
+            store
+                .completed_email_tasks_awaiting_a_reply()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

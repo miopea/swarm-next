@@ -19,9 +19,6 @@ use crate::{
     terminal_host::authorized_no_store_request, unix_timestamp,
 };
 
-const COORDINATOR_PROCESS_ADVISORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const COORDINATOR_PROCESS_CRITICAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-
 #[derive(Debug, Serialize)]
 pub(super) struct RuntimeLimitsResponse {
     terminal: TerminalRuntimeLimits,
@@ -433,34 +430,41 @@ fn sample_machine_resources() -> MachineResourceResponse {
 }
 
 pub(super) async fn coordinator_start_admission(state: &AppState) -> CoordinatorStartAdmission {
-    let machine = sample_machine_resources().pressure;
+    let machine = sample_machine_resources();
     let terminal_host = if let Some(client) = &state.terminal_host {
         match client.request(&HostRequest::HostStatus).await {
             Ok(HostResponse::HostStatus { status }) => {
-                coordinator_process_pressure(status.resources)
+                coordinator_process_pressure(status.resources, &machine)
             }
             Ok(_) | Err(_) => ResourcePressure::Unavailable,
         }
     } else {
         ResourcePressure::Unavailable
     };
-    combine_coordinator_start_admission(machine, terminal_host)
+    combine_coordinator_start_admission(machine.pressure, terminal_host)
 }
 
+/// Whether the terminal host is the reason a machine is struggling.
+///
+/// Judged as a share of the machine, exactly as the diagnostics page judges it.
+/// This was a fixed 4 GiB ceiling applied to the host's whole process tree —
+/// which is every loaded worker together — so ten healthy workers on a large
+/// machine crossed it and automatic starts were paused permanently. Queen then
+/// queued wakes that were never claimed, and the operator watched workers she
+/// said she had opened never come up.
+///
+/// The same mistake was fixed on the page that displays this; it survived here,
+/// where it actually stops work.
 pub(super) fn coordinator_process_pressure(
     sample: Option<ProcessResourceSample>,
+    machine: &MachineResourceResponse,
 ) -> ResourcePressure {
     let bytes = sample.and_then(|sample| {
         sample
             .process_tree_resident_memory_bytes
             .or(sample.resident_memory_bytes)
     });
-    match bytes {
-        Some(bytes) if bytes >= COORDINATOR_PROCESS_CRITICAL_BYTES => ResourcePressure::Critical,
-        Some(bytes) if bytes >= COORDINATOR_PROCESS_ADVISORY_BYTES => ResourcePressure::Advisory,
-        Some(_) => ResourcePressure::Normal,
-        None => ResourcePressure::Unavailable,
-    }
+    layer_pressure(bytes, machine)
 }
 
 pub(super) const fn combine_coordinator_start_admission(

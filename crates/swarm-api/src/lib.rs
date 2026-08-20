@@ -7727,19 +7727,40 @@ mod tests {
         );
     }
 
+    /// The operator watched Queen say she had opened My RCG and RCG Hub while
+    /// neither ever woke. Their wakes sat queued with zero attempts, because
+    /// automatic starts were paused: a fixed 4 GiB ceiling was being applied to
+    /// the terminal host's whole process tree, which is every loaded worker
+    /// together. Ten healthy workers crossed it and starts stopped for good.
+    ///
+    /// The identical mistake was fixed on the page that displays this and
+    /// survived here, where it does not merely mislead — it stops work.
     #[test]
-    fn coordinator_start_admission_does_not_treat_one_normal_provider_as_pressure() {
-        let sample = |resident_memory_bytes| {
-            runtime::coordinator_process_pressure(Some(ProcessResourceSample {
-                resident_memory_bytes: Some(resident_memory_bytes),
-                process_tree_resident_memory_bytes: Some(resident_memory_bytes),
-                process_tree_process_count: Some(2),
-            }))
+    fn a_busy_terminal_host_on_a_healthy_machine_does_not_pause_starts() {
+        let sample = |resident_memory_bytes, machine: &_| {
+            runtime::coordinator_process_pressure(
+                Some(ProcessResourceSample {
+                    resident_memory_bytes: Some(resident_memory_bytes),
+                    process_tree_resident_memory_bytes: Some(resident_memory_bytes),
+                    process_tree_process_count: Some(2),
+                }),
+                machine,
+            )
         };
+        let roomy = runtime::machine_of(32 * 1024 * 1024 * 1024, ResourcePressure::Normal);
+        let stalling = runtime::machine_of(8 * 1024 * 1024 * 1024, ResourcePressure::Critical);
 
-        assert_eq!(sample(512 * 1024 * 1024), ResourcePressure::Normal);
-        assert_eq!(sample(2 * 1024 * 1024 * 1024), ResourcePressure::Advisory);
-        assert_eq!(sample(4 * 1024 * 1024 * 1024), ResourcePressure::Critical);
+        // Six gigabytes of workers on a machine with thirty-two, not stalling.
+        assert_eq!(
+            sample(6 * 1024 * 1024 * 1024, &roomy),
+            ResourcePressure::Normal
+        );
+        // The same six on a machine a quarter the size that is actually
+        // struggling is a real reason to hold off.
+        assert_eq!(
+            sample(6 * 1024 * 1024 * 1024, &stalling),
+            ResourcePressure::Critical
+        );
     }
 
     #[tokio::test]
