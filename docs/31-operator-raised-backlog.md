@@ -178,17 +178,21 @@ answer was treated as "nothing to update", so the indicator vanished at the
 same moment the card did. It now keeps its last answer until something is
 actually learned.
 
-### 8. Takeover is visibility only — *decision drafted, needs the operator*
+### 8. Takeover is visibility only — *fixed*
 
 Engagement now names the device driving a worker (`a39a95c`), but there is no
 control to take it back. Claiming engagement without sending input would be a
 new input-authority path and needs an ADR, not a button.
 
 Drafted as [ADR 0049](decisions/0049-claiming-worker-engagement-without-input.md),
-status Proposed. It argues the claim should be granted immediately — there is
-one operator, so a second device asking is not contention — but on a shorter
-lease than typing earns, and without taking terminal geometry. Nothing is built:
-this needs an operator ruling first.
+now Accepted on the operator's ruling and built. The claim is granted
+immediately — there is one operator, so a second device asking is not
+contention — on a 90-second lease against the 300 seconds typing earns, and
+without taking terminal geometry.
+
+Reclaiming a screen and instructing an agent were the same button; they are not
+the same act, and now they are not the same button. Claiming a sleeping worker
+says why it cannot rather than silently claiming nothing.
 
 ### 9. A phone cannot see what a worker is carrying — *fixed*
 

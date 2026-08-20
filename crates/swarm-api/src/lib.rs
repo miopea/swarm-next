@@ -2632,6 +2632,10 @@ fn api_router(state: AppState) -> Router {
             delete(workers::stop_worker),
         )
         .route(
+            "/api/v1/workers/{worker_id}/engagement/{device_id}",
+            post(workers::claim_worker),
+        )
+        .route(
             "/api/v1/terminal/sessions",
             get(session_history::list_live_sessions).post(terminal_control::start),
         )
@@ -14492,5 +14496,87 @@ mod tests {
             .await
             .unwrap();
         serde_json::from_slice(&body).unwrap()
+    }
+
+    /// ADR 0049. A phone showing "On another desktop" named a device the
+    /// operator may have walked away from and offered nothing to do about it.
+    /// The only remedy was to type into the worker, which sends real input to a
+    /// real provider — reclaiming a screen and instructing an agent are not the
+    /// same act, and they were the same button.
+    #[tokio::test]
+    async fn a_device_claims_a_worker_by_arriving_not_by_typing() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/workspace/queen").unwrap();
+        let session_id = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session_id).unwrap();
+        let device_id = PresenceDeviceId::new();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store.clone()),
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/workers/{}/engagement/{device_id}",
+                        worker.id
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        // Granted, not negotiated: one operator moving between screens is not
+        // two parties contending for a worker.
+        let claimed = store.get_worker_profile(worker.id).unwrap();
+        let expires = claimed.engagement_expires_at.expect("the claim is held");
+        // On a shorter lease than typing earns, because engagement holds back
+        // the coordination a worker is owed and this claim cost nothing to make.
+        let held_for = expires - unix_timestamp();
+        assert!(
+            held_for <= terminal_socket::VIEWING_ENGAGEMENT_LEASE_SECONDS,
+            "held for {held_for}s"
+        );
+        assert!(
+            held_for < terminal_socket::OPERATOR_ENGAGEMENT_LEASE_SECONDS,
+            "held for {held_for}s"
+        );
+    }
+
+    /// A sleeping worker has no session to claim, and saying so is better than
+    /// silently claiming nothing.
+    #[tokio::test]
+    async fn claiming_a_sleeping_worker_says_why_it_cannot() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/workspace/queen").unwrap();
+        let app = router(
+            AppState::default()
+                .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+                .with_task_store(store),
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/workers/{}/engagement/{}",
+                        worker.id,
+                        PresenceDeviceId::new()
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(response).await["code"], "worker_not_running");
     }
 }

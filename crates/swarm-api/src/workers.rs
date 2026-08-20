@@ -11,7 +11,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use swarm_domain::{ProviderKind, WorkerId, WorkerProfile};
+use std::str::FromStr;
+use swarm_domain::{PresenceDeviceId, ProviderKind, WorkerId, WorkerProfile};
 use swarm_terminal::{HostRequest, ProviderActivity, TerminalSize};
 
 use super::{
@@ -19,6 +20,8 @@ use super::{
     default_terminal_rows, parse_worker_id, provider_activity, require_valid_size, task_store,
     task_store_error,
     terminal_host::request_host,
+    terminal_socket::VIEWING_ENGAGEMENT_LEASE_SECONDS,
+    unix_timestamp,
     worker_runtime::{reconcile_worker_bindings, start_worker_process},
     worker_view,
 };
@@ -972,4 +975,59 @@ mod repository_tests {
             }
         );
     }
+}
+
+/// Claims a worker for this device without sending it anything.
+///
+/// [ADR 0049]. A phone showing "On another desktop" named a device the operator
+/// may have walked away from and offered nothing to do about it; the only
+/// remedy was to type into the worker, which sends real input to a real
+/// provider. Reclaiming a screen and instructing an agent are not the same act.
+///
+/// Granted, not negotiated: engagement identifies a device, but every device
+/// here belongs to one operator, so a second device asking is that person
+/// saying where they now are rather than two parties contending.
+///
+/// The lease is shorter than typing earns and viewing does not renew it.
+/// Engagement holds back a worker's coordination, so a claim that costs nothing
+/// to make must not silence a worker for as long as demonstrated presence does.
+/// Typing converts it to a full lease through the path that already exists.
+/// Terminal geometry is untouched: ADR 0045 gives resize authority to the
+/// device actually typing, and this device is not.
+pub(super) async fn claim_worker(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath((worker_id, device_id)): AxumPath<(String, String)>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let worker_id = parse_worker_id(&worker_id)?;
+    let device_id = PresenceDeviceId::from_str(&device_id).map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_presence_device_id",
+            "device_id must be a UUID",
+        )
+    })?;
+    let store = task_store(&state)?;
+    let session_id = store
+        .get_worker_profile(worker_id)
+        .map_err(|error| task_store_error(&error))?
+        .active_session_id
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "worker_not_running",
+                "a sleeping worker has no session to claim",
+            )
+        })?;
+    store
+        .renew_worker_engagement(
+            session_id,
+            Some(device_id),
+            unix_timestamp(),
+            VIEWING_ENGAGEMENT_LEASE_SECONDS,
+        )
+        .map_err(|error| task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(StatusCode::NO_CONTENT.into_response())
 }

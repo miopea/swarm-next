@@ -22,6 +22,13 @@ const OUTBOUND_MESSAGE_CAPACITY: usize = 64;
 const OUTPUT_FRAME_TYPE: u8 = 1;
 const SNAPSHOT_FRAME_TYPE: u8 = 2;
 pub const OPERATOR_ENGAGEMENT_LEASE_SECONDS: i64 = 300;
+/// A claim made by arriving rather than by typing.
+///
+/// Shorter than the lease typing earns, and viewing does not renew it.
+/// Engagement holds back the coordination a worker is owed, so a claim that
+/// costs nothing to make must not silence a worker for as long as demonstrated
+/// presence does. Typing converts it to a full lease through the existing path.
+pub const VIEWING_ENGAGEMENT_LEASE_SECONDS: i64 = 90;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

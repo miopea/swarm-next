@@ -213,3 +213,15 @@ test("renders every header pill at one height, and lets the chrome yield before 
   expect(stylesheet).toMatch(/\.header-actions > \* \{[^}]*flex:\s*0 0 auto/);
   expect(stylesheet).toMatch(/\.mobile-worker-switcher-trigger \{[^}]*flex:\s*1 1 auto/);
 });
+
+test("keeps the age legible on a state that paints its own pill", () => {
+  // Reported: "when buzzing the time is hard to read." The age was written in a
+  // fixed --quiet grey, which is chosen against the panel — but buzzing fills
+  // the pill with --busy and writes on it in --panel. Grey on green measured
+  // 1.65:1 in light and 1.71:1 in dark, against the 4.5:1 this text size needs.
+  //
+  // A tint of the actual foreground is legible on every state by construction,
+  // because it is always a shade of whatever is already readable there.
+  expect(stylesheet).toContain(".worker-silence { color: inherit; opacity: .85;");
+  expect(stylesheet).not.toMatch(/\.worker-silence \{ color: var\(--quiet\)/);
+});

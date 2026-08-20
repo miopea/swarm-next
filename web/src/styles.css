@@ -1411,7 +1411,13 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .worker-unconfirmed-detail { flex: 0 0 auto; padding: 2px 9px; border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--line)); border-radius: 999px; color: var(--warn); font-size: .68rem; font-weight: 500; white-space: nowrap; }
 .worker-engaged-elsewhere { flex: 0 0 auto; padding: 2px 9px; border: 1px solid color-mix(in srgb, var(--accent-strong) 45%, var(--line)); border-radius: 999px; color: var(--muted); font-size: .68rem; white-space: nowrap; }
 .worker-unconfirmed { display: inline-flex; width: 14px; height: 14px; flex: 0 0 auto; align-items: center; justify-content: center; margin-left: 5px; border-radius: 50%; color: var(--panel); background: var(--warn); font-size: .58rem; font-weight: 700; vertical-align: middle; }
-.worker-silence { color: var(--quiet); font-weight: 400; font-variant-numeric: tabular-nums; }
+/* A tint of whatever the label is actually written in, rather than a fixed
+   grey. On a state with a solid fill — buzzing paints the pill green and writes
+   on it in panel — a fixed --quiet gave grey on green at 1.65:1, well under the
+   4.5:1 this text size needs, and the operator could not read the age. Tinting
+   the real foreground keeps it quieter than the label everywhere while staying
+   legible on every state: measured 4.76:1 light and 5.90:1 dark on buzzing. */
+.worker-silence { color: inherit; opacity: .85; font-weight: 400; font-variant-numeric: tabular-nums; }
 .brand-lockup { position: relative; }
 .brand-diagnostics { position: absolute; top: 0; right: 0; width: 28px; height: 28px; color: var(--quiet); }
 .brand-diagnostics:hover { color: var(--text); background: var(--panel-raised); }

@@ -2,7 +2,10 @@
 
 ## Status
 
-Proposed. Needs an operator ruling before any of it is built.
+Accepted, 2026-08-20, on the operator's ruling to proceed. Implemented: a device
+claims a worker with `POST /api/v1/workers/{worker_id}/engagement/{device_id}`,
+which sends the worker nothing. The claim is granted, holds a 90-second lease
+against the 300 seconds typing earns, and does not move terminal geometry.
 
 Raised by `docs/29`, which records takeover as visibility only, and by
 `docs/31` item 8. Extends [ADR 0045](0045-engaged-device-terminal-geometry.md)
