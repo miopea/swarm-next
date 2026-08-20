@@ -17,10 +17,9 @@ const outcomeDeliveryLabels = {
   uncertain: "Queen handoff uncertain — task remains authoritative",
 } as const;
 
-export default function TaskAssignment({ task, workers, workerRunning, busy, onAssign, onOpenWorker, onTransition, onStartWorker }: {
+export default function TaskAssignment({ task, workers, busy, onAssign, onOpenWorker, onTransition, onStartWorker }: {
   task: Task;
   workers: Worker[];
-  workerRunning: boolean;
   busy: boolean;
   onAssign: (task: Task, workerId: string) => Promise<void>;
   onOpenWorker: (sessionId: string) => void;
@@ -29,6 +28,11 @@ export default function TaskAssignment({ task, workers, workerRunning, busy, onA
 }) {
   const assignableWorkers = workers.filter((worker) => worker.role !== "queen");
   const targetWorker = assignableWorkers.find((worker) => worker.id === task.assigned_worker_id);
+  // Asked of the worker, not of the session this task was assigned to. A worker
+  // gets a new session every time it restarts, so judging from the recorded
+  // session made every task assigned before a restart offer to wake a worker
+  // that was already running.
+  const workerRunning = Boolean(targetWorker?.running && targetWorker.active_session_id);
 
   return (
     <div className="task-assignment-cell">

@@ -100,7 +100,7 @@ test("reads worker state as a scale rather than a palette", () => {
   // red is work that cannot proceed. Previously resting held the green and
   // buzzing the amber, and the two states most needing to differ — waiting on
   // the operator, and held by the operator — shared one colour.
-  expect(stylesheet).toContain(".worker-state-buzzing { --worker-state: var(--good); }");
+  expect(stylesheet).toContain(".worker-state-buzzing { --worker-state: var(--busy); }");
   expect(stylesheet).toContain(".worker-state-awaiting_operator { --worker-state: var(--warn); }");
   expect(stylesheet).toContain(".worker-state-with_operator { --worker-state: var(--accent-strong); }");
   expect(stylesheet).toContain(".worker-state-blocked { --worker-state: var(--bad); }");
@@ -117,4 +117,22 @@ test("moves only the worker state that is actually doing something", () => {
   );
   // Motion is never the only signal, and never forced on someone who asked for less.
   expect(stylesheet).toContain(".worker-row.worker-state-buzzing .presence { animation: none; }");
+});
+
+test("separates a working worker from a resting one by more than a shade", () => {
+  // Raised as: buzzing and resting look almost alike, impossible to notice a
+  // difference when scanning. Measured at the time: 14.6 dE apart in light and
+  // 13.3 in dark, on uppercase text at .58rem inside a 12% tint.
+  //
+  // --good is a soft success tone that sits right next to the resting grey, so
+  // buzzing gets its own colour rather than borrowing it.
+  expect(stylesheet).toContain(".worker-state-buzzing { --worker-state: var(--busy); }");
+  expect(stylesheet).toContain("--busy: #2f6b2a;");
+  expect(stylesheet).toContain("--busy: #7fd070;");
+
+  // And the difference does not rest on hue alone, for the same reason sleeping
+  // is a hollow dot rather than another shade.
+  expect(stylesheet).toContain(
+    ".worker-row.worker-state-buzzing .worker-attention-label { color: var(--panel); background: var(--busy); }",
+  );
 });

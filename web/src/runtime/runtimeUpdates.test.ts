@@ -124,3 +124,27 @@ test("replaces the answer as soon as any subsystem reports", () => {
 
   expect(settled?.kind).toBe("none");
 });
+
+test("does not report uncommitted work in progress as an update waiting", () => {
+  // The indicator would never go quiet while anyone is editing the checkout,
+  // and an alert that is always on is not an alert.
+  const summary = runtimeUpdateSummary(health("same"), host("same"), development({
+    reload_available: true,
+    source_dirty: true,
+    source_revision: "ed715fe3c3f3",
+    deployed_source_revision: "ed715fe3c3f3",
+  }));
+
+  expect(summary.kind).toBe("none");
+});
+
+test("still reports an update when the working copy is a different commit", () => {
+  const summary = runtimeUpdateSummary(health("same"), host("same"), development({
+    reload_available: true,
+    source_dirty: true,
+    source_revision: "9668d65abcde",
+    deployed_source_revision: "ed715fe3c3f3",
+  }));
+
+  expect(summary.kind).toBe("app");
+});

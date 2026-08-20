@@ -509,7 +509,6 @@ export default function TaskBoard({
                 jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
                 emailSources={emailTaskSources.filter((source) => source.task_id === task.id)}
                 operatorToken={operatorToken}
-                sessions={sessions}
                 workers={workers}
                 busy={busy}
                 onUpdate={onUpdate}
@@ -591,7 +590,6 @@ export default function TaskBoard({
                 jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
                 emailSources={emailTaskSources.filter((source) => source.task_id === task.id)}
                 operatorToken={operatorToken}
-                sessions={sessions}
                 workers={workers}
                 busy={busy}
                 onUpdate={onUpdate}

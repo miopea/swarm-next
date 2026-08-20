@@ -393,6 +393,95 @@ field. Narrowing the list is the Awake/All toggle's job, which needs no typing.
 The desktop rail keeps its own filter, and the shared roster-matching helpers
 are still used there.
 
+### 24. Buzzing and resting were the same colour — *fixed*
+
+Raised as: "buzzing and resting look almost alike, it is impossible to notice a
+difference when scanning."
+
+Measured rather than eyeballed: the two badge colours sat **14.6 dE apart in
+light and 13.3 in dark**, on uppercase text at `.58rem` inside a 12% tint.
+Above the threshold where two colours are formally identical, and far below what
+a scan can separate at that size. Buzzing was borrowing `--good`, a soft success
+tone that happens to sit right next to the resting grey.
+
+Note for next time: WCAG contrast was the wrong instrument here and nearly led
+to the wrong colour. It measures lightness only, so it cannot tell green from
+grey — a darker green scored *worse* against the grey while being obviously
+different. Perceptual distance is the measure that matches the complaint.
+
+Fixed with a dedicated `--busy` (37 dE light, 51 dE dark) and, so the difference
+does not rest on hue at all, a filled badge for buzzing against the flat tint
+everything else uses — the same reasoning that made sleeping a hollow dot.
+
+### 25. Tasks offered to wake a worker that was already working — *fixed*
+
+Raised as: "why would it say to wake a worker that is already working."
+
+Running-ness was judged from `task.assigned_session_id` — the session the task
+was assigned to. A worker gets a **new session every time it restarts**, so
+after the engine update at 21:47 that lookup found nothing for every previously
+assigned task, and each one offered to wake a worker that was running at that
+moment.
+
+It asks the worker now, not the session the task remembers.
+
+### 29. The reload card named the same revision on both sides — *fixed*
+
+Raised as: "this makes no sense, they are all the same build, and I still see
+the App and API update pill." The card read `Revision ed715fe is active. Build
+and switch the browser and API to working-copy revision ed715fe.`
+
+Confirmed from the live runtime: both revisions were `ed715fe3c3f3` and
+`source_dirty` was true. The working copy differed by **uncommitted changes** —
+which no revision comparison can show — and the card never mentioned them, so it
+named one commit twice and offered a reload for no visible reason.
+
+Fixed in two places. The card says the working copy has uncommitted changes on
+top of the running revision, which is the actual reason to rebuild. The header
+indicator stops reporting that case at all: uncommitted changes at the same
+revision are work in progress, not an update waiting, and an indicator that
+cannot go quiet while anyone is editing the checkout is not an indicator.
+
+### 26. An imported email task woke its worker and then nothing happened
+
+Raised as: an email task was imported for a sleeping worker; the wake worked and
+the worker came up, but the terminal "just sits blank" and the task shows
+`Briefing waits for a quiet moment`. Several minutes passed with no change.
+
+The worker (D365 Solutions) shows `resting`, the task shows `IN PROGRESS`, and
+the briefing appears to be held rather than delivered. Not yet diagnosed. The
+hold reason is the interesting part: the terminal is at an idle prompt, which
+should be the quiet moment it is waiting for.
+
+### 27. Pop-out duplicates the whole window instead of detaching one thing
+
+Raised as three parts:
+
+- The pop-out control belongs in the board area rather than where it sits now.
+- A popped-out window should show **only the thing that was popped out**, not a
+  second copy of the whole app.
+- The item that was popped out should then be greyed out in the main window, or
+  clicking it should focus the window that already holds it. Two copies of one
+  surface is the outcome to avoid.
+
+### 28. Queen automation reports a stuck review, and nothing moves it
+
+Raised as: "why isn't the Queen on a cron or polling cycle? When I go in, she is
+sitting idle but the pill badge at the top says the same thing and links to
+settings. Then on Needs you there is this, which is useless right now."
+
+The state observed: `Review needs attention — Delivery was interrupted before
+Swarm could confirm completion. Retry resumes this same review after you check
+Queen's terminal.` It appears in three places at once — the Queen terminal
+header, the Settings automation panel, and a Needs-you card — and none of them
+move it forward on their own. Meanwhile Queen sits idle rather than running on a
+cycle, and the counters read `17` stale/exited cases with `0` needing judgment.
+
+Three distinct complaints inside one report, worth separating when this is
+picked up: automation does not resume on its own; the same message is repeated
+in three surfaces without any of them being the place to act; and the Needs-you
+card offers no action that resolves it.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.

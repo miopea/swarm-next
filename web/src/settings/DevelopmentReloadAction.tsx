@@ -37,6 +37,12 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
   // A finished build said nothing about having finished. The card went back to
   // offering a reload — correctly, because newer commits exist — and the
   // operator could not tell whether the build they asked for had landed.
+  // The working copy can differ from what is running without being a different
+  // commit: uncommitted changes are a reason to rebuild that no revision
+  // comparison can show. Naming the same revision on both sides and offering a
+  // reload anyway reads as nonsense.
+  const uncommittedOnly = runtime.source_dirty
+    && runtime.source_revision === runtime.deployed_source_revision;
   const lastBuildLanded = runtime.state === "ready" ? (
     <p className="development-build-landed" role="status">
       The last build completed, and revision {runningRevision} is serving this page.
@@ -83,7 +89,9 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
     <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status">
       <header><div><span className="runtime-component-name">App and API</span><strong>Development reload available</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header>
       {lastBuildLanded}
-      <p>Revision {runningRevision} is active. Build and switch the browser and API to working-copy revision {workingRevision}.</p>
+      <p>{uncommittedOnly
+        ? <>Revision {runningRevision} is active, and the working copy has uncommitted changes on top of it. Building picks those up.</>
+        : <>Revision {runningRevision} is active. Build and switch the browser and API to working-copy revision {workingRevision}.</>}</p>
       <small>A failed compile is rejected and {runningRevision} remains active. Claude, Codex, and the worker engine are not restarted.</small>
       {!confirming ? (
         <button className="secondary-button" disabled={busy} onClick={() => setConfirming(true)}>Reload development build</button>

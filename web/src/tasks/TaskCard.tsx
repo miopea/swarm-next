@@ -4,7 +4,6 @@ import {
   type EmailTaskSource,
   type JiraComment,
   type JiraTaskLink,
-  type SessionSummary,
   type Task,
   type TaskActivityPage,
   type TaskState,
@@ -24,7 +23,6 @@ export type TaskCardProps = {
   jiraLink?: JiraTaskLink;
   emailSources: EmailTaskSource[];
   operatorToken: string;
-  sessions: SessionSummary[];
   workers: Worker[];
   busy: boolean;
   onUpdate: (task: Task, input: TaskUpdateInput) => Promise<void>;
@@ -49,8 +47,7 @@ export type TaskCardProps = {
   onDragEnd: () => void;
 };
 
-export default function TaskCard({ task, jiraLink, emailSources, operatorToken, sessions, workers, busy, onUpdate, onRemove, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: TaskCardProps) {
-  const assigned = sessions.find((session) => session.session_id === task.assigned_session_id);
+export default function TaskCard({ task, jiraLink, emailSources, operatorToken, workers, busy, onUpdate, onRemove, onTransition, onAssign, onStartWorker, onOpenWorker, onFetchActivity, onFetchJiraComments, onAddJiraComment, onRetryJira, canMoveEarlier, canMoveLater, onMoveEarlier, onMoveLater, onDropBefore, dropTarget, onDragTarget, onDragLeave, onDragStart, onDragEnd }: TaskCardProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activity, setActivity] = useState<TaskActivityPage>();
   const [historyError, setHistoryError] = useState(false);
@@ -124,7 +121,7 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
       <h4>{task.title}</h4>
       {task.description && <p className="task-description">{task.description}</p>}
       {task.state !== "completed" && (
-        <TaskAssignment task={task} workers={workers} workerRunning={Boolean(assigned?.running)} busy={busy} onAssign={onAssign} onOpenWorker={onOpenWorker} onTransition={onTransition} onStartWorker={onStartWorker} />
+        <TaskAssignment task={task} workers={workers} busy={busy} onAssign={onAssign} onOpenWorker={onOpenWorker} onTransition={onTransition} onStartWorker={onStartWorker} />
       )}
       <div className="task-actions">
         <button className="text-button" disabled={busy} onClick={() => setDetailsOpen(true)}>Edit</button>

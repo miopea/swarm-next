@@ -32,6 +32,10 @@
   --ink: var(--text);
   --link: var(--accent-strong);
   --good: #748766;
+  /* Work actually happening. Distinct from --good, which is a soft success
+     tone that sits 14 dE from the resting grey — technically different and
+     indistinguishable at badge size. */
+  --busy: #2f6b2a;
   --good-soft: #dce5d2;
   --sage-soft: var(--good-soft);
   --warn: #d69c28;
@@ -72,6 +76,7 @@
   --accent-strong: #e9b74f;
   --accent-soft: #443b24;
   --good: #9aaa89;
+  --busy: #7fd070;
   --good-soft: #314333;
   --warn: #dfaa40;
   --warn-soft: #4a4026;
@@ -208,7 +213,7 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    words, and only the live state moves. */
 .worker-state-sleeping { --worker-state: var(--quiet); }
 .worker-state-resting { --worker-state: var(--muted); }
-.worker-state-buzzing { --worker-state: var(--good); }
+.worker-state-buzzing { --worker-state: var(--busy); }
 .worker-state-awaiting_operator { --worker-state: var(--warn); }
 .worker-state-with_operator { --worker-state: var(--accent-strong); }
 .worker-state-blocked { --worker-state: var(--bad); }
@@ -225,6 +230,10 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 }
 /* Waiting on the operator is the one state the roster should be able to find at
    a glance, so it carries weight as well as hue. */
+/* Buzzing carries weight as well as hue, so a scan separates it from resting
+   without depending on colour at all — the same reason sleeping is a hollow
+   dot rather than a different shade. */
+.worker-row.worker-state-buzzing .worker-attention-label { color: var(--panel); background: var(--busy); }
 .worker-row.worker-state-awaiting_operator .worker-attention-label { color: var(--warn); font-weight: 600; }
 
 .start-worker { display: grid; gap: 8px; margin: 14px 0 4px; padding: 14px 10px 4px; border-top: 1px solid var(--line); }

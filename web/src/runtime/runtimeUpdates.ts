@@ -81,7 +81,13 @@ export function runtimeUpdateSummary(
     };
   }
 
-  if (development?.enabled && development.reload_available) {
+  // Uncommitted changes at the same revision are work in progress, not an
+  // update waiting to be applied. The settings card still offers the build;
+  // the indicator does not nag about it, because it would never go quiet
+  // while anyone is editing the checkout.
+  const onlyUncommitted = development?.source_dirty
+    && development.source_revision === development.deployed_source_revision;
+  if (development?.enabled && development.reload_available && !onlyUncommitted) {
     const revision = development.source_revision?.slice(0, 7);
     return {
       kind: "app",

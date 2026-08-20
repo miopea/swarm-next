@@ -164,3 +164,22 @@ test("says nothing about a last build when none has run", () => {
 
   expect(screen.getByLabelText("App and API status")).not.toHaveTextContent("The last build completed");
 });
+
+test("says uncommitted changes are the reason, not a revision that reads identical", () => {
+  // Observed: both halves named ed715fe and it still offered a reload. The
+  // working copy differed by uncommitted changes, which no revision comparison
+  // can show, so the card named the same commit twice and explained nothing.
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-ed715fe3c3f3-20260820003934-235175",
+    state: "ready",
+    reload_available: true,
+    deployed_source_revision: "ed715fe3c3f3",
+    source_revision: "ed715fe3c3f3",
+    source_dirty: true,
+  }} />);
+
+  const status = screen.getByLabelText("App and API status");
+  expect(status).toHaveTextContent("the working copy has uncommitted changes on top of it");
+  expect(status).not.toHaveTextContent("switch the browser and API to working-copy revision");
+});
