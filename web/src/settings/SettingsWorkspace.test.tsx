@@ -147,6 +147,10 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByRole("group", { name: "Confirm worker engine update" })).toHaveTextContent("Restart 1 active worker now?");
   fireEvent.click(screen.getByRole("button", { name: "Stop workers and update" }));
   expect(onUpdateWorkerEngine).toHaveBeenCalledOnce();
+  // Healthy checks collapse now: the page leads with its verdict and keeps the
+  // evidence behind a count. These rows are all healthy in this fixture, so the
+  // full list has to be asked for.
+  fireEvent.click(await screen.findByRole("button", { name: /Show all \d+ checks/ }, { timeout: 5_000 }));
   const terminalHost = await screen.findByText("Terminal host", {}, { timeout: 5_000 });
   expect(terminalHost.parentElement).toHaveTextContent("Terminal hostHealthy · 0.1.0-host");
   expect((await screen.findByText("API memory", {}, { timeout: 5_000 })).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
