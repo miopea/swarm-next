@@ -806,6 +806,26 @@ has a reason to exist — the Queen terminal, the settings panel, the Needs-you
 queue — so this is a presentation judgment rather than a defect, and the
 substance of the complaint was that none of them could act, which is now false.
 
+### 40. One settings test failed under load and passed alone — *fixed*
+
+Not operator-raised. Found while verifying something else: it failed twice in
+full runs and passed four times in isolation, then again later.
+
+That test drives ten unrelated things across a hundred and sixty lines —
+navigation, presence policy, lock detection, Queen policy, resources, saved
+reports, the theme — with **seven separate waits**, each on the default
+one-second budget. Every one of them is a chance to exceed it while the whole
+suite competes for CPU, which is exactly the pattern that produced "fails
+together, passes alone".
+
+The waits are given room, because they assert behaviour rather than speed —
+the same reasoning applied to the lazy settings surface in `4a42df9`. The size
+is the underlying reason there were so many chances to trip, and that is
+recorded in the test rather than fixed: splitting a test somebody else wrote,
+while chasing a timing failure, is two changes at once.
+
+Verified by five full runs and three shuffled runs, all 451 passing.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.

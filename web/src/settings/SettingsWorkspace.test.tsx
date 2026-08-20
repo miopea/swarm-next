@@ -14,6 +14,13 @@ afterEach(() => {
   else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
 });
 
+// This one test drives ten unrelated things — navigation, presence policy, lock
+// detection, Queen policy, resources, saved reports, and the theme — across a
+// hundred and sixty lines and seven separate waits. Each wait is a chance to
+// exceed the default one-second budget when the whole suite is competing for
+// CPU, which is why it failed under load and passed alone. The waits are given
+// room here because they assert behaviour, not speed; the size is the reason
+// there are so many of them to trip over.
 test("shows subsystem diagnostics, previews a sanitized report, and changes the selected theme", async () => {
   const createObjectURL = vi.fn().mockReturnValue("blob:dogfood-screenshot");
   const revokeObjectURL = vi.fn();
@@ -124,7 +131,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getAllByText("Meadow Hive").length).toBeGreaterThan(0);
   expect(screen.getByText("Bea")).toBeInTheDocument();
   expect(screen.getAllByText("Personal Hive").length).toBeGreaterThan(0);
-  expect(await screen.findByText("Jira not connected")).toBeInTheDocument();
+  expect(await screen.findByText("Jira not connected", {}, { timeout: 5_000 })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Bring Jira into your Hive" }).closest("section")).toHaveTextContent("Owned tasks continue; new shared claims wait.");
   expect(screen.getByText("Live updates").parentElement).toHaveTextContent("Live updatesConnected");
   expect(screen.getByText("Running workers").parentElement).toHaveTextContent("Running workers1");
@@ -140,9 +147,9 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   expect(screen.getByRole("group", { name: "Confirm worker engine update" })).toHaveTextContent("Restart 1 active worker now?");
   fireEvent.click(screen.getByRole("button", { name: "Stop workers and update" }));
   expect(onUpdateWorkerEngine).toHaveBeenCalledOnce();
-  const terminalHost = await screen.findByText("Terminal host");
+  const terminalHost = await screen.findByText("Terminal host", {}, { timeout: 5_000 });
   expect(terminalHost.parentElement).toHaveTextContent("Terminal hostHealthy · 0.1.0-host");
-  expect((await screen.findByText("API memory")).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
+  expect((await screen.findByText("API memory", {}, { timeout: 5_000 })).parentElement).toHaveTextContent("API memoryNormal · 18.0 MiB");
   expect(screen.getByText("Terminal host service").parentElement).toHaveTextContent("Terminal host service9.0 MiB");
   expect(screen.getByText("Loaded worker runtimes").parentElement).toHaveTextContent("Loaded worker runtimesNormal · 476.0 MiB · 1 loaded");
   expect(screen.getByText("Live metrics")).toBeInTheDocument();
@@ -151,19 +158,19 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   const resourceRequests = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("runtime/resources")).length;
   const resourceRequestsBeforeRefresh = resourceRequests();
   fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
-  await vi.waitFor(() => expect(resourceRequests()).toBeGreaterThan(resourceRequestsBeforeRefresh));
+  await vi.waitFor(() => expect(resourceRequests()).toBeGreaterThan(resourceRequestsBeforeRefresh), { timeout: 5_000 });
   expect(screen.getByText("Needs you").parentElement).toHaveTextContent("Needs youAlt1");
   expect(screen.getByText("Tasks").parentElement).toHaveTextContent("TasksAlt2");
   expect(screen.getByText("Workers").parentElement).toHaveTextContent("WorkersAlt3");
   expect(screen.getByText("Settings").parentElement).toHaveTextContent("SettingsAlt4");
   expect(screen.getByText("Quick navigation").parentElement).toHaveTextContent("Quick navigationAltK");
-  const savedReportSummary = await screen.findByText("Terminal wrapped too narrowly", { selector: "summary span" });
+  const savedReportSummary = await screen.findByText("Terminal wrapped too narrowly", { selector: "summary span" }, { timeout: 5_000 });
   expect(savedReportSummary).toBeInTheDocument();
   fireEvent.click(savedReportSummary);
   expect(screen.getByText("Worker remains readable")).toBeInTheDocument();
   expect(screen.getByText("Attached privately")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Download screenshot" }));
-  await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce(), { timeout: 5_000 });
   expect(click).toHaveBeenCalledOnce();
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:dogfood-screenshot");
 
