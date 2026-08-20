@@ -212,6 +212,7 @@ impl ServerHandler for AgentMcp {
             comment_jira_task_tool(),
             record_deployment_tool(),
             draft_email_reply_tool(),
+            create_task_tool(),
             list_decisions_tool(),
             request_decision_tool(),
         ];
@@ -219,7 +220,6 @@ impl ServerHandler for AgentMcp {
             tools.extend([
                 list_workers_tool(),
                 list_coordination_attention_tool(),
-                create_task_tool(),
                 assign_task_tool(),
                 list_apiary_hives_tool(),
                 list_apiary_tasks_tool(),
@@ -1035,14 +1035,14 @@ fn finish_automation_run_tool() -> Tool {
 fn create_task_tool() -> Tool {
     tool(
         "swarm_create_task",
-        "Queen only: create one durable draft task. Use for work that should survive sessions; do not use for casual operator steering.",
+        "Create one durable draft task, for work that should survive this session. Any worker may record work it has found, in its own repository or another; the task lands as an unassigned draft, so this records work rather than routing it. Queen assigns. Do not use for casual operator steering.",
         &json!({
             "type": "object",
             "properties": {
                 "title": { "type": "string", "minLength": 1, "maxLength": 240 },
                 "description": { "type": "string", "maxLength": 10000, "default": "" },
                 "priority": { "type": "string", "enum": ["low", "normal", "high", "urgent"], "default": "normal" },
-                "workspace": { "type": "string", "minLength": 1, "maxLength": 4096 }
+                "workspace": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Absolute path of the repository the work belongs to, which is what routing reads. Use the target repository's path, not your own, when the work belongs elsewhere." }
             },
             "required": ["title", "workspace"],
             "additionalProperties": false
@@ -1396,6 +1396,24 @@ mod tests {
     use swarm_persistence::JiraProjectBindingInput;
     use tempfile::tempdir;
 
+    /// Tools Queen holds and a worker must never see. Recording work is not on
+    /// this list: a worker files drafts, and only Queen routes them.
+    const QUEEN_ONLY_TOOLS: &[&str] = &[
+        "swarm_preview_jira_project",
+        "swarm_sync_jira_project",
+        "swarm_refresh_jira_project",
+        "swarm_list_apiary_tasks",
+        "swarm_list_apiary_hives",
+        "swarm_create_apiary_task",
+        "swarm_claim_apiary_task",
+        "swarm_send_apiary_task_to_worker",
+        "swarm_transition_apiary_task",
+        "swarm_list_coordination_attention",
+        "swarm_finish_automation_run",
+        "swarm_assign_task",
+        "swarm_list_jira_projects",
+    ];
+
     fn setup() -> (
         AgentBridge,
         TaskStore,
@@ -1541,33 +1559,17 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>();
-        assert!(queen_names.contains(&"swarm_create_task"));
-        assert!(queen_names.contains(&"swarm_assign_task"));
-        assert!(queen_names.contains(&"swarm_list_apiary_tasks"));
-        assert!(queen_names.contains(&"swarm_list_apiary_hives"));
-        assert!(queen_names.contains(&"swarm_create_apiary_task"));
-        assert!(queen_names.contains(&"swarm_claim_apiary_task"));
-        assert!(queen_names.contains(&"swarm_send_apiary_task_to_worker"));
-        assert!(queen_names.contains(&"swarm_transition_apiary_task"));
-        assert!(queen_names.contains(&"swarm_list_jira_projects"));
-        assert!(queen_names.contains(&"swarm_preview_jira_project"));
-        assert!(queen_names.contains(&"swarm_sync_jira_project"));
-        assert!(queen_names.contains(&"swarm_refresh_jira_project"));
-        assert!(queen_names.contains(&"swarm_list_jira_comments"));
-        assert!(queen_names.contains(&"swarm_comment_jira_task"));
-        assert!(queen_names.contains(&"swarm_list_coordination_attention"));
-        assert!(queen_names.contains(&"swarm_finish_automation_run"));
-        assert!(!worker_names.contains(&"swarm_preview_jira_project"));
-        assert!(!worker_names.contains(&"swarm_sync_jira_project"));
-        assert!(!worker_names.contains(&"swarm_refresh_jira_project"));
-        assert!(!worker_names.contains(&"swarm_list_apiary_tasks"));
-        assert!(!worker_names.contains(&"swarm_list_apiary_hives"));
-        assert!(!worker_names.contains(&"swarm_create_apiary_task"));
-        assert!(!worker_names.contains(&"swarm_claim_apiary_task"));
-        assert!(!worker_names.contains(&"swarm_send_apiary_task_to_worker"));
-        assert!(!worker_names.contains(&"swarm_transition_apiary_task"));
-        assert!(!worker_names.contains(&"swarm_list_coordination_attention"));
-        assert!(!worker_names.contains(&"swarm_finish_automation_run"));
+        for name in QUEEN_ONLY_TOOLS {
+            assert!(queen_names.contains(name), "Queen is missing {name}");
+            assert!(!worker_names.contains(name), "a worker was offered {name}");
+        }
+        for name in [
+            "swarm_create_task",
+            "swarm_list_jira_comments",
+            "swarm_comment_jira_task",
+        ] {
+            assert!(queen_names.contains(&name), "Queen is missing {name}");
+        }
         assert_eq!(
             worker_names,
             [
@@ -1575,11 +1577,12 @@ mod tests {
                 "swarm_transition_task",
                 "swarm_list_jira_comments",
                 "swarm_comment_jira_task",
-                // Answering the person who wrote in is part of the work, so a
-                // worker holds both halves of it: where the fix is running, and
-                // the reply itself. Sending stays the operator's.
+                // A worker holds every half of its own work: where the fix is
+                // running, the reply to whoever asked, and the follow-up it
+                // found. Sending and routing stay above it.
                 "swarm_record_deployment",
                 "swarm_draft_email_reply",
+                "swarm_create_task",
                 "swarm_list_decisions",
                 "swarm_request_decision"
             ]
@@ -1928,8 +1931,12 @@ mod tests {
         );
     }
 
+    /// A worker asked to file follow-up work had no tool for it and stalled,
+    /// so the work was simply lost. Recording is now open to any worker;
+    /// routing is not. The draft it writes is inert until Queen assigns it,
+    /// which is the boundary that actually matters.
     #[tokio::test]
-    async fn queen_can_create_work_but_worker_cannot_elevate_via_tool_name() {
+    async fn a_worker_records_work_it_finds_but_cannot_route_it() {
         let (bridge, store, queen_id, worker_id, _) = setup();
         let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
         let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
@@ -1954,14 +1961,45 @@ mod tests {
 
         let worker = response_json(
             handle(
-                bridge,
+                bridge.clone(),
                 mcp_request(Some(&worker_token), "tools/call", &arguments),
             )
             .await,
         )
         .await;
-        assert_eq!(worker["result"]["isError"], true);
-        assert_eq!(store.list_tasks().unwrap().len(), 1);
+        assert_eq!(worker["result"]["isError"], false);
+        let tasks = store.list_tasks().unwrap();
+        assert_eq!(tasks.len(), 2);
+        // Recorded, not routed: nothing a worker files is claimable until
+        // someone readies and assigns it.
+        assert!(tasks.iter().all(|task| task.state == TaskState::Draft));
+
+        let elevated = response_json(
+            handle(
+                bridge,
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_assign_task",
+                        "arguments": {
+                            "task_id": tasks[0].id.to_string(),
+                            "worker_id": worker_id.to_string()
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(elevated["result"]["isError"], true);
+        assert!(
+            store
+                .list_tasks()
+                .unwrap()
+                .iter()
+                .all(|task| task.assigned_worker_id.is_none())
+        );
     }
 
     #[tokio::test]

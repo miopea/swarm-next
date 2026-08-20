@@ -961,6 +961,30 @@ carries a verdict too, from the kernel's CPU stall reporting where it exists and
 from load-per-processor where it does not — a load of four is idle on forty
 processors and saturated on four.
 
+### 47. A worker had no way to record work it found — *fixed*
+
+Raised as: "the Swarm Next MCP has no way for workers to create tasks. Is that
+by design? I just asked scout to do a couple for architecture and it got
+confused because there is no tool to do it."
+
+It was by design, and the design was wrong. `swarm_create_task` existed but was
+gated `require_queen` and only listed for Queen, so a worker asked to file
+follow-up work found no tool, could not say why, and the work was lost.
+
+The gate was defending the wrong thing. What must stay Queen's is **routing** —
+deciding who works on what and when. Recording that work exists is not routing.
+A created task lands as an unassigned `draft`: it is not queued, not claimable,
+and cannot be worked until someone readies and assigns it.
+
+Fixed: any worker may create a draft task, in its own repository or another —
+the cross-repository case is the one that prompted this. `swarm_assign_task`
+stays Queen-only, and the boundary is now asserted as such rather than as a
+blanket denial.
+
+**A connected worker will not see the new tool until its session reconnects.**
+A worker's MCP tool schema is fixed when the session connects, so Scout keeps
+the old list until it is restarted.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.

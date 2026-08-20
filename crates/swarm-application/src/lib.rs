@@ -2029,10 +2029,19 @@ impl TaskService {
         self.store.list_worker_profiles().map_err(Into::into)
     }
 
-    /// Creates a draft in the local Hive. Only Queen may originate durable work through MCP.
+    /// Creates a draft in the local Hive.
+    ///
+    /// Open to any worker, not only Queen. A worker that discovers follow-up
+    /// work — in its own repository or another — had no way to record it and
+    /// simply lost it. The operator hit this directly: a worker asked to file
+    /// architecture tasks found no tool for it and stalled.
+    ///
+    /// A draft is inert. It is not assigned, not queued, and cannot be worked
+    /// until someone readies it, so recording work is not routing it. Routing
+    /// stays Queen's, which is the authority boundary that matters here.
     ///
     /// # Errors
-    /// Denies worker callers and propagates validation or persistence failures.
+    /// Propagates validation or persistence failures.
     pub fn create_task(
         &self,
         principal: AgentPrincipal,
@@ -2041,7 +2050,6 @@ impl TaskService {
         priority: TaskPriority,
         workspace: &str,
     ) -> Result<Task, ApplicationError> {
-        require_queen(principal)?;
         self.store
             .create_task_with_details_as(
                 title,
@@ -2572,8 +2580,11 @@ mod tests {
         );
     }
 
+    /// A worker records work and cannot route or bless it. Creating a draft
+    /// is deliberately on the near side of that line: the work a worker finds
+    /// is lost otherwise, and a draft is inert until someone readies it.
     #[test]
-    fn worker_cannot_create_assign_or_approve_completion() {
+    fn a_worker_records_work_but_cannot_route_or_approve_it() {
         let (service, queen, worker) = setup();
         let session_id = WorkerSessionId::new();
         service
@@ -2595,14 +2606,19 @@ mod tests {
             .assign_task(AgentPrincipal::from(&queen), task.id, worker.id)
             .unwrap();
 
-        assert!(matches!(
-            service.create_task(
+        let recorded = service
+            .create_task(
                 worker_principal,
-                "Nope",
+                "Follow-up the worker found",
                 "",
                 TaskPriority::Normal,
-                &worker.workspace
-            ),
+                &worker.workspace,
+            )
+            .unwrap();
+        assert_eq!(recorded.state, TaskState::Draft);
+        assert!(recorded.assigned_worker_id.is_none());
+        assert!(matches!(
+            service.assign_task(worker_principal, recorded.id, worker.id),
             Err(ApplicationError::NotAuthorized)
         ));
         assert!(matches!(
