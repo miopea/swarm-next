@@ -145,7 +145,7 @@ export function App() {
   const [workerVisibility, setWorkerVisibility] = useState<WorkerVisibility>(readWorkerVisibility);
   const [workerQuery, setWorkerQuery] = useState("");
   const [terminalConnection, setTerminalConnection] = useState<string>();
-  const { runtimeUpdate, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
+  const { runtimeUpdates, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
   const [repository, setRepository] = useState<RepositoryState | null>();
   const [popoutBlocked, setPopoutBlocked] = useState(false);
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
@@ -1122,18 +1122,22 @@ export function App() {
             is mostly a misclick risk. */}
         <div className="rail-footer">
           <RuntimeStatus state={loadState} />
-          {operatorToken && runtimeUpdate && runtimeUpdate.kind !== "none" ? (
+          {/* One per subsystem rather than only the most severe: they are
+              independent and can all be true at once, and ranking them into a
+              single pill hid the others until the first was dealt with. */}
+          {operatorToken ? runtimeUpdates.map((update) => (
             <button
+              key={update.kind}
               type="button"
-              className={`runtime-update runtime-update-${runtimeUpdate.kind}`}
-              title={runtimeUpdate.detail}
-              aria-label={`${runtimeUpdate.label}. ${runtimeUpdate.detail}`}
+              className={`runtime-update runtime-update-${update.kind}`}
+              title={update.detail}
+              aria-label={`${update.label}. ${update.detail}`}
               onClick={() => openSettings("settings-runtime")}
             >
-              {runtimeUpdate.busy ? <span className="runtime-update-spinner" aria-hidden="true" /> : null}
-              {runtimeUpdate.label}
+              {update.busy ? <span className="runtime-update-spinner" aria-hidden="true" /> : null}
+              {update.label}
             </button>
-          ) : null}
+          )) : null}
         </div>
         <div className="rail-resize-handle" role="separator" aria-label="Resize worker area" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={480} aria-valuenow={workerRail.width} tabIndex={0} onPointerDown={workerRail.start} onPointerMove={workerRail.move} onPointerUp={workerRail.finish} onPointerCancel={workerRail.finish} onKeyDown={workerRail.resizeWithKeyboard} />
       </aside>

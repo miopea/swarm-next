@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { fetchDevelopmentRuntime, fetchHealth, fetchProviderCapabilities, fetchTerminalHostStatus } from "../api";
-import { nextRuntimeUpdate, type RuntimeUpdateSummary } from "./runtimeUpdates";
+import { nextRuntimeUpdates, type RuntimeUpdateSummary } from "./runtimeUpdates";
 
 const RUNTIME_UPDATE_REFRESH_MS = 15_000;
 
@@ -22,7 +22,7 @@ export function useRuntimeUpdate(
   operatorToken: string | undefined,
   refreshMs = RUNTIME_UPDATE_REFRESH_MS,
 ) {
-  const [update, setUpdate] = useState<RuntimeUpdateSummary>();
+  const [updates, setUpdates] = useState<RuntimeUpdateSummary[]>();
 
   const refresh = useCallback(async () => {
     if (!operatorToken) return;
@@ -32,13 +32,13 @@ export function useRuntimeUpdate(
       fetchDevelopmentRuntime(operatorToken).catch(() => undefined),
       fetchProviderCapabilities(operatorToken).catch(() => undefined),
     ]);
-    setUpdate((previous) =>
-      nextRuntimeUpdate(previous, health, host, development, providers?.superseded ?? []));
+    setUpdates((previous) =>
+      nextRuntimeUpdates(previous, health, host, development, providers?.superseded ?? []));
   }, [operatorToken]);
 
   useEffect(() => {
     if (!operatorToken) {
-      setUpdate(undefined);
+      setUpdates(undefined);
       return;
     }
     void refresh();
@@ -46,5 +46,5 @@ export function useRuntimeUpdate(
     return () => window.clearInterval(interval);
   }, [operatorToken, refresh, refreshMs]);
 
-  return { runtimeUpdate: update, refreshRuntimeUpdate: refresh };
+  return { runtimeUpdates: updates ?? [], refreshRuntimeUpdate: refresh };
 }

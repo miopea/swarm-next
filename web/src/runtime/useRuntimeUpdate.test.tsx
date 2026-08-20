@@ -33,8 +33,8 @@ test("reports a waiting update without being asked to refresh", async () => {
   const { result } = renderHook(() => useRuntimeUpdate("secret"));
   await act(async () => { await Promise.resolve(); });
 
-  expect(result.current.runtimeUpdate?.kind).toBe("app");
-  expect(result.current.runtimeUpdate?.label).toContain("App and API");
+  expect(result.current.runtimeUpdates.map((entry) => entry.kind)).toEqual(["app"]);
+  expect(result.current.runtimeUpdates[0].label).toContain("App and API");
 });
 
 test("notices an update that appears while the operator is looking elsewhere", async () => {
@@ -44,12 +44,12 @@ test("notices an update that appears while the operator is looking elsewhere", a
 
   const { result } = renderHook(() => useRuntimeUpdate("secret", 15_000));
   await act(async () => { await Promise.resolve(); });
-  expect(result.current.runtimeUpdate?.kind).toBe("none");
+  expect(result.current.runtimeUpdates).toEqual([]);
 
   available = true;
   await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
 
-  expect(result.current.runtimeUpdate?.kind).toBe("app");
+  expect(result.current.runtimeUpdates.map((entry) => entry.kind)).toEqual(["app"]);
 });
 
 test("says nothing at all before the operator is authenticated", async () => {
@@ -58,5 +58,5 @@ test("says nothing at all before the operator is authenticated", async () => {
   const { result } = renderHook(() => useRuntimeUpdate(undefined));
   await act(async () => { await Promise.resolve(); });
 
-  expect(result.current.runtimeUpdate).toBeUndefined();
+  expect(result.current.runtimeUpdates).toEqual([]);
 });

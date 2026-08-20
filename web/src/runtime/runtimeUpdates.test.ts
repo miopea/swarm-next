@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { DevelopmentRuntime, Health, TerminalHostStatus } from "../api";
-import { nextRuntimeUpdate, runtimeUpdateSummary } from "./runtimeUpdates";
+import { nextRuntimeUpdates, runtimeUpdates, runtimeUpdateSummary } from "./runtimeUpdates";
 
 const health = (buildId: string): Health => ({
   status: "ok",
@@ -71,27 +71,34 @@ test("says a worker engine replacement is under way, and outranks everything whi
   expect(summary.busy).toBe(true);
 });
 
-test("work in progress outranks work waiting", () => {
-  const summary = runtimeUpdateSummary(
+test("a build in progress is reported even beside a worker engine update", () => {
+  // This used to assert that a running build outranked everything, which was
+  // only ever true because a single pill had to choose. Both are reported now,
+  // so neither hides the other.
+  const all = runtimeUpdates(
     health("new"),
     host("old"),
     development({ state: "building", reload_available: true }),
   );
+  const building = all.find((entry) => entry.kind === "building");
 
-  expect(summary.kind).toBe("building");
-  expect(summary.busy).toBe(true);
-  expect(summary.detail).toContain("abcdef1");
+  expect(all.map((entry) => entry.kind)).toEqual(["worker_engine", "building"]);
+  expect(building?.busy).toBe(true);
+  expect(building?.detail).toContain("abcdef1");
 });
 
-test("a stopped build outranks everything, since nothing else will move it", () => {
-  const summary = runtimeUpdateSummary(
+test("a stopped build is reported, since nothing else will move it", () => {
+  const all = runtimeUpdates(
     health("new"),
     host("old"),
     development({ state: "failed", reload_available: true }),
   );
+  const failed = all.find((entry) => entry.kind === "failed");
 
-  expect(summary.kind).toBe("failed");
-  expect(summary.busy).toBe(false);
+  expect(failed).toBeDefined();
+  expect(failed?.busy).toBe(false);
+  // And the engine update beside it is not swallowed by the failure.
+  expect(all.some((entry) => entry.kind === "worker_engine")).toBe(true);
 });
 
 test("stays quiet when development mode is off", () => {
@@ -115,14 +122,14 @@ test("keeps the last answer when a refresh learns nothing", () => {
   // exactly then.
   const building = runtimeUpdateSummary(health("same"), host("same"), development({ state: "building" }));
 
-  expect(nextRuntimeUpdate(building, undefined, undefined, undefined)).toBe(building);
+  expect(nextRuntimeUpdates([building], undefined, undefined, undefined)).toEqual([building]);
 });
 
 test("replaces the answer as soon as any subsystem reports", () => {
   const building = runtimeUpdateSummary(health("same"), host("same"), development({ state: "building" }));
-  const settled = nextRuntimeUpdate(building, health("same"), host("same"), development({}));
+  const settled = nextRuntimeUpdates([building], health("same"), host("same"), development({}));
 
-  expect(settled?.kind).toBe("none");
+  expect(settled).toEqual([]);
 });
 
 test("does not report uncommitted work in progress as an update waiting", () => {
@@ -180,4 +187,44 @@ test("counts a worker once when both providers are behind", () => {
   ]);
 
   expect(summary.detail).toContain("2 running workers");
+});
+
+test("reports every pending update, not only the most severe", () => {
+  // Ranked into one pill, a provider update stayed hidden behind a worker
+  // engine update until that was dealt with — and they are independent.
+  const all = runtimeUpdates(
+    health("new"),
+    host("old"),
+    development({ reload_available: true }),
+    [{ provider: "claude_code", version: "2.1.237", installed_at: 1, worker_ids: ["a"] }],
+  );
+
+  expect(all.map((entry) => entry.kind)).toEqual(["worker_engine", "provider", "app"]);
+});
+
+test("orders them by what they cost the operator", () => {
+  // The engine takes workers away; a provider update is installed and running
+  // nowhere until each worker restarts; App and API leaves workers online.
+  const all = runtimeUpdates(health("same"), host("same"), development({ reload_available: true }), [
+    { provider: "codex", version: null, installed_at: 1, worker_ids: ["a"] },
+  ]);
+
+  expect(all.map((entry) => entry.kind)).toEqual(["provider", "app"]);
+});
+
+test("says nothing at all when every subsystem is current", () => {
+  expect(runtimeUpdates(health("same"), host("same"), development({}), [])).toEqual([]);
+});
+
+test("reports one entry per subsystem, never two for the same one", () => {
+  // A failed build and an available reload are the same subsystem disagreeing
+  // with itself; only the current state of it is reported.
+  const all = runtimeUpdates(
+    health("same"),
+    host("same"),
+    development({ state: "failed", reload_available: true }),
+    [],
+  );
+
+  expect(all.map((entry) => entry.kind)).toEqual(["failed"]);
 });

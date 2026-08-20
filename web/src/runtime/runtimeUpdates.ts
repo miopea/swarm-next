@@ -37,12 +37,10 @@ const IDLE: RuntimeUpdateSummary = {
  * The indicator leads to that page, so a word that appears in one and not the
  * other sends the operator looking for something that is not there.
  */
-export function runtimeUpdateSummary(
+function workerEngineUpdate(
   health: Health | undefined,
   host: TerminalHostStatus | undefined,
-  development: DevelopmentRuntime | undefined,
-  superseded: SupersededProvider[] = [],
-): RuntimeUpdateSummary {
+): RuntimeUpdateSummary | undefined {
   if (host?.draining) {
     return {
       kind: "worker_engine",
@@ -51,7 +49,32 @@ export function runtimeUpdateSummary(
       busy: true,
     };
   }
+  if (workerEngineUpdateRequired(health, host)) {
+    return {
+      kind: "worker_engine",
+      label: "Worker engine update",
+      detail: "A worker engine update is installed but not running. Applying it restarts loaded workers.",
+      busy: false,
+    };
+  }
+  return undefined;
+}
 
+function providerUpdate(superseded: SupersededProvider[]): RuntimeUpdateSummary | undefined {
+  if (superseded.length === 0) return undefined;
+  const workers = new Set(superseded.flatMap((entry) => entry.worker_ids)).size;
+  const named = superseded
+    .map((entry) => `${entry.provider === "codex" ? "Codex" : "Claude"}${entry.version ? ` ${entry.version}` : ""}`)
+    .join(" and ");
+  return {
+    kind: "provider",
+    label: "Provider update",
+    detail: `${named} is installed, and ${workers} running worker${workers === 1 ? "" : "s"} started before that, so ${workers === 1 ? "it is" : "they are"} still running the older release.`,
+    busy: false,
+  };
+}
+
+function appUpdate(development: DevelopmentRuntime | undefined): RuntimeUpdateSummary | undefined {
   if (development?.state === "failed") {
     return {
       kind: "failed",
@@ -60,7 +83,6 @@ export function runtimeUpdateSummary(
       busy: false,
     };
   }
-
   if (development?.state === "building" || development?.state === "requested") {
     const revision = development.source_revision?.slice(0, 7);
     return {
@@ -72,38 +94,12 @@ export function runtimeUpdateSummary(
       busy: true,
     };
   }
-
-  if (workerEngineUpdateRequired(health, host)) {
-    return {
-      kind: "worker_engine",
-      label: "Worker engine update",
-      detail: "A worker engine update is installed but not running. Applying it restarts loaded workers.",
-      busy: false,
-    };
-  }
-
   // Uncommitted changes at the same revision are work in progress, not an
   // update waiting to be applied. The settings card still offers the build;
   // the indicator does not nag about it, because it would never go quiet
   // while anyone is editing the checkout.
   const onlyUncommitted = development?.source_dirty
     && development.source_revision === development.deployed_source_revision;
-  // Ranked below the worker engine and above App and API: like an engine
-  // replacement it needs a restart to take effect, and unlike an App and API
-  // release it is not running anywhere until each worker restarts.
-  if (superseded.length > 0) {
-    const workers = new Set(superseded.flatMap((entry) => entry.worker_ids)).size;
-    const named = superseded
-      .map((entry) => `${entry.provider === "codex" ? "Codex" : "Claude"}${entry.version ? ` ${entry.version}` : ""}`)
-      .join(" and ");
-    return {
-      kind: "provider",
-      label: "Provider update",
-      detail: `${named} is installed, and ${workers} running worker${workers === 1 ? "" : "s"} started before that, so ${workers === 1 ? "it is" : "they are"} still running the older release.`,
-      busy: false,
-    };
-  }
-
   if (development?.enabled && development.reload_available && !onlyUncommitted) {
     const revision = development.source_revision?.slice(0, 7);
     return {
@@ -115,26 +111,52 @@ export function runtimeUpdateSummary(
       busy: false,
     };
   }
-
-  return IDLE;
+  return undefined;
 }
 
 /**
- * The summary to show after a refresh, given what that refresh managed to learn.
+ * Everything the control room should currently say about runtime updates.
  *
- * A refresh that learned nothing about any subsystem keeps the previous answer
- * rather than reporting silence as "nothing to update". The App and API build
- * restarts the API, so a refresh returning nothing is the expected middle of
- * the operation the indicator is reporting — the same reason the settings card
- * holds its place instead of disappearing.
+ * One entry per subsystem, in the order they cost the operator: the worker
+ * engine takes workers away, a provider update is installed and running
+ * nowhere until each worker restarts, and an App and API release leaves
+ * workers online throughout.
+ *
+ * They are reported together rather than ranked into one, because they are
+ * independent and can all be true — showing only the most severe hid the
+ * others until it was dealt with. This mirrors the settings page, which has
+ * a card for each, and uses the same names it does.
  */
-export function nextRuntimeUpdate(
-  previous: RuntimeUpdateSummary | undefined,
+export function runtimeUpdates(
   health: Health | undefined,
   host: TerminalHostStatus | undefined,
   development: DevelopmentRuntime | undefined,
   superseded: SupersededProvider[] = [],
-): RuntimeUpdateSummary | undefined {
+): RuntimeUpdateSummary[] {
+  return [
+    workerEngineUpdate(health, host),
+    providerUpdate(superseded),
+    appUpdate(development),
+  ].filter((entry): entry is RuntimeUpdateSummary => entry !== undefined);
+}
+
+/** The single most pressing update, when only one can be shown. */
+export function runtimeUpdateSummary(
+  health: Health | undefined,
+  host: TerminalHostStatus | undefined,
+  development: DevelopmentRuntime | undefined,
+  superseded: SupersededProvider[] = [],
+): RuntimeUpdateSummary {
+  return runtimeUpdates(health, host, development, superseded)[0] ?? IDLE;
+}
+
+export function nextRuntimeUpdates(
+  previous: RuntimeUpdateSummary[] | undefined,
+  health: Health | undefined,
+  host: TerminalHostStatus | undefined,
+  development: DevelopmentRuntime | undefined,
+  superseded: SupersededProvider[] = [],
+): RuntimeUpdateSummary[] | undefined {
   if (!health && !host && !development) return previous;
-  return runtimeUpdateSummary(health, host, development, superseded);
+  return runtimeUpdates(health, host, development, superseded);
 }

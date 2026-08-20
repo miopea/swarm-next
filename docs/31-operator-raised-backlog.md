@@ -442,6 +442,25 @@ indicator stops reporting that case at all: uncommitted changes at the same
 revision are work in progress, not an update waiting, and an indicator that
 cannot go quiet while anyone is editing the checkout is not an indicator.
 
+### 31. Only the most severe update got a pill — *fixed*
+
+Raised as: make sure the pill shows down with the others when there are updates.
+
+The indicator ranked everything into a single summary and showed only the top
+one, so a provider update stayed invisible behind a worker engine update until
+that was dealt with, and an App and API release behind either. The three are
+independent and can all be true at once.
+
+One pill per subsystem now, ordered by what each costs: the worker engine takes
+workers away, a provider update is installed and running nowhere until each
+worker restarts, and an App and API release leaves workers online throughout.
+That mirrors the settings page, which has a card for each.
+
+Two older tests asserted the ranking — "work in progress outranks work waiting",
+"a stopped build outranks everything". That ranking only existed because a
+single pill had to choose. They now assert the stronger property: neither hides
+the other.
+
 ### 30. The runtime pill said nothing about a provider update — *fixed*
 
 Raised as: a Claude update notification arrived, the settings page detected it
