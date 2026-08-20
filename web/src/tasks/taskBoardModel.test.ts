@@ -53,3 +53,35 @@ test("separates Jira, email, and Swarm-created sources without losing Jira proje
   expect(buildTaskBoardView(tasks, [jiraLink], [worker], { ...baseQuery, source: "email" }, new Set(["blocked"])).open.map((task) => task.id)).toEqual(["blocked"]);
   expect(buildTaskBoardView(tasks, [jiraLink], [worker], { ...baseQuery, source: "local" }, new Set(["blocked"])).open.map((task) => task.id)).toEqual(["local"]);
 });
+
+test("filters and sorts finished work the same way as work in progress", () => {
+  // "When I sort by source email it only sorts the active tasks, not the closed
+  // tasks. It should do both." The query applied to open work only, so choosing
+  // a source narrowed the top of the board and left everything below it alone.
+  const base = tasks[0];
+  const open = { ...base, id: "open-email", title: "Bravo", state: "active" } as Task;
+  const closedEmail = { ...base, id: "closed-email", title: "Alpha", state: "completed" } as Task;
+  const closedLocal = { ...base, id: "closed-local", title: "Zulu", state: "completed" } as Task;
+
+  const view = buildTaskBoardView(
+    [open, closedLocal, closedEmail],
+    [],
+    [],
+    { text: "", filter: "all", source: "email", sort: "updated", project: "all", worker: "all" },
+    new Set(["open-email", "closed-email"]),
+  );
+
+  // The source filter reaches finished work.
+  expect(view.completed.map((entry) => entry.id)).toEqual(["closed-email"]);
+  // And so does the sort: this list is ordered, not merely passed through.
+  const newest = { ...closedLocal, id: "closed-new", title: "Newest", updated_at: 900 } as Task;
+  const oldest = { ...closedEmail, id: "closed-old", title: "Oldest", updated_at: 100 } as Task;
+  const ordered = buildTaskBoardView(
+    [open, oldest, newest],
+    [],
+    [],
+    { text: "", filter: "all", source: "all", sort: "updated", project: "all", worker: "all" },
+    new Set(),
+  );
+  expect(ordered.completed.map((entry) => entry.title)).toEqual(["Newest", "Oldest"]);
+});

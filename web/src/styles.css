@@ -1291,6 +1291,16 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .development-build-landed { margin: 0; font-size: .78rem; color: var(--good); font-weight: 500; }
 /* Written with paragraphs in it, so it is shown with them. */
 .task-state.unverified { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); }
+/* The status and priority values wrap inside their own cells.
+   "Finished · unverified" is 151px of unbreakable text — white-space: nowrap is
+   inherited here — in a 59px cell, so it ran straight across the Priority label
+   beside it. Measured before: 36px of overlap with "Priority" and 42px with its
+   value, at every panel width, plus spill past the panel itself. */
+.task-metadata-section dl > div { min-width: 0; }
+.task-metadata-section dl > div > dd { min-width: 0; }
+.task-state, .task-priority { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.task-state { flex-wrap: wrap; }
+.task-state::before { flex: 0 0 auto; }
 .worker-overdue { color: var(--bad); font-weight: 700; }
 .decision-summary { margin: 0; color: var(--text); font-size: .95rem; line-height: 1.5; }
 .decision-argument > summary { color: var(--muted); cursor: pointer; font-size: .78rem; }

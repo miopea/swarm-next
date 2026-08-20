@@ -50,7 +50,11 @@ export function buildTaskBoardView(
   const workerNames = new Map(workers.map((worker) => [worker.id, worker.name]));
   const normalizedText = query.text.trim().toLocaleLowerCase();
 
-  const open = allOpen.filter((task) => {
+  // One predicate for both lists. Filtering and sorting used to apply to open
+  // work only, so choosing a source narrowed the top of the board and left
+  // finished work below it untouched — the operator sorted by email and watched
+  // the closed tasks ignore them.
+  const matches = (task: Task) => {
     const jiraLink = jiraByTask.get(task.id);
     const source = jiraLink ? "jira" : emailTaskIds.has(task.id) ? "email" : "local";
     const matchesText = !normalizedText || [task.title, task.description, jiraLink?.issue_key, jiraLink?.project_name]
@@ -60,6 +64,13 @@ export function buildTaskBoardView(
     if (query.project !== "all" && jiraLink?.project_key !== query.project) return false;
     if (query.worker === "unassigned" && task.assigned_worker_id) return false;
     if (query.worker !== "all" && query.worker !== "unassigned" && task.assigned_worker_id !== query.worker) return false;
+    return true;
+  };
+
+  const open = allOpen.filter((task) => {
+    if (!matches(task)) return false;
+    // State filters describe work in progress, so they say nothing about work
+    // that is finished and are not asked of it.
     if (query.filter === "unassigned") return !task.assigned_worker_id;
     if (query.filter === "assigned") return Boolean(task.assigned_worker_id);
     if (query.filter === "active") return task.state === "active";
@@ -67,6 +78,9 @@ export function buildTaskBoardView(
     return true;
   });
 
-  open.sort(taskComparator(query.sort, workerNames, jiraProjects));
-  return { open, completed, allOpenCount: allOpen.length, jiraByTask };
+  const comparator = taskComparator(query.sort, workerNames, jiraProjects);
+  open.sort(comparator);
+  const closed = completed.filter(matches);
+  closed.sort(comparator);
+  return { open, completed: closed, allOpenCount: allOpen.length, jiraByTask };
 }

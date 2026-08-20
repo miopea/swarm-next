@@ -240,3 +240,13 @@ test("keeps settings navigable on a phone once its own bar is gone", () => {
   expect(stylesheet).toContain(".control-rail.surface-settings .rail-context { display: flex;");
   expect(stylesheet).toMatch(/\.rail-settings-sections \{[^}]*overflow-x:\s*auto/);
 });
+
+test("lets a long task status wrap in its own cell instead of crossing the next one", () => {
+  // Reported as the finished-unverified row being "a mess". Measured against the
+  // deployed stylesheet in a real layout engine: "Finished · unverified" is 151px
+  // of text that white-space: nowrap forbids breaking, inside a 59px cell, so it
+  // overlapped the Priority label by 36px and its value by 42px — at every panel
+  // width, and it spilled past the panel too. After: zero overlaps at 160 to 320.
+  expect(stylesheet).toContain(".task-state, .task-priority { min-width: 0; white-space: normal; overflow-wrap: anywhere; }");
+  expect(stylesheet).toContain(".task-state::before { flex: 0 0 auto; }");
+});
