@@ -79,7 +79,7 @@ pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionReques
 pub use email::{
     EmailAttachmentSnapshot, EmailImport, EmailMessageSnapshot, EmailReplyDispatch,
     EmailReplyFailure, EmailReplyState, EmailReplyTarget, EmailReplyTargetDispatch,
-    EmailTaskAttachment, EmailTaskDraft, EmailTaskLink, TaskDeploymentRecord,
+    EmailTaskAttachment, EmailTaskDraft, EmailTaskLink, TaskDeploymentRecord, UnansweredEmailTask,
 };
 pub use presence::PresenceMutation;
 mod notifications;

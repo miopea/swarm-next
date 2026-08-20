@@ -2533,6 +2533,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/integrations/email/task-links",
             get(email_task_sources),
         )
+        .route(
+            "/api/v1/integrations/email/awaiting-reply",
+            get(email_tasks_awaiting_a_reply),
+        )
         .route("/api/v1/tasks/{task_id}/email", get(email_task_source))
         .route(
             "/api/v1/tasks/{task_id}/email/attachments/{storage_name}",
@@ -5272,6 +5276,18 @@ async fn email_task_sources(
         .email_task_links()
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(sources)).into_response())
+}
+
+/// Completed email tasks whose requester has not been answered.
+async fn email_tasks_awaiting_a_reply(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let awaiting = task_store(&state)?
+        .completed_email_tasks_awaiting_a_reply()
+        .map_err(|error| task_store_error(&error))?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(awaiting)).into_response())
 }
 
 async fn download_email_attachment(

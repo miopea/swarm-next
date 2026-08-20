@@ -8,8 +8,10 @@ import {
   fetchDevelopmentRuntime,
   answerDecision,
   resolveDecision,
+  fetchEmailTasksAwaitingReply,
   restartSupersededWorkers,
   runQueenAutomation,
+  type UnansweredEmailTask,
   type DecisionSurface,
   createWorker,
   fetchHealth,
@@ -73,6 +75,7 @@ import {
 import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
+import UnansweredEmailAttentionCard from "./tasks/UnansweredEmailAttentionCard";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
 import { foreignEngagement, workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
@@ -152,6 +155,26 @@ export function App() {
   const [workerQuery, setWorkerQuery] = useState("");
   const [terminalConnection, setTerminalConnection] = useState<string>();
   const { runtimeUpdates, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
+  // Polled rather than derived from the board, because the board is one surface
+  // and a finished task with nobody answered belongs in Needs you regardless of
+  // where the operator is standing.
+  const [awaitingReply, setAwaitingReply] = useState<UnansweredEmailTask[]>([]);
+  useEffect(() => {
+    if (!operatorToken) {
+      setAwaitingReply([]);
+      return;
+    }
+    let current = true;
+    // Only replaced by something that is actually a list. A malformed answer
+    // during a rolling update should not take the whole attention queue down
+    // with it.
+    const load = () => void fetchEmailTasksAwaitingReply(operatorToken)
+      .then((awaiting) => { if (current && Array.isArray(awaiting)) setAwaitingReply(awaiting); })
+      .catch(() => undefined);
+    load();
+    const interval = window.setInterval(load, 30_000);
+    return () => { current = false; window.clearInterval(interval); };
+  }, [operatorToken, feedbackRevision]);
   const [repository, setRepository] = useState<RepositoryState | null>();
   const [popoutBlocked, setPopoutBlocked] = useState(false);
   // A window opened to show one surface shows exactly that: no navigation, no
@@ -863,7 +886,8 @@ export function App() {
   const queenWorkerId = workers.find((worker) => worker.role === "queen")?.id;
   const pendingQueenDecisionCount = decisions.filter((decision) => decision.state === "pending" && decision.requesting_worker_id === queenWorkerId).length;
   const queenAutomationAttentionCount = queenAutomationNeedsAttention(queenAutomation) && pendingQueenDecisionCount === 0 ? 1 : 0;
-  const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount;
+  const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
+    + (awaitingReply.length > 0 ? 1 : 0);
   const orphanSessions = useMemo(
     () => sessions.filter((session) => session.running && !workers.some((worker) => worker.active_session_id === session.session_id)),
     [sessions, workers],
@@ -1335,8 +1359,9 @@ export function App() {
               busy={busy}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount}
+              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + (awaitingReply.length > 0 ? 1 : 0)}
               attentionCards={<>
+                <UnansweredEmailAttentionCard awaiting={awaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-queen")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
               </>}

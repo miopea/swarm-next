@@ -146,6 +146,7 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
     if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
     if (url === "/api/v1/hive") return Promise.resolve(ok({
       operator: { id: "operator-1", display_name: "Bea" },
       hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: "apiary-1" },
@@ -198,6 +199,7 @@ test("gives a Member Hive a first-class Apiary membership surface", async () => 
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
     if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
     if (url === "/api/v1/hive") return Promise.resolve(ok({
       operator: { id: "operator-2", display_name: "Cora" },
       hive: { id: "hive-2", name: "Clover Hive", operator_id: "operator-2", apiary_id: "apiary-1" },
@@ -396,6 +398,7 @@ test("filters sleeping workers and remembers the choice on this device", async (
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
     if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
     if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
     if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: queenSession, running: true }] }));
     if (url === "/api/v1/workers") return Promise.resolve(ok(workers));
@@ -449,6 +452,7 @@ test("opens the mobile worker picker without raising the keyboard over it", asyn
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
     if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
     if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
     if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: queenSession, running: true }] }));
     if (url === "/api/v1/workers") return Promise.resolve(ok(workers));
@@ -506,6 +510,7 @@ test("switching workers releases only the previously selected engagement", async
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
     if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
     if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
     if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [
       { session_id: queenSession, running: true }, { session_id: workerSession, running: true },
@@ -567,6 +572,7 @@ test("makes an operator-blocked Queen review first-class attention", async () =>
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
     if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
     if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
     if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: queenSession, running: true }] }));
     if (url === "/api/v1/workers") return Promise.resolve(ok([queen]));
@@ -735,6 +741,9 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).includes("/api/v1/runtime/terminal-host")) {
       return Promise.resolve(ok({ type: "host_status", status: { host_version: "0.1.0", draining: false } }));
     }
+    if (String(url).endsWith("/integrations/email/awaiting-reply")) {
+      return Promise.resolve(ok([]));
+    }
     if (String(url).includes("/api/v1/runtime/development")) {
       return Promise.resolve(ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false }));
     }
@@ -779,6 +788,7 @@ test("waking a task worker assigns the stable worker rather than its new session
     const method = init?.method ?? "GET";
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
     if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
     if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
     if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: method === "GET" && fetch.mock.calls.some(([called]) => String(called).endsWith(`/workers/${worker.id}/start`)) ? [{ session_id: sessionId, running: true }] : [] }));
     if (url === "/api/v1/workers") return Promise.resolve(ok(fetch.mock.calls.some(([called]) => String(called).endsWith(`/workers/${worker.id}/start`)) ? [runningWorker] : [worker]));
@@ -853,6 +863,7 @@ test("the phone names the task its worker is carrying, without taking a row for 
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
     if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
     if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
     if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [{ session_id: queenSession, running: true }] }));
     if (url === "/api/v1/workers") return Promise.resolve(ok(workers));
@@ -894,6 +905,7 @@ function bootFetch() {
     const url = String(input);
     if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
     if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
     if (url === "/api/v1/hive") return Promise.resolve(ok(hiveIdentity()));
     if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [] }));
     if (["/api/v1/workers", "/api/v1/workspaces", "/api/v1/tasks", "/api/v1/decisions"].includes(url)) {

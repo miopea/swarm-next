@@ -146,6 +146,19 @@ impl FromStr for EmailReplyState {
     }
 }
 
+/// A completed email task whose requester has not been answered.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct UnansweredEmailTask {
+    pub task_id: TaskId,
+    pub title: String,
+    pub sender_name: String,
+    pub sender_address: String,
+    /// When the earliest message in the thread arrived.
+    pub received_at: i64,
+    /// A reply exists but was never sent. Writing one is not sending it.
+    pub drafted: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EmailReplyDispatch {
     pub id: String,
@@ -412,6 +425,65 @@ impl TaskStore {
             )
             .optional()?;
         id.map_or(Ok(None), |id| email_reply_by_id(&connection, &id))
+    }
+
+    /// Completed email tasks whose thread nobody ever answered.
+    ///
+    /// A task imported from email carries a person waiting on it. Finishing the
+    /// work does not tell them anything: the reply is a separate, deliberate
+    /// step, and until it is sent the requester has heard nothing. Nothing
+    /// noticed that silence, so a completed task simply went quiet.
+    ///
+    /// A draft that exists but was never sent still counts as unanswered —
+    /// writing a reply is not sending one.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or holds an invalid ID.
+    pub fn completed_email_tasks_awaiting_a_reply(
+        &self,
+    ) -> Result<Vec<UnansweredEmailTask>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT t.id, t.title, link.sender_name, link.sender_address,
+                    MIN(link.received_at),
+                    EXISTS(SELECT 1 FROM email_reply_deliveries r WHERE r.task_id = t.id)
+             FROM tasks t
+             JOIN email_message_links link ON link.task_id = t.id
+             WHERE t.state = 'completed' AND t.removed_at IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM email_reply_deliveries reply
+                   WHERE reply.task_id = t.id AND reply.state = 'delivered'
+               )
+             GROUP BY t.id
+             ORDER BY MIN(link.received_at), t.id",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, bool>(5)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(
+                |(id, title, sender_name, sender_address, received_at, drafted)| {
+                    Ok(UnansweredEmailTask {
+                        task_id: TaskId::from_str(&id)
+                            .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
+                        title,
+                        sender_name,
+                        sender_address,
+                        received_at,
+                        drafted,
+                    })
+                },
+            )
+            .collect()
     }
 
     /// Records operator-approved deployment evidence for a completed task.
@@ -1541,6 +1613,84 @@ mod tests {
             vec![first.source.clone()]
         );
         assert_eq!(store.list_tasks().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_completed_email_task_nobody_answered_is_reported() {
+        // A task imported from email carries a person waiting on it. Finishing
+        // the work tells them nothing — the reply is a separate deliberate
+        // step — and nothing noticed when it never happened, so a worker could
+        // close the task and the requester heard nothing at all.
+        let store = TaskStore::in_memory().unwrap();
+        let imported = store
+            .import_email_message(&message(&[]), TaskPriority::Normal)
+            .unwrap();
+
+        // Work still in progress is not owed a reply yet.
+        assert!(
+            store
+                .completed_email_tasks_awaiting_a_reply()
+                .unwrap()
+                .is_empty()
+        );
+
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+
+        let awaiting = store.completed_email_tasks_awaiting_a_reply().unwrap();
+        assert_eq!(awaiting.len(), 1);
+        assert_eq!(awaiting[0].task_id, imported.task.id);
+        assert_eq!(awaiting[0].sender_address, "member@example.test");
+        assert!(!awaiting[0].drafted, "nothing has been written yet");
+    }
+
+    #[test]
+    fn a_written_reply_is_not_a_sent_one() {
+        // Drafting is not answering. The requester has still heard nothing
+        // until a reply is actually delivered, so a draft left unsent must keep
+        // reporting rather than quietly clearing the flag.
+        let store = TaskStore::in_memory().unwrap();
+        let imported = store
+            .import_email_message(&message(&[]), TaskPriority::Normal)
+            .unwrap();
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+        store
+            .record_task_deployment(imported.task.id, "production", "release-9", 1_786_730_200)
+            .unwrap();
+        let draft = store
+            .prepare_email_reply(imported.task.id, "Thank you, this is fixed.")
+            .unwrap();
+
+        let drafted = store.completed_email_tasks_awaiting_a_reply().unwrap();
+        assert_eq!(drafted.len(), 1);
+        assert!(drafted[0].drafted, "a draft exists and is worth saying so");
+
+        store.queue_email_reply(&draft.id).unwrap();
+        let target = store.claim_email_reply().unwrap().unwrap();
+        store
+            .complete_email_reply(&target.target_id, "provider-reply-1")
+            .unwrap();
+
+        assert!(
+            store
+                .completed_email_tasks_awaiting_a_reply()
+                .unwrap()
+                .is_empty(),
+            "a delivered reply is what answers the thread"
+        );
     }
 
     #[test]

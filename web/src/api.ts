@@ -104,6 +104,7 @@ export {
   fetchEmailReply,
   fetchEmailTaskSource,
   fetchEmailTaskSources,
+  fetchEmailTasksAwaitingReply,
   fetchEmailTaskAttachment,
   fetchTaskDeployments,
   importEmailMessage,
@@ -129,6 +130,7 @@ export type {
   EmailTaskAttachment,
   EmailTaskImportInput,
   EmailTaskSource,
+  UnansweredEmailTask,
   TaskDeployment,
 } from "./api/email";
 export type {

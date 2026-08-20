@@ -476,6 +476,40 @@ for a restart, but replacing the engine also restarts the providers, and unlike
 an App and API release a provider update is installed and running **nowhere**
 until each worker restarts.
 
+### 35. Deployment evidence is the operator's chore, and a task claims COMPLETED without it
+
+Raised as: "I shouldn't be managing this — that is part of marking something
+complete. It should [not] be listed as complete if it wasn't verified."
+
+Today a task reaches `completed` on a transition alone. Deployment evidence is a
+separate form the operator fills in afterwards, and only then does a reply
+become available. So the board shows **COMPLETED** for work nobody has shown to
+be live, and the one person who cannot check it is the one being asked to.
+
+This is the same distinction the shipping vocabulary already draws elsewhere in
+this repo: committed, pushed, and deployed are not synonyms, and a completion
+that has not been verified is a claim rather than a fact. The task lifecycle
+does not currently make that distinction, and the panel's own wording admits it
+— "deployment evidence prevents a completion status from emailing someone before
+the change is actually available" — which is exactly right about email and
+silent about the status shown on the board.
+
+Two candidate shapes, and this needs the operator's ruling because it changes
+the lifecycle:
+
+- The worker records the evidence as part of finishing, since it is the actor
+  that deployed and the only one that knows the reference. Completion without it
+  is refused, the way the reply already is.
+- Completion stays as it is, but a task without evidence does not read as
+  COMPLETED — it reads as finished-and-unverified until evidence exists.
+
+The first removes the chore; the second removes the false claim. They are not
+exclusive, and the second is the one that makes the board honest.
+
+Related and already built: item 32's card now reports a completed email task
+nobody answered. The same reasoning applies one step earlier, to whether it
+should have been called complete at all.
+
 ### 34. Swarm Next has a developer update path and no user one
 
 Raised as: the Python Swarm had a "dev" mode for local work with fast hot
@@ -509,7 +543,7 @@ engine on its own thirty minutes later (item 22). Whatever the user-mode
 updater does, it inherits that lesson — a release is not isolated from the
 workers just because the card says workers stay online.
 
-### 32. A worker can finish an email task without anyone answering the email
+### 32. A worker can finish an email task without anyone answering the email — *partly fixed*
 
 Raised as: "email workflows are not defined. I had D365 work on an email task
 and it closed the email without drafting a response in my inbox to the ticket."
@@ -533,6 +567,16 @@ guessed: whether the worker should draft the reply as part of finishing, whether
 completion should be blocked until a reply exists, or whether this stays an
 operator step that is merely surfaced. The third is the only one that can be
 built without deciding the other two, and it is worth building either way.
+
+**Built: Swarm now reports the silence.** A completed email task with no
+delivered reply appears in Needs you, naming the person still waiting and
+whether a reply was written but never sent — drafting is not answering. It does
+not send anything; the reply is still written and reviewed on the task, where
+the thread and the deployment evidence are.
+
+Still undecided, and still the operator's: whether a worker should draft the
+reply as part of finishing, and whether completion should be refused without
+one.
 
 ### 33. The completed email task's panels overlap and run off the card
 

@@ -202,3 +202,19 @@ export async function retryEmailReply(operatorToken: string, replyId: string): P
   const response = await authenticatedFetch(operatorToken, `/api/v1/integrations/email/replies/${encodeURIComponent(replyId)}/retry`, { method: "POST" });
   return response.json() as Promise<EmailReply>;
 }
+
+/** A completed email task whose requester has not been answered. */
+export type UnansweredEmailTask = {
+  task_id: string;
+  title: string;
+  sender_name: string;
+  sender_address: string;
+  received_at: number;
+  /** A reply exists but was never sent. Writing one is not sending one. */
+  drafted: boolean;
+};
+
+export async function fetchEmailTasksAwaitingReply(operatorToken: string): Promise<UnansweredEmailTask[]> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/email/awaiting-reply");
+  return response.json() as Promise<UnansweredEmailTask[]>;
+}
