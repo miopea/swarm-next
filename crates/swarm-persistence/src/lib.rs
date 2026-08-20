@@ -125,7 +125,8 @@ const WORKER_REVIVAL_INTENT_SCHEMA_VERSION: i64 = 76;
 const DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION: i64 = 77;
 const DECISION_QUESTIONS_SCHEMA_VERSION: i64 = 78;
 const DECISION_SUMMARY_SCHEMA_VERSION: i64 = 79;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_SUMMARY_SCHEMA_VERSION;
+const EMAIL_REPLY_FROM_REVIEW_SCHEMA_VERSION: i64 = 80;
+const CURRENT_SCHEMA_VERSION: i64 = EMAIL_REPLY_FROM_REVIEW_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1964,6 +1965,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < DECISION_SUMMARY_SCHEMA_VERSION {
         decisions::migrate_decision_summary(transaction)?;
+    }
+    if schema_version < EMAIL_REPLY_FROM_REVIEW_SCHEMA_VERSION {
+        email::migrate_email_reply_from_review(transaction)?;
     }
     Ok(())
 }
@@ -4709,12 +4713,21 @@ mod tests {
         table: &'static str,
         /// The column the step adds, or empty when the step adds the table.
         artifact: &'static str,
+        /// For a step that changes something which is neither a table nor a
+        /// column — a trigger, say — the SQL that models a database one
+        /// version short, and the SQL that detects the change. Both empty when
+        /// the table and artifact above already describe the step.
+        undo_sql: &'static str,
+        probe_sql: &'static str,
     }
 
     impl SchemaStep {
         /// SQL that removes this step's artifact, to model a database that
         /// never ran it.
         fn undo(&self) -> String {
+            if !self.undo_sql.is_empty() {
+                return self.undo_sql.to_owned();
+            }
             if self.artifact.is_empty() {
                 format!("DROP TABLE {}", self.table)
             } else {
@@ -4724,6 +4737,9 @@ mod tests {
 
         /// SQL returning whether this step's artifact is present.
         fn probe(&self) -> String {
+            if !self.probe_sql.is_empty() {
+                return self.probe_sql.to_owned();
+            }
             if self.artifact.is_empty() {
                 format!(
                     "SELECT EXISTS(SELECT 1 FROM sqlite_master
@@ -4745,30 +4761,63 @@ mod tests {
         SchemaStep {
             table: "queen_automation",
             artifact: "delivery_session_id",
+            undo_sql: "",
+            probe_sql: "",
         },
         SchemaStep {
             table: "operator_presence_devices",
             artifact: "last_active_at",
+            undo_sql: "",
+            probe_sql: "",
         },
         SchemaStep {
             table: "tasks",
             artifact: "operator_instruction",
+            undo_sql: "",
+            probe_sql: "",
         },
         SchemaStep {
             table: "worker_revival_intents",
             artifact: "",
+            undo_sql: "",
+            probe_sql: "",
         },
         SchemaStep {
             table: "decision_requests",
             artifact: "resolution_surface",
+            undo_sql: "",
+            probe_sql: "",
         },
         SchemaStep {
             table: "decision_requests",
             artifact: "questions",
+            undo_sql: "",
+            probe_sql: "",
         },
         SchemaStep {
             table: "decision_requests",
             artifact: "summary",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        // A trigger rather than a table or a column: the undo restores the
+        // narrower rule so the migration has something real to widen.
+        SchemaStep {
+            table: "email_reply_deliveries",
+            artifact: "",
+            undo_sql: "DROP TRIGGER IF EXISTS email_reply_requires_completed_deployment;
+                 CREATE TRIGGER email_reply_requires_completed_deployment
+                     BEFORE INSERT ON email_reply_deliveries
+                     WHEN NOT EXISTS (
+                         SELECT 1 FROM tasks task
+                         JOIN task_deployments deployment ON deployment.task_id = task.id
+                         WHERE task.id = NEW.task_id AND task.state = 'completed'
+                     )
+                     BEGIN SELECT RAISE(ABORT, 'Email replies require completed deployed work'); END",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'trigger'
+                   AND name = 'email_reply_requires_completed_deployment'
+                   AND sql LIKE '%review%')",
         },
     ];
 

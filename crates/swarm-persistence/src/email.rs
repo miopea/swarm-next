@@ -6,8 +6,8 @@ use swarm_domain::{Task, TaskId, TaskPriority, TaskState, WorkerId};
 use uuid::Uuid;
 
 use crate::{
-    ControlRoomEventKind, TaskStore, TaskStoreError, insert_control_room_event, parse_domain_id,
-    validate_description, validate_text,
+    ControlRoomEventKind, EMAIL_REPLY_FROM_REVIEW_SCHEMA_VERSION, TaskStore, TaskStoreError,
+    insert_control_room_event, parse_domain_id, validate_description, validate_text,
 };
 
 const MAX_SOURCE_ID_BYTES: usize = 512;
@@ -515,7 +515,14 @@ impl TaskStore {
             )
             .optional()?
             .ok_or(TaskStoreError::NotFound)?;
-        if task_state != TaskState::Completed.to_string() {
+        // Review counts as well as completed. A worker can only report Active,
+        // Blocked or Review for its own work, so requiring completion here made
+        // this unreachable by the one actor that knows where the work is
+        // running — and the briefing asks that actor to record it. Review is
+        // exactly the moment it knows: finished, handed off, still on the task.
+        if task_state != TaskState::Completed.to_string()
+            && task_state != TaskState::Review.to_string()
+        {
             return Err(TaskStoreError::InvalidTaskDeployment);
         }
         let id = Uuid::now_v7().to_string();
@@ -540,7 +547,13 @@ impl TaskStore {
         Ok(record)
     }
 
-    /// Creates one reviewed reply draft only after the linked task is completed and deployed.
+    /// Creates one reviewed reply draft once the linked work is deployed and
+    /// either finished or handed to review.
+    ///
+    /// Review is included because a worker cannot mark its own task completed,
+    /// so gating on completion alone left the reply to be written by whoever
+    /// closed the task later — which is how the person who wrote in ended up
+    /// waiting while the operator drafted it by hand. This still only drafts.
     ///
     /// # Errors
     /// Rejects ineligible work, duplicate or invalid replies, and a full bounded queue.
@@ -560,7 +573,7 @@ impl TaskStore {
                  SELECT 1 FROM tasks task
                  JOIN email_message_links source ON source.task_id = task.id
                  JOIN task_deployments deployment ON deployment.task_id = task.id
-                 WHERE task.id = ?1 AND task.state = 'completed'
+                 WHERE task.id = ?1 AND task.state IN ('completed', 'review')
              )",
             [task_id.to_string()],
             |row| row.get(0),
@@ -1564,6 +1577,45 @@ fn resolve_email_reply_target_id(
         .ok_or(TaskStoreError::InvalidEmailReply)
 }
 
+/// Lets the worker that did the work answer the person who wrote in.
+///
+/// The trigger required a task to be `completed` before any reply could be
+/// inserted. A worker can only report Active, Blocked or Review for its own
+/// assignment, so the one actor that knows where the work is running and what
+/// to say could never satisfy it — and the reply fell to whoever closed the
+/// task later, which is how the person who wrote in ended up waiting while the
+/// operator drafted it by hand.
+///
+/// Review is included, and nothing else is loosened: a deployment record is
+/// still required, and this still only drafts. The operator sends.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+pub(super) fn migrate_email_reply_from_review(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let replies_exist: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'email_reply_deliveries')",
+        [],
+        |row| row.get(0),
+    )?;
+    if replies_exist {
+        transaction.execute_batch(
+            "DROP TRIGGER IF EXISTS email_reply_requires_completed_deployment;
+             CREATE TRIGGER email_reply_requires_completed_deployment
+                 BEFORE INSERT ON email_reply_deliveries
+                 WHEN NOT EXISTS (
+                     SELECT 1 FROM tasks task
+                     JOIN task_deployments deployment ON deployment.task_id = task.id
+                     WHERE task.id = NEW.task_id AND task.state IN ('completed', 'review')
+                 )
+                 BEGIN SELECT RAISE(ABORT, 'Email replies require deployed work in review or completed'); END;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", EMAIL_REPLY_FROM_REVIEW_SCHEMA_VERSION)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2067,5 +2119,57 @@ mod tests {
             store.retry_uncertain_email_reply(&draft.id).unwrap().state,
             EmailReplyState::Queued
         );
+    }
+
+    /// The worker that did the work is the one that knows where it is running
+    /// and what to tell the person who wrote in — and it can only report
+    /// Active, Blocked or Review for its own task. Gating both acts on
+    /// `completed` therefore made them unreachable by that worker, and the
+    /// reply fell to whoever closed the task later. That is how the person who
+    /// wrote in ended up waiting while the operator drafted it by hand.
+    #[test]
+    fn a_worker_can_record_where_its_work_runs_and_answer_from_review() {
+        let store = TaskStore::in_memory().unwrap();
+        let imported = store
+            .import_email_message(&message(&[]), TaskPriority::Normal)
+            .unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+
+        // Handed to review, not completed: the furthest a worker can take it.
+        store
+            .record_task_deployment(imported.task.id, "production", "release-51", 1_786_730_300)
+            .unwrap();
+        let draft = store
+            .prepare_email_reply(
+                imported.task.id,
+                "Thank you for reporting this. Your phone number is kept now when you press Save.",
+            )
+            .unwrap();
+
+        assert_eq!(draft.state, EmailReplyState::Draft);
+    }
+
+    /// Deployment evidence still means something. Work nobody has finished has
+    /// nowhere to be running.
+    #[test]
+    fn work_still_in_progress_has_no_deployment_to_record() {
+        let store = TaskStore::in_memory().unwrap();
+        let imported = store
+            .import_email_message(&message(&[]), TaskPriority::Normal)
+            .unwrap();
+        for state in [TaskState::Ready, TaskState::Active] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+        assert!(matches!(
+            store.record_task_deployment(
+                imported.task.id,
+                "production",
+                "release-51",
+                1_786_730_300
+            ),
+            Err(TaskStoreError::InvalidTaskDeployment)
+        ));
     }
 }
