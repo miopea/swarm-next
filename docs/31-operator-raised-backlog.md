@@ -1139,6 +1139,58 @@ every pixel it asked for. Shown failing first.
   removes the case that made it necessary, so the question is now whether it is
   still wanted as an escape hatch or was only ever a workaround for the freeze.
 
+### 52. Operator rulings, 2026-08-20 — authorised, not yet built
+
+Four answers given in an interview, recorded so the scope is not re-litigated.
+
+**Rename to "Swarm": everything, one clean break.** The operator chose the
+expensive half knowing the cost. It renames on-disk state, the systemd units,
+the MCP server key, and the crates. The hazard is specific and must be planned
+for rather than discovered: a worker's MCP tool schema is fixed when its session
+connects, so changing the key `swarm-next` breaks every running worker's Swarm
+access at once, and each must be restarted. Do it at a moment when the fleet can
+be restarted, not mid-flight.
+
+**Versioning: SemVer for releases, SHA for dev builds.** Tagged releases get
+0.2.0 and so on; dev builds keep `0.1.0-dev-<sha>-<time>`. An updater can then
+compare two releases, and a dev build is self-evidently not one.
+
+**Diagnostics: one verdict, then only what is not normal.** The headline says
+everything is healthy or names what is not; healthy rows collapse. When nothing
+is wrong the page is three lines. Closes item 45.
+
+**Mobile: build both.** A manual refresh control, and a redesign of the selector
+and pill row so the selector keeps a fixed position whatever else appears.
+Closes the two items left open in 51.
+
+### 53. A worker cannot say anything to Queen
+
+Raised as: "I told a worker to create a task and assign it, but it doesn't have
+that in the tool. Also, do we have a way for workers to communicate with the
+queen on these sort of actions?"
+
+Assignment is Queen-only deliberately — a worker that assigns work to other
+workers reorganises the fleet without the operator. That part is by design.
+
+The second question has a plain answer: **no.** Queen's attention inbox is
+`coordinator_actions` filtered to exactly three machine-generated kinds, each
+written by a detector in `coordinator.rs`. Nothing a worker does writes into it.
+A worker's only outbound channels are `swarm_request_decision`, which reaches
+the *operator* rather than Queen, a task transition, and now a draft task. All
+indirect. So a worker that wants Queen to route something must interrupt the
+operator instead, which is the opposite of what Queen is for.
+
+Narrower than it first appears: Queen already sees every task including drafts
+(`list_visible_tasks` returns everything for Queen), so a worker-filed draft
+carrying its routing intent in the description is visible today. What is missing
+is anything *telling* her one is waiting.
+
+Proposed, not built: a fourth attention kind for a draft filed by a worker and
+not yet routed. That reuses the inbox Queen already reads, keeps the authority
+boundary — the worker asks, Queen decides — and needs no new messaging
+subsystem. A general worker-to-Queen channel is a larger design and should be
+chosen deliberately rather than arrived at.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.
