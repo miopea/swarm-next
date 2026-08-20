@@ -127,7 +127,11 @@ export class XtermSurface implements TerminalSurface {
   restore(snapshot: TerminalSnapshot): Promise<void> {
     this.#restorePending = true;
     if (this.#element) {
-      this.#element.dataset.terminalRestoring = "true";
+      // Names the cause, so the cover over the terminal stops describing every
+      // rebuild as a layout adjustment. A recovery from a burst of build output
+      // is not a layout change, and reading that it was is what made this look
+      // like it popped up at random.
+      this.#element.dataset.terminalRestoring = snapshot.reason;
       this.#element.setAttribute("aria-busy", "true");
     }
     this.#terminal.reset();

@@ -1363,7 +1363,15 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .terminal-mount, .terminal-surface { min-height: 0; flex: 1; }
 .terminal-mount { display: flex; overflow: hidden; padding: 10px 12px 12px; background: var(--terminal-frame); }
 .terminal-surface { position: relative; width: 100%; height: 100%; overscroll-behavior: contain; touch-action: none; }
-.terminal-surface[data-terminal-restoring="true"]::after { position: absolute; z-index: 12; inset: 0; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, var(--terminal-frame) 94%, transparent); color: color-mix(in srgb, var(--terminal-text) 68%, transparent); content: "Adjusting terminal layout…"; font-family: var(--font-mono); font-size: .86rem; letter-spacing: .02em; text-align: center; pointer-events: none; }
+/* The cover exists because the screen is genuinely blank between reset and
+   rewrite, and a blank flash reads worse than a held frame. What it says has
+   to match what happened: it described every rebuild as a layout adjustment,
+   including recovery from a burst of build output, which is why it read as
+   popping up for no reason. */
+.terminal-surface[data-terminal-restoring]::after { position: absolute; z-index: 12; inset: 0; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, var(--terminal-frame) 94%, transparent); color: color-mix(in srgb, var(--terminal-text) 68%, transparent); font-family: var(--font-mono); font-size: .86rem; letter-spacing: .02em; text-align: center; pointer-events: none; }
+.terminal-surface[data-terminal-restoring="attached"]::after { content: "Adjusting terminal layout…"; }
+.terminal-surface[data-terminal-restoring="fell_behind"]::after { content: "Catching up after a burst of output…"; }
+.terminal-surface[data-terminal-restoring="dropped_output"]::after { content: "Rebuilding the screen after dropped output…"; }
 .mobile-terminal-composer { display: none; }
 
 .bee-mascot { display: block; overflow: visible; }

@@ -1012,6 +1012,34 @@ either the cards move below the list, which reads oddly against the "nothing
 needs your attention" empty state, or the list gets an anchored position. That
 is the operator's call on how the page should read, not mine to take silently.
 
+### 49. "Adjusting terminal layout…" covers the terminal for reasons that are not layout — *fixed*
+
+Raised as: "This randomly pops up", with a screenshot taken while a build was
+emitting heavily.
+
+Nothing about the layout was being adjusted. The cover is driven by
+`data-terminal-restoring`, set on every canonical snapshot restore, and there
+are three causes: first attachment, the renderer falling more than 3 MiB behind
+its bounded queue, and a gap in the output sequence. Only the first is a layout
+fit. The other two are the screen being rebuilt, and both were describing
+themselves as a layout adjustment — which is exactly why it read as arriving
+for no reason.
+
+The likely cause in the screenshot is the second: a `cargo test --workspace` or
+`pnpm vitest run` passes 3 MiB of output easily, the client discards its state
+and asks for a fresh snapshot, and the operator gets a full-surface cover
+saying something that does not match anything they did.
+
+Fixed: the reason travels with the snapshot, so the cover names it — "Adjusting
+terminal layout…", "Catching up after a burst of output…", or "Rebuilding the
+screen after dropped output…". The cover itself stays, because the screen is
+genuinely blank between reset and rewrite and a blank flash reads worse.
+
+Deliberately not changed: `MAX_PENDING_RENDER_BYTES` is still 3 MiB. Raising it
+trades memory for fewer rebuilds and is a number that should be set against a
+measurement, not a guess. Now that each rebuild names its own cause, the next
+occurrence says whether backpressure is the one worth tuning.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.

@@ -534,9 +534,12 @@ test("snapshot geometry exposes a bounded recovery state until the visible rende
     rows: 24,
     columns: 80,
     truncated: false,
+    reason: "fell_behind" as const,
     bytes: new TextEncoder().encode("snapshot"),
   });
-  expect(element.dataset.terminalRestoring).toBe("true");
+  // Carries the cause, so the cover can name it rather than calling every
+  // rebuild a layout adjustment.
+  expect(element.dataset.terminalRestoring).toBe("fell_behind");
   expect(element).toHaveAttribute("aria-busy", "true");
   expect(element.dataset.terminalScrollbackRows).toBe("48");
   expect(element.dataset.terminalBufferLines).toBe("24");

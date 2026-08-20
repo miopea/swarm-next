@@ -16,11 +16,22 @@ export interface TerminalConnectionHandlers {
   onRunningChange(running: boolean): void;
 }
 
+/**
+ * Why the canonical screen is being rebuilt.
+ *
+ * The operator sees a cover over the terminal while this happens, and it used
+ * to say "adjusting layout" whatever the cause — so a recovery from a burst of
+ * build output read as an unexplained interruption. The reason travels with
+ * the snapshot so the cover can say which of these actually happened.
+ */
+export type SnapshotReason = "attached" | "fell_behind" | "dropped_output";
+
 export interface TerminalSnapshot {
   sequence: number;
   rows: number;
   columns: number;
   truncated: boolean;
+  reason: SnapshotReason;
   bytes: Uint8Array;
 }
 
@@ -81,6 +92,9 @@ export class TerminalConnection {
   #disposed = false;
   #fatal = false;
   #recovering = false;
+  // Survives the socket rebuild that recovery triggers, so the snapshot that
+  // arrives afterwards can say what it is recovering from.
+  #recoveryReason: SnapshotReason | undefined;
   #connectionConfirmed = false;
   #rendererConfirmed = false;
   #processExited = false;
@@ -243,7 +257,7 @@ export class TerminalConnection {
   #enqueueBinaryFrame(frame: Uint8Array): void {
     if (this.#recovering) return;
     if (this.#pendingRenderBytes + frame.byteLength > MAX_PENDING_RENDER_BYTES) {
-      this.#recoverFromSnapshot("terminal renderer fell behind its bounded queue");
+      this.#recoverFromSnapshot("fell_behind", "terminal renderer fell behind its bounded queue");
       return;
     }
     this.#pendingRenderBytes += frame.byteLength;
@@ -286,11 +300,14 @@ export class TerminalConnection {
       }
       if (this.#hasCanonicalState && sequence < this.#sequence) return;
       const truncated = frame[13] === 1;
+      const reason = this.#recoveryReason ?? "attached";
+      this.#recoveryReason = undefined;
       await this.#handlers?.onSnapshot({
         sequence,
         rows,
         columns,
         truncated,
+        reason,
         bytes: frame.slice(14),
       });
       this.#sequence = sequence;
@@ -315,6 +332,7 @@ export class TerminalConnection {
     if (sequence <= this.#sequence) return;
     if (sequence !== this.#sequence + 1) {
       this.#recoverFromSnapshot(
+        "dropped_output",
         `terminal sequence gap: expected ${this.#sequence + 1}, received ${sequence}`,
       );
       return;
@@ -364,9 +382,10 @@ export class TerminalConnection {
     this.#socket?.close(CLOSE_PROTOCOL_FAILURE, detail.slice(0, 100));
   }
 
-  #recoverFromSnapshot(detail: string): void {
+  #recoverFromSnapshot(reason: SnapshotReason, detail: string): void {
     if (this.#recovering || this.#fatal || this.#disposed) return;
     this.#recovering = true;
+    this.#recoveryReason = reason;
     this.#renderGeneration += 1;
     this.#hasCanonicalState = false;
     this.#sequence = 0;

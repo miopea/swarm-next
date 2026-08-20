@@ -493,3 +493,32 @@ test("a memory-safety snapshot reset remains visible to the operator", async () 
     expect.stringContaining("canonical memory bound"),
   );
 });
+
+test("a rebuilt screen says which cause rebuilt it", async () => {
+  // The operator saw "Adjusting terminal layout…" cover the terminal during a
+  // run that emitted a great deal of output, and read it as popping up at
+  // random. Nothing about the layout had changed: the renderer had fallen
+  // behind and the screen was being rebuilt. The cover reads from the reason
+  // the snapshot carries, so each cause now identifies itself.
+  vi.useFakeTimers();
+  const { connection, handlers, sockets } = harness([1, 1]);
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(0n, 24, 80, "screen"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(handlers.onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ reason: "attached" }));
+
+  // A gap in the stream is dropped output, not a layout change.
+  sockets[0].message(outputFrame(2n, "gap"));
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].disconnect();
+  await vi.advanceTimersByTimeAsync(1);
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[1].open();
+  sockets[1].message(snapshotFrame(5n, 24, 80, "rebuilt"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(handlers.onSnapshot).toHaveBeenLastCalledWith(
+    expect.objectContaining({ reason: "dropped_output" }),
+  );
+});

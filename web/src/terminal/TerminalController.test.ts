@@ -97,6 +97,7 @@ test("focus waits through a hidden canonical restore until the terminal is focus
     rows: 24,
     columns: 80,
     truncated: false,
+    reason: "attached" as const,
     bytes: new Uint8Array(),
   });
 
@@ -255,6 +256,7 @@ test("canonical snapshots reset the renderer through its controller", async () =
     rows: 30,
     columns: 100,
     truncated: false,
+    reason: "attached" as const,
     bytes: new TextEncoder().encode("canonical"),
   };
 
@@ -283,7 +285,7 @@ test("an unfocused window accepts the canonical size instead of arguing with it"
   vi.mocked(surface.fit).mockClear();
   document.hasFocus = () => false;
 
-  const snapshot = { sequence: 9, rows: 30, columns: 100, truncated: false, bytes: new Uint8Array() };
+  const snapshot = { sequence: 9, rows: 30, columns: 100, truncated: false, reason: "attached" as const, bytes: new Uint8Array() };
   await handlers.onSnapshot(snapshot);
 
   // Restored at the size the other window set, and nothing pushed back.
@@ -308,6 +310,7 @@ test("a canonical restore survives transient responsive renderer metrics", async
     rows: 24,
     columns: 80,
     truncated: false,
+    reason: "attached" as const,
     bytes: new Uint8Array(),
   })).resolves.toBeUndefined();
 
