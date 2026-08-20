@@ -1040,6 +1040,40 @@ trades memory for fewer rebuilds and is a number that should be set against a
 measurement, not a guess. Now that each rebuild names its own cause, the next
 occurrence says whether backpressure is the one worth tuning.
 
+### 50. One busy terminal held up every other worker's delivery — *fixed*
+
+Raised as: "The Queen was busy so I'm not sure if this was on purpose or not
+but the prompt is sitting waiting to be sent on a decision that was made — it
+should be able to handle multiple of these at one time."
+
+Measured rather than guessed. Every coordination message is submitted by
+`submit_coordination_message`, which can spend up to ten seconds waiting for
+the terminal to settle and up to ten more waiting for it to accept — twenty
+seconds worst case per message. All three delivery loops — decision outcomes,
+task briefings, task outcomes — iterated **strictly sequentially**, and the
+whole cycle runs under one Hive-wide `coordination_delivery` mutex.
+
+The live database shows eight distinct sessions with delivery records. A
+message at the back of that queue waits behind terminals it has nothing to do
+with, and Queen streaming output is exactly the case where the front of the
+queue burns its full budget.
+
+**It does not merely delay — it manufactures the (!) mark.** The live database
+holds five `uncertain` decision deliveries. `uncertain` is what a message
+becomes when its ten-second acceptance window expires, and a message that
+waited minutes to start is far likelier to meet a terminal that is still busy.
+That is the same "Swarm wrote a briefing to this worker and could not confirm
+it landed" mark reported twice before, and this is one of its sources.
+
+Fixed: distinct terminals now proceed at the same time, and each terminal's own
+messages stay in order. The grouping is the correctness boundary, not the
+concurrency — two messages for one worker share a single input line and
+interleaving them would produce a prompt made of both; two for different
+workers never touch. Both properties are pinned by tests.
+
+The Hive-wide mutex stays. It serialises *cycles*, not messages within one, and
+it is what stops two overlapping cycles claiming the same delivery twice.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.

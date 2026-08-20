@@ -14,6 +14,7 @@
 
 use std::time::{Duration, Instant};
 
+use futures_util::future::join_all;
 use swarm_domain::{ProviderKind, WorkerSessionId};
 use swarm_persistence::{
     DecisionDispatch, QueenAutomationDelivery, TaskDispatch, TaskOutcomeDispatch, TaskStore,
@@ -103,6 +104,66 @@ impl RenderStability {
     fn reset(&mut self) {
         self.visible_since = None;
     }
+}
+
+/// Submits one message per delivery, letting distinct terminals proceed at the
+/// same time while keeping each terminal's own messages in order.
+///
+/// Delivery used to be strictly sequential across the whole Hive. Every attempt
+/// can spend ten seconds waiting for a terminal to settle and ten more waiting
+/// for it to accept, so with eight sessions in play a message at the back of
+/// the queue waited minutes behind terminals it had nothing to do with — and
+/// often expired into `uncertain` rather than arriving, which is the mark the
+/// operator sees on a worker that was never actually written to twice.
+///
+/// Two prompts bound for two different workers were never in conflict. Two
+/// bound for the same worker always are: they share one input line, and
+/// interleaving them would produce a prompt made of both. So the grouping is
+/// the correctness boundary, not the concurrency.
+pub(super) async fn submit_to_each_terminal_at_once<D>(
+    store: &TaskStore,
+    client: &HostClient,
+    deliveries: Vec<D>,
+    describe: impl Fn(&D) -> (WorkerSessionId, Vec<u8>, Vec<u8>),
+) -> Vec<(D, Result<TerminalSubmission, swarm_terminal::IpcError>)> {
+    let describe = &describe;
+    let groups = group_by_terminal(deliveries, |delivery| describe(delivery).0)
+        .into_iter()
+        .map(|group| async move {
+            let mut settled = Vec::with_capacity(group.len());
+            for delivery in group {
+                let (session_id, bytes, marker) = describe(&delivery);
+                let submission =
+                    submit_coordination_message(store, client, session_id, bytes, &marker).await;
+                settled.push((delivery, submission));
+            }
+            settled
+        });
+    join_all(groups).await.into_iter().flatten().collect()
+}
+
+/// Gathers deliveries into one group per terminal, keeping each terminal's own
+/// messages in the order they were claimed.
+///
+/// This is the correctness boundary of running deliveries at the same time.
+/// Messages bound for one terminal share a single input line, so interleaving
+/// two of them would produce a prompt made of both; messages bound for
+/// different terminals never touch. First-seen order is kept deliberately — a
+/// handful of sessions makes the linear scan free, and a stable order keeps
+/// results reproducible rather than dependent on hash iteration.
+fn group_by_terminal<D>(
+    deliveries: Vec<D>,
+    session_of: impl Fn(&D) -> WorkerSessionId,
+) -> Vec<Vec<D>> {
+    let mut grouped: Vec<(WorkerSessionId, Vec<D>)> = Vec::new();
+    for delivery in deliveries {
+        let session_id = session_of(&delivery);
+        match grouped.iter_mut().find(|(known, _)| *known == session_id) {
+            Some((_, group)) => group.push(delivery),
+            None => grouped.push((session_id, vec![delivery])),
+        }
+    }
+    grouped.into_iter().map(|(_, group)| group).collect()
 }
 
 /// Submits a coordination prompt after observing it in host-owned output.
@@ -873,5 +934,51 @@ mod tests {
             b"\xe2\x9d\xaf [Swarm task 01ab23cd]\nworked\n\xe2\x9d\xaf ",
             marker,
         ));
+    }
+
+    /// The operator's report: a prompt sitting unsent while Queen was busy,
+    /// and "it should be able to handle multiple of these at one time".
+    ///
+    /// Delivery was strictly sequential across the whole Hive, and one attempt
+    /// can spend ten seconds waiting for a terminal to settle and ten more
+    /// waiting for it to accept. Grouping is what makes running them together
+    /// safe: two messages for one terminal share an input line and must stay
+    /// ordered; messages for different terminals never touch.
+    #[test]
+    fn each_terminal_is_its_own_queue_and_keeps_its_own_order() {
+        let first = WorkerSessionId::new();
+        let second = WorkerSessionId::new();
+        let deliveries = vec![
+            (first, "first to Queen"),
+            (second, "first to Scout"),
+            (first, "second to Queen"),
+            (second, "second to Scout"),
+            (first, "third to Queen"),
+        ];
+
+        let groups = group_by_terminal(deliveries, |(session_id, _)| *session_id);
+
+        // One queue per terminal, in the order those terminals were first seen.
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups[0].iter().map(|(_, what)| *what).collect::<Vec<_>>(),
+            ["first to Queen", "second to Queen", "third to Queen"]
+        );
+        assert_eq!(
+            groups[1].iter().map(|(_, what)| *what).collect::<Vec<_>>(),
+            ["first to Scout", "second to Scout"]
+        );
+    }
+
+    /// One terminal must not become two queues, whatever else is in flight.
+    #[test]
+    fn messages_for_a_single_terminal_stay_in_one_queue() {
+        let only = WorkerSessionId::new();
+        let groups = group_by_terminal(vec![(only, 1), (only, 2), (only, 3)], |(id, _)| *id);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].iter().map(|(_, n)| *n).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
     }
 }

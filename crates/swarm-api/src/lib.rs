@@ -1173,16 +1173,21 @@ impl AppState {
                 return;
             }
         };
-        for delivery in deliveries {
-            let outcome = match submit_coordination_message(
-                store,
-                client,
-                delivery.session_id,
-                decision_delivery_message(&delivery),
-                &delivery_marker(delivery.decision_id),
-            )
-            .await
-            {
+        let settled = coordination_delivery::submit_to_each_terminal_at_once(
+            store,
+            client,
+            deliveries,
+            |delivery| {
+                (
+                    delivery.session_id,
+                    decision_delivery_message(delivery),
+                    delivery_marker(delivery.decision_id),
+                )
+            },
+        )
+        .await;
+        for (delivery, submission) in settled {
+            let outcome = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
                     store.complete_decision_delivery(delivery.decision_id, unix_timestamp())
                 }
@@ -1232,16 +1237,21 @@ impl AppState {
                 return;
             }
         };
-        for delivery in deliveries {
-            let outcome = match submit_coordination_message(
-                store,
-                client,
-                delivery.session_id,
-                task_dispatch_message(&delivery),
-                &delivery_marker(delivery.task_id),
-            )
-            .await
-            {
+        let settled = coordination_delivery::submit_to_each_terminal_at_once(
+            store,
+            client,
+            deliveries,
+            |delivery| {
+                (
+                    delivery.session_id,
+                    task_dispatch_message(delivery),
+                    delivery_marker(delivery.task_id),
+                )
+            },
+        )
+        .await;
+        for (delivery, submission) in settled {
+            let outcome = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
                     store.complete_task_dispatch(&delivery.assignment_id, unix_timestamp())
                 }
@@ -1290,16 +1300,21 @@ impl AppState {
                 return;
             }
         };
-        for outcome in outcomes {
-            let result = match submit_coordination_message(
-                store,
-                client,
-                outcome.session_id,
-                task_outcome_message(&outcome),
-                &delivery_marker(outcome.task_id),
-            )
-            .await
-            {
+        let settled = coordination_delivery::submit_to_each_terminal_at_once(
+            store,
+            client,
+            outcomes,
+            |outcome| {
+                (
+                    outcome.session_id,
+                    task_outcome_message(outcome),
+                    delivery_marker(outcome.task_id),
+                )
+            },
+        )
+        .await;
+        for (outcome, submission) in settled {
+            let result = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
                     store.complete_task_outcome(&outcome.id, unix_timestamp())
                 }
