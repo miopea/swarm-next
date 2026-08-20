@@ -1351,6 +1351,32 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .queen-automation-chip.offline { border-color: color-mix(in srgb, var(--bad) 48%, var(--line)); color: var(--bad); background: var(--bad-soft); }
 .queen-autonomy-chip { min-height: 30px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 999px; color: var(--text); background: var(--accent-soft); font-size: .72rem; white-space: nowrap; }
 .runtime-update { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); background: var(--panel-soft); font-size: .68rem; font-weight: 500; }
+/* Each update says what it is, what it will do, and offers to do it. The detail
+   used to live in a title attribute, which is nothing at all on a phone. */
+.runtime-update-card { display: grid; width: 100%; min-width: 0; gap: 5px; padding: 8px 9px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-soft); }
+.runtime-update-card.costly { border-color: color-mix(in srgb, var(--bad) 42%, var(--line)); background: var(--bad-soft); }
+.runtime-update-label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); font-size: .72rem; font-weight: 600; }
+.runtime-update-detail { margin: 0; color: var(--muted); font-size: .68rem; line-height: 1.4; }
+.runtime-update-run { min-height: var(--pill-height); padding: 0 10px; border: 1px solid var(--accent-strong); border-radius: 999px; color: var(--text); background: var(--accent-soft); font-size: .69rem; font-weight: 600; }
+.runtime-update-card.costly .runtime-update-run { border-color: var(--bad); color: var(--bad); background: transparent; }
+.runtime-update-settings { justify-self: start; padding: 0; border: 0; color: var(--muted); background: none; font-size: .66rem; text-decoration: underline; }
+/* Dev mode changes what every line beneath it means, so it is stated with the
+   version rather than found in Settings. */
+.runtime-mode { flex: 0 0 auto; padding: 1px 6px; border-radius: 999px; font-size: .62rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+.runtime-mode.development { color: var(--accent-strong); background: var(--accent-soft); }
+/* The confirmation the operator asked for, weighted by what it costs: a plain
+   question for a release that keeps workers online, and a warning that names
+   what stops for one that does not. */
+.dialog-backdrop { position: fixed; z-index: 60; inset: 0; display: grid; padding: 24px; place-items: center; background: color-mix(in srgb, var(--terminal-frame) 64%, transparent); backdrop-filter: blur(3px); }
+.dialog { display: grid; width: min(440px, 100%); gap: 9px; padding: 18px; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); background: var(--panel-raised); box-shadow: var(--shadow); }
+.dialog h3 { margin: 0; font-size: 1.05rem; }
+.dialog p { margin: 0; color: var(--muted); font-size: .78rem; line-height: 1.45; }
+.dialog.destructive { border-color: var(--bad); }
+.runtime-confirm-consequence { padding: 9px 10px; border-radius: var(--radius-md); color: var(--bad) !important; background: var(--bad-soft); font-weight: 500; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.dialog-actions button { min-height: var(--pill-touch-height); padding: 0 14px; border-radius: 999px; }
+.destructive-action { border: 1px solid var(--bad); color: var(--bad); background: var(--bad-soft); font-weight: 650; }
+.destructive-action:hover:not(:disabled) { color: var(--panel); background: var(--bad); }
 .runtime-update:hover { border-color: var(--accent-strong); background: var(--panel-raised); }
 .runtime-update-worker_engine { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
 .runtime-update-provider { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }

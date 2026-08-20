@@ -3,14 +3,24 @@ import { workerEngineUpdateRequired } from "./workerEngine";
 
 export type RuntimeUpdateKind = "none" | "building" | "failed" | "app" | "worker_engine" | "provider";
 
+/** What running this update actually does, when the operator asks for it here. */
+export type RuntimeUpdateAction = "build" | "apply_worker_engine" | "restart_providers";
+
 export type RuntimeUpdateSummary = {
   kind: RuntimeUpdateKind;
   /** Short label for the control-room indicator. */
   label: string;
-  /** The longer explanation, for a title and the accessible name. */
+  /** The longer explanation. Shown, not only hovered: a title attribute is
+      nothing on a phone, and this is the part that says what is happening. */
   detail: string;
   /** Whether this is work in progress rather than something waiting on the operator. */
   busy: boolean;
+  /** Absent while busy: there is nothing to start that is not already running. */
+  action?: RuntimeUpdateAction;
+  /** What the operator is asked to press. */
+  actionLabel?: string;
+  /** Set when running this takes workers away. Drives the stronger warning. */
+  consequence?: string;
 };
 
 const IDLE: RuntimeUpdateSummary = {
@@ -55,6 +65,9 @@ function workerEngineUpdate(
       label: "Worker engine update",
       detail: "A worker engine update is installed but not running. Applying it restarts loaded workers.",
       busy: false,
+      action: "apply_worker_engine",
+      actionLabel: "Apply worker engine update",
+      consequence: "Every loaded worker is stopped and brought back. Work in a terminal that has not been saved is lost, and each worker reconnects on the new engine.",
     };
   }
   return undefined;
@@ -71,6 +84,9 @@ function providerUpdate(superseded: SupersededProvider[]): RuntimeUpdateSummary 
     label: "Provider update",
     detail: `${named} is installed, and ${workers} running worker${workers === 1 ? "" : "s"} started before that, so ${workers === 1 ? "it is" : "they are"} still running the older release.`,
     busy: false,
+    action: "restart_providers",
+    actionLabel: "Restart onto the new release",
+    consequence: `${workers} running worker${workers === 1 ? "" : "s"} ${workers === 1 ? "is" : "are"} restarted. Each loses its current conversation and starts again on the newer release.`,
   };
 }
 
@@ -81,6 +97,8 @@ function appUpdate(development: DevelopmentRuntime | undefined): RuntimeUpdateSu
       label: "App and API build failed",
       detail: "The development working copy did not compile. The current release is still running.",
       busy: false,
+      action: "build",
+      actionLabel: "Build again",
     };
   }
   if (development?.state === "building" || development?.state === "requested") {
@@ -109,6 +127,8 @@ function appUpdate(development: DevelopmentRuntime | undefined): RuntimeUpdateSu
         ? `Revision ${revision} is ready to build. Workers stay online through an App and API release.`
         : "A development update is ready to build. Workers stay online through an App and API release.",
       busy: false,
+      action: "build",
+      actionLabel: "Build and release",
     };
   }
   return undefined;

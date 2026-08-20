@@ -23,6 +23,10 @@ export function useRuntimeUpdate(
   refreshMs = RUNTIME_UPDATE_REFRESH_MS,
 ) {
   const [updates, setUpdates] = useState<RuntimeUpdateSummary[]>();
+  // Whether this Hive builds from a working copy. The operator asked to be able
+  // to see that without opening Settings, because it changes what every other
+  // line here means.
+  const [developmentMode, setDevelopmentMode] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!operatorToken) return;
@@ -32,6 +36,7 @@ export function useRuntimeUpdate(
       fetchDevelopmentRuntime(operatorToken).catch(() => undefined),
       fetchProviderCapabilities(operatorToken).catch(() => undefined),
     ]);
+    setDevelopmentMode(development?.enabled ?? false);
     setUpdates((previous) =>
       nextRuntimeUpdates(previous, health, host, development, providers?.superseded ?? []));
   }, [operatorToken]);
@@ -46,5 +51,5 @@ export function useRuntimeUpdate(
     return () => window.clearInterval(interval);
   }, [operatorToken, refresh, refreshMs]);
 
-  return { runtimeUpdates: updates ?? [], refreshRuntimeUpdate: refresh };
+  return { runtimeUpdates: updates ?? [], developmentMode, refreshRuntimeUpdate: refresh };
 }

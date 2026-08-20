@@ -228,3 +228,28 @@ test("reports one entry per subsystem, never two for the same one", () => {
 
   expect(all.map((entry) => entry.kind)).toEqual(["failed"]);
 });
+
+test("only the updates that take workers away carry a consequence", () => {
+  // The confirmation's weight is driven by this field rather than by a list of
+  // kinds, so the classification has to be right here or the warning lands on
+  // the wrong thing.
+  const engine = runtimeUpdates(
+    { version: "0.1.0", worker_engine_build_id: "installed" } as never,
+    { protocol_version: 1, draining: false, running_sessions: 0, worker_engine_build_id: "running" } as never,
+    undefined,
+    [],
+  ).find((update) => update.kind === "worker_engine");
+  expect(engine?.consequence).toContain("stopped");
+  expect(engine?.action).toBe("apply_worker_engine");
+
+  const release = runtimeUpdates(
+    undefined,
+    undefined,
+    { enabled: true, state: "idle", reload_available: true, source_revision: "5394d9a", deployed_source_revision: "66c26f5", source_dirty: false } as never,
+    [],
+  ).find((update) => update.kind === "app");
+  // Workers stay online through an App and API release, so nothing is lost and
+  // the dialog must not claim otherwise.
+  expect(release?.consequence).toBeUndefined();
+  expect(release?.action).toBe("build");
+});

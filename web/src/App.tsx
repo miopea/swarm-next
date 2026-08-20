@@ -83,6 +83,8 @@ import DogfoodFeedbackDialog from "./feedback/DogfoodFeedbackDialog";
 import CommandPalette, { type CommandChoice } from "./navigation/CommandPalette";
 import { applyColorTheme, initialColorTheme, type ColorTheme } from "./brand/theme";
 import { ControlRoomLiveFeed, type LiveFeedState } from "./controlRoom/ControlRoomLiveFeed";
+import RuntimeUpdateConfirm from "./runtime/RuntimeUpdateConfirm";
+import type { RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
 import HiveContextIndicator from "./controlRoom/HiveContextIndicator";
 import { useControlRoomModel } from "./controlRoom/useControlRoomModel";
 import { clearSettingsSection, navigateToSettingsSection, readSettingsSection, type SettingsSection } from "./settings/settingsNavigation";
@@ -154,7 +156,8 @@ export function App() {
   const [workerVisibility, setWorkerVisibility] = useState<WorkerVisibility>(readWorkerVisibility);
   const [workerQuery, setWorkerQuery] = useState("");
   const [terminalConnection, setTerminalConnection] = useState<string>();
-  const { runtimeUpdates, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
+  const { runtimeUpdates, developmentMode, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
+  const [runtimeConfirm, setRuntimeConfirm] = useState<RuntimeUpdateSummary>();
   // Polled rather than derived from the board, because the board is one surface
   // and a finished task with nobody answered belongs in Needs you regardless of
   // where the operator is standing.
@@ -770,6 +773,21 @@ export function App() {
     });
   }
 
+  /**
+   * Runs a runtime update the operator started from the control room.
+   *
+   * Routes to the same actions the settings page uses rather than duplicating
+   * them, so there is one implementation of each and no second path to keep
+   * true. The dialog has already asked; this only does it.
+   */
+  async function runRuntimeUpdate(update: RuntimeUpdateSummary) {
+    setRuntimeConfirm(undefined);
+    if (update.action === "build") await reloadDevelopmentBuild();
+    else if (update.action === "apply_worker_engine") await maintainWorkerEngine();
+    else if (update.action === "restart_providers") await restartProviders();
+    await refreshRuntimeUpdate();
+  }
+
   async function restartProviders() {
     if (!operatorToken) return;
     await perform(async () => {
@@ -1183,22 +1201,33 @@ export function App() {
             operator reaches for often enough that a rarely-used control there
             is mostly a misclick risk. */}
         <div className="rail-footer">
-          <RuntimeStatus state={loadState} />
+          <RuntimeStatus state={loadState} developmentMode={developmentMode} />
           {/* One per subsystem rather than only the most severe: they are
               independent and can all be true at once, and ranking them into a
-              single pill hid the others until the first was dealt with. */}
+              single pill hid the others until the first was dealt with.
+              Each states what it is and what it will do, and offers to do it —
+              a title attribute said none of that on a phone, and sending the
+              operator to Settings to press a button they can see from here is
+              a trip with nothing in it. */}
           {operatorToken ? runtimeUpdates.map((update) => (
-            <button
-              key={update.kind}
-              type="button"
-              className={`runtime-update runtime-update-${update.kind}`}
-              title={update.detail}
-              aria-label={`${update.label}. ${update.detail}`}
-              onClick={() => openSettings("settings-runtime")}
-            >
-              {update.busy ? <span className="runtime-update-spinner" aria-hidden="true" /> : null}
-              {update.label}
-            </button>
+            <div key={update.kind} className={`runtime-update-card runtime-update-${update.kind}${update.consequence ? " costly" : ""}`}>
+              <p className="runtime-update-label">
+                {update.busy ? <span className="runtime-update-spinner" aria-hidden="true" /> : null}
+                {update.label}
+              </p>
+              <p className="runtime-update-detail">{update.detail}</p>
+              {update.action && !update.busy ? (
+                <button
+                  type="button"
+                  className="runtime-update-run"
+                  onClick={() => setRuntimeConfirm(update)}
+                  disabled={busy}
+                >{update.actionLabel}</button>
+              ) : null}
+              <button type="button" className="runtime-update-settings" onClick={() => openSettings("settings-runtime")}>
+                Details
+              </button>
+            </div>
           )) : null}
         </div>
         <div className="rail-resize-handle" role="separator" aria-label="Resize worker area" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={480} aria-valuenow={workerRail.width} tabIndex={0} onPointerDown={workerRail.start} onPointerMove={workerRail.move} onPointerUp={workerRail.finish} onPointerCancel={workerRail.finish} onKeyDown={workerRail.resizeWithKeyboard} />
@@ -1341,6 +1370,14 @@ export function App() {
               <button className="secondary-button mobile-manage-workers" type="button" onClick={() => { setShowMobileWorkers(false); openSettings("settings-crew"); }}>Manage workers</button>
             </section>
           </div>
+        ) : null}
+        {operatorToken && runtimeConfirm ? (
+          <RuntimeUpdateConfirm
+            update={runtimeConfirm}
+            busy={busy}
+            onConfirm={() => void runRuntimeUpdate(runtimeConfirm)}
+            onCancel={() => setRuntimeConfirm(undefined)}
+          />
         ) : null}
         {operatorToken && showCommands ? <CommandPalette choices={commandChoices} onClose={() => setShowCommands(false)} /> : null}
         {operatorToken && showFeedback ? (
@@ -1550,8 +1587,14 @@ function presenceModeLabel(mode: PresenceMode) {
   return "Away";
 }
 
-function RuntimeStatus({ state }: { state: LoadState }) {
-  if (state.kind === "ready") return <span className="runtime-status"><span className="presence online" /> Runtime {state.health.version}</span>;
+function RuntimeStatus({ state, developmentMode }: { state: LoadState; developmentMode?: boolean }) {
+  // Dev mode changes what every line beneath this means — updates come from a
+  // working copy rather than a release — so it is said here rather than found
+  // in Settings.
+  const mode = developmentMode
+    ? <span className="runtime-mode development" title="This Hive builds and releases from its working copy">Dev</span>
+    : null;
+  if (state.kind === "ready") return <span className="runtime-status"><span className="presence online" /> Runtime {state.health.version}{mode}</span>;
   if (state.kind === "unavailable") return <span className="runtime-status error"><span className="presence offline" /> Runtime unavailable</span>;
   return <span className="runtime-status"><span className="presence" /> Connecting…</span>;
 }
