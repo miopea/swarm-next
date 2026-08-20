@@ -921,3 +921,21 @@ function bootFetch() {
     return Promise.resolve(ok({}));
   });
 }
+
+test("a detached window keeps the controls belonging to what it shows", async () => {
+  // The operator: "while secondary screens don't need to show the control areas
+  // (needs you, tasks, etc) it still needs the filters, worker picker, etc.
+  // This is the popped out worker panel with no way to change workers."
+  //
+  // So the rail survives detachment carrying the surface's own controls, and
+  // loses the navigation between surfaces — which is what it was detached from.
+  window.history.replaceState({}, "", "/?surface=workers&detached=1");
+  const fetch = bootFetch();
+  vi.stubGlobal("fetch", fetch);
+
+  render(<App />);
+
+  await screen.findByRole("complementary", { name: "Workers controls" });
+  // Navigation between surfaces is gone: this window is one surface.
+  expect(screen.queryByRole("navigation", { name: "Primary" })).not.toBeInTheDocument();
+});

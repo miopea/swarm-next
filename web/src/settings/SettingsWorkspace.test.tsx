@@ -107,13 +107,8 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
     />,
   );
 
-  const settingsNavigation = screen.getByRole("navigation", { name: "Settings sections" });
-  expect(settingsNavigation).toHaveTextContent("CrewPresenceQueenAlertsSystemApiaryIntegrationsMigrationBackupDiagnostics");
-  expect(screen.getByRole("button", { name: "Diagnostics" })).toHaveAttribute("aria-controls", "settings-diagnostics");
-  fireEvent.click(screen.getByRole("button", { name: "Diagnostics" }));
-  expect(screen.getByRole("button", { name: "Diagnostics" })).toHaveAttribute("aria-current", "location");
-  expect(screen.getByRole("button", { name: "Crew" })).not.toHaveAttribute("aria-current");
-  expect(window.location.hash).toBe("#settings-diagnostics");
+  // Section navigation lives in the rail now, with every other surface's, and
+  // is covered at that level. This file covers what the workspace itself does.
 
   expect(screen.getAllByRole("status")[0]).toHaveTextContent("AwayComputer lock detected");
   fireEvent.change(screen.getByLabelText("Presence policy"), { target: { value: "night_watch" } });
@@ -228,7 +223,8 @@ test("restores a linked settings section after its responsive layout settles", a
 
   render(<SettingsWorkspace {...minimalProps()} />);
 
-  expect(screen.getByRole("button", { name: "Apiary" })).toHaveAttribute("aria-current", "location");
+  // The subject here is scroll restoration: a linked section has to be brought
+  // into view once the responsive layout settles.
   await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
 });
 
@@ -259,7 +255,6 @@ test("keeps the selected settings section when the layout crosses phone width", 
   }));
 
   render(<SettingsWorkspace {...minimalProps()} />);
-  expect(screen.getByRole("button", { name: "Queen" })).toHaveAttribute("aria-current", "location");
   await waitFor(() => expect(responsiveChange).toBeTypeOf("function"));
   scrollIntoView.mockClear();
   responsiveChange?.();

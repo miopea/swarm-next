@@ -204,21 +204,8 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
   const queenReviewTone = hasPendingQueenDecision ? "offline" : queenAutomationStateTone(queenAutomation);
   return (
     <div className="settings-workspace">
-      <nav className="settings-section-nav" aria-label="Settings sections">
-        {SETTINGS_SECTIONS.map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            aria-controls={id}
-            aria-current={activeSettingsSection === id ? "location" : undefined}
-            onClick={() => {
-              setActiveSettingsSection(id);
-              navigateToSettingsSection(id);
-              document.getElementById(id)?.scrollIntoView?.({ behavior: "auto", block: "start" });
-            }}
-          >{label}</button>
-        ))}
-      </nav>
+      {/* The section list lives in the rail now, with every other surface's
+          navigation. */}
       <WorkerSettings workers={workers} workspaces={workspaces} busy={busy} providers={providers} providerCapabilitiesUnavailable={providerCapabilitiesUnavailable} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onRemove={onRemoveWorker} onDraftDescription={async (workerId) => (await draftWorkerDescription(operatorToken, workerId)).description} onImproveDescription={async (workerId) => (await improveWorkerDescription(operatorToken, workerId)).description} onReorder={onReorderWorkers} />
       <section id="settings-presence" className="settings-card presence-settings" aria-labelledby="presence-heading">
         <div><p className="eyebrow">Presence</p><h3 id="presence-heading">Let attention follow you</h3></div>

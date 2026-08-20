@@ -154,6 +154,11 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .surface-nav button.selected small { color: var(--text); background: var(--panel-raised); }
 
 .rail-context { display: flex; min-height: 0; flex: 1; flex-direction: column; padding-top: 17px; overflow: hidden; }
+/* Settings sections, in the rail with every other surface's navigation. */
+.rail-settings-sections { display: grid; min-height: 0; gap: 2px; overflow-y: auto; }
+.rail-settings-sections button { min-height: 36px; padding: 0 10px; border: 1px solid transparent; border-radius: 9px; color: var(--muted); background: transparent; font-size: .78rem; text-align: left; }
+.rail-settings-sections button:hover { color: var(--text); background: var(--panel-soft); }
+.rail-settings-sections button.selected { color: var(--text); border-color: var(--line); background: var(--panel-raised); font-weight: 600; }
 .rail-controls { flex: 0 0 auto; }
 .control-rail.surface-tasks .rail-controls { min-height: 0; flex: 1; overflow-y: auto; }
 .rail-context .worker-list, .rail-context .empty-rail { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
@@ -273,7 +278,10 @@ button:hover:not(:disabled) { border-color: var(--accent-strong); background: co
 button:active:not(:disabled) { transform: translateY(1px); }
 .surface-nav button:hover:not(:disabled), .worker-button:hover:not(:disabled) { border-color: transparent; color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
 .surface-nav button.selected:hover:not(:disabled), .worker-button[aria-current="page"]:hover:not(:disabled) { border-color: color-mix(in srgb, var(--good) 40%, transparent); background: color-mix(in srgb, var(--good-soft) 68%, transparent); }
-.rail-footer { display: flex; min-width: 0; flex-wrap: wrap; flex-direction: column; align-items: flex-start; gap: 7px; padding: 13px 8px 2px; border-top: 1px solid var(--line); }
+/* Pinned to the bottom of the rail rather than floating under whatever
+   happens to be above it: surfaces without a rail context left it partway up
+   the column, so where the runtime lived depended on which screen you were on. */
+.rail-footer { display: flex; min-width: 0; flex-wrap: wrap; flex-direction: column; align-items: flex-start; gap: 7px; margin-top: auto; padding: 13px 8px 2px; border-top: 1px solid var(--line); }
 .rail-footer .runtime-status { min-width: 0; }
 .rail-footer .runtime-update { max-width: 100%; }
 .runtime-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .72rem; }
@@ -613,7 +621,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
    the card wider than its column and clipping at the edge. */
 .task-card-panel { grid-column: 1 / -1; min-width: 0; }
 /* A window detached to show one surface has no rail to leave room for. */
-.app-shell.detached-surface { grid-template-columns: 1fr; }
+/* A detached window keeps a rail, narrower than the full one, carrying only the
+   controls belonging to the surface it shows. It used to have none at all, so a
+   popped-out worker panel could show one worker and offer no way to change it. */
+.app-shell.detached-surface { grid-template-columns: minmax(0, var(--rail-width, 260px)) 1fr; }
+.control-rail.detached-rail { padding-top: 14px; }
+.control-rail.detached-rail .rail-context { padding-top: 0; }
 /* A surface already open in its own window is shown as spoken for; clicking it
    brings that window forward rather than drawing it a second time. */
 .surface-nav button[data-detached] { color: var(--muted); }
@@ -1526,7 +1539,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .surface-nav button svg { width: 15px; height: 15px; }
   .surface-nav button small { min-width: 19px; height: 19px; font-size: .63rem; }
   .rail-context { display: none; }
-  .control-rail.surface-workers .rail-context { display: none; }
+  /* Except settings, which has nowhere else to navigate from now that its own
+     bar is gone. A scroller here is the same affordance that bar had. */
+  .control-rail.surface-settings .rail-context { display: flex; padding-top: 8px; }
+  .rail-settings-sections { display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+  .rail-settings-sections button { min-height: var(--pill-touch-height); flex: 0 0 auto; border-color: var(--line); border-radius: 999px; }
   .start-worker { margin-top: 12px; padding-top: 12px; }
   .start-worker-disclosure { display: none; }
   .start-worker-disclosure .start-worker { display: none; margin-top: 9px; padding: 10px 0 2px; }

@@ -88,7 +88,7 @@ import RuntimeUpdateConfirm from "./runtime/RuntimeUpdateConfirm";
 import type { RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
 import HiveContextIndicator from "./controlRoom/HiveContextIndicator";
 import { useControlRoomModel } from "./controlRoom/useControlRoomModel";
-import { clearSettingsSection, navigateToSettingsSection, readSettingsSection, type SettingsSection } from "./settings/settingsNavigation";
+import { SETTINGS_SECTIONS, clearSettingsSection, navigateToSettingsSection, readSettingsSection, type SettingsSection } from "./settings/settingsNavigation";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
 import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskBoardSource } from "./tasks/TaskBoardControls";
@@ -159,6 +159,12 @@ export function App() {
   const [terminalConnection, setTerminalConnection] = useState<string>();
   const { runtimeUpdates, developmentMode, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
   const [runtimeConfirm, setRuntimeConfirm] = useState<RuntimeUpdateSummary>();
+  // Settings navigates from the rail like every other surface, so the rail has
+  // to know which section is current. The hash stays the source of truth, since
+  // a link into a section has to keep working.
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>(
+    () => readSettingsSection() ?? "settings-crew",
+  );
   // Polled rather than derived from the board, because the board is one surface
   // and a finished task with nobody answered belongs in Needs you regardless of
   // where the operator is standing.
@@ -1007,6 +1013,7 @@ export function App() {
   }])).values()].sort((left, right) => left.name.localeCompare(right.name)), [jiraTaskLinks]);
   const openSettings = (section: SettingsSection = "settings-crew") => {
     navigateToSettingsSection(section);
+    setSettingsSection(section);
     setSurface("settings");
   };
   const openApiarySettings = () => openSettings("settings-apiary");
@@ -1096,8 +1103,13 @@ export function App() {
 
   return (
     <main className={`app-shell${workerRail.resizing ? " resizing-rail" : ""}${detached ? " detached-surface" : ""}`} style={{ "--rail-width": `${workerRail.width}px` } as CSSProperties}>
-      {detached ? null : <aside className={`control-rail surface-${surface}`} aria-label="Swarm navigation">
-        <div className="brand-lockup">
+      {/* A detached window keeps the controls that belong to the surface it is
+          showing — the worker picker, the filters, the settings sections — and
+          drops the navigation between surfaces, which is what it was detached
+          from. Without this a popped-out worker panel could only ever show the
+          one worker it opened with. */}
+      <aside className={`control-rail surface-${surface}${detached ? " detached-rail" : ""}`} aria-label={detached ? `${surfaceLabel(surface)} controls` : "Swarm navigation"}>
+        {detached ? null : <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
           <div className="brand-copy"><p className="eyebrow">Swarm</p><h1>Control room</h1><HiveContextIndicator identity={hiveIdentity} /></div>
           {operatorToken ? (
@@ -1109,11 +1121,11 @@ export function App() {
               onClick={() => openSettings("settings-diagnostics")}
             ><DiagnosticsIcon /></button>
           ) : null}
-        </div>
+        </div>}
 
         {operatorToken ? (
           <>
-            <nav className={`surface-nav${federated ? " with-apiary" : ""}`} aria-label="Primary">
+            {detached ? null : <nav className={`surface-nav${federated ? " with-apiary" : ""}`} aria-label="Primary">
               <span className="surface-nav-item"><button className={surface === "decisions" ? "selected" : ""} aria-current={surface === "decisions" ? "page" : undefined} data-detached={surfaceIsDetached("decisions") || undefined} onClick={() => showSurface("decisions")}>
                 <span><DecisionIcon /> Needs you</span><small>{attentionCount}</small>
               </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("decisions")} in a new window`} title={`Open ${surfaceLabel("decisions")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("decisions", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
@@ -1127,8 +1139,26 @@ export function App() {
               <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => openSettings()}>
                 <span><SettingsIcon /> Settings</span>
               </button>
-            </nav>
+            </nav>}
 
+            {/* Settings navigates from the rail like every other surface. It
+                was the only one carrying its own bar of sections above the
+                content, so it read as a different kind of screen. */}
+            {surface === "settings" && (
+              <div className="rail-context">
+                <nav className="rail-settings-sections" aria-label="Settings sections">
+                  {SETTINGS_SECTIONS.map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={settingsSection === id ? "selected" : ""}
+                      aria-current={settingsSection === id ? "location" : undefined}
+                      onClick={() => openSettings(id)}
+                    >{label}</button>
+                  ))}
+                </nav>
+              </div>
+            )}
             {(surface === "tasks" || surface === "workers") && <div className="rail-context">
               <div className="rail-controls">
                 <div className="rail-heading">
@@ -1222,7 +1252,7 @@ export function App() {
             version it sits next to is about, and the lockup is a row the
             operator reaches for often enough that a rarely-used control there
             is mostly a misclick risk. */}
-        <div className="rail-footer">
+        {detached ? null : <div className="rail-footer">
           <RuntimeStatus state={loadState} developmentMode={developmentMode} />
           {/* One per subsystem rather than only the most severe: they are
               independent and can all be true at once, and ranking them into a
@@ -1251,9 +1281,9 @@ export function App() {
               </button>
             </div>
           )) : null}
-        </div>
+        </div>}
         <div className="rail-resize-handle" role="separator" aria-label="Resize worker area" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={480} aria-valuenow={workerRail.width} tabIndex={0} onPointerDown={workerRail.start} onPointerMove={workerRail.move} onPointerUp={workerRail.finish} onPointerCancel={workerRail.finish} onKeyDown={workerRail.resizeWithKeyboard} />
-      </aside>}
+      </aside>
 
       {/* Replacing the paint boundary on a workspace change prevents Chromium
           from retaining xterm's detached accelerated layer over the next view. */}

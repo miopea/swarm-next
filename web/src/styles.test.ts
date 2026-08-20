@@ -225,3 +225,18 @@ test("keeps the age legible on a state that paints its own pill", () => {
   expect(stylesheet).toContain(".worker-silence { color: inherit; opacity: .85;");
   expect(stylesheet).not.toMatch(/\.worker-silence \{ color: var\(--quiet\)/);
 });
+
+test("pins the runtime footer to the bottom of the rail on every surface", () => {
+  // It sat under whatever happened to be above it, so on surfaces with no rail
+  // context it floated partway up the column and the runtime lived somewhere
+  // different depending on which screen you were on.
+  expect(stylesheet).toMatch(/\.rail-footer \{[^}]*margin-top:\s*auto/);
+});
+
+test("keeps settings navigable on a phone once its own bar is gone", () => {
+  // Settings sections moved into the rail to match every other surface. The
+  // rail context is hidden at phone width, so without this the only way to
+  // reach a settings section on a phone would have disappeared with the bar.
+  expect(stylesheet).toContain(".control-rail.surface-settings .rail-context { display: flex;");
+  expect(stylesheet).toMatch(/\.rail-settings-sections \{[^}]*overflow-x:\s*auto/);
+});
