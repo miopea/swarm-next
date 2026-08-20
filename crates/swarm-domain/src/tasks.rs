@@ -419,6 +419,14 @@ pub struct Task {
     /// this, do not act on it" govern the work without being part of it, and
     /// putting them in the description makes them read as part of it.
     pub operator_instruction: String,
+    /// Whether anyone has recorded where this work is running.
+    ///
+    /// Computed rather than stored. A completed task without it is finished,
+    /// not shown to be live — and calling that COMPLETED claims more than
+    /// anyone has established, which is the same distinction between committed
+    /// and deployed that this repo draws everywhere else.
+    #[serde(default)]
+    pub deployment_recorded: bool,
     pub priority: TaskPriority,
     pub workspace: String,
     pub state: TaskState,

@@ -98,7 +98,7 @@ pub use task_dispatches::{TaskDispatch, TaskDispatchFailure};
 mod task_outcomes;
 pub use task_outcomes::{TaskOutcomeDispatch, TaskOutcomeFailure};
 mod workers;
-pub use decisions::INTERVIEW_ANSWERED_ACTION;
+pub use decisions::{HeldForAnswer, INTERVIEW_ANSWERED_ACTION, OPERATOR_ANSWER_HEADER};
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
@@ -853,7 +853,8 @@ impl TaskStore {
                    (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
                     AND outcome.target_state = t.state
                     ORDER BY outcome.activity_sequence DESC LIMIT 1),
-                   t.position, t.created_at, t.updated_at, t.operator_instruction
+                   t.position, t.created_at, t.updated_at, t.operator_instruction,
+                   EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -887,7 +888,8 @@ impl TaskStore {
                    (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
                     AND outcome.target_state = t.state
                     ORDER BY outcome.activity_sequence DESC LIMIT 1),
-                   t.position, t.created_at, t.updated_at, t.operator_instruction
+                   t.position, t.created_at, t.updated_at, t.operator_instruction,
+                   EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -918,7 +920,8 @@ impl TaskStore {
                    (SELECT state FROM task_outcome_deliveries outcome WHERE outcome.task_id = t.id
                     AND outcome.target_state = t.state
                     ORDER BY outcome.activity_sequence DESC LIMIT 1),
-                       t.position, t.created_at, t.updated_at, t.operator_instruction
+                       t.position, t.created_at, t.updated_at, t.operator_instruction,
+                   EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
                 FROM tasks t
                 LEFT JOIN task_assignments a
                   ON a.task_id = t.id AND a.released_at IS NULL
@@ -3062,6 +3065,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
                 )
             })?,
         operator_instruction: row.get(14)?,
+        deployment_recorded: row.get(15).unwrap_or(false),
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))
             .transpose()

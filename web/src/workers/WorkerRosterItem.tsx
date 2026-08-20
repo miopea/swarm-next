@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import CursorMenu, { pointFromElement, type MenuPoint } from "../shared/CursorMenu";
-import { workerAttention, workerSilence } from "./workerAttention";
+import { heldForAnswer, workerAttention, workerSilence } from "./workerAttention";
 
 type Props = {
   worker: Worker;
@@ -22,7 +22,12 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
   const primaryAction = worker.running ? onOpen : onStart;
   const primaryActionLabel = worker.running ? "Open terminal" : worker.runtime_error ? "Retry worker" : "Wake worker";
   const attention = workerAttention(worker);
-  const silence = workerSilence(worker);
+  // A worker holding for an answer reports how long the answer has been owed,
+  // not how long its terminal has been quiet. Silence age looks right for a
+  // held worker by coincidence — it stopped producing output because it
+  // stopped — and measures the wrong thing.
+  const held = heldForAnswer(worker);
+  const silence = held ?? workerSilence(worker);
 
   useEffect(() => {
     if (worker.attention_state !== "with_operator" || worker.engagement_expires_at === undefined) return;
@@ -56,7 +61,7 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
       >
         <span className="worker-avatar"><BeeMascot role={worker.role === "queen" ? "queen" : "worker"} expression={attention.expression} /></span>
         <span className="worker-copy">
-          <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.label}{silence ? <span className="worker-silence"> · {silence}</span> : null}{worker.unconfirmed_delivery ? (
+          <span className="worker-copy-heading"><strong>{worker.name}</strong><span className="worker-attention-label">{attention.label}{silence ? <span className="worker-silence"> · {silence}</span> : null}{worker.answer_overdue ? <span className="worker-overdue" title="This request passed the deadline its asker set. The worker is still holding."> · overdue</span> : null}{worker.unconfirmed_delivery ? (
             <span
               className="worker-unconfirmed"
               role="img"

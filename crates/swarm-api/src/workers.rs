@@ -75,6 +75,9 @@ pub(super) async fn list_workers(
         .map_err(|error| task_store_error(&error))?;
     let live_ids = live.keys().copied().collect::<HashSet<_>>();
     let provider_activity = provider_activity::refresh(&state, &profiles, &live_ids).await;
+    let held = task_store(&state)?
+        .workers_holding_for_an_answer(crate::unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
     let awaiting_operator = task_store(&state)?
         .workers_awaiting_operator()
         .map_err(|error| task_store_error(&error))?;
@@ -115,6 +118,7 @@ pub(super) async fn list_workers(
                     provider_activity: activity,
                     system_role: is_scout.then_some("scout"),
                     last_output_at,
+                    held_for_answer: held.get(&profile_id).copied(),
                     unconfirmed_delivery: unconfirmed.contains(&profile_id),
                     engaged_device: engaged.remove(&profile_id),
                 },

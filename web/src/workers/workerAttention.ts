@@ -70,3 +70,26 @@ export function workerSwitcherDetail(worker: Worker, assignedTaskTitle?: string)
   if (assignedTaskTitle) return `${state} · ${assignedTaskTitle}`;
   return worker.running ? state : "Sleeping · tap to wake";
 }
+
+/**
+ * How long this worker has been holding for an operator answer.
+ *
+ * Distinct from silence: a held worker stopped producing output as a
+ * consequence of stopping, so silence age happens to look right and measures
+ * the wrong thing. What the operator needs to see is how long an answer has
+ * been owed, which is when the request was filed.
+ *
+ * Shown from the first minute rather than suppressed like silence is. A
+ * one-minute silence is noise; a worker pinned for a minute waiting on you is
+ * already the fact.
+ */
+export function heldForAnswer(worker: Worker, now = Date.now()): string | undefined {
+  if (worker.held_for_answer_since === undefined) return undefined;
+  const seconds = Math.max(0, Math.floor(now / 1000) - worker.held_for_answer_since);
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}

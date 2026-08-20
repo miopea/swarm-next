@@ -18,6 +18,12 @@ const priorityLabels: Record<TaskPriority, string> = {
 
 function taskStateLabel(task: Task): string {
   if (task.state === "ready" && task.assigned_worker_id) return "Assigned";
+  // Finished is not the same as shown to be live. Calling it completed claims
+  // more than anyone has established, which is the distinction between
+  // committed and deployed drawn everywhere else here. Work with nothing to
+  // deploy is not blocked — it simply reads as what it is until evidence
+  // exists.
+  if (task.state === "completed" && !task.deployment_recorded) return "Finished · unverified";
   return stateLabels[task.state];
 }
 
@@ -32,7 +38,7 @@ export default function TaskMetadata({ task, jiraLink, busy, onRetryJira }: {
       <section className="task-metadata-section" aria-label="Swarm details">
         <strong className="task-section-label">Swarm</strong>
         <dl>
-          <div><dt>Status</dt><dd><span className={`task-state state-${task.state}`}>{taskStateLabel(task)}</span></dd></div>
+          <div><dt>Status</dt><dd><span className={`task-state state-${task.state}${task.state === "completed" && !task.deployment_recorded ? " unverified" : ""}`} title={task.state === "completed" && !task.deployment_recorded ? "The work is finished. Nothing has recorded where it is running, so nothing has shown it to be live." : undefined}>{taskStateLabel(task)}</span></dd></div>
           <div><dt>Priority</dt><dd><span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span></dd></div>
         </dl>
       </section>

@@ -1613,6 +1613,14 @@ struct WorkerView {
     /// roster can show how long it has been silent without opening it.
     #[serde(skip_serializing_if = "Option::is_none")]
     last_output_at: Option<i64>,
+    /// When this worker's oldest unanswered request was filed. The roster
+    /// shows silence age, which for a held worker measures when output stopped
+    /// rather than how long an answer has been owed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    held_for_answer_since: Option<i64>,
+    /// One of this worker's unanswered requests has passed its deadline.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    answer_overdue: bool,
     /// Swarm wrote a briefing to this worker and could not confirm it landed.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     unconfirmed_delivery: bool,
@@ -1816,6 +1824,9 @@ struct WorkerViewFacts {
     /// second boolean nobody can read at the call site.
     system_role: Option<&'static str>,
     last_output_at: Option<i64>,
+    /// When this worker's oldest unanswered request was filed, and whether any
+    /// of them has passed its deadline. Present only while it is holding.
+    held_for_answer: Option<swarm_persistence::HeldForAnswer>,
     unconfirmed_delivery: bool,
     engaged_device: Option<(String, String)>,
 }
@@ -1829,6 +1840,7 @@ impl Default for WorkerViewFacts {
             provider_activity: ProviderActivity::Unknown,
             system_role: None,
             last_output_at: None,
+            held_for_answer: None,
             unconfirmed_delivery: false,
             engaged_device: None,
         }
@@ -1843,6 +1855,7 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         provider_activity,
         system_role,
         last_output_at,
+        held_for_answer,
         unconfirmed_delivery,
         engaged_device,
     } = facts;
@@ -1872,6 +1885,8 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         runtime_error,
         system_role,
         last_output_at,
+        held_for_answer_since: held_for_answer.map(|held| held.since),
+        answer_overdue: held_for_answer.is_some_and(|held| held.overdue),
         unconfirmed_delivery,
         engaged_device_id,
         engaged_device_class,

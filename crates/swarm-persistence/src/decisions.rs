@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     str::FromStr,
 };
 
@@ -134,6 +134,15 @@ pub const INTERVIEW_ANSWERED_ACTION: &str = "answered";
 /// format and one audit trail rather than a second of each.
 pub const OPERATOR_ANSWER_HEADER: &str = "Answer";
 
+/// A worker holding its session until the operator answers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HeldForAnswer {
+    /// When the oldest unanswered request from this worker was filed.
+    pub since: i64,
+    /// Whether any of them has passed the deadline its asker set.
+    pub overdue: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecisionDispatch {
     pub decision_id: DecisionRequestId,
@@ -189,6 +198,45 @@ impl TaskStore {
                 let id = result?;
                 Ok(parse_id(&id)?)
             })
+            .collect()
+    }
+
+    /// How long each worker has been holding for an operator answer, and
+    /// whether that wait has passed the deadline the asker set.
+    ///
+    /// A worker that files a decision stops and holds its session. The roster
+    /// showed how long its terminal had been silent, which for a held worker is
+    /// a coincidence rather than the fact: it measures when output stopped, not
+    /// how long an answer has been owed. A pinned session with no visible
+    /// reason is a worse failure than the guess-the-button problem it came
+    /// from.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable or holds an invalid ID.
+    pub fn workers_holding_for_an_answer(
+        &self,
+        now: i64,
+    ) -> Result<HashMap<WorkerId, HeldForAnswer>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT d.requesting_worker_id, MIN(d.created_at),
+                    MAX(CASE WHEN d.deadline IS NOT NULL AND d.deadline <= ?1 THEN 1 ELSE 0 END)
+             FROM decision_requests d
+             JOIN local_hive_identity l ON l.hive_id = d.hive_id AND l.singleton = 1
+             WHERE d.state = 'pending'
+             GROUP BY d.requesting_worker_id",
+        )?;
+        let rows = statement
+            .query_map([now], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(id, since, overdue)| Ok((parse_id(&id)?, HeldForAnswer { since, overdue })))
             .collect()
     }
 
@@ -959,6 +1007,75 @@ mod tests {
         assert_eq!(resolved.resolution_surface, "inbox_interview");
         // Delivered back to the asker the same way a ruling is.
         assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
+    }
+
+    #[test]
+    fn a_held_worker_reports_how_long_an_answer_has_been_owed() {
+        // Spec 3.2: a held session must be visible as held, and for how long.
+        // The roster showed terminal silence, which for a held worker measures
+        // when output stopped rather than how long the operator has owed an
+        // answer. A pinned session with no visible reason is a worse failure
+        // than the guess-the-button problem it came from.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = ["ship".to_owned()];
+
+        assert!(
+            store
+                .workers_holding_for_an_answer(1_000)
+                .unwrap()
+                .is_empty()
+        );
+
+        let created = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+
+        let held = store.workers_holding_for_an_answer(1_000).unwrap();
+        let queen_hold = held.get(&queen.id).expect("queen is holding");
+        assert_eq!(queen_hold.since, created.created_at);
+        assert!(!queen_hold.overdue, "no deadline was set");
+
+        // Answering releases the hold.
+        store
+            .resolve_decision_request(created.id, "ship", "", "test")
+            .unwrap();
+        assert!(
+            store
+                .workers_holding_for_an_answer(1_000)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_wait_past_its_deadline_is_reported_as_overdue_and_keeps_holding() {
+        // Operator ruling 2026-08-20: escalate, keep holding. Never invent an
+        // answer, and never quietly break the hard block — but never stay
+        // silent about it either.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = ["ship".to_owned()];
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                // Creation rejects a deadline already in the past, so this is a
+                // real future one and the clock is moved past it by the query.
+                deadline: Some(4_000_000_000),
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+
+        let before = store.workers_holding_for_an_answer(3_999_999_999).unwrap();
+        assert!(!before.get(&queen.id).unwrap().overdue);
+
+        let after = store.workers_holding_for_an_answer(4_000_000_001).unwrap();
+        let overdue = after.get(&queen.id).expect("still holding");
+        assert!(overdue.overdue);
+        assert_eq!(
+            store.get_decision_request(created.id).unwrap().state,
+            DecisionRequestState::Pending,
+            "an overdue request is escalated, not resolved on the operator's behalf"
+        );
     }
 
     #[test]

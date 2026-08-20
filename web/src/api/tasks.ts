@@ -14,6 +14,8 @@ export type Task = {
    * it". Empty when the operator has not said anything.
    */
   operator_instruction: string;
+  /** Whether anyone has recorded where this work is running. */
+  deployment_recorded?: boolean;
   priority: TaskPriority;
   workspace: string;
   state: TaskState;

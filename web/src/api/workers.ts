@@ -28,6 +28,10 @@ export type Worker = {
   attention_state: WorkerAttentionState;
   /** Wall-clock second this worker's terminal last produced output. */
   last_output_at?: number;
+  /** When this worker's oldest unanswered request was filed, while it holds. */
+  held_for_answer_since?: number;
+  /** One of its unanswered requests has passed the deadline its asker set. */
+  answer_overdue?: boolean;
   /** Swarm wrote a briefing to this worker and could not confirm it landed. */
   unconfirmed_delivery?: boolean;
   /** The device currently holding input and terminal geometry for this worker. */

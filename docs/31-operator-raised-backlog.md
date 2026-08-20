@@ -559,7 +559,7 @@ recorded under one reserved key, carries the same `answered` action, and reaches
 the worker through the delivery an interview already uses — one answer shape,
 one audit trail, one format, rather than a second of each.
 
-### 35. Deployment evidence is the operator's chore, and a task claims COMPLETED without it
+### 35. Deployment evidence is the operator's chore, and a task claims COMPLETED without it — *fixed*
 
 Raised as: "I shouldn't be managing this — that is part of marking something
 complete. It should [not] be listed as complete if it wasn't verified."
@@ -588,6 +588,17 @@ the lifecycle:
 
 The first removes the chore; the second removes the false claim. They are not
 exclusive, and the second is the one that makes the board honest.
+
+**Operator ruling, 2026-08-20: both, in that order.** The chore went first —
+`swarm_record_deployment` means the worker records it, since it deployed the
+work and holds the reference. The false claim went second: completion still
+works, and a completed task with no deployment record reads as
+**Finished · unverified** rather than Completed.
+
+Deliberately not a gate. Plenty of work has nothing to deploy — a research
+task, a document, an interview — and refusing completion for those would put a
+meaningless question in front of every task. The board says what is known
+instead of blocking what is not.
 
 Related and already built: item 32's card now reports a completed email task
 nobody answered. The same reasoning applies one step earlier, to whether it

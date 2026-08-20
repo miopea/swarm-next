@@ -760,3 +760,21 @@ function apiaryTask() {
 function ok(payload: unknown) {
   return { ok: true, status: 200, json: async () => payload };
 }
+
+test("does not call work completed when nothing has shown it to be live", async () => {
+  // Operator ruling 2026-08-20: completion still works, but a task with no
+  // deployment record reads as finished-and-unverified. Committed and deployed
+  // are not synonyms, and work that has nothing to deploy is not blocked.
+  renderBoard({ tasks: [{ ...task, state: "completed", deployment_recorded: false }] });
+  fireEvent.click(screen.getByText("Completed work"));
+
+  expect(await screen.findByText("Finished · unverified")).toBeInTheDocument();
+});
+
+test("calls it completed once something has", async () => {
+  renderBoard({ tasks: [{ ...task, state: "completed", deployment_recorded: true }] });
+  fireEvent.click(screen.getByText("Completed work"));
+
+  expect(await screen.findByText("Completed")).toBeInTheDocument();
+  expect(screen.queryByText("Finished · unverified")).not.toBeInTheDocument();
+});
