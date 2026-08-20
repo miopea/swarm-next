@@ -2050,15 +2050,27 @@ impl TaskService {
         priority: TaskPriority,
         workspace: &str,
     ) -> Result<Task, ApplicationError> {
-        self.store
-            .create_task_with_details_as(
-                title,
-                description,
-                priority,
-                workspace,
-                &TaskActivityActor::worker(principal.worker_id),
-            )
-            .map_err(Into::into)
+        let task = self.store.create_task_with_details_as(
+            title,
+            description,
+            priority,
+            workspace,
+            &TaskActivityActor::worker(principal.worker_id),
+        )?;
+        // Filing is the whole of what a worker can do here, so it has to reach
+        // the one who routes. Queen already sees drafts; nothing told her one
+        // was waiting, and a worker has no other channel to her. Queen filing
+        // her own draft needs no such notice.
+        if principal.role != WorkerRole::Queen
+            && let Some(session_id) = principal.active_session_id
+        {
+            self.store.record_worker_filed_draft_attention(
+                task.id,
+                principal.worker_id,
+                session_id,
+            )?;
+        }
+        Ok(task)
     }
 
     /// Assigns a task to a stable worker, whether running or sleeping.
@@ -2851,5 +2863,82 @@ mod tests {
             ),
             Err(ApplicationError::NotAuthorized)
         ));
+    }
+
+    /// A worker has no channel to Queen: her inbox is written by detectors and
+    /// nothing else, so a worker wanting work routed had to interrupt the
+    /// operator instead. It can file a draft, but nothing said one was waiting.
+    ///
+    /// Deliberately not a messaging system. The worker states a fact once, to
+    /// the one who routes, and cannot reply or address another worker — there
+    /// is nothing here for two workers to argue over.
+    #[test]
+    fn filing_work_a_worker_cannot_route_tells_queen() {
+        let (service, queen, worker) = setup();
+        let session_id = WorkerSessionId::new();
+        service
+            .store()
+            .bind_worker_session(worker.id, session_id)
+            .unwrap();
+        let running_worker = service.store().get_worker_profile(worker.id).unwrap();
+
+        let filed = service
+            .create_task(
+                AgentPrincipal::from(&running_worker),
+                "Cross-repository follow-up the worker found",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+
+        let waiting = service.store().current_coordinator_attention().unwrap();
+        let notice = waiting
+            .iter()
+            .find(|item| item.kind == "worker_filed_draft_attention")
+            .expect("Queen is told a worker filed work it cannot route");
+        assert_eq!(notice.task_id, filed.id);
+        assert_eq!(notice.worker_id, worker.id);
+
+        // Once Queen routes it, the notice has done its job and stops asking.
+        service
+            .store()
+            .transition_task(filed.id, TaskState::Ready)
+            .unwrap();
+        service
+            .assign_task(AgentPrincipal::from(&queen), filed.id, worker.id)
+            .unwrap();
+        assert!(
+            service
+                .store()
+                .current_coordinator_attention()
+                .unwrap()
+                .iter()
+                .all(|item| item.kind != "worker_filed_draft_attention"),
+            "a routed draft is no longer waiting on Queen"
+        );
+    }
+
+    /// Queen filing her own draft needs no notice to herself.
+    #[test]
+    fn queen_filing_her_own_draft_tells_no_one() {
+        let (service, queen, worker) = setup();
+        service
+            .create_task(
+                AgentPrincipal::from(&queen),
+                "Queen's own note",
+                "",
+                TaskPriority::Normal,
+                &worker.workspace,
+            )
+            .unwrap();
+        assert!(
+            service
+                .store()
+                .current_coordinator_attention()
+                .unwrap()
+                .iter()
+                .all(|item| item.kind != "worker_filed_draft_attention")
+        );
     }
 }

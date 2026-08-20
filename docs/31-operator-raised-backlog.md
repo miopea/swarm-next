@@ -1185,11 +1185,33 @@ Narrower than it first appears: Queen already sees every task including drafts
 carrying its routing intent in the description is visible today. What is missing
 is anything *telling* her one is waiting.
 
-Proposed, not built: a fourth attention kind for a draft filed by a worker and
-not yet routed. That reuses the inbox Queen already reads, keeps the authority
-boundary — the worker asks, Queen decides — and needs no new messaging
-subsystem. A general worker-to-Queen channel is a larger design and should be
-chosen deliberately rather than arrived at.
+Built, on the operator's ruling — "can we simply make it so a filed draft has a
+trigger that informs the queen?" A fourth attention kind is recorded when a
+worker files a draft, and shown in the inbox Queen already reads. It stops being
+shown the moment the task is no longer an unrouted draft, so routing it is what
+clears it. Queen filing her own draft tells no one.
+
+**Deliberately not a messaging system, and that is the point.** The operator's
+account of Swarm Legacy: messaging "did allow for a lot of back and forth that
+moved things forward but it also tended to cause workers to get into 'fights'
+with each other over who was responsible."
+
+What is built here cannot produce that. A worker states one fact, once, to the
+one who routes. There is no reply, no thread, and no way to address another
+worker — so there is nothing for two workers to negotiate and no channel in
+which to disagree about ownership. Responsibility stays where it was: Queen
+assigns, and only Queen assigns.
+
+That is an argument for keeping this shape rather than growing it. If a richer
+channel is ever wanted, the Legacy failure says the thing to design first is who
+may say what to whom, not the transport.
+
+**One hazard found and fixed while building it.** `coordinator_actions.kind`
+carries a CHECK, and the detectors write with `INSERT OR IGNORE` — which
+suppresses a constraint violation exactly as readily as a duplicate. The new
+kind therefore did nothing and said nothing until schema 81 admitted it. The
+writer now names its conflict target explicitly, so only a repeat filing is
+ignorable and an unadmitted kind fails loudly.
 
 ## Landed
 

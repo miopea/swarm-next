@@ -2,7 +2,9 @@ use rusqlite::params;
 use swarm_domain::{ControlRoomEventKind, TaskId, WorkerId, WorkerSessionId};
 use uuid::Uuid;
 
-use super::{TaskStore, TaskStoreError, events::insert_control_room_event};
+use super::{
+    TaskStore, TaskStoreError, WORKER_FILED_DRAFT_SCHEMA_VERSION, events::insert_control_room_event,
+};
 
 /// Automatic starts are intentionally serialized. A fresh resource sample is
 /// required before the next sleeping worker can be claimed.
@@ -420,6 +422,61 @@ impl TaskStore {
         Ok(changed)
     }
 
+    /// Tells Queen that a worker filed work and cannot route it.
+    ///
+    /// A worker has no channel to Queen at all: her inbox is written by
+    /// detectors and nothing else, so a worker wanting work routed had to
+    /// interrupt the operator instead — the opposite of what Queen is for. It
+    /// can file a draft, but nothing said one was waiting.
+    ///
+    /// Recorded when the draft is filed rather than found by a later sweep,
+    /// because the filing is the event. One record per task, and it stops being
+    /// shown the moment the task is no longer an unrouted draft.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn record_worker_filed_draft_attention(
+        &self,
+        task_id: TaskId,
+        worker_id: WorkerId,
+        session_id: WorkerSessionId,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let revision: i64 = transaction.query_row(
+            "SELECT updated_at FROM tasks WHERE id = ?1",
+            [task_id.to_string()],
+            |row| row.get(0),
+        )?;
+        // Deliberately not INSERT OR IGNORE on the conflict clause alone: that
+        // suppresses a CHECK violation exactly as it suppresses a duplicate, so
+        // an unadmitted kind would do nothing and say nothing. Only a repeat of
+        // the same filing is ignorable.
+        let changed = transaction.execute(
+            "INSERT INTO coordinator_actions
+                 (id, idempotency_key, kind, worker_id, task_id, session_id,
+                  evidence_revision, observed_age_seconds, state, reason,
+                  finished_at, updated_at)
+             VALUES (?1, ?2, 'worker_filed_draft_attention', ?3, ?4, ?5, ?6, 0,
+                     'completed', 'A worker filed this work and cannot route it',
+                     unixepoch(), unixepoch())
+             ON CONFLICT(idempotency_key) DO NOTHING",
+            params![
+                Uuid::now_v7().to_string(),
+                format!("worker-filed-draft:{task_id}"),
+                worker_id.to_string(),
+                task_id.to_string(),
+                session_id.to_string(),
+                revision,
+            ],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
     /// Returns bounded durable candidates for stale-owned-work observation.
     /// Runtime/provider evidence is deliberately evaluated by the API before
     /// any attention action is recorded.
@@ -581,15 +638,21 @@ impl TaskStore {
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
              JOIN worker_sessions session ON session.session_id = action.session_id
-             WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention')
+             WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention')
                AND action.state = 'completed'
-               AND task.assigned_worker_id = action.worker_id
                AND task.updated_at = action.evidence_revision
                AND session.worker_id = action.worker_id
                AND (
-                   (action.kind = 'stale_owned_work_attention'
+                   -- A filed draft has no assignee yet: that is the whole point
+                   -- of it, and why the ownership condition the other kinds
+                   -- share cannot be asked of it.
+                   (action.kind = 'worker_filed_draft_attention'
+                       AND task.state = 'draft' AND task.assigned_worker_id IS NULL)
+                   OR (action.kind = 'stale_owned_work_attention'
+                       AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'active' AND session.ended_at IS NULL)
                    OR (action.kind = 'owned_work_worker_exited_attention'
+                       AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'active'
                        AND session.ended_at IS NOT NULL
                        AND session.session_id = (
@@ -604,6 +667,7 @@ impl TaskStore {
                            WHERE live.worker_id = action.worker_id AND live.ended_at IS NULL
                        ))
                    OR (action.kind = 'assigned_ready_work_not_started_attention'
+                       AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'ready' AND session.ended_at IS NULL
                        AND EXISTS (
                            SELECT 1 FROM task_assignments assignment
@@ -1016,6 +1080,75 @@ pub(super) fn migrate_coordinator_unstarted_work_attention(
          PRAGMA legacy_alter_table = OFF;
          PRAGMA user_version = 65;",
     )
+}
+
+/// Admits the one kind of attention a worker can raise itself.
+///
+/// `kind` carries a CHECK, and the writer uses INSERT OR IGNORE — which
+/// suppresses a constraint violation as readily as a duplicate. A new kind
+/// therefore fails silently and completely until the constraint admits it,
+/// which is why this migration exists rather than the insert simply working.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+pub(super) fn migrate_worker_filed_draft_attention(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%worker_filed_draft_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    // The steps that built this table's current shape bail when their own
+    // prerequisites are absent, so a database can arrive here still carrying an
+    // older one. Rebuild only what is actually the shape this widens; anything
+    // else is left alone rather than rewritten from a guess.
+    let ready: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%assigned_ready_work_not_started_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    if ready && !present {
+        transaction.execute_batch(
+            "DROP INDEX IF EXISTS coordinator_actions_queue;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE coordinator_actions RENAME TO coordinator_actions_v80;
+             CREATE TABLE coordinator_actions (
+                 id TEXT PRIMARY KEY,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention')),
+                 worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 session_id TEXT,
+                 evidence_revision INTEGER,
+                 observed_age_seconds INTEGER,
+                 state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                 reason TEXT NOT NULL,
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                 attempted_at INTEGER,
+                 finished_at INTEGER,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );
+             INSERT INTO coordinator_actions (
+                 id, idempotency_key, kind, worker_id, task_id, session_id,
+                 evidence_revision, observed_age_seconds, state, reason, attempts,
+                 attempted_at, finished_at, created_at, updated_at
+             ) SELECT id, idempotency_key, kind, worker_id, task_id, session_id,
+                      evidence_revision, observed_age_seconds, state, reason, attempts,
+                      attempted_at, finished_at, created_at, updated_at
+               FROM coordinator_actions_v80;
+             DROP TABLE coordinator_actions_v80;
+             CREATE INDEX coordinator_actions_queue
+                 ON coordinator_actions(state, created_at, id);
+             PRAGMA legacy_alter_table = OFF;",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", WORKER_FILED_DRAFT_SCHEMA_VERSION)
 }
 
 #[cfg(test)]
