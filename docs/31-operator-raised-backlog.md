@@ -442,16 +442,30 @@ indicator stops reporting that case at all: uncommitted changes at the same
 revision are work in progress, not an update waiting, and an indicator that
 cannot go quiet while anyone is editing the checkout is not an indicator.
 
-### 26. An imported email task woke its worker and then nothing happened
+### 26. An imported email task woke its worker and then nothing happened — *fixed*
 
 Raised as: an email task was imported for a sleeping worker; the wake worked and
 the worker came up, but the terminal "just sits blank" and the task shows
 `Briefing waits for a quiet moment`. Several minutes passed with no change.
 
-The worker (D365 Solutions) shows `resting`, the task shows `IN PROGRESS`, and
-the briefing appears to be held rather than delivered. Not yet diagnosed. The
-hold reason is the interesting part: the terminal is at an idle prompt, which
-should be the quiet moment it is waiting for.
+Diagnosed from the record. The dispatch had `attempts = 0` — never claimed, so
+never attempted, so no error to show. The claim required the task to be `ready`,
+and the activity trail shows why it was not:
+
+    00:32:29  imported from email, draft -> ready, assigned
+    00:32:49  reassigned by the operator
+    00:32:50  ready -> active by the operator
+
+Delivery runs on a thirty-second timer. The task was started twenty-one seconds
+after it was assigned, inside that interval, so the briefing missed its only
+window and became permanently unclaimable — no retry, no timeout, no error, and
+a woken worker sitting at a blank prompt.
+
+Fixed: a briefing is owed for work that has already started, not only for work
+still waiting. Other active work still holds a briefing back, since that is the
+rule stopping a busy worker being handed more, but the task being briefed no
+longer counts against itself, and queue order no longer applies to work already
+under way.
 
 ### 27. Pop-out duplicates the whole window instead of detaching one thing
 
