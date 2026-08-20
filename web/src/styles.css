@@ -568,6 +568,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .email-import-actions select { min-width: 130px; }
 .integration-guardrails { display: grid; gap: 3px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-soft); }
 .integration-guardrails span { color: var(--muted); font-size: .77rem; line-height: 1.45; }
+/* A panel revealed inside a task card. The wrapper is the grid item, so the
+   span belongs here; `min-width: 0` stops a long reference or address forcing
+   the card wider than its column and clipping at the edge. */
+.task-card-panel { grid-column: 1 / -1; min-width: 0; }
 .email-resolution-panel { grid-column: 1 / -1; display: grid; gap: 12px; margin-top: 8px; padding: 14px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--honey-soft) 24%, transparent); }
 .email-resolution-sources { display: grid; min-width: 0; gap: 7px; }
 .email-resolution-sources ul, .email-reply-targets { display: grid; margin: 0; padding: 0; gap: 5px; list-style: none; }

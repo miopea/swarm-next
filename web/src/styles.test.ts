@@ -136,3 +136,12 @@ test("separates a working worker from a resting one by more than a shade", () =>
     ".worker-row.worker-state-buzzing .worker-attention-label { color: var(--panel); background: var(--busy); }",
   );
 });
+
+test("spans a revealed task panel across the card instead of into a column", () => {
+  // The Original report and Step 1 of 2 panels drew on top of each other and
+  // clipped at the card's right edge. Both are wrapped in a plain div so they
+  // can be hidden without unmounting, and that wrapper is the grid item — the
+  // span declared on the panel inside it does nothing, so the wrapper was
+  // auto-placed into one of the card's named columns.
+  expect(stylesheet).toContain(".task-card-panel { grid-column: 1 / -1; min-width: 0; }");
+});

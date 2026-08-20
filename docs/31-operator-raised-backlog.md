@@ -476,6 +476,37 @@ for a restart, but replacing the engine also restarts the providers, and unlike
 an App and API release a provider update is installed and running **nowhere**
 until each worker restarts.
 
+### 32. A worker can finish an email task without anyone answering the email
+
+Raised as: "email workflows are not defined. I had D365 work on an email task
+and it closed the email without drafting a response in my inbox to the ticket."
+
+Two findings, both confirmed by reading the surface rather than guessing.
+
+**A worker has no way to reply.** The MCP tool list carries `swarm_comment_jira_task`
+for Jira and nothing at all for email. A worker handed an email-sourced task
+cannot draft a reply, and nothing in the briefing tells it a person is waiting
+on one.
+
+**Nothing notices the silence.** The reply workflow in `EmailResolutionPanel` is
+complete and careful — record deployment, then draft, review, and send, with
+idempotent per-thread delivery — but every step is the operator's, reachable
+only by expanding email details on a completed task. No coordination attention
+detects a completed email task whose thread was never answered, so a finished
+task simply goes quiet and the person who wrote in hears nothing.
+
+What should happen is a product decision and is recorded here rather than
+guessed: whether the worker should draft the reply as part of finishing, whether
+completion should be blocked until a reply exists, or whether this stays an
+operator step that is merely surfaced. The third is the only one that can be
+built without deciding the other two, and it is worth building either way.
+
+### 33. The completed email task's panels overlap and run off the card
+
+Raised in the same report: opening a completed email task shows the Original
+report panel and the Step 1 of 2 deployment form overlapping each other and
+clipped at the right edge of the card.
+
 ### 26. An imported email task woke its worker and then nothing happened — *fixed*
 
 Raised as: an email task was imported for a sleeping worker; the wake worked and

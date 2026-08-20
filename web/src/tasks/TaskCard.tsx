@@ -145,8 +145,12 @@ export default function TaskCard({ task, jiraLink, emailSources, operatorToken, 
         </CursorMenu>
       )}
       {historyOpen && <TaskActivityPanel activity={activity} loading={historyLoading} failed={historyError} onRetry={() => void loadActivity()} />}
-      {discussionMounted && jiraLink && <div hidden={!discussionOpen}><JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} /></div>}
-      {emailDetailsMounted && emailSources.length > 0 && <div hidden={!emailDetailsOpen}><EmailResolutionPanel operatorToken={operatorToken} task={task} sources={emailSources} /></div>}
+      {/* The wrapper is the grid item, so it carries the full-width span. The
+          panels inside declare one too, which does nothing from in here — that
+          is how they came to be auto-placed into a named column and drawn on
+          top of the assignment cell. */}
+      {discussionMounted && jiraLink && <div className="task-card-panel" hidden={!discussionOpen}><JiraDiscussion taskId={task.id} issueKey={jiraLink.issue_key} onFetch={onFetchJiraComments} onAdd={onAddJiraComment} /></div>}
+      {emailDetailsMounted && emailSources.length > 0 && <div className="task-card-panel" hidden={!emailDetailsOpen}><EmailResolutionPanel operatorToken={operatorToken} task={task} sources={emailSources} /></div>}
       {detailsOpen && <TaskDetailDialog task={task} jiraLink={jiraLink} emailSources={emailSources} operatorToken={operatorToken} busy={busy} onClose={() => setDetailsOpen(false)} onSave={(input) => onUpdate(task, input)} onRemove={() => onRemove(task)} />}
     </article>
   );
