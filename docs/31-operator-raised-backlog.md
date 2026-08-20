@@ -608,7 +608,7 @@ Related and already built: item 32's card now reports a completed email task
 nobody answered. The same reasoning applies one step earlier, to whether it
 should have been called complete at all.
 
-### 34. Swarm Next has a developer update path and no user one
+### 34. Swarm Next has a developer update path and no user one — *decided, needs signing before code*
 
 Raised as: the Python Swarm had a "dev" mode for local work with fast hot
 updates, and a normal user mode that polled GitHub for updates or checked on
@@ -633,7 +633,17 @@ So the missing half is discovery and fetch, not application. That is a smaller
 gap than it first appears, and a more sensitive one: it decides where a release
 comes from, how its provenance is verified before it is trusted, whether checks
 happen on a schedule or only when asked, and what the operator consents to.
-Those are decisions rather than work, so this needs an ADR before it needs code.
+Those are decisions rather than work, so this needed an ADR before it needed
+code. Written as [ADR 0050](decisions/0050-discovering-and-fetching-a-release.md):
+a signed manifest at a configured origin, provenance checked before an artifact
+is trusted rather than after, checking consented to once and installing consented
+to every time, development builds never updated automatically, and the worker
+engine consequence stated at the point of consent rather than discovered by a
+reconcile timer later.
+
+The real cost is named there and is not code: a manifest nobody signs is a
+manifest anybody can replace, so signing infrastructure has to exist before any
+of this is built.
 
 Worth carrying into that ADR from today's evidence: an App and API deploy
 changed the worker-engine build id and a reconcile timer then restarted the
