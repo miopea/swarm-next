@@ -136,10 +136,13 @@ export class XtermSurface implements TerminalSurface {
     }
     this.#terminal.reset();
     this.#terminal.resize(snapshot.columns, snapshot.rows);
-    return this.write(snapshot.bytes).catch((error: unknown) => {
-      this.#finishRestore();
-      throw error;
-    });
+    // The cover comes down when the bytes are on screen, not when someone
+    // later re-fits. It used to be removed only by `fit`, and the controller
+    // deliberately skips that re-fit when the window is unfocused — so two
+    // viewers of one PTY stop arguing over its size. That left the cover up
+    // until the page was reloaded. What it hides is the blank between reset
+    // and rewrite, and after this write there is no blank left to hide.
+    return this.write(snapshot.bytes).finally(() => this.#finishRestore());
   }
 
   onData(listener: (text: string) => void): Disposable {

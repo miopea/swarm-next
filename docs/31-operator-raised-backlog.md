@@ -1040,6 +1040,28 @@ trades memory for fewer rebuilds and is a number that should be set against a
 measurement, not a guess. Now that each rebuild names its own cause, the next
 occurrence says whether backpressure is the one worth tuning.
 
+**Second report, and a different defect underneath.** "I got adjusting terminal
+again right now, until I did a refresh." The word that matters is *until*: the
+cover was not flashing, it was stuck.
+
+`#finishRestore` — which removes the cover — was reachable from exactly two
+places: `fit()`'s `finally` block, and `restore()`'s error path. Nothing removed
+it on the success path. The cover therefore came down only if a `fit()` happened
+to follow.
+
+One does not always follow. `TerminalController.onSnapshot` returns early,
+skipping the re-fit, when the window is not focused — deliberately, so two
+viewers of one PTY stop arguing over its size forever. That early return
+silently took the cover-removal with it, and the cover then stayed until the
+page was reloaded. Shown failing first: a completed restore with no fit after it
+left `data-terminal-restoring` set.
+
+Fixed: `restore()` uncovers itself once the snapshot bytes are on screen. What
+the cover hides is the blank between reset and rewrite, and after that write
+there is no blank left to hide. The repaint that guards Chromium's blank-canvas
+behaviour now runs with the rebuild instead of riding on a fit that may never
+come.
+
 ### 50. One busy terminal held up every other worker's delivery — *fixed*
 
 Raised as: "The Queen was busy so I'm not sure if this was on purpose or not

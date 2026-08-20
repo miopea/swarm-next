@@ -509,7 +509,12 @@ test("resize events publish the settled renderer geometry and coalesce stale eve
   expect(listener).toHaveBeenCalledWith({ rows: 41, columns: 154 });
 });
 
-test("snapshot geometry exposes a bounded recovery state until the visible renderer is refitted", async () => {
+/**
+ * The cover names its cause while it is up, and comes down when the bytes are
+ * on screen. It used to stay up until a refit, which is what left it stuck on
+ * the operator's terminal until they reloaded the page.
+ */
+test("a covered rebuild names its cause, uncovers on write, and refits after", async () => {
   const frames: FrameRequestCallback[] = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     frames.push(callback);
@@ -529,7 +534,7 @@ test("snapshot geometry exposes a bounded recovery state until the visible rende
   surface.open(element);
   xterm.bufferBaseY = 48;
 
-  await surface.restore({
+  const restoring = surface.restore({
     sequence: 1,
     rows: 24,
     columns: 80,
@@ -537,12 +542,25 @@ test("snapshot geometry exposes a bounded recovery state until the visible rende
     reason: "fell_behind" as const,
     bytes: new TextEncoder().encode("snapshot"),
   });
-  // Carries the cause, so the cover can name it rather than calling every
-  // rebuild a layout adjustment.
+  // Carries the cause while it is covered, so the cover names what happened
+  // rather than calling every rebuild a layout adjustment.
   expect(element.dataset.terminalRestoring).toBe("fell_behind");
   expect(element).toHaveAttribute("aria-busy", "true");
+
+  await restoring;
+  // Down as soon as the screen is correct — not held for a refit that may
+  // never come, which is what left it covered until a page reload.
+  expect(element.dataset.terminalRestoring).toBeUndefined();
+  expect(element).not.toHaveAttribute("aria-busy");
   expect(element.dataset.terminalScrollbackRows).toBe("48");
   expect(element.dataset.terminalBufferLines).toBe("24");
+
+  // Chromium can hold a blank canvas after a snapshot is written to a hidden
+  // surface, so uncovering schedules a repaint. It runs with the rebuild now
+  // rather than riding on a later fit.
+  xterm.refresh.mockClear();
+  frames.shift()?.(0);
+  expect(xterm.refresh).toHaveBeenCalledWith(0, 23);
 
   const fitting = surface.fit();
   await Promise.resolve();
@@ -550,11 +568,6 @@ test("snapshot geometry exposes a bounded recovery state until the visible rende
   await Promise.resolve();
   frames.shift()?.(16);
   await expect(fitting).resolves.toEqual({ rows: 38, columns: 132 });
-  expect(element.dataset.terminalRestoring).toBeUndefined();
-  expect(element).not.toHaveAttribute("aria-busy");
-  xterm.refresh.mockClear();
-  frames.shift()?.(16);
-  expect(xterm.refresh).toHaveBeenCalledWith(0, 37);
   surface.dispose();
   element.remove();
 });
@@ -626,3 +639,41 @@ function pointerEvent(
   });
   return event;
 }
+
+test("a rebuilt screen uncovers itself without waiting for a later fit", async () => {
+  // Reported as: the cover appeared and stayed until a refresh.
+  //
+  // It was only ever removed by fit()'s finally block, so a restore that is
+  // not followed by a fit left it up permanently. That path is reachable and
+  // deliberate: the controller skips the re-fit when the window is not focused,
+  // so that two viewers of one PTY do not argue over its size forever. The
+  // cover-removal went with it silently.
+  //
+  // Once the snapshot bytes are written the screen is correct, which is the
+  // moment the cover has to come down — whether or not anyone re-fits later.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const surface = new XtermSurface();
+  const element = document.createElement("div");
+  document.body.append(element);
+  surface.open(element);
+
+  await surface.restore({
+    sequence: 1,
+    rows: 24,
+    columns: 80,
+    truncated: false,
+    reason: "attached" as const,
+    bytes: new TextEncoder().encode("snapshot"),
+  });
+
+  expect(element.dataset.terminalRestoring).toBeUndefined();
+  expect(element).not.toHaveAttribute("aria-busy");
+  surface.dispose();
+  element.remove();
+});
