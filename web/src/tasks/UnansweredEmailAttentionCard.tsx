@@ -9,13 +9,17 @@ import BeeMascot from "../brand/BeeMascot";
  * used to notice when that step never happened, so a worker could close the
  * task and the person who wrote in heard nothing at all.
  *
- * This reports the silence. It does not send anything — the reply is written
- * and reviewed on the task itself, where the original thread and the
- * deployment evidence are.
+ * When a reply has been written, it is shown here and can be sent from here.
+ * Reading the words is the operator's part; whether the work is actually
+ * running in production is the worker's, recorded as deployment evidence. The
+ * reply used to be reviewed on the task, which meant going and finding the task
+ * to do the one thing that was genuinely theirs.
  */
-export default function UnansweredEmailAttentionCard({ awaiting, onOpenTask }: {
+export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTask, onSendReply }: {
   awaiting: UnansweredEmailTask[];
+  busy?: boolean;
   onOpenTask: (taskId: string) => void;
+  onSendReply?: (replyId: string) => void;
 }) {
   if (awaiting.length === 0) return null;
   const [first] = awaiting;
@@ -30,12 +34,20 @@ export default function UnansweredEmailAttentionCard({ awaiting, onOpenTask }: {
         <p>
           {first.sender_name || first.sender_address} is still waiting on “{first.title}”
           {awaiting.length > 1 ? `, and ${awaiting.length - 1} other${awaiting.length === 2 ? "" : "s"} like it` : ""}.
-          {first.drafted ? " A reply is written but was never sent." : " No reply has been written."}
+          {first.draft_body ? " A reply is written and waiting for you to read it." : first.drafted ? " A reply is written but was never sent." : " No reply has been written."}
         </p>
+        {first.draft_body ? (
+          <blockquote className="unanswered-email-draft">{first.draft_body}</blockquote>
+        ) : null}
       </div>
       <div className="queen-attention-actions">
-        <button className="primary-action" type="button" onClick={() => onOpenTask(first.task_id)}>
-          {awaiting.length === 1 ? "Open the task" : "Open the oldest"}
+        {first.draft_id && onSendReply ? (
+          <button className="primary-action" type="button" disabled={busy} onClick={() => onSendReply(first.draft_id!)}>
+            Send this reply
+          </button>
+        ) : null}
+        <button className={first.draft_id ? "secondary-button" : "primary-action"} type="button" onClick={() => onOpenTask(first.task_id)}>
+          {first.draft_id ? "Edit first" : awaiting.length === 1 ? "Open the task" : "Open the oldest"}
         </button>
       </div>
     </section>

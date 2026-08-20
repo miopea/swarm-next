@@ -9,6 +9,7 @@ import {
   answerDecision,
   resolveDecision,
   fetchEmailTasksAwaitingReply,
+  sendEmailReply,
   restartSupersededWorkers,
   runQueenAutomation,
   type UnansweredEmailTask,
@@ -788,6 +789,21 @@ export function App() {
     await refreshRuntimeUpdate();
   }
 
+  /**
+   * Sends a reply the operator has just read, from where they read it.
+   *
+   * Reviewing the words is the operator's part of an email task. Whether the
+   * work is running belongs to the worker that did it, and is recorded as
+   * deployment evidence rather than asked of the operator here.
+   */
+  async function sendAwaitingReply(replyId: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await sendEmailReply(operatorToken, replyId);
+      setAwaitingReply(await fetchEmailTasksAwaitingReply(operatorToken));
+    }, "Sending the reply…");
+  }
+
   async function restartProviders() {
     if (!operatorToken) return;
     await perform(async () => {
@@ -1409,7 +1425,7 @@ export function App() {
               focusRequest={decisionFocus?.request}
               additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + (awaitingReply.length > 0 ? 1 : 0)}
               attentionCards={<>
-                <UnansweredEmailAttentionCard awaiting={awaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-queen")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
               </>}

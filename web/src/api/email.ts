@@ -212,6 +212,9 @@ export type UnansweredEmailTask = {
   received_at: number;
   /** A reply exists but was never sent. Writing one is not sending one. */
   drafted: boolean;
+  /** The drafted reply, so it can be read and sent without finding the task. */
+  draft_id: string | null;
+  draft_body: string | null;
 };
 
 export async function fetchEmailTasksAwaitingReply(operatorToken: string): Promise<UnansweredEmailTask[]> {

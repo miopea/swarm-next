@@ -157,6 +157,11 @@ pub struct UnansweredEmailTask {
     pub received_at: i64,
     /// A reply exists but was never sent. Writing one is not sending it.
     pub drafted: bool,
+    /// The drafted reply itself, so the operator can read and send it without
+    /// going and finding the task. Reviewing the words is the only part of
+    /// this that is theirs; the worker verifies that the work is running.
+    pub draft_id: Option<String>,
+    pub draft_body: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -446,7 +451,13 @@ impl TaskStore {
         let mut statement = connection.prepare(
             "SELECT t.id, t.title, link.sender_name, link.sender_address,
                     MIN(link.received_at),
-                    EXISTS(SELECT 1 FROM email_reply_deliveries r WHERE r.task_id = t.id)
+                    EXISTS(SELECT 1 FROM email_reply_deliveries r WHERE r.task_id = t.id),
+                    (SELECT r.id FROM email_reply_deliveries r
+                     WHERE r.task_id = t.id AND r.state = 'draft'
+                     ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
+                    (SELECT r.body FROM email_reply_deliveries r
+                     WHERE r.task_id = t.id AND r.state = 'draft'
+                     ORDER BY r.created_at DESC, r.id DESC LIMIT 1)
              FROM tasks t
              JOIN email_message_links link ON link.task_id = t.id
              WHERE t.state = 'completed' AND t.removed_at IS NULL
@@ -466,12 +477,23 @@ impl TaskStore {
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, bool>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(
-                |(id, title, sender_name, sender_address, received_at, drafted)| {
+                |(
+                    id,
+                    title,
+                    sender_name,
+                    sender_address,
+                    received_at,
+                    drafted,
+                    draft_id,
+                    draft_body,
+                )| {
                     Ok(UnansweredEmailTask {
                         task_id: TaskId::from_str(&id)
                             .map_err(|_| TaskStoreError::Sql(rusqlite::Error::InvalidQuery))?,
@@ -480,6 +502,8 @@ impl TaskStore {
                         sender_address,
                         received_at,
                         drafted,
+                        draft_id,
+                        draft_body,
                     })
                 },
             )
