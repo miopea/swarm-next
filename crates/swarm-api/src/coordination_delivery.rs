@@ -551,9 +551,21 @@ pub(super) fn task_dispatch_message(delivery: &TaskDispatch) -> Vec<u8> {
     } else {
         format!(" Operator instruction for this task: {instruction}.")
     };
+    // A person wrote in and is waiting on that thread. Finishing the work tells
+    // them nothing, so answering them is part of the work rather than a chore
+    // left for the operator afterwards.
+    let requester = delivery.email_requester.as_deref().map_or_else(
+        String::new,
+        |requester| {
+            format!(
+                " This came in by email from {}, who is waiting on a reply. Finishing it includes recording where it is deployed with swarm_record_deployment and writing their reply with swarm_draft_email_reply; the operator reviews and sends it.",
+                terminal_safe_text(requester)
+            )
+        },
+    );
     format!(
-        "[Swarm task {} assigned] {}.{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
-        delivery.task_id, title, instruction,
+        "[Swarm task {} assigned] {}.{}{} Call swarm_list_tasks now and work from its authoritative task details and linked evidence. If this task is not visible, stop; its assignment changed.\r",
+        delivery.task_id, title, instruction, requester,
     )
     .into_bytes()
 }

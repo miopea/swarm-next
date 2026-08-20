@@ -7227,6 +7227,59 @@ mod tests {
         assert!(!message.contains(&0x1b));
     }
     #[test]
+    fn an_email_task_brief_names_who_is_waiting_and_what_finishing_includes() {
+        // Operator ruling 2026-08-20: answering the person who wrote in is part
+        // of the agent's work, not a chore left for the operator afterwards. A
+        // worker that is never told a person is waiting cannot know to answer
+        // them, so the brief says so and names the tools that do it.
+        let dispatch = TaskDispatch {
+            assignment_id: "assignment-1".into(),
+            task_id: TaskId::new(),
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            title: "Re: Adjustment Request".into(),
+            description: String::new(),
+            priority: swarm_domain::TaskPriority::Normal,
+            workspace: "email://inbox".into(),
+            operator_instruction: String::new(),
+            email_requester: Some("Lynn\u{1b}[31m Kuczyra".into()),
+        };
+
+        let message = task_dispatch_message(&dispatch);
+        let rendered = String::from_utf8_lossy(&message);
+
+        assert!(rendered.contains("came in by email from Lynn [31m Kuczyra"));
+        assert!(rendered.contains("waiting on a reply"));
+        assert!(rendered.contains("swarm_record_deployment"));
+        assert!(rendered.contains("swarm_draft_email_reply"));
+        // Still one sanitised submission.
+        assert_eq!(message.last(), Some(&b'\r'));
+        assert!(!message[..message.len() - 1].contains(&b'\n'));
+        assert!(!message.contains(&0x1b));
+    }
+
+    #[test]
+    fn a_task_that_did_not_come_from_email_says_nothing_about_replies() {
+        let dispatch = TaskDispatch {
+            assignment_id: "assignment-1".into(),
+            task_id: TaskId::new(),
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            title: "Ordinary work".into(),
+            description: String::new(),
+            priority: swarm_domain::TaskPriority::Normal,
+            workspace: "/workspace".into(),
+            operator_instruction: String::new(),
+            email_requester: None,
+        };
+
+        let rendered = String::from_utf8_lossy(&task_dispatch_message(&dispatch)).into_owned();
+
+        assert!(!rendered.contains("waiting on a reply"));
+        assert!(!rendered.contains("swarm_draft_email_reply"));
+    }
+
+    #[test]
     fn task_dispatch_is_one_sanitized_terminal_submission() {
         let dispatch = TaskDispatch {
             assignment_id: "assignment-1".into(),
@@ -7240,6 +7293,7 @@ mod tests {
             // Carries the same hostile characters as the rest: an instruction
             // reaches the terminal by the same path and gets the same sanitising.
             operator_instruction: "interview\u{1b}[31m me\rfirst".into(),
+            email_requester: None,
         };
         let message = task_dispatch_message(&dispatch);
         // The operator's instruction governs how the work is approached, so a

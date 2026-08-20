@@ -210,6 +210,8 @@ impl ServerHandler for AgentMcp {
             transition_task_tool(),
             list_jira_comments_tool(),
             comment_jira_task_tool(),
+            record_deployment_tool(),
+            draft_email_reply_tool(),
             list_decisions_tool(),
             request_decision_tool(),
         ];
@@ -270,6 +272,8 @@ impl ServerHandler for AgentMcp {
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
+            "swarm_record_deployment" => self.record_deployment(arguments),
+            "swarm_draft_email_reply" => self.draft_email_reply(arguments),
             "swarm_list_workers" => self
                 .tasks
                 .list_workers(self.principal)
@@ -608,6 +612,48 @@ impl AgentMcp {
         structured(json!({ "task_id": task_id, "state": "queued" }))
     }
 
+    /// Records where and what the worker deployed, as part of finishing.
+    ///
+    /// The worker is the actor that deployed and the only one holding the
+    /// reference. Asking the operator for it afterwards makes the one person
+    /// who cannot check it responsible for asserting it, and leaves the board
+    /// showing a completion nobody has shown to be live.
+    fn record_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<RecordDeploymentInput>(arguments)?;
+        let task_id = self.visible_task_id(&input.task_id)?;
+        let record = self.tasks.store().record_task_deployment(
+            task_id,
+            &input.environment,
+            &input.reference,
+            crate::unix_timestamp(),
+        )?;
+        structured(json!({
+            "task_id": task_id,
+            "environment": record.environment,
+            "reference": record.reference,
+        }))
+    }
+
+    /// Writes the reply the person who emailed in will receive.
+    ///
+    /// Drafting only. Sending is an external effect and stays an explicit
+    /// operator act, which is also what the operator asked for: they objected
+    /// to writing the reply, not to approving it.
+    fn draft_email_reply(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<DraftEmailReplyInput>(arguments)?;
+        let task_id = self.visible_task_id(&input.task_id)?;
+        let reply = self
+            .tasks
+            .store()
+            .prepare_email_reply(task_id, &input.body)?;
+        structured(json!({
+            "task_id": task_id,
+            "state": reply.state.to_string(),
+            "awaiting": "operator review and send",
+            "recipients": reply.targets.len(),
+        }))
+    }
+
     fn visible_task_id(&self, value: &str) -> Result<TaskId, ApplicationError> {
         let task_id = TaskId::from_str(value).map_err(|_| ApplicationError::NotAuthorized)?;
         self.tasks
@@ -841,6 +887,19 @@ struct TransitionTaskInput {
     state: TaskState,
     #[serde(default)]
     note: String,
+}
+
+#[derive(Deserialize)]
+struct RecordDeploymentInput {
+    task_id: String,
+    environment: String,
+    reference: String,
+}
+
+#[derive(Deserialize)]
+struct DraftEmailReplyInput {
+    task_id: String,
+    body: String,
 }
 
 #[derive(Deserialize)]
@@ -1166,6 +1225,41 @@ fn list_jira_comments_tool() -> Tool {
     )
 }
 
+fn record_deployment_tool() -> Tool {
+    tool(
+        "swarm_record_deployment",
+        "Record where the finished work is running, as part of completing a task. You deployed it and hold the reference; the operator cannot verify it for you, and until this exists the board shows a completion nobody has shown to be live. Required before an email reply can be drafted.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "environment": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Where it is running, such as production or staging." },
+                "reference": { "type": "string", "minLength": 1, "maxLength": 200, "description": "The release, URL, or deployment reference someone else could check." }
+            },
+            "required": ["task_id", "environment", "reference"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn draft_email_reply_tool() -> Tool {
+    tool(
+        "swarm_draft_email_reply",
+        "Write the reply for a task that came in by email, as part of finishing it. A person is waiting on that thread and finishing the work tells them nothing. Write for them: what changed, what they can do now, and no internal implementation detail. This drafts only — the operator reviews and sends. Requires the task to be completed and its deployment recorded.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "body": { "type": "string", "minLength": 1, "maxLength": 8000, "description": "Plain language for the person who wrote in, not a status report." }
+            },
+            "required": ["task_id", "body"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
 fn comment_jira_task_tool() -> Tool {
     tool(
         "swarm_comment_jira_task",
@@ -1463,6 +1557,11 @@ mod tests {
                 "swarm_transition_task",
                 "swarm_list_jira_comments",
                 "swarm_comment_jira_task",
+                // Answering the person who wrote in is part of the work, so a
+                // worker holds both halves of it: where the fix is running, and
+                // the reply itself. Sending stays the operator's.
+                "swarm_record_deployment",
+                "swarm_draft_email_reply",
                 "swarm_list_decisions",
                 "swarm_request_decision"
             ]

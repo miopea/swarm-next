@@ -667,15 +667,26 @@ operator afterwards. That settles both questions this item left open, and it
 settles item 35 the same way: the agent that did the work owns the evidence and
 the answer, because it is the only actor that has them.
 
-What that needs, none of which exists yet:
+**Built.** A worker now holds both halves of finishing an email task:
 
-- A worker-facing tool to draft the reply, since the MCP surface has nothing for
-  email at all.
-- The briefing for an email-sourced task to say that a person is waiting and a
-  reply is part of finishing.
-- The operator's role reduced to reviewing and sending, which is where the
-  existing panel is already good — not to writing it from scratch after hunting
-  for the task.
+- `swarm_record_deployment` records where the work is running. The worker
+  deployed it and holds the reference; the operator cannot verify it for them,
+  and until it exists the board shows a completion nobody has shown to be live.
+  This also answers item 35's chore half.
+- `swarm_draft_email_reply` writes the reply the requester will receive.
+- The briefing for an email-sourced task now names who wrote in, says they are
+  waiting, and says finishing includes both steps. A worker that is never told
+  cannot know to answer, so the tools alone would have gone unused.
+
+**Sending stays the operator's.** It is an external effect, and the objection
+was to *writing* the reply, not to approving it — the existing review-and-send
+panel is the good part of that flow. Drafting requires the task completed and
+its deployment recorded, which is the order that stops a reply going out before
+the change is available.
+
+Not addressed: whether completion should be refused without a deployment
+record. Item 35's second half — a task reading COMPLETED when nothing has shown
+it to be live — is still open.
 
 ### 33. The completed email task's panels overlap and run off the card
 
