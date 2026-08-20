@@ -688,11 +688,17 @@ Not addressed: whether completion should be refused without a deployment
 record. Item 35's second half — a task reading COMPLETED when nothing has shown
 it to be live — is still open.
 
-### 33. The completed email task's panels overlap and run off the card
+### 33. The completed email task's panels overlap and run off the card — *fixed*
 
 Raised in the same report: opening a completed email task shows the Original
 report panel and the Step 1 of 2 deployment form overlapping each other and
 clipped at the right edge of the card.
+
+Fixed in `d60b6ed`. Both panels are wrapped in a plain div so they can be
+hidden without unmounting, and that wrapper is the card's grid item — the
+full-width span was declared on the panel inside it, where it does nothing, so
+the wrapper was auto-placed into a named column and drawn over the assignment
+cell.
 
 ### 26. An imported email task woke its worker and then nothing happened — *fixed*
 
@@ -745,7 +751,7 @@ existing test caught it. Detaching now carries its own flag.
 The control's placement — the third part of the report — is unchanged and still
 open.
 
-### 28. Queen automation reports a stuck review, and nothing moves it
+### 28. Queen automation reports a stuck review, and nothing moves it — *two of three fixed*
 
 Raised as: "why isn't the Queen on a cron or polling cycle? When I go in, she is
 sitting idle but the pill badge at the top says the same thing and links to
