@@ -9,6 +9,7 @@ import {
   answerDecision,
   resolveDecision,
   restartSupersededWorkers,
+  runQueenAutomation,
   type DecisionSurface,
   createWorker,
   fetchHealth,
@@ -628,6 +629,11 @@ export function App() {
   async function reorderOpenTasks(taskIds: string[]) {
     if (!operatorToken) return;
     await perform(async () => setTasks(await reorderTasks(operatorToken, taskIds)));
+  }
+
+  async function resumeQueenReview() {
+    if (!operatorToken) return;
+    setQueenAutomation(await runQueenAutomation(operatorToken));
   }
 
   async function answerInboxDecision(decision: DecisionRequest, answers: Record<string, string[]>, note: string) {
@@ -1311,7 +1317,7 @@ export function App() {
               focusRequest={decisionFocus?.request}
               additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount}
               attentionCards={<>
-                <QueenAutomationAttentionCard status={queenAutomation} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-queen")} />
+                <QueenAutomationAttentionCard status={queenAutomation} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-queen")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
               </>}
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}

@@ -476,6 +476,39 @@ for a restart, but replacing the engine also restarts the providers, and unlike
 an App and API release a provider update is installed and running **nowhere**
 until each worker restarts.
 
+### 34. Swarm Next has a developer update path and no user one
+
+Raised as: the Python Swarm had a "dev" mode for local work with fast hot
+updates, and a normal user mode that polled GitHub for updates or checked on
+demand. Swarm Next needs the equivalent before anyone else can use it.
+
+What exists today, confirmed by reading the surface rather than assuming:
+
+- **Developer mode is real and complete.** `swarm-next-package` carries
+  `enable-development CHECKOUT`, `disable-development`, and
+  `reload-development`, and `development.enabled` in the runtime response is
+  literally "is a development reload path configured". That is the mode being
+  used to build Swarm Next in Swarm Next.
+- **Applying a release already exists.** `swarm-next-package install|update
+  RELEASE_DIR` installs a prepared release directory, and that directory
+  carries `SHA256SUMS`, `VERSION`, `PROTOCOL`, and `SOURCE_REVISION`, so
+  integrity and compatibility checking are already part of the release format.
+- **Nothing discovers a release.** There is no reference to GitHub, a release
+  channel, or an update check anywhere in the Rust code. A user with no
+  checkout has no way to learn a new version exists, and no way to fetch one.
+
+So the missing half is discovery and fetch, not application. That is a smaller
+gap than it first appears, and a more sensitive one: it decides where a release
+comes from, how its provenance is verified before it is trusted, whether checks
+happen on a schedule or only when asked, and what the operator consents to.
+Those are decisions rather than work, so this needs an ADR before it needs code.
+
+Worth carrying into that ADR from today's evidence: an App and API deploy
+changed the worker-engine build id and a reconcile timer then restarted the
+engine on its own thirty minutes later (item 22). Whatever the user-mode
+updater does, it inherits that lesson — a release is not isolated from the
+workers just because the card says workers stay online.
+
 ### 32. A worker can finish an email task without anyone answering the email
 
 Raised as: "email workflows are not defined. I had D365 work on an email task
@@ -575,8 +608,17 @@ It only ever resolves uncertainty toward "it landed". An absent marker proves
 nothing — it may have scrolled out — and replaying a review that did arrive
 would double it, which is what the uncertain state exists to prevent.
 
-Still open here: the message appearing in three surfaces with none of them the
-place to act, and the Needs-you card offering no resolving action.
+**Second part fixed.** The Needs-you card now offers "Resume review" when a
+review is waiting to be resumed. Opening Queen stays the first action, because
+the message asks the operator to check her terminal before resuming, but the
+resuming itself no longer lives two screens away in Settings. It is offered only
+for `uncertain`: a review blocked on an operator decision is resolved by
+answering it, not by running it again.
+
+Still open: the same message appearing in three surfaces at once. Each surface
+has a reason to exist — the Queen terminal, the settings panel, the Needs-you
+queue — so this is a presentation judgment rather than a defect, and the
+substance of the complaint was that none of them could act, which is now false.
 
 ## Landed
 
