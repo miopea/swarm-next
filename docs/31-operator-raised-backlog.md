@@ -1252,6 +1252,58 @@ Not changed: the email attachment store has the same shape but is nowhere near
 its bounds — 28 files and 4.3 MB against 2,048 files and 512 MB. It should get
 the same treatment, but it is not what failed.
 
+### 55. Mobile header: one pill size, and the selector stops absorbing every squeeze — *fixed*
+
+Task `01a020a9`. Two operator constraints, treated as acceptance criteria: no
+text overlapping, and one pill size.
+
+**The screenshot's premise was half wrong, and measuring said so.** Driving the
+deployed stylesheet through a real layout engine at 360, 390, 414, 600, 680, 768
+and 900px found **no geometric overlap at any width**. Nothing sits on anything.
+What the operator saw as "the selector gets bumped over" is crowding, and the
+measurement named its cause exactly:
+
+    .header-actions   a rigid 252px at 360, 390, 414, 600 and 680
+    selector          84px at 360px, with the worker name AND its task clipped
+    pill heights      21, 26, 34, 38, 39 at >=768px — five, on one row
+
+So the wrong element was inflexible. Presence, four icon buttons and Lock never
+gave way, and the one control the screen exists for took the entire shortfall.
+
+**One height, defined once.** `--pill-height` (32px) and `--pill-touch-height`
+(44px) replace five content-driven sizes. Every pill and every button on that
+row is now sized by the token rather than by its text. Measured after: exactly
+one height at every width — 44 on phones, 32 on desktop.
+
+**A regression I introduced and caught by measuring.** Making `.header-actions`
+shrinkable did free space — by crushing the icon buttons from 44px wide to
+**15px**. Untappable, and a worse defect than the crowding it relieved. Nothing
+in the chrome shrinks now; room comes from carrying less, not from crushing what
+is carried. That rule is pinned by a test with the number in it.
+
+**Where the room came from instead.** Presence reports rather than acts, so it
+needs no touch target: 44px to 24px. The theme toggle is a preference that
+already lives in Settings, so it leaves the phone row. And the selector's
+`max-width: min(190px, 48vw)` cap is gone — it was capping the control even when
+space existed.
+
+Measured after, selector width: 84 to 105 at 360px, 138 to 159 at 414, and
+190 to 425 at 680. The worker name stops being clipped from 414 up; below that
+it ellipsizes, which is truncation rather than overlap and is the correct answer
+on a 360px screen for a name like "Public Website Operations".
+
+**Patterns considered.** An overflow/"More" menu (Material's app-bar overflow,
+iOS's More tab) — rejected as a new control for this round, though it is the
+right answer if the row grows again. A second header row — rejected because the
+phone layout deliberately reclaimed that vertical space, and a comment in the
+source says so. Status as a dot rather than a labelled pill — adopted, and it is
+where a third of the recovered space came from. Priority+ progressive disclosure
+— the general form of the overflow menu, same trade.
+
+**Settled and recorded so nobody re-adds it:** the manual mobile refresh control
+is DROPPED. The operator ruled it "a workaround for the freeze, now fixed" once
+55b936d landed. It should not come back from the original email thread.
+
 ## Landed
 
 Earlier items, kept as a record rather than a queue.

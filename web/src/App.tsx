@@ -1269,11 +1269,13 @@ export function App() {
                 title={`Terminal ${terminalConnection.replace("_", " ")}`}
               />
             ) : null}
-            {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
+            {/* The word is dropped on a phone to give the selector its room back, so the
+                state has to be carried by the label rather than by the text. */}
+            {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} role="status" aria-label={`Operator presence: ${presenceModeLabel(presence.mode)}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
             {popoutBlocked && <span className="saving-state" role="alert">Your browser blocked the new window</span>}
             {operatorToken && <button className="icon-button feedback-button" aria-label="Report a problem" onClick={() => setShowFeedback(true)}><FeedbackIcon /></button>}
             {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
-            <button className="icon-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
+            <button className="icon-button theme-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" title="Refresh data and rebuild the visible terminal" onClick={() => void refreshControlRoom(true)} disabled={busy}><RefreshIcon /></button>}
             {operatorToken && <button className="secondary-button" onClick={() => void logout()} disabled={busy}>Lock</button>}
           </div>

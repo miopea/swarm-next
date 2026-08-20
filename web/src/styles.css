@@ -1,4 +1,10 @@
 :root {
+  /* Every pill-shaped control is this tall, and none is sized by its content.
+     Measured before this existed: five different pill heights on one row —
+     21, 26, 34, 38 and 39 pixels — because each carried its own padding and
+     font size and let the text decide the rest. */
+  --pill-height: 32px;
+  --pill-touch-height: 44px;
   color: #293027;
   background: #f7f3e9;
   font-family: "Atkinson Hyperlegible Next Variable", "Segoe UI", system-ui, sans-serif;
@@ -278,8 +284,19 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .workspace-heading .popout-button { flex: 0 0 auto; }
 .workspace-header h2 { margin: 0; font-size: 1.3rem; letter-spacing: -.02em; }
 .mobile-worker-switcher-trigger { display: none; }
+/* One height for everything on this row, phone and desktop alike. Measured
+   before this: 21, 26, 34, 38 and 39 pixels side by side. */
+.header-actions .icon-button, .header-actions .secondary-button { box-sizing: border-box; height: var(--pill-height); min-height: var(--pill-height); }
+/* The chrome gives way before the control the screen exists for. This row was
+   a rigid 252px at every phone width, so the worker selector took the whole
+   shortfall — 84px at 360px, with both the worker name and its task clipped. */
 .header-actions { display: flex; align-items: center; gap: 8px; }
-.operator-presence-chip { display: inline-flex; min-height: 34px; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--panel-raised); font-size: .72rem; font-weight: 500; white-space: nowrap; }
+/* Nothing here shrinks. Letting the row squeeze took the icon buttons from
+   44px to 15px wide — untappable, and a worse defect than the crowding it was
+   meant to relieve. Room comes from carrying less, not from crushing what is
+   carried. */
+.header-actions > * { flex: 0 0 auto; }
+.operator-presence-chip { display: inline-flex; box-sizing: border-box; min-height: var(--pill-height); align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--panel-raised); font-size: .72rem; font-weight: 500; white-space: nowrap; }
 .operator-presence-chip.at_hive .state-dot { background: var(--good); }
 .operator-presence-chip.away .state-dot { background: var(--quiet); }
 .operator-presence-chip.night_watch { color: var(--blocked); background: var(--blocked-soft); }
@@ -1339,7 +1356,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .runtime-update-provider { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
 .runtime-update-failed { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); color: var(--bad); }
 .runtime-update-spinner { width: 10px; height: 10px; border: 2px solid color-mix(in srgb, var(--accent-strong) 35%, transparent); border-top-color: var(--accent-strong); border-radius: 50%; animation: maintenance-spin .9s linear infinite; }
-.worker-repository { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .68rem; white-space: nowrap; }
+.worker-repository { display: inline-flex; box-sizing: border-box; min-height: var(--pill-height); flex: 0 0 auto; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: .68rem; white-space: nowrap; }
 .worker-repository-branch { overflow: hidden; max-width: 14ch; text-overflow: ellipsis; font-family: "Atkinson Hyperlegible Mono Variable", Consolas, monospace; }
 .worker-repository-dirty { display: inline-flex; min-width: 15px; height: 15px; align-items: center; justify-content: center; padding: 0 3px; border-radius: 999px; color: var(--panel); background: var(--warn); font-size: .6rem; font-weight: 700; }
 .jira-intake-filter > span:has(.email-inbox-refresh) { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -1352,11 +1369,11 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .brand-diagnostics { position: absolute; top: 0; right: 0; width: 28px; height: 28px; color: var(--quiet); }
 .brand-diagnostics:hover { color: var(--text); background: var(--panel-raised); }
 .worker-context { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 6px; }
-.worker-context-task { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: 8px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); }
+.worker-context-task { display: flex; box-sizing: border-box; min-height: var(--pill-height); min-width: 0; max-width: 100%; align-items: center; gap: 8px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); }
 .worker-context-task:hover { border-color: var(--accent-strong); background: var(--panel-raised); }
 .worker-context-task .task-state { flex: 0 0 auto; }
 .worker-context-title { overflow: hidden; color: var(--text); font-size: .8rem; text-overflow: ellipsis; white-space: nowrap; }
-.worker-context-queue { min-height: 26px; flex: 0 0 auto; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--panel-soft); font-size: .72rem; }
+.worker-context-queue { box-sizing: border-box; min-height: var(--pill-height); flex: 0 0 auto; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--panel-soft); font-size: .72rem; }
 .worker-context-queue:hover { color: var(--text); border-color: var(--accent-strong); }
 .terminal-connection-dot, .terminal-sleep-button { display: none; }
 .connection-state { padding: 3px 7px; border-radius: 999px; color: var(--muted); background: var(--panel-soft); font-size: .66rem; text-transform: capitalize; }
@@ -1471,7 +1488,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .workspace-header .hive-context-indicator.compact .hive-context-role { font-size: .5rem; }
   .workspace-header:has(.mobile-worker-switcher-trigger) > div:first-child { display: none; }
   .mobile-worker-task { display: block; overflow: hidden; color: var(--muted); font-size: .58rem; text-overflow: ellipsis; white-space: nowrap; }
-  .mobile-worker-switcher-trigger { display: grid; min-width: 0; max-width: min(190px, 48vw); min-height: 44px; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 7px; border-color: var(--line); color: var(--text); background: var(--panel-raised); text-align: left; }
+  /* Takes the room rather than surrendering it. Capped only so it cannot crowd
+     out the actions entirely on a wide phone. */
+  .mobile-worker-switcher-trigger { display: grid; min-width: 0; flex: 1 1 auto; max-width: none; min-height: var(--pill-touch-height); grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 7px; border-color: var(--line); color: var(--text); background: var(--panel-raised); text-align: left; }
   .mobile-worker-switcher-trigger .worker-avatar { width: 32px; height: 32px; }
   .mobile-worker-switcher-trigger .worker-avatar .bee-mascot { width: 35px; height: 35px; }
   .mobile-worker-switcher-trigger > span:nth-child(2) { display: grid; min-width: 0; }
@@ -1481,11 +1500,20 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .mobile-worker-switcher-trigger strong { font-size: .76rem; }
   .mobile-worker-backdrop { display: grid; }
   .header-actions { gap: 5px; }
+  /* Presence keeps its signal and gives up its word. The dot carries the state
+     by colour and the control keeps its accessible name, which is ~70px of a
+     360px screen returned to the selector. */
+  /* Theme is a preference and already lives in Settings. The phone row keeps
+     what is glanceable or urgent: which worker, presence, report, navigate,
+     lock. */
+  .header-actions .theme-button { display: none; }
   .header-actions .refresh-button { display: none; }
   .header-actions .popout-button { display: none; }
-  .header-actions .icon-button { width: 44px; min-height: 44px; }
-  .header-actions .secondary-button { min-height: 44px; padding-inline: 10px; }
-  .operator-presence-chip { width: 44px; justify-content: center; padding: 0; }
+  .header-actions .icon-button { width: var(--pill-touch-height); height: var(--pill-touch-height); min-height: var(--pill-touch-height); }
+  .header-actions .secondary-button { height: var(--pill-touch-height); min-height: var(--pill-touch-height); padding-inline: 10px; }
+  /* Presence reports, it does not act, so it needs no touch target — 20px of a
+     360px screen handed back to the control that does act. */
+  .operator-presence-chip { width: 24px; min-height: var(--pill-touch-height); justify-content: center; padding: 0; }
   .primary-action, .secondary-button, .danger-button,
   .attention-tabs button, .decision-actions button,
   .queen-autonomy-chip, .queen-automation-chip,

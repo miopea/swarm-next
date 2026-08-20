@@ -42,9 +42,8 @@ test("keeps Queen autonomy explanations readable on phones", () => {
 
 test("keeps persistent phone navigation controls comfortably touchable", () => {
   expect(stylesheet).toContain(".surface-nav button { min-width: 0; min-height: 44px;");
-  expect(stylesheet).toContain(".header-actions .icon-button { width: 44px; min-height: 44px; }");
-  expect(stylesheet).toContain(".header-actions .secondary-button { min-height: 44px;");
-  expect(stylesheet).toContain(".operator-presence-chip { width: 44px;");
+  expect(stylesheet).toContain(".header-actions .icon-button { width: var(--pill-touch-height); height: var(--pill-touch-height); min-height: var(--pill-touch-height); }");
+  expect(stylesheet).toContain(".header-actions .secondary-button { height: var(--pill-touch-height); min-height: var(--pill-touch-height);");
   expect(stylesheet).toContain(".attention-tabs button, .decision-actions button,");
   expect(stylesheet).toContain(".queen-autonomy-chip, .queen-automation-chip,");
   expect(stylesheet).toContain(".settings-section-nav button, .worker-edit-button,");
@@ -173,4 +172,44 @@ test("gives the worker picker as many rows as it has children, so its footer sur
   expect(rows).toBe("auto auto minmax(0, 1fr) auto");
   // The list is the row that gives way, and it scrolls rather than clipping.
   expect(stylesheet).toContain(".mobile-worker-dialog-list { display: grid; min-height: 0; overflow-y: auto;");
+});
+
+test("renders every header pill at one height, and lets the chrome yield before the selector", () => {
+  // Measured against the deployed stylesheet in a real layout engine, at real
+  // phone widths, before this rule existed:
+  //
+  //   heights >=768px : 21, 26, 34, 38, 39  — five different pills
+  //   header-actions  : a rigid 252px at 360, 390, 414, 600 and 680
+  //   selector width  : 84px at 360px, with the worker name AND the task clipped
+  //
+  // So "the selector gets bumped over by the open pill" is the wrong element
+  // being inflexible. The chrome beside it — presence, four icon buttons, Lock
+  // — never gave way, and the one control the screen exists for absorbed all
+  // of the loss.
+  const pillHeight = /--pill-height:\s*([^;]+);/.exec(stylesheet)?.[1].trim();
+  expect(pillHeight).toBeTruthy();
+
+  // Every pill-shaped control is sized by the token rather than by its content.
+  for (const pill of [
+    ".worker-context-task",
+    ".worker-repository",
+    ".worker-context-queue",
+    ".operator-presence-chip",
+  ]) {
+    expect(stylesheet).toMatch(
+      new RegExp(`${pill.replace(".", "\\.")}[^{]*\\{[^}]*min-height:\\s*var\\(--pill-height\\)`),
+    );
+  }
+
+  // Same height for the buttons sharing that row, which is what the operator
+  // was pointing at.
+  expect(stylesheet).toMatch(
+    /\.header-actions \.icon-button, \.header-actions \.secondary-button \{[^}]*height:\s*var\(--pill-height\)/,
+  );
+
+  // The selector takes the room; the chrome never squeezes to give it. Making
+  // the row shrinkable was tried and measured: it took the icon buttons from
+  // 44px to 15px wide, which is a worse defect than the crowding it relieved.
+  expect(stylesheet).toMatch(/\.header-actions > \* \{[^}]*flex:\s*0 0 auto/);
+  expect(stylesheet).toMatch(/\.mobile-worker-switcher-trigger \{[^}]*flex:\s*1 1 auto/);
 });
