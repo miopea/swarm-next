@@ -1,4 +1,4 @@
-# Swarm Next definition set
+# Swarm definition set
 
 Read and review these documents in order:
 

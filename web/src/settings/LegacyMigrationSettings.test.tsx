@@ -124,7 +124,7 @@ test("previews before importing and selects only server-approved records", async
   expect(screen.getByRole("button", { name: "Continue to task import confirmation" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Continue to task import confirmation" }));
   expect(requests).toHaveLength(4);
-  expect(screen.getByText(/This is the step that changes Swarm Next/)).toBeInTheDocument();
+  expect(screen.getByText(/This is the step that changes Swarm/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Import 1 task" }));
 
   await waitFor(() => expect(requests).toHaveLength(5));
@@ -296,8 +296,8 @@ test("previews selected Legacy workers as sleeping before adding them", async ()
         invalid: 0,
         records: [
           { source_id: "daisy", name: "Daisy", workspace: "/projects/daisy", provider: "claude_code", disposition: "ready", selectable: true, conversation_available: true, warnings: [] },
-          { source_id: "clover", name: "Clover", workspace: "/projects/clover", provider: "claude_code", disposition: "duplicate", selectable: false, conversation_available: true, existing_worker_id: "next-clover", warnings: ["Swarm Next already has worker 'Clover' for this name or repository."] },
-          { source_id: "root", name: "Project Root", workspace: "/projects", provider: "claude_code", disposition: "managed_by_next", selectable: false, conversation_available: false, warnings: ["Swarm Next Scout owns cross-repository work; Project Root is not duplicated."] },
+          { source_id: "clover", name: "Clover", workspace: "/projects/clover", provider: "claude_code", disposition: "duplicate", selectable: false, conversation_available: true, existing_worker_id: "next-clover", warnings: ["Swarm already has worker 'Clover' for this name or repository."] },
+          { source_id: "root", name: "Project Root", workspace: "/projects", provider: "claude_code", disposition: "managed_by_next", selectable: false, conversation_available: false, warnings: ["Swarm Scout owns cross-repository work; Project Root is not duplicated."] },
         ],
       });
     }

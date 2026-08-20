@@ -3,7 +3,7 @@
 ## Conclusion
 
 Legacy drones are obsolete as a **separate terminal-reading automation persona**.
-They are not evidence that background coordination is obsolete. Swarm Next keeps
+They are not evidence that background coordination is obsolete. Swarm keeps
 the valuable outcomes by splitting them among typed application services, the
 deterministic coordinator, worker health policy, and Queen.
 
@@ -47,11 +47,11 @@ firing while work was already active.
 
 Calling all background behavior a drone blurs whether an action is a database
 transition, a resource policy, a provider input, an external effect, or a
-judgment call. Swarm Next instead gives each operation one domain owner and one
+judgment call. Swarm instead gives each operation one domain owner and one
 authority contract. The implementation can be tested without pretending that a
 general-purpose agent made the decision.
 
-## What survives in Swarm Next
+## What survives in Swarm
 
 | Legacy outcome | Next owner | Rule |
 | --- | --- | --- |

@@ -81,7 +81,7 @@ merge modes. The route remains present at `2026.7.30` and `2026.8.13`.
 need selection, merge, durable source linkage, attachments, assignment fields,
 and a reviewed reply after completion.
 
-**Next comparison:** Swarm Next keeps this outcome with a typed email source and
+**Next comparison:** Swarm keeps this outcome with a typed email source and
 reviewed reply boundary. Ring 1 has already refined the requirement beyond the
 Legacy snapshot: inline images must render, multiple messages may become one
 task, and assignment and task fields belong in the import flow. This is a
@@ -97,7 +97,7 @@ prevented its initialization since `2026.6.8.2`; resize handles, digest polling,
 and its default view were dead until the July repair.
 
 **Lesson:** tree survival and test volume cannot prove a composed browser
-surface initialized. Swarm Next must keep rendered desktop and mobile journeys,
+surface initialized. Swarm must keep rendered desktop and mobile journeys,
 not static template scans alone. The Legacy panel layout is **obsolete as an
 implementation**; Queen, Needs You, Tasks, and Workers remain the outcomes to
 prove in Next.

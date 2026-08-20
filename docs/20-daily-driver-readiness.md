@@ -8,12 +8,12 @@ Next keeps an outcome only when it contributes to reliable daily work.
 
 ## Current position
 
-Swarm Next has crossed the infrastructure gate: terminal state is bounded and
+Swarm has crossed the infrastructure gate: terminal state is bounded and
 host-owned, browser reload recovery is canonical, API updates preserve active
 PTYs, and the sidecar advances only at zero sessions. The missing work is now
 mostly product operability rather than process survival.
 
-| Daily outcome | Legacy Swarm | Swarm Next now | Decision |
+| Daily outcome | Legacy Swarm | Swarm now | Decision |
 |---|---|---|---|
 | Resume after reload | Feature-rich but observed redraw and reconnect failures | Canonical recovery verified with three live workers in an actual browser | Complete baseline; continue multi-day soak |
 | Update during work | Sidecar separation existed | Live proof preserves the same host PID, session, and interactive PTY; a separately confirmed maintenance action can safely restart and recover an always-active crew | Complete |
@@ -107,7 +107,7 @@ return only through a measured operator journey.
 
 Ring 1 begins when the operator can:
 
-1. open Swarm Next and find Queen already live;
+1. open Swarm and find Queen already live;
 2. create named workers once and start or revive them without retyping paths;
 3. switch and reload without terminal corruption;
 4. create, edit, prioritize, assign, and complete ordinary coding tasks;
@@ -125,7 +125,7 @@ legacy ports.
 **Decision: ready to begin non-critical real work.** This is a build-gate
 decision, not a claim that a week of daily use has already succeeded. Legacy
 Swarm remains installed as the independent fallback while ordinary work starts
-moving through Swarm Next.
+moving through Swarm.
 
 | Promotion outcome | Current evidence |
 |---|---|
@@ -150,5 +150,5 @@ Ring 1 now gathers evidence that cannot be manufactured by more implementation:
 2. real operator value from Queen routing, notifications, Jira reconciliation,
    email intake, and worker state accuracy;
 3. memory and recovery behavior across normal multi-day use;
-4. refreshed legacy-history findings classified against observed Swarm Next
+4. refreshed legacy-history findings classified against observed Swarm
    gaps rather than converted directly into port work.

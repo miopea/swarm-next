@@ -11,7 +11,7 @@ editing service files or deleting state by hand.
 
 ## Decision
 
-Swarm Next ships one release artifact containing the Rust API, terminal host,
+Swarm ships one release artifact containing the Rust API, terminal host,
 `swarmctl`, and compiled browser assets. Installation uses:
 
 - versioned immutable releases under `~/.local/lib/swarm-next/releases`;
@@ -96,7 +96,7 @@ explicit future operation.
 - The initial package uses one workspace root so its application allowlist and
   OS write boundary cannot drift apart.
 - The isolated Claude profile requires one-time authentication and configuration
-  but prevents Swarm Next workers from mutating the operator's host-wide profile.
+  but prevents Swarm workers from mutating the operator's host-wide profile.
 - User lingering or an active login session is an operator prerequisite if the
   application must survive logout; enabling lingering is deliberately outside
   this unprivileged installer.

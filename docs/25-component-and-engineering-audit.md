@@ -4,7 +4,7 @@ Status: **Active guardrail**
 
 ## Purpose
 
-Swarm Next is being built quickly with AI, but speed does not excuse accidental
+Swarm is being built quickly with AI, but speed does not excuse accidental
 coupling. This audit turns DRY, YAGNI, KISS, SOLID, WET, separation of concerns
 (SoC), principle of least astonishment (POLA), and single level of abstraction
 (SLAP) into concrete repository decisions rather than slogans.

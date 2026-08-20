@@ -4,7 +4,7 @@
 
 Proposed. Raised by `docs/31` item 34, on the operator's account of Swarm
 Legacy: a "dev" mode for local work with fast hot updates, and a normal user
-mode that polled for updates or checked on demand. Swarm Next needs the
+mode that polled for updates or checked on demand. Swarm needs the
 equivalent before anyone else can use it.
 
 Depends on [ADR 0049](0049-claiming-worker-engagement-without-input.md) only in
@@ -19,7 +19,7 @@ is what narrows it.
 **Developer mode is real and complete.** `swarm-next-package` carries
 `enable-development CHECKOUT`, `disable-development`, and `reload-development`.
 `development.enabled` in the runtime response means precisely "is a development
-reload path configured". This is the mode Swarm Next is being built in.
+reload path configured". This is the mode Swarm is being built in.
 
 **Applying a release already exists.** `swarm-next-package install|update
 RELEASE_DIR` installs a prepared release directory, and that directory carries

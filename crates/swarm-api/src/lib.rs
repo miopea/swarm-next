@@ -11679,7 +11679,7 @@ mod tests {
         let web_root = TempDir::new().unwrap();
         std::fs::write(
             web_root.path().join("index.html"),
-            "<!doctype html><title>Swarm Next</title>",
+            "<!doctype html><title>Swarm</title>",
         )
         .unwrap();
         std::fs::write(web_root.path().join("app.js"), "export {};").unwrap();

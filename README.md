@@ -1,6 +1,6 @@
-# Swarm Next
+# Swarm
 
-Swarm Next is a ground-up redesign of Swarm: a persistent control room for AI
+Swarm is a ground-up redesign of Swarm: a persistent control room for AI
 coding agents. It preserves proven user outcomes while replacing accidental
 architecture, obsolete automation, and implementation-driven product behavior.
 
@@ -31,7 +31,7 @@ accepted decisions and continuing review sequence.
 ## Relationship to legacy Swarm
 
 The legacy `miopea/swarm` repository remains the stable daily driver and an
-executable source of product evidence. Swarm Next does not port a module merely
+executable source of product evidence. Swarm does not port a module merely
 because it exists. Each capability is classified as keep, redesign, merge, or
 remove before implementation.
 
@@ -45,7 +45,7 @@ browser attachment, API/browser restart survival, and persisted task-to-worker
 delivery. The multi-day resource soak continues; later features do not waive
 that evidence.
 
-M2 moves ordinary work into Swarm Next: durable worker/task ergonomics, Jira
+M2 moves ordinary work into Swarm: durable worker/task ergonomics, Jira
 work intake and reconciliation, closed-loop Outlook issue intake, first-class
 desktop/Android operation, and the authenticated Jira-backed Apiary foundation.
 Dogfood evidence determines the order within M2; legacy remains the independent
@@ -118,7 +118,7 @@ Compatible updates switch the API and browser release, then restart only
 `swarm-next-api.service`; the independently versioned terminal-host process and
 its worker PTYs stay alive. Run `swarm-next-package reconcile-host` when workers
 are idle to move the sidecar to the current release.
-When a release changes the terminal protocol, stop all Swarm Next workers and
+When a release changes the terminal protocol, stop all Swarm workers and
 run `swarm-next-package migrate-protocol RELEASE_DIR`. The migration drains the
 old host, refuses active sessions, switches the API and sidecar together, and
 restores both previous pointers if health verification fails.

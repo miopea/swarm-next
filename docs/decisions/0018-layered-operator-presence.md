@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context
 
-Swarm Next needs to route attention differently when the operator is actively
+Swarm needs to route attention differently when the operator is actively
 working at the Hive, away from the computer, or intentionally running a Night
 Watch. A browser tab alone cannot authoritatively answer that question: tabs
 may be hidden or suspended, devices can disconnect, and operating-system lock
@@ -16,7 +16,7 @@ business truth.
 
 ## Decision
 
-Swarm Next derives one effective operator-presence mode from bounded,
+Swarm derives one effective operator-presence mode from bounded,
 expiring per-device observations plus an optional explicit override.
 
 - Effective modes are At Hive, Away, and Night Watch.

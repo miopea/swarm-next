@@ -4,7 +4,7 @@ Status: **Ring 1 ready — bounded real-use evidence begins next**
 
 ## Isolation
 
-Legacy Swarm and Swarm Next run side by side with:
+Legacy Swarm and Swarm run side by side with:
 
 - different web ports;
 - different runtime directories;
@@ -28,7 +28,7 @@ injection, and browser automation.
 
 ### Ring 1: non-critical real work
 
-The primary operator uses Swarm Next for bounded tasks while legacy Swarm
+The primary operator uses Swarm for bounded tasks while legacy Swarm
 remains the immediate fallback.
 
 The 2026-08-16 promotion gate is recorded in
@@ -39,12 +39,12 @@ alongside this week of use; its findings are discussion inputs, not port tickets
 
 ### Ring 2: parallel daily use
 
-Swarm Next handles a meaningful portion of normal work. Missing capabilities
+Swarm handles a meaningful portion of normal work. Missing capabilities
 are recorded, not automatically copied from legacy.
 
 ### Ring 3: default with rollback
 
-Swarm Next is the normal entry point; legacy Swarm remains installed and can be
+Swarm is the normal entry point; legacy Swarm remains installed and can be
 started independently. Promotion requires completed soak and recovery tests.
 
 ### Ring 4: migration and retirement
@@ -72,7 +72,7 @@ to reproduce a legacy feature must state the user outcome it restores.
 
 ## Legacy evolution archaeology
 
-Before Swarm Next becomes the default daily driver, review the full reachable
+Before Swarm becomes the default daily driver, review the full reachable
 legacy history using the [legacy evolution atlas](26-legacy-evolution-atlas.md).
 This is an evidence exercise, not a port checklist. It identifies recurring
 incidents, features that survived real use, solutions that were reverted, and

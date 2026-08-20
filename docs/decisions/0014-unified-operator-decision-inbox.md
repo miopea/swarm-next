@@ -16,7 +16,7 @@ use those boundaries instead of reintroducing arbitrary messaging.
 
 ## Decision
 
-Swarm Next owns one durable, typed operator decision inbox.
+Swarm owns one durable, typed operator decision inbox.
 
 - Requests are one of Input, Approval, Credentials, Conflict, or Help, with
   Normal or Time-sensitive urgency.

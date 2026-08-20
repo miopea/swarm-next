@@ -4,7 +4,7 @@ Status: **Accepted**
 
 ## Context
 
-Swarm Next began with one local operator because that is the shortest path to
+Swarm began with one local operator because that is the shortest path to
 reliable dogfooding. The intended product must also let independently managed
 developer environments cooperate without sharing Linux accounts, credentials,
 repositories, terminals, or conversational context.

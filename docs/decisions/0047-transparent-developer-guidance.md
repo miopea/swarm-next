@@ -17,7 +17,7 @@ The complete active ruleset must be visible and manageable in Settings.
 
 ## Decision
 
-Swarm Next will implement **Developer guidance** as a private, revisioned Hive
+Swarm will implement **Developer guidance** as a private, revisioned Hive
 record with an explicit lifecycle:
 
 1. **Proposed** — Queen has suggested the narrowest useful rule and cited the

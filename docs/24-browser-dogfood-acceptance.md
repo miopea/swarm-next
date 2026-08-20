@@ -263,7 +263,7 @@ worker:
   ADR 0003; Swarm does not silently override provider permissions.
 - The same pass found and corrected stale Settings shortcut labels so the
   displayed Alt+1 through Alt+4 mapping matches the running application.
-- Repeated desktop switching preserved the exact Queen, Swarm Next, and Clover
+- Repeated desktop switching preserved the exact Queen, Swarm, and Clover
   session IDs across nine selections. Reload then exposed a view mismatch: the
   engagement lease correctly survived on Clover while the UI defaulted to
   Queen. The client now restores the last selected live session so the visible
@@ -282,7 +282,7 @@ worker:
   contradictory global failure banner when the browser already completed or
   reconciled the operation.
 - A live API-only restart replaced PID `658477` with `721890` while the
-  terminal-host PID remained `400662`. Queen, Swarm Next, and Dogfood Clover
+  terminal-host PID remained `400662`. Queen, Swarm, and Dogfood Clover
   reconnected under the same three session IDs before and after a browser
   reload. Eight samples over 105 seconds kept API memory between 3.2 and 3.8
   MiB and the host cgroup, including all three Claude processes, between 937.5
@@ -395,7 +395,7 @@ the independently updated terminal host through the API to worker settings:
   exposed client use of reserved WebSocket close codes during canonical
   recovery; the terminal now uses browser-valid application codes and unit
   tests pin both failure and fresh-snapshot paths. The strengthened live gate
-  then selected Queen, Swarm Next, and Dogfood Clover in turn at desktop and
+  then selected Queen, Swarm, and Dogfood Clover in turn at desktop and
   Android sizes, verified each exact session became selected and connected,
   and completed every prior surface check without console or runtime errors.
   The same gate now closes the authenticated page, opens a fresh page in the
@@ -520,7 +520,7 @@ the independently updated terminal host through the API to worker settings:
   finite safe integers, a transient reattach before layout no longer poisons a
   healthy connection, focus remains pending through canonical snapshot restore,
   and ordinary worker selection delivers focus after React mounts the selected
-  terminal. The deployed desktop and Android gate selected Queen, Swarm Next,
+  terminal. The deployed desktop and Android gate selected Queen, Swarm,
   and Dogfood Clover as Connected, proved each terminal owned focus, exercised
   all eight primary surfaces without overflow, pasted an image into dogfood
   feedback, and preserved authentication across complete browser-process
@@ -1488,7 +1488,7 @@ the independently updated terminal host through the API to worker settings:
   Apiary mutation occurred, and the private proof tab was closed.
 - The live worker-description journey confirms commits `6d9a1148`, `7d229a85`,
   `eab08838`, and `a1a27764` resolve the formerly inert **Improve with Claude**
-  experience. Against the sleeping Swarm Next worker, the bounded endpoint
+  experience. Against the sleeping Swarm worker, the bounded endpoint
   completed one tool-free, non-persistent Claude turn in 5.31 seconds and
   returned a concise routing description without saving it. The actual Settings
   editor then showed **Claude is generating**, replaced the editable text,
@@ -1501,7 +1501,7 @@ the independently updated terminal host through the API to worker settings:
   provider session, task, Jira issue, or Apiary record changed, and the private
   proof tab was closed.
 - A same-host Ring 1 process-attribution sample resolves the apparent mismatch
-  between the **2/30** Swarm Next worker count and the many visible Claude
+  between the **2/30** Swarm worker count and the many visible Claude
   processes. The `swarm-next-terminal-host.service` cgroup owned exactly two
   provider processes—Queen and Scout—in their expected repositories, matching
   the two awake workers. None of the other 28 configured sleeping workers had

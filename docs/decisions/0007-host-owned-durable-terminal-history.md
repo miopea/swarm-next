@@ -10,7 +10,7 @@ Operators still need bounded scrollback and trustworthy recovery evidence after
 the API or terminal host restarts. Keeping that history in React, a browser
 database, or the general application event tables would put terminal lifetime
 back in the wrong process and recreate the unbounded-storage failure mode that
-motivated Swarm Next.
+motivated Swarm.
 
 The legacy application retained 1 MiB of raw output per terminal and later
 capped browser replay at 256 KiB after an out-of-memory investigation. A
@@ -82,7 +82,7 @@ still owned. Swarm must not present an archive as an interactive worker.
 - Store output in SQLite: mixes a high-volume byte stream with authoritative
   application state and increases database write amplification and exposure.
 - Store output in IndexedDB or Cache Storage: ties recovery and resource use to
-  browser/profile lifetime, the exact boundary Swarm Next is removing.
+  browser/profile lifetime, the exact boundary Swarm is removing.
 - Keep only raw in-memory replay: cannot survive host restart and has already
   demonstrated dangerous browser allocation behavior in the legacy system.
 - Persist unframed terminal bytes: cannot distinguish a valid prefix from a

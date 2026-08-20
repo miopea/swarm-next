@@ -58,7 +58,7 @@ export default function ApiaryHandoffLanding({ children }: Props) {
         <form className="apiary-handoff-target" onSubmit={openPersonalHive}>
           <label htmlFor="personal-hive-address">Your personal Hive address</label>
           <div><input id="personal-hive-address" type="url" inputMode="url" autoCapitalize="none" autoCorrect="off" placeholder="https://my-hive.example.com" value={hiveAddress} onChange={(event) => setHiveAddress(event.target.value)} /><button disabled={!hiveAddress.trim()}>Open my Hive</button></div>
-          <small>Use the address where you normally open Swarm Next. HTTPS is required unless it runs on localhost.</small>
+          <small>Use the address where you normally open Swarm. HTTPS is required unless it runs on localhost.</small>
         </form>
         <div className="apiary-handoff-current">
           <span><strong>Already opened in your personal Hive?</strong><small>Continue here, then review the exact Keeper and Apiary before joining.</small></span>

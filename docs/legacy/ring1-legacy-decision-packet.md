@@ -3,7 +3,7 @@
 Status: **Four safeguards closed; eleven operator choices recorded 2026-08-17**
 
 This packet contains only choices that survived the full-history evidence pass
-and comparison with current Swarm Next. It deliberately excludes findings that
+and comparison with current Swarm. It deliberately excludes findings that
 are already prevented, clearly obsolete, or mechanical defects with one safe
 answer.
 
@@ -167,7 +167,7 @@ operator corrections into future behavior. The useful outcome is personal
 adaptation; the danger is hidden policy that silently changes Queen's authority
 or spreads one correction across unrelated repositories and operators.
 
-**Current Next boundary.** Swarm Next preserves task history, discussions,
+**Current Next boundary.** Swarm preserves task history, discussions,
 worker descriptions, repository-owned policy, and explicit settings, but it
 does not promote repeated operator corrections into reusable guidance.
 
@@ -268,7 +268,7 @@ timer heuristics.
 
 **Evidence.** Legacy's Command Center attempted to summarize fleet state, but
 some surfaces were assembled UI rather than a proven event-driven operator
-brief. Swarm Next has durable task, decision, worker, sync, resource, presence,
+brief. Swarm has durable task, decision, worker, sync, resource, presence,
 and Apiary evidence, yet a returning operator can still need to inspect several
 workers to understand what changed while away.
 

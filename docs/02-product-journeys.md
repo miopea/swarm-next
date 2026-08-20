@@ -113,7 +113,7 @@ Success means:
 
 ## J9: Install or migrate
 
-The operator installs Swarm Next or imports selected legacy data.
+The operator installs Swarm or imports selected legacy data.
 
 Success means:
 

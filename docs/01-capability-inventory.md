@@ -10,7 +10,7 @@ Decision meanings:
 - **Keep**: preserve the outcome with minimal product change.
 - **Redesign**: preserve the value through a new model or interaction.
 - **Merge**: absorb the outcome into a clearer capability.
-- **Remove**: do not implement in Swarm Next.
+- **Remove**: do not implement in Swarm.
 - **Investigate**: usage or value needs more evidence.
 
 ## Product center

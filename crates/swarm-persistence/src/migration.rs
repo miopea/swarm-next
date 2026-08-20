@@ -108,7 +108,7 @@ pub struct LegacyWorkerPreview {
     pub disposition: LegacyWorkerImportDisposition,
     pub selectable: bool,
     pub conversation_available: bool,
-    /// Existing sleeping Swarm Next worker that will receive the Legacy
+    /// Existing sleeping Swarm worker that will receive the Legacy
     /// conversation instead of creating a duplicate roster entry.
     pub existing_worker_id: Option<WorkerId>,
     pub warnings: Vec<String>,
@@ -1122,7 +1122,7 @@ impl TaskStore {
             {
                 disposition = LegacyImportDisposition::Invalid;
                 selectable = false;
-                warnings.push("Required text is empty or exceeds Swarm Next safety bounds.".into());
+                warnings.push("Required text is empty or exceeds Swarm safety bounds.".into());
             }
             if source.attachment_count > 0 {
                 warnings.push(format!(
@@ -1251,7 +1251,7 @@ impl TaskStore {
             }
             if !source.isolation.trim().is_empty() {
                 warnings.push(
-                    "Legacy isolation settings are not copied; Swarm Next applies its own workspace policy."
+                    "Legacy isolation settings are not copied; Swarm applies its own workspace policy."
                         .into(),
                 );
                 disposition = LegacyWorkerImportDisposition::Transformed;
@@ -1263,10 +1263,9 @@ impl TaskStore {
                 disposition = LegacyWorkerImportDisposition::ManagedByNext;
                 selectable = false;
                 warnings.push(if name.eq_ignore_ascii_case("queen") {
-                    "Swarm Next owns one durable Queen; the Legacy Queen is not duplicated.".into()
+                    "Swarm owns one durable Queen; the Legacy Queen is not duplicated.".into()
                 } else {
-                    "Swarm Next Scout owns cross-repository work; Project Root is not duplicated."
-                        .into()
+                    "Swarm Scout owns cross-repository work; Project Root is not duplicated.".into()
                 });
             }
             if source_id.is_empty()
@@ -1279,7 +1278,7 @@ impl TaskStore {
                 disposition = LegacyWorkerImportDisposition::Invalid;
                 selectable = false;
                 warnings.push(
-                    "Required worker data is empty, contains control characters, or exceeds Swarm Next safety bounds."
+                    "Required worker data is empty, contains control characters, or exceeds Swarm safety bounds."
                         .into(),
                 );
             }
@@ -1304,11 +1303,11 @@ impl TaskStore {
                         .into()
                 } else if let Some(duplicate) = duplicate {
                     format!(
-                        "Swarm Next already has worker '{}' for this name or repository.",
+                        "Swarm already has worker '{}' for this name or repository.",
                         duplicate.name
                     )
                 } else {
-                    "Swarm Next already has this worker.".into()
+                    "Swarm already has this worker.".into()
                 });
                 if !already_imported
                     && let Some(duplicate) = duplicate.filter(|duplicate| {
@@ -1611,7 +1610,7 @@ pub(super) fn migrate_legacy_existing_conversations(
     transaction.pragma_update(None, "user_version", 72)
 }
 
-/// Points an existing Swarm Next worker at the Legacy conversation the operator
+/// Points an existing Swarm worker at the Legacy conversation the operator
 /// explicitly chose to adopt, recording what that profile carried beforehand.
 fn adopt_existing_legacy_conversation(
     transaction: &rusqlite::Transaction<'_>,
@@ -1699,7 +1698,7 @@ fn adopt_existing_legacy_conversation(
     Ok(())
 }
 
-/// Creates one sleeping Swarm Next profile for a selected Legacy worker and
+/// Creates one sleeping Swarm profile for a selected Legacy worker and
 /// reports whether it kept the Legacy conversation for its first wake.
 fn import_new_legacy_worker(
     transaction: &rusqlite::Transaction<'_>,

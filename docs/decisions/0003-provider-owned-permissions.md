@@ -16,7 +16,7 @@ budgets, and accepting a generated plan.
 
 ## Decision
 
-The provider adapter owns provider tool permissions. Swarm Next will configure
+The provider adapter owns provider tool permissions. Swarm will configure
 and report the provider's declared permission posture but will not scrape a
 terminal prompt, maintain regex approval rules, or inject approval keystrokes.
 

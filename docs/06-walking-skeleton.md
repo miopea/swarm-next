@@ -8,7 +8,7 @@ packaging.
 
 ## User story
 
-As the operator, I can install and start Swarm Next, create one task, start one
+As the operator, I can install and start Swarm, create one task, start one
 worker in a configured workspace, interact with its terminal, reload the
 browser, recover the exact terminal state, and complete the task. I can update
 the application backend without killing the worker.

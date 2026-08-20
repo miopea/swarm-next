@@ -4,13 +4,13 @@ Status: Accepted
 
 ## Context
 
-Swarm Next must eventually migrate existing Hives without asking Legacy Swarm to understand or write the Next database. Open local tasks are the first required slice. Jira remains canonical for Jira-linked work, while Legacy-only tasks, worker routing, learnings, decision history, and Routine candidates need an auditable path over time.
+Swarm must eventually migrate existing Hives without asking Legacy Swarm to understand or write the Next database. Open local tasks are the first required slice. Jira remains canonical for Jira-linked work, while Legacy-only tasks, worker routing, learnings, decision history, and Routine candidates need an auditable path over time.
 
 Writing both databases during one import would create a distributed transaction that SQLite cannot make atomic. A partial failure could hide work in Legacy before it is usable in Next. Treating every historical record as live Next state would also import obsolete behavior and noise.
 
 ## Decision
 
-Swarm Next owns a versioned, bounded migration package and a preview-first import workflow.
+Swarm owns a versioned, bounded migration package and a preview-first import workflow.
 
 1. The source Legacy snapshot is opened read-only and is never attached to the Next database.
 2. Export produces a portable package with source identity, format version, source record IDs, and explicit exclusions.
@@ -19,7 +19,7 @@ Swarm Next owns a versioned, bounded migration package and a preview-first impor
 5. One SQLite transaction creates the selected Next records as Drafts, provenance links, and an immutable migration batch receipt. Source status and proposed Next state remain visible in the preview, but import cannot start workers, dispatch tasks, or trigger Queen automation.
 6. Jira-linked tasks are skipped and later recreated by normal Jira synchronization.
 7. A Legacy task that was Active is proposed as Ready because no Legacy provider process is transferred, but remains Draft until the operator approves normal work. Its prior state remains in provenance.
-8. After the operator verifies the Next batch, a separate **Finish migration** step may create a fresh Legacy backup and apply the signed receipt. Legacy keeps the transferred tasks visible and read-only as `Moved to Swarm Next`; it does not mark them completed.
+8. After the operator verifies the Next batch, a separate **Finish migration** step may create a fresh Legacy backup and apply the signed receipt. Legacy keeps the transferred tasks visible and read-only as `Moved to Swarm`; it does not mark them completed.
 9. Finishing is never automatic. If an untouched Next batch is rolled back, its receipt can restore the corresponding Legacy tasks.
 10. No dual write or ongoing synchronization exists between Legacy and Next.
 

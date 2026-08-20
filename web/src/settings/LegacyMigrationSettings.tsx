@@ -457,7 +457,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTas
       {confirmImport && (
         <MigrationConfirmationDialog
           title={`Import ${selected.size} task${selected.size === 1 ? "" : "s"}?`}
-          detail="This is the step that changes Swarm Next. The selected work will appear as Drafts on the task board. No worker starts, and Legacy remains unchanged."
+          detail="This is the step that changes Swarm. The selected work will appear as Drafts on the task board. No worker starts, and Legacy remains unchanged."
           confirmLabel={working ? "Importing tasks…" : `Import ${selected.size} task${selected.size === 1 ? "" : "s"}`}
           disabled={disabled}
           onCancel={() => setConfirmImport(false)}
@@ -529,7 +529,7 @@ function canSelectWorker(record: LegacyWorkerPreview, replaceExistingConversatio
 function migrationRecordSummary(record: LegacyTaskPreview) {
   if (record.disposition === "skipped_jira") return "Jira issue · returns through Jira sync";
   if (record.disposition === "skipped_closed") return "Closed in Legacy · remains in Legacy history";
-  if (record.disposition === "duplicate") return "Already represented in Swarm Next";
+  if (record.disposition === "duplicate") return "Already represented in Swarm";
   if (record.disposition === "invalid") return "Cannot import until its source data is repaired";
   const worker = record.matched_worker_name ? ` · ${record.matched_worker_name}` : " · Unassigned";
   return `${record.source_status} → ${record.target_state}${worker}`;

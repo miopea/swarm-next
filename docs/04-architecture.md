@@ -4,7 +4,7 @@ Status: **Proposed**
 
 ## Shape
 
-Swarm Next is a modular Rust monolith with a React/TypeScript browser client and
+Swarm is a modular Rust monolith with a React/TypeScript browser client and
 an embedded SQLite database.
 
 ```text

@@ -82,7 +82,7 @@ serve its second purpose of reconciling the older workspace-encoding scheme.
 - Conversation resume no longer depends on a staging copy having succeeded.
 - Authenticating a separate provider profile is no longer required before
   dogfooding, removing a setup step and a class of credential confusion.
-- Swarm Next and legacy Swarm now share one mutable Claude configuration
+- Swarm and legacy Swarm now share one mutable Claude configuration
   directory. The isolation requirement in
   [dogfooding and cutover](../07-dogfooding-and-cutover.md) still holds for the
   database, PTYs, worker processes, service names, ports, and runtime

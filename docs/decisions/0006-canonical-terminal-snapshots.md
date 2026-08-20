@@ -77,7 +77,7 @@ and sequence. This event is carried to the browser instead of failing silently.
 - Build a terminal emulator from scratch: creates a large correctness and
   security surface without product differentiation.
 - Allow parser and renderer queues to grow: directly violates the resource
-  policy that motivated Swarm Next.
+  policy that motivated Swarm.
 
 ## Validation
 

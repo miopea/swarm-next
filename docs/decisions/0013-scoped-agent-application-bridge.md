@@ -8,7 +8,7 @@ Queen and workers need typed ways to plan, assign, and report work before the
 unified decision inbox can receive meaningful requests. Legacy Swarm exposed a
 large MCP catalog, trusted caller-supplied worker names, and mixed transport,
 authorization, and business rules. Reproducing that surface would restore the
-same authority ambiguity and coupling Swarm Next is intended to remove.
+same authority ambiguity and coupling Swarm is intended to remove.
 
 Claude Code supports explicit MCP configuration at process launch. The official
 Rust MCP SDK supplies protocol negotiation and Streamable HTTP handling, so
@@ -16,7 +16,7 @@ Swarm does not need to maintain a hand-written JSON-RPC transport.
 
 ## Decision
 
-Swarm Next exposes one loopback Streamable HTTP MCP endpoint as an adapter over
+Swarm exposes one loopback Streamable HTTP MCP endpoint as an adapter over
 shared application services.
 
 - Every durable worker profile receives an independent, revocable bearer

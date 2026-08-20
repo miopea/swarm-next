@@ -1093,7 +1093,7 @@ export function App() {
       {detached ? null : <aside className={`control-rail surface-${surface}`} aria-label="Swarm navigation">
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
-          <div className="brand-copy"><p className="eyebrow">Swarm Next</p><h1>Control room</h1><HiveContextIndicator identity={hiveIdentity} /></div>
+          <div className="brand-copy"><p className="eyebrow">Swarm</p><h1>Control room</h1><HiveContextIndicator identity={hiveIdentity} /></div>
           {operatorToken ? (
             <button
               type="button"

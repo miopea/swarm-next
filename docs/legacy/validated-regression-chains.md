@@ -15,7 +15,7 @@ process, bridge, dashboard, and focused tests rather than one cosmetic layer.
 
 **Stable outcome:** the terminal process owner must be independent from the web
 app; reconnect and resize require explicit protocols, bounded journals, and
-idempotent process identity. Swarm Next keeps those contracts in the Rust worker
+idempotent process identity. Swarm keeps those contracts in the Rust worker
 engine and tests app reload separately from holder replacement.
 
 Ring 1 reproduced the operator outcome on 2026-08-16 through a different cause:
@@ -56,7 +56,7 @@ BUZZING-only whitelist. `de1763d1` later bound deferred actions to state and
 process snapshots while fixing six other PTY/drone races. Each change touched
 the automation path and its tests, not only presentation.
 
-**Stable outcome:** current terminal text cannot grant authority. Swarm Next
+**Stable outcome:** current terminal text cannot grant authority. Swarm
 uses explicit operator engagement, durable role identity, revision-bound
 actions, and at-most-once uncertain delivery. Provider-native approval removes
 most legacy prompt clicking; external effects remain separately authorized.
@@ -81,7 +81,7 @@ unrelated workers. `6b4b061a` restored it only behind exact target-worker
 matching, rate-limit awareness, operator inactivity, and an opt-in defaulting
 off. The sequence changed the drone pilot and later added configuration guards.
 
-**Stable outcome:** speculative delivery remains deferred in Swarm Next. A task
+**Stable outcome:** speculative delivery remains deferred in Swarm. A task
 must already have durable ownership before deterministic coordination can wake
 or brief a worker. Cancellation and wrong-recipient proofs are required before
 any broader preparation returns.
@@ -96,7 +96,7 @@ held. Most changes concentrated in one dashboard template and terminal route.
 
 **Stable outcome:** mobile scrolling needs one owned gesture path with direct
 tests at touch size, not layers of browser, tmux, and copy-mode translation.
-Swarm Next maps a one-finger captured gesture directly to xterm scroll lines and
+Swarm maps a one-finger captured gesture directly to xterm scroll lines and
 has an Android CDP smoke that proves the viewport actually moves.
 
 ## State classification and the continuous-event boundary
@@ -109,7 +109,7 @@ continuous one, exposing the later browser-process memory incident described in
 the atlas.
 
 **Stable outcome:** provider/runtime events and durable lifecycle ownership are
-authoritative; terminal text is bounded supporting evidence. Swarm Next keeps
+authoritative; terminal text is bounded supporting evidence. Swarm keeps
 one invalidation stream, quiet steady state, content-free diagnostics, and
 browser-process soak evidence.
 
@@ -133,7 +133,7 @@ pickers, and an automated message was observed to disappear on refusal.
 **Stable outcome:** a provider question is a typed attention object and an input
 authority boundary. Unrelated automation must refuse without losing its body;
 an authorized answer must bind to the exact current question and report written,
-observed, and accepted as different facts. Swarm Next `1a3c89b` now checks the
+observed, and accepted as different facts. Swarm `1a3c89b` now checks the
 canonical host snapshot at the shared durable-coordination boundary. A visible
 picker returns decision results, task briefs, worker outcomes, and Queen prompts
 to their durable queues without consuming a retry attempt. A real-PTY test holds
@@ -156,7 +156,7 @@ This chain is also post-`2026.8.13`; treat the implementation as development
 evidence. Its architectural lesson is independent of the JSONL mechanism.
 
 **Stable outcome:** terminal input provenance belongs at the single byte-write
-boundary, with no secret-bearing content in the record. Swarm Next `7c84cb9`
+boundary, with no secret-bearing content in the record. Swarm `7c84cb9`
 now makes actor and coarse input shape mandatory on `HostRequest::Write`, derives
 Steward identity from the active lease, and records accepted and rejected writes
 in a holder-owned audit capped at 10,000 entries and 24 hours. A private,
@@ -183,7 +183,7 @@ legitimate destination.
 
 **Stable outcome:** hard boundaries are typed effect contracts owned by code;
 operator convenience rules cannot widen them. Human-review brakes and absolute
-gates need different types, defaults, and failure behavior. Swarm Next does not
+gates need different types, defaults, and failure behavior. Swarm does not
 port Legacy's approval drones or regex policy engine. Its deterministic
 coordinator is restricted to typed application operations, so the mechanism is
 obsolete while the design constraint remains mandatory for each future action.
@@ -219,7 +219,7 @@ not a universal requirement for these exact scripts.
 
 **Stable outcome:** linked Jira terminal states must reconcile without depending
 on a bounded open-issue query, and a completion claim must retain concise durable
-verification evidence. Swarm Next already fetches exact linked issue identities,
+verification evidence. Swarm already fetches exact linked issue identities,
 including closed issues, and persists mapped inbound and outbound transitions.
 Project-specific citation, branch-containment, or deployment checks remain
 optional typed policies that should be adopted only when Ring 1 evidence shows

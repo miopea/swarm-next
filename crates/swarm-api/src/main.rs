@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     state.supervise_workers().await;
     start_background_services(&state);
     let listener = tokio::net::TcpListener::bind(address).await?;
-    info!(%address, "Swarm Next API listening");
+    info!(%address, "Swarm API listening");
     let app = match (
         env::var_os("SWARM_WEB_ROOT"),
         env::var_os("SWARM_ASSET_ROOT"),

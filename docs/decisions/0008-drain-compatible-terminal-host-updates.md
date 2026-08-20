@@ -4,7 +4,7 @@ Status: **Accepted**
 
 ## Context
 
-Swarm Next must update its backend without killing active workers. The API and
+Swarm must update its backend without killing active workers. The API and
 browser can already be replaced independently because the terminal host owns
 PTY descriptors. Replacing the terminal host itself is different: transferring
 a PTY master descriptor does not transfer normal child-process parentage,

@@ -6,7 +6,7 @@ Items the operator raised during live dogfooding, written down as they arrived
 rather than held in a conversation. Everything here came from using the product,
 not from planning it.
 
-The Swarm Next worker cannot create durable Swarm tasks: `swarm_create_task` is
+The Swarm worker cannot create durable Swarm tasks: `swarm_create_task` is
 Queen-only through MCP, and a worker holds list, transition, comment, and
 decision tools. Queen should file anything here that deserves queue tracking.
 This file is the durable record until then.
@@ -101,7 +101,7 @@ identifies itself.
 
 Raised as: three workers show "with you" while the operator is plainly in one
 session. Observed as BFG Operations `WITH YOU · 4M`, BudgetBug `WITH YOU · 4M`,
-and Swarm Next `WITH YOU` together.
+and Swarm `WITH YOU` together.
 
 "With you" is the one worker state that is exclusive by definition — the
 operator is in one place. Three simultaneous claims mean the engagement lease is
@@ -608,11 +608,11 @@ Related and already built: item 32's card now reports a completed email task
 nobody answered. The same reasoning applies one step earlier, to whether it
 should have been called complete at all.
 
-### 34. Swarm Next has a developer update path and no user one — *decided, needs signing before code*
+### 34. Swarm has a developer update path and no user one — *decided, needs signing before code*
 
 Raised as: the Python Swarm had a "dev" mode for local work with fast hot
 updates, and a normal user mode that polled GitHub for updates or checked on
-demand. Swarm Next needs the equivalent before anyone else can use it.
+demand. Swarm needs the equivalent before anyone else can use it.
 
 What exists today, confirmed by reading the surface rather than assuming:
 
@@ -620,7 +620,7 @@ What exists today, confirmed by reading the surface rather than assuming:
   `enable-development CHECKOUT`, `disable-development`, and
   `reload-development`, and `development.enabled` in the runtime response is
   literally "is a development reload path configured". That is the mode being
-  used to build Swarm Next in Swarm Next.
+  used to build Swarm in Swarm.
 - **Applying a release already exists.** `swarm-next-package install|update
   RELEASE_DIR` installs a prepared release directory, and that directory
   carries `SHA256SUMS`, `VERSION`, `PROTOCOL`, and `SOURCE_REVISION`, so
@@ -899,7 +899,7 @@ permanent.
 They are now forgotten once their work moves on. The mark still means what it
 says for work still waiting.
 
-### 43. Swarm Next needs a versioning system before others can use it — *fixed*
+### 43. Swarm needs a versioning system before others can use it — *fixed*
 
 Operator ruling: SemVer for releases, SHA for dev builds.
 
@@ -923,7 +923,7 @@ nobody declared is a version nobody can reason about later.
 
 
 Raised as: "we need to introduce a versioning system as we get close to opening
-Swarm Next to others."
+Swarm to others."
 
 Today every build is `0.1.0-dev-<sha>-<timestamp>-<pid>` — a development
 identity, unique per build, with no ordering anyone outside this machine could
@@ -998,7 +998,7 @@ processors and saturated on four.
 
 ### 47. A worker had no way to record work it found — *fixed*
 
-Raised as: "the Swarm Next MCP has no way for workers to create tasks. Is that
+Raised as: "the Swarm MCP has no way for workers to create tasks. Is that
 by design? I just asked scout to do a couple for architecture and it got
 confused because there is no tool to do it."
 

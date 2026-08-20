@@ -6,7 +6,7 @@ Status: **Accepted**
 
 A Queen or operator can durably assign work, but a worker cannot act until it
 is briefed. Ad hoc terminal injection would recreate the context-breaking
-broadcast behavior Swarm Next is replacing. It would also lose work across API
+broadcast behavior Swarm is replacing. It would also lose work across API
 replacement or duplicate a brief after a crash-ambiguous terminal write.
 
 Task state, stable worker ownership, process binding, and briefing delivery are

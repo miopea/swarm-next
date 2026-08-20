@@ -14,7 +14,7 @@ work and turn an otherwise recoverable condition into an out-of-memory crash.
 
 Legacy Swarm reacted after pressure rose by suppressing workers. That behavior
 needed hysteresis, could make state difficult to interpret, and did not undo
-the cost of processes that were already running. Swarm Next has enough typed
+the cost of processes that were already running. Swarm has enough typed
 evidence to make a narrower decision before it claims an automatic wake.
 
 ## Decision

@@ -1,6 +1,6 @@
 # Agent development instructions
 
-Swarm Next is an architecture-led replacement, not a mechanical port.
+Swarm is an architecture-led replacement, not a mechanical port.
 
 Before changing runtime code, read `docs/00-program-charter.md`,
 `docs/04-architecture.md`, and the relevant accepted ADRs.

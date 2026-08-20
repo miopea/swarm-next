@@ -4,7 +4,7 @@ Status: **Approved direction; implementation in progress**
 
 ## Product feeling
 
-Swarm Next is a capable developer control room presented as a quiet botanical
+Swarm is a capable developer control room presented as a quiet botanical
 apiary studio. It should feel soft, natural, playful, and emotionally warm
 without resembling a children's product or sacrificing information density.
 

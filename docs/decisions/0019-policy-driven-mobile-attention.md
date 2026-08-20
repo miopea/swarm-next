@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context
 
-Mobile is a first-class Swarm Next surface. The operator needs important Queen
+Mobile is a first-class Swarm surface. The operator needs important Queen
 and worker decisions to follow her when she is away without turning ordinary
 Hive activity into notification noise or exposing development context on a
 lock screen. Browser push endpoints are untrusted input, delivery is fallible,
@@ -13,7 +13,7 @@ instability in legacy Swarm.
 
 ## Decision
 
-Swarm Next uses Web Push as a narrow delivery adapter for the unified Needs you
+Swarm uses Web Push as a narrow delivery adapter for the unified Needs you
 inbox.
 
 - Notifications are eligible only while effective presence is Away or Night

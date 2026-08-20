@@ -11,10 +11,10 @@ same liabilities and obscure which features remain valuable.
 
 ## Decision
 
-Develop Swarm Next as a separate repository and application. Legacy Swarm
+Develop Swarm as a separate repository and application. Legacy Swarm
 remains operational and serves as behavioral evidence. Each capability is
 classified as keep, redesign, merge, remove, or investigate before it becomes a
-Swarm Next requirement.
+Swarm requirement.
 
 Runtime scaffolding follows approval of the M0 definition set.
 

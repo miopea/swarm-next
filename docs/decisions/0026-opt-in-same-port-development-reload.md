@@ -4,7 +4,7 @@ Status: **Accepted for the dogfood host**
 
 ## Context
 
-The primary operator develops Swarm Next from inside Swarm Next. A normal
+The primary operator develops Swarm from inside Swarm. A normal
 immutable release is the right production boundary, but packaging every local
 iteration by hand makes dogfooding unnecessarily slow. Running a second dev
 server on another port would exercise a different route, cookie, PWA, and

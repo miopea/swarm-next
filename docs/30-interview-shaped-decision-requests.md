@@ -7,9 +7,9 @@
 
 **Status:** specified, not built
 **Author:** Queen, from an operator interview on 2026-08-18
-**Implementer:** Swarm Next worker (`/home/bschleifer/projects/personal/swarm-next`)
+**Implementer:** Swarm worker (`/home/bschleifer/projects/personal/swarm-next`)
 **Origin:** operator instruction — "You should always /interview me when you have
-questions. This should be something that Swarm Next builds into the system."
+questions. This should be something that Swarm builds into the system."
 
 ---
 
@@ -33,7 +33,7 @@ Three failures from a single evening, all real, all in the Hive record:
 | `01a01673-a282-7320-836d-51e5d1e5fd92` | Correct outcome, but the asker (BFG Operations) had to compress a nuanced cross-repo finding into three buttons, and pre-committed to one interpretation of an ambiguous number. | Nuance survived only because the `reason` field was long enough to carry it — a workaround, not a mechanism. |
 
 The pattern: **a button set is a good instrument for a ruling that is already
-understood, and a bad instrument for a question that is still open.** Swarm Next
+understood, and a bad instrument for a question that is still open.** Swarm
 currently has only the first.
 
 ## 2. What is being built
@@ -86,7 +86,7 @@ be stated explicitly in the delivered work rather than settled silently:
    defined precedence. If the implementer finds a real case needing both, it
    should be specified, not permitted by accident.
 2. **Limits.** `AskUserQuestion` accepts at most 4 questions, each with 2–4
-   options. Whether Swarm Next mirrors those caps or sets its own is open, but
+   options. Whether Swarm mirrors those caps or sets its own is open, but
    the caps must exist — an unbounded interview is a worse instrument than a
    button.
 3. **Free text.** `AskUserQuestion` always offers "Other" with custom input, so
@@ -178,7 +178,7 @@ indistinguishable.
 ## 5. Boundaries
 
 - **This spec lives outside the swarm-next repository on purpose.** At the time
-  of writing, the Swarm Next worker had uncommitted changes in that tree —
+  of writing, the Swarm worker had uncommitted changes in that tree —
   including a new untracked `crates/swarm-domain/src/decisions.rs` — and writing
   into a repo mid-change risks the file being swept into someone else's commit.
   The implementer should relocate this into `docs/` under the existing numeric

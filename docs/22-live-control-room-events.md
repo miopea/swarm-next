@@ -2,7 +2,7 @@
 
 Status: **Implemented foundation**
 
-Swarm Next now refreshes roster, session, task, and runtime snapshots without
+Swarm now refreshes roster, session, task, and runtime snapshots without
 requiring the operator to press Refresh. The feed is an authenticated,
 content-free invalidation channel rather than a second copy of domain state.
 
