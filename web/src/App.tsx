@@ -1092,15 +1092,15 @@ export function App() {
         {operatorToken ? (
           <>
             <nav className={`surface-nav${federated ? " with-apiary" : ""}`} aria-label="Primary">
-              <button className={surface === "decisions" ? "selected" : ""} aria-current={surface === "decisions" ? "page" : undefined} data-detached={surfaceIsDetached("decisions") || undefined} onClick={() => showSurface("decisions")}>
+              <span className="surface-nav-item"><button className={surface === "decisions" ? "selected" : ""} aria-current={surface === "decisions" ? "page" : undefined} data-detached={surfaceIsDetached("decisions") || undefined} onClick={() => showSurface("decisions")}>
                 <span><DecisionIcon /> Needs you</span><small>{attentionCount}</small>
-              </button>
-              <button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} data-detached={surfaceIsDetached("tasks") || undefined} onClick={() => showSurface("tasks")}>
+              </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("decisions")} in a new window`} title={`Open ${surfaceLabel("decisions")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("decisions", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
+              <span className="surface-nav-item"><button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} data-detached={surfaceIsDetached("tasks") || undefined} onClick={() => showSurface("tasks")}>
                 <span><TaskIcon /> Tasks</span><small>{openTaskCount}</small>
-              </button>
-              <button className={surface === "workers" ? "selected" : ""} aria-current={surface === "workers" ? "page" : undefined} data-detached={surfaceIsDetached("workers") || undefined} aria-label={`Workers, ${liveWorkerCount} active of ${rosterWorkerCount}`} onClick={() => showSurface("workers")}>
+              </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("tasks")} in a new window`} title={`Open ${surfaceLabel("tasks")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("tasks", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
+              <span className="surface-nav-item"><button className={surface === "workers" ? "selected" : ""} aria-current={surface === "workers" ? "page" : undefined} data-detached={surfaceIsDetached("workers") || undefined} aria-label={`Workers, ${liveWorkerCount} active of ${rosterWorkerCount}`} onClick={() => showSurface("workers")}>
                 <span><TerminalIcon /> Workers</span><small>{liveWorkerCount}/{rosterWorkerCount}</small>
-              </button>
+              </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("workers")} in a new window`} title={`Open ${surfaceLabel("workers")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("workers", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
               {federated ? <button className={`apiary-nav-button${surface === "apiary" ? " selected" : ""}`} aria-current={surface === "apiary" ? "page" : undefined} data-detached={surfaceIsDetached("apiary") || undefined} onClick={() => showSurface("apiary")}><span><ApiaryIcon /> Apiary</span>{pendingAssistCount ? <small aria-label={`${pendingAssistCount} pending help offer${pendingAssistCount === 1 ? "" : "s"}`}>{pendingAssistCount}</small> : null}</button> : null}
               <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => openSettings()}>
                 <span><SettingsIcon /> Settings</span>
@@ -1239,19 +1239,12 @@ export function App() {
         <header className="workspace-header">
           <div>
             <p className="eyebrow">{surface === "decisions" ? "Attention without interruption" : surface === "tasks" ? "Plan and dispatch" : surface === "apiary" ? "Organization without noise" : surface === "settings" ? "Preferences and diagnostics" : "Persistent terminal"}</p>
-            {/* Beside the heading it detaches, rather than among the header's
-                global controls: what it pops out is the surface named here. */}
+            {/* Detaching lives in the rail beside each surface's own entry, on
+                the operator's ruling. The heading names one surface; the rail
+                lists them all, which is where a per-surface action belongs. */}
             <div className="workspace-heading">
               <h2>{surface === "decisions" ? "Needs you" : surface === "tasks" ? "Task board" : surface === "apiary" ? keeper ? "Keeper" : "Member Hive" : surface === "settings" ? "Settings" : activeSession ? activeWorker?.name ?? workerName(activeSession.session_id) : "Worker terminal"}</h2>
-              {operatorToken && !detached && (
-                <button
-                  type="button"
-                  className="icon-button popout-button"
-                  aria-label={`Open ${surfaceLabel(surface)} in a new window`}
-                  title={`Open ${surfaceLabel(surface)} in a new window. Workers keep running; a window only views them.`}
-                  onClick={() => setPopoutBlocked(!openSurfaceWindow(surface, (url, name, features) => window.open(url, name, features)))}
-                ><PopoutIcon /></button>
-              )}
+
             </div>
             <HiveContextIndicator identity={hiveIdentity} compact />
           </div>

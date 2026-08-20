@@ -134,6 +134,18 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .hive-context-indicator.compact { display: none; }
 
 .surface-nav { display: grid; gap: 5px; padding-bottom: 17px; border-bottom: 1px solid var(--line); }
+/* Detaching sits beside the surface it detaches, in the list of surfaces. The
+   nav entry is a button, so the pop-out cannot nest inside it — hence the row.
+   It stays out of the way until the entry is hovered, focused or current, so
+   the rail still reads as five destinations rather than ten controls. */
+.surface-nav-item { display: flex; min-width: 0; align-items: center; gap: 2px; }
+.surface-nav-item > button:first-child { flex: 1 1 auto; min-width: 0; }
+.surface-nav-popout { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border: 1px solid transparent; border-radius: 8px; opacity: 0; color: var(--muted); background: transparent; transition: opacity 120ms ease; }
+.surface-nav-item:hover .surface-nav-popout,
+.surface-nav-item:focus-within .surface-nav-popout,
+.surface-nav-item:has(> button.selected) .surface-nav-popout { opacity: 1; }
+.surface-nav-popout:hover { border-color: var(--line); color: var(--text); background: var(--panel-soft); }
+.surface-nav-popout:focus-visible { opacity: 1; }
 .surface-nav button { display: flex; min-height: 42px; align-items: center; justify-content: space-between; padding: 0 10px; border: 1px solid transparent; border-radius: 10px; color: var(--muted); background: transparent; text-align: left; }
 .surface-nav button > span { display: flex; align-items: center; gap: 10px; }
 .surface-nav button small { display: grid; min-width: 23px; height: 21px; place-items: center; border-radius: 7px; color: var(--muted); background: color-mix(in srgb, var(--text) 5%, transparent); font-size: .7rem; }
@@ -1505,6 +1517,8 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .start-worker-disclosure .start-worker { display: none; margin-top: 9px; padding: 10px 0 2px; }
   .start-worker-disclosure .start-worker.mobile-expanded { display: grid; }
   .rail-footer { display: none; }
+  /* No hover on a touch screen, so it cannot hide behind one. */
+  .surface-nav-popout { width: var(--pill-touch-height); height: var(--pill-touch-height); opacity: 1; }
   .workspace-header { min-height: 52px; padding: 7px 12px; }
   .workspace-header .eyebrow { display: none; }
   .workspace-header h2 { font-size: 1rem; }
