@@ -7156,12 +7156,50 @@ mod tests {
             session_id: WorkerSessionId::new(),
             action: "ship\nnow".into(),
             note: "green\u{1b}[31m\rchecks".into(),
+            answers: std::collections::BTreeMap::new(),
         };
         let message = decision_delivery_message(&delivery);
         assert_eq!(message.last(), Some(&b'\r'));
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));
         assert!(String::from_utf8_lossy(&message).contains("ship now"));
+    }
+
+    #[test]
+    fn an_answered_interview_states_its_answers_in_the_delivery() {
+        // A worker that held its session waiting for an answer should not have
+        // to go and fetch what it was waiting for, and the answers are the
+        // substance of an interview rather than the action.
+        let mut answers = std::collections::BTreeMap::new();
+        answers.insert("Scope".to_owned(), vec!["This repo\nonly".to_owned()]);
+        answers.insert(
+            "Timing".to_owned(),
+            vec!["After\u{1b}[31m the release".to_owned()],
+        );
+        let delivery = DecisionDispatch {
+            decision_id: DecisionRequestId::new(),
+            worker_id: WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            action: "answered".into(),
+            note: String::new(),
+            answers,
+        };
+
+        let message = decision_delivery_message(&delivery);
+        let rendered = String::from_utf8_lossy(&message);
+
+        assert!(rendered.contains("Scope: This repo only"));
+        // The escape is neutralised into a space rather than dropped, so the
+        // surrounding answer text survives intact and nothing is silently lost.
+        assert!(rendered.contains("Timing: After [31m the release"));
+        assert!(
+            !rendered.contains("Action:"),
+            "an interview reports answers, not a button"
+        );
+        // Still one sanitised submission, exactly like a ruling.
+        assert_eq!(message.last(), Some(&b'\r'));
+        assert!(!message[..message.len() - 1].contains(&b'\n'));
+        assert!(!message.contains(&0x1b));
     }
     #[test]
     fn task_dispatch_is_one_sanitized_terminal_submission() {

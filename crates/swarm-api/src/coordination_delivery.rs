@@ -485,9 +485,29 @@ pub(super) fn decision_delivery_message(delivery: &DecisionDispatch) -> Vec<u8> 
     } else {
         terminal_safe_text(&delivery.note)
     };
+    // An interview's substance is in the answers, so they are stated here
+    // rather than left behind a tool call. A worker that has been holding its
+    // session should not have to go and fetch what it was waiting for.
+    let outcome = if delivery.answers.is_empty() {
+        format!("Action: {action}.")
+    } else {
+        let answers = delivery
+            .answers
+            .iter()
+            .map(|(header, given)| {
+                format!(
+                    "{}: {}",
+                    terminal_safe_text(header),
+                    terminal_safe_text(&given.join(", "))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        format!("Answers: {answers}.")
+    };
     format!(
-        "[Swarm decision {} resolved] Action: {}. Operator note: {} Use swarm_list_decisions for the full request context.\r",
-        delivery.decision_id, action, note,
+        "[Swarm decision {} resolved] {} Operator note: {} Use swarm_list_decisions for the full request context.\r",
+        delivery.decision_id, outcome, note,
     )
     .into_bytes()
 }

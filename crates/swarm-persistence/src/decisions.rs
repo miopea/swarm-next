@@ -109,6 +109,9 @@ pub struct DecisionDispatch {
     pub session_id: WorkerSessionId,
     pub action: String,
     pub note: String,
+    /// The operator's answers when this was an interview, keyed by question
+    /// header. Empty for a ruling.
+    pub answers: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -456,7 +459,7 @@ impl TaskStore {
         let candidates = {
             let mut statement = transaction.prepare(
                 "SELECT dd.decision_id, dd.worker_id, ws.session_id,
-                        d.resolution_action, d.resolution_note
+                        d.resolution_action, d.resolution_note, d.resolution_answers
                  FROM decision_deliveries dd
                  JOIN decision_requests d ON d.id = dd.decision_id
                  JOIN worker_sessions ws ON ws.worker_id = dd.worker_id AND ws.ended_at IS NULL
@@ -476,6 +479,8 @@ impl TaskStore {
                         session_id: parse_id(&row.get::<_, String>(2)?)?,
                         action: row.get(3)?,
                         note: row.get(4)?,
+                        answers: serde_json::from_str(&row.get::<_, String>(5)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?
