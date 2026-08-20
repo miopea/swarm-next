@@ -101,6 +101,12 @@ const OPERATOR_DISMISS_ACTION: &str = "dismissed";
 /// trail should read as clearly for an interview as for a button. "answered"
 /// is that action; the substance is in `resolution_answers`.
 pub const INTERVIEW_ANSWERED_ACTION: &str = "answered";
+/// The key a ruling's free answer is recorded under.
+///
+/// A ruling declares no questions, so there is no header to key its answer by.
+/// Naming it here keeps one answer shape for both, which means one delivery
+/// format and one audit trail rather than a second of each.
+pub const OPERATOR_ANSWER_HEADER: &str = "Answer";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecisionDispatch {
@@ -324,8 +330,23 @@ impl TaskStore {
         let declared: Vec<DecisionQuestion> = serde_json::from_str(&declared)
             .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
         if declared.is_empty() {
-            // A ruling is resolved by choosing one of its actions.
-            return Err(TaskStoreError::InvalidDecisionResolution);
+            // A record with no questions is a ruling, and its buttons are the
+            // asker's guesses. When none of them is the operator's answer, the
+            // answer is still the operator's to give: the alternative is
+            // pressing a wrong button or dismissing, and both lose it.
+            //
+            // Exactly one free answer, under a reserved key, so a ruling
+            // answered in words carries the same shape as an interview and
+            // reaches the worker through the same delivery.
+            let spoken = answers.get(OPERATOR_ANSWER_HEADER);
+            if answers.len() != 1
+                || !spoken.is_some_and(|given| given.iter().any(|value| !value.trim().is_empty()))
+            {
+                return Err(TaskStoreError::InvalidDecisionResolution);
+            }
+            record_answers(transaction, id, answers, note, surface)?;
+            drop(connection);
+            return self.get_decision_request(id);
         }
         let answered_every_question = declared.iter().all(|question| {
             answers
@@ -335,31 +356,7 @@ impl TaskStore {
         if !answered_every_question || answers.len() != declared.len() {
             return Err(TaskStoreError::IncompleteDecisionAnswers);
         }
-        let recorded = serde_json::to_string(answers)
-            .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
-        let updated = transaction.execute(
-            "UPDATE decision_requests SET
-                 state = 'resolved', resolution_action = 'answered',
-                 resolution_answers = ?2, resolution_note = ?3,
-                 resolution_surface = ?4,
-                 resolved_by_operator_id = (
-                     SELECT h.operator_id FROM local_hive_identity l
-                     JOIN hives h ON h.id = l.hive_id WHERE l.singleton = 1
-                 ),
-                 resolved_at = unixepoch(), updated_at = unixepoch()
-             WHERE id = ?1 AND state = 'pending'",
-            params![id.to_string(), recorded, note, surface],
-        )?;
-        if updated != 1 {
-            return Err(TaskStoreError::DecisionAlreadyResolved);
-        }
-        transaction.execute(
-            "INSERT INTO decision_deliveries (decision_id, worker_id, state)
-             SELECT id, requesting_worker_id, 'queued' FROM decision_requests WHERE id = ?1",
-            [id.to_string()],
-        )?;
-        insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
-        transaction.commit()?;
+        record_answers(transaction, id, answers, note, surface)?;
         drop(connection);
         self.get_decision_request(id)
     }
@@ -618,6 +615,42 @@ impl TaskStore {
         transaction.commit()?;
         Ok(changed)
     }
+}
+
+/// Writes an answered resolution and queues it back to the asking worker.
+fn record_answers(
+    transaction: rusqlite::Transaction<'_>,
+    id: DecisionRequestId,
+    answers: &BTreeMap<String, Vec<String>>,
+    note: &str,
+    surface: &str,
+) -> Result<(), TaskStoreError> {
+    let recorded = serde_json::to_string(answers)
+        .map_err(|error| TaskStoreError::IntegrityFailure(error.to_string()))?;
+    let updated = transaction.execute(
+        "UPDATE decision_requests SET
+             state = 'resolved', resolution_action = 'answered',
+             resolution_answers = ?2, resolution_note = ?3,
+             resolution_surface = ?4,
+             resolved_by_operator_id = (
+                 SELECT h.operator_id FROM local_hive_identity l
+                 JOIN hives h ON h.id = l.hive_id WHERE l.singleton = 1
+             ),
+             resolved_at = unixepoch(), updated_at = unixepoch()
+         WHERE id = ?1 AND state = 'pending'",
+        params![id.to_string(), recorded, note, surface],
+    )?;
+    if updated != 1 {
+        return Err(TaskStoreError::DecisionAlreadyResolved);
+    }
+    transaction.execute(
+        "INSERT INTO decision_deliveries (decision_id, worker_id, state)
+         SELECT id, requesting_worker_id, 'queued' FROM decision_requests WHERE id = ?1",
+        [id.to_string()],
+    )?;
+    insert_control_room_event(&transaction, ControlRoomEventKind::DecisionsChanged)?;
+    transaction.commit()?;
+    Ok(())
 }
 
 fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStoreError> {
@@ -886,6 +919,78 @@ mod tests {
         assert_eq!(resolved.resolution_surface, "inbox_interview");
         // Delivered back to the asker the same way a ruling is.
         assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
+    }
+
+    #[test]
+    fn a_ruling_can_be_answered_in_the_operators_own_words() {
+        // Observed 2026-08-20: a request offered three buttons and the operator
+        // wanted a fourth thing entirely — "add it to the Play Store itself via
+        // the browser extension". Pressing a wrong button or dismissing were
+        // the only ways out, and both lose the answer.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = [
+            "Install it yourself".to_owned(),
+            "Route it elsewhere".to_owned(),
+        ];
+        let created = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+
+        let mut spoken = BTreeMap::new();
+        spoken.insert(
+            OPERATOR_ANSWER_HEADER.to_owned(),
+            vec!["Add it to the Play Store yourself, using the browser extension.".to_owned()],
+        );
+        let resolved = store
+            .answer_decision_request(created.id, &spoken, "", "inbox_answer")
+            .unwrap();
+
+        assert_eq!(resolved.state, DecisionRequestState::Resolved);
+        assert_eq!(
+            resolved.resolution_action.as_deref(),
+            Some(INTERVIEW_ANSWERED_ACTION)
+        );
+        assert_eq!(
+            resolved
+                .resolution_answers
+                .get(OPERATOR_ANSWER_HEADER)
+                .unwrap(),
+            &vec!["Add it to the Play Store yourself, using the browser extension.".to_owned()]
+        );
+        // Reaches the asker the same way any other resolution does.
+        assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
+    }
+
+    #[test]
+    fn a_ruling_answered_in_words_takes_one_answer_and_not_a_questionnaire() {
+        // A ruling declares no questions, so there is nothing to key several
+        // answers by. Accepting them would invent a shape nobody declared.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = ["ship".to_owned()];
+        let created = store
+            .create_decision_request(&request(queen.id, &actions))
+            .unwrap();
+
+        let mut wrong_key = BTreeMap::new();
+        wrong_key.insert("Scope".to_owned(), vec!["everything".to_owned()]);
+        assert!(matches!(
+            store.answer_decision_request(created.id, &wrong_key, "", "test"),
+            Err(TaskStoreError::InvalidDecisionResolution)
+        ));
+
+        let mut blank = BTreeMap::new();
+        blank.insert(OPERATOR_ANSWER_HEADER.to_owned(), vec!["  ".to_owned()]);
+        assert!(matches!(
+            store.answer_decision_request(created.id, &blank, "", "test"),
+            Err(TaskStoreError::InvalidDecisionResolution)
+        ));
+
+        assert_eq!(
+            store.get_decision_request(created.id).unwrap().state,
+            DecisionRequestState::Pending
+        );
     }
 
     #[test]

@@ -320,3 +320,34 @@ test("declining an interview requires a reason the worker can act on", () => {
   fireEvent.click(decline);
   expect(onResolve).toHaveBeenCalledWith(interview, "dismissed", "Holding until the mapping is fixed.", "inbox_dismiss");
 });
+
+test("lets the operator answer a ruling with something none of the buttons offered", () => {
+  // Observed: a request offered three actions and the operator wanted a fourth
+  // thing entirely. Pressing the closest button or dismissing were the only
+  // ways out, and both lose the answer.
+  const onAnswer = vi.fn().mockResolvedValue(undefined);
+  render(
+    <DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} onAnswer={onAnswer} />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Say something else" }));
+  fireEvent.change(screen.getByLabelText("Tell the worker what to do instead"), {
+    target: { value: "Add it to the Play Store yourself, using the browser extension" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send this instead" }));
+
+  expect(onAnswer).toHaveBeenCalledWith(
+    pending,
+    { Answer: ["Add it to the Play Store yourself, using the browser extension"] },
+    "",
+  );
+});
+
+test("will not send an empty answer in place of a button", () => {
+  render(
+    <DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} onAnswer={vi.fn()} />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Say something else" }));
+  expect(screen.getByRole("button", { name: "Send this instead" })).toBeDisabled();
+});

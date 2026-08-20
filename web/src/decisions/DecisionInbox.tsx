@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { DecisionRequest, DecisionSurface, Task, TaskActivityPage, Worker } from "../api";
 import BeeMascot from "../brand/BeeMascot";
 import DecisionInterview from "./DecisionInterview";
+import LongText from "./LongText";
 import WorkActivity from "./WorkActivity";
 
 const kindLabel = {
@@ -33,6 +34,8 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   const [showResolved, setShowResolved] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [dismissConfirmId, setDismissConfirmId] = useState<string>();
+  const [speakingId, setSpeakingId] = useState<string>();
+  const [spoken, setSpoken] = useState<Record<string, string>>({});
   const [activity, setActivity] = useState<TaskActivityPage>();
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityFailed, setActivityFailed] = useState(false);
@@ -122,8 +125,8 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                 <DecisionReason reason={decision.reason} />
                 <dl className="decision-context">
                   {decision.task_id && <div><dt>Task</dt><dd>{onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(decision.task_id!)}>{taskNames.get(decision.task_id) ?? "Linked task"}</button> : taskNames.get(decision.task_id) ?? "Linked task"}</dd></div>}
-                  {decision.risk && <div><dt>Risk</dt><dd>{decision.risk}</dd></div>}
-                  {decision.evidence && <div><dt>Evidence</dt><dd>{decision.evidence}</dd></div>}
+                  {decision.risk && <div><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" /></dd></div>}
+                  {decision.evidence && <div><dt>Evidence</dt><dd><LongText text={decision.evidence} label="the evidence" /></dd></div>}
                   <div><dt>Suggested</dt><dd>{decision.suggested_action}</dd></div>
                 </dl>
                 {decision.state === "pending" && decision.questions?.length ? (
@@ -158,6 +161,16 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                       {decision.allowed_actions.map((action, index) => (
                         <button key={action} type="button" className={index === 0 ? "primary-action" : "secondary-button"} disabled={busy} onClick={() => { setDismissConfirmId(undefined); void onResolve(decision, action, note, "inbox_action"); }}>{humanize(action)}</button>
                       ))}
+                      {/* The buttons above are the asker's guesses. When none
+                          of them is the answer, the answer is still the
+                          operator's to give — pressing the closest one or
+                          dismissing both lose it. */}
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={busy}
+                        onClick={() => setSpeakingId(speakingId === decision.id ? undefined : decision.id)}
+                      >{speakingId === decision.id ? "Never mind" : "Say something else"}</button>
                       <button
                         type="button"
                         className="secondary-button decision-dismiss"
@@ -175,6 +188,29 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                         {dismissConfirmId === decision.id ? "Confirm dismiss" : "Dismiss request"}
                       </button>
                     </div>
+                    {speakingId === decision.id ? (
+                      <div className="decision-own-words" role="group" aria-label="Answer in your own words">
+                        <label>
+                          <span>Tell the worker what to do instead</span>
+                          <textarea
+                            rows={3}
+                            value={spoken[decision.id] ?? ""}
+                            maxLength={4000}
+                            placeholder="Add it to the Play Store yourself, using the browser extension"
+                            onChange={(event) => setSpoken((current) => ({ ...current, [decision.id]: event.target.value }))}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="primary-action"
+                          disabled={busy || !(spoken[decision.id] ?? "").trim()}
+                          onClick={() => {
+                            setSpeakingId(undefined);
+                            void onAnswer?.(decision, { Answer: [(spoken[decision.id] ?? "").trim()] }, note);
+                          }}
+                        >Send this instead</button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="decision-resolved"><p><strong>{humanize(decision.resolution_action ?? "resolved")}</strong>{decision.resolution_note ? ` · ${decision.resolution_note}` : ""}</p><span className={`delivery-state ${decision.delivery_state ?? "recorded"}`}>{deliveryLabel(decision.delivery_state)}</span></div>
@@ -211,7 +247,10 @@ const queenSectionLabels: Record<string, string> = {
 function DecisionReason({ reason }: { reason: string }) {
   const heading = /(DISPATCHABLE NOW|BLOCKED ON YOUR RULING|NOT DELEGABLE \/ OUT OF SCOPE THIS RUN)\s*\((\d+)\)/gi;
   const matches = [...reason.matchAll(heading)];
-  if (!matches.length) return <p className="decision-reason">{reason}</p>;
+  // No recognised structure to lift out, so it is shown as written: the author
+  // put paragraphs in it, and collapsing them is what produced a block nobody
+  // could read.
+  if (!matches.length) return <div className="decision-reason"><LongText text={reason} label="the reason" /></div>;
   const preamble = reason.slice(0, matches[0].index).trim();
   return (
     <div className="decision-reason decision-reason-structured">

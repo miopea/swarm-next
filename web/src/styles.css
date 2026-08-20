@@ -1223,6 +1223,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-detail-editor textarea { min-height: 8rem; resize: vertical; }
 .task-detail-editor select { max-width: 16rem; }
 .development-build-landed { margin: 0; font-size: .78rem; color: var(--good); font-weight: 500; }
+/* Written with paragraphs in it, so it is shown with them. */
+.decision-prose { margin: 0; white-space: pre-wrap; }
+.decision-prose.clamped { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
+.decision-prose-folded { display: grid; justify-items: start; gap: 4px; }
+.decision-own-words { display: grid; justify-items: start; gap: 7px; margin-top: 8px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-soft); }
+.decision-own-words label { display: grid; width: 100%; gap: 4px; }
 .decision-interview { display: grid; gap: 11px; }
 .decision-question { display: grid; gap: 7px; margin: 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-soft); }
 .decision-question legend { padding: 0 5px; color: var(--muted); font-size: .68rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }

@@ -476,6 +476,31 @@ for a restart, but replacing the engine also restarts the providers, and unlike
 an App and API release a provider update is installed and running **nowhere**
 until each worker restarts.
 
+### 36. A Needs-you request is an unreadable wall, and its options were not the answer — *fixed*
+
+Raised as: "this needs you is ridiculously long, block of text, impossible to
+read" and "the options are terrible — I want to tell SS to add it to the play
+store itself via the browser extension and that isn't an option."
+
+**The wall was self-inflicted.** The request in question carried 16 line breaks
+in its reason and 23 in its evidence: the worker wrote it with paragraphs and
+headings, and the card rendered it as one continuous run, throwing all of that
+away. Prose is now shown as written, and a long block folds until asked for
+rather than being truncated — the operator is deciding something, so nothing
+written for them is thrown away.
+
+**The options being wrong is the exact failure `01a016be` exists for.** The
+asker collapses an open question into guesses before the operator has said
+anything, and when the guess is wrong the only ways out are pressing the closest
+button or dismissing — both of which lose the answer. That spec's ruling was
+that the operator should not be limited to guesses, and it applies to a ruling
+just as much as to an interview.
+
+So any pending request can now be answered in the operator's own words. It is
+recorded under one reserved key, carries the same `answered` action, and reaches
+the worker through the delivery an interview already uses — one answer shape,
+one audit trail, one format, rather than a second of each.
+
 ### 35. Deployment evidence is the operator's chore, and a task claims COMPLETED without it
 
 Raised as: "I shouldn't be managing this — that is part of marking something
