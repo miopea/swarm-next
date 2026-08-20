@@ -36,6 +36,10 @@
      tone that sits 14 dE from the resting grey — technically different and
      indistinguishable at badge size. */
   --busy: #2f6b2a;
+  /* The operator is here. Its own hue, because it used to borrow the accent —
+     which is amber, 12 dE from the amber that means a worker is waiting on
+     them, and 5 dE in dark. Two states that mean opposite things read alike. */
+  --with-operator: #6f4bb8;
   --good-soft: #dce5d2;
   --sage-soft: var(--good-soft);
   --warn: #d69c28;
@@ -77,6 +81,7 @@
   --accent-soft: #443b24;
   --good: #9aaa89;
   --busy: #7fd070;
+  --with-operator: #b79bf0;
   --good-soft: #314333;
   --warn: #dfaa40;
   --warn-soft: #4a4026;
@@ -215,7 +220,7 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .worker-state-resting { --worker-state: var(--muted); }
 .worker-state-buzzing { --worker-state: var(--busy); }
 .worker-state-awaiting_operator { --worker-state: var(--warn); }
-.worker-state-with_operator { --worker-state: var(--accent-strong); }
+.worker-state-with_operator { --worker-state: var(--with-operator); }
 .worker-state-blocked { --worker-state: var(--bad); }
 .worker-row .presence { background: var(--worker-state); box-shadow: 0 0 0 3px color-mix(in srgb, var(--worker-state) 14%, transparent); }
 /* An unloaded worker is hollow. Sleeping and resting are both quiet greens, so

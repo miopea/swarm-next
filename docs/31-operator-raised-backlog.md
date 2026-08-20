@@ -476,6 +476,41 @@ for a restart, but replacing the engine also restarts the providers, and unlike
 an App and API release a provider update is installed and running **nowhere**
 until each worker restarts.
 
+### 37. "With you" and "awaiting you" were the same colour — *fixed*
+
+Raised as: "with you needs another colour? Maybe a purple? Right now it is the
+same as waiting."
+
+Measured: **12.5 dE apart in light and 5.0 in dark**. The dark case is close to
+no difference at all. Both were amber — `with_operator` borrowed
+`--accent-strong`, which sits beside the `--warn` that means a worker has
+stopped and is waiting on the operator. Two states that mean opposite things.
+
+Fixed with the suggested purple, giving its own token rather than borrowing
+one: 123 dE in light and 100 in dark, and well clear of the busy green and the
+resting grey too.
+
+### 38. A delivered prompt sits unsent while the provider is working — *fixed*
+
+Raised as: the prompt is still sometimes not hitting enter and sits there until
+pressed manually.
+
+Read from the live log rather than reproduced. At 02:47:38 a delivery was
+abandoned with `marker_is_visible=true` and `new_claude_paste_is_visible=true` —
+the message had demonstrably rendered, and Enter was withheld anyway.
+
+The confirmation required the marker to be visible **and the terminal's output
+sequence to stop advancing for 750ms**. That second condition asks a different
+question: it asks the provider to be idle. A provider that is thinking streams
+output continuously, so the sequence never settles, the delivery is never
+confirmed, and the message is left in the prompt — and a busy worker is exactly
+when automation delivers.
+
+Stability now measures how long **the delivery itself** has been continuously
+visible, which is the thing actually being waited for. The sequence-stability
+rule stays where it belongs: the check after submission, which genuinely does
+ask whether the provider came to rest.
+
 ### 36. A Needs-you request is an unreadable wall, and its options were not the answer — *fixed*
 
 Raised as: "this needs you is ridiculously long, block of text, impossible to

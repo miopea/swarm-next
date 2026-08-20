@@ -102,7 +102,7 @@ test("reads worker state as a scale rather than a palette", () => {
   // the operator, and held by the operator — shared one colour.
   expect(stylesheet).toContain(".worker-state-buzzing { --worker-state: var(--busy); }");
   expect(stylesheet).toContain(".worker-state-awaiting_operator { --worker-state: var(--warn); }");
-  expect(stylesheet).toContain(".worker-state-with_operator { --worker-state: var(--accent-strong); }");
+  expect(stylesheet).toContain(".worker-state-with_operator { --worker-state: var(--with-operator); }");
   expect(stylesheet).toContain(".worker-state-blocked { --worker-state: var(--bad); }");
   // Sleeping and resting are separated by fill, not hue, so the distinction
   // survives where colour does not.
@@ -144,4 +144,15 @@ test("spans a revealed task panel across the card instead of into a column", () 
   // span declared on the panel inside it does nothing, so the wrapper was
   // auto-placed into one of the card's named columns.
   expect(stylesheet).toContain(".task-card-panel { grid-column: 1 / -1; min-width: 0; }");
+});
+
+test("keeps with-you and awaiting-you from reading as the same state", () => {
+  // Raised as: "with you" needs another colour, right now it is the same as
+  // waiting. It was — both were amber, 12.5 dE apart in light and 5.0 in dark,
+  // which is close to no difference at all. They mean opposite things: one is
+  // the operator being present, the other is a worker stopped waiting for them.
+  expect(stylesheet).toContain("--with-operator: #6f4bb8;");
+  expect(stylesheet).toContain("--with-operator: #b79bf0;");
+  // Borrowing the accent is what put it next to the warning tone.
+  expect(stylesheet).not.toContain(".worker-state-with_operator { --worker-state: var(--accent-strong); }");
 });

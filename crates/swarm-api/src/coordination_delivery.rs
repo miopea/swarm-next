@@ -58,6 +58,10 @@ struct SequenceStability {
 }
 
 impl SequenceStability {
+    /// Whether the terminal has stopped producing output for `required`.
+    ///
+    /// Used after submission, where the question genuinely is whether the
+    /// provider settled.
     fn observe(&mut self, sequence: u64, now: Instant, required: Duration) -> bool {
         if self.sequence != Some(sequence) {
             self.sequence = Some(sequence);
@@ -71,6 +75,33 @@ impl SequenceStability {
     fn reset(&mut self) {
         self.sequence = None;
         self.unchanged_since = None;
+    }
+}
+
+/// How long the delivery must be continuously observable before it is accepted.
+///
+/// This used to require the terminal's whole output sequence to stop advancing,
+/// which is a different claim: it asks the provider to be idle. A provider that
+/// is thinking streams output the entire time, so the sequence never settled,
+/// the delivery was never confirmed, and the message sat unsent in the prompt —
+/// which is exactly when automation delivers, and exactly what the operator
+/// kept finding.
+///
+/// What matters is that the written prompt is still there, not that nothing
+/// else moved. So this measures how long the delivery itself has been visible.
+#[derive(Debug, Default)]
+struct RenderStability {
+    visible_since: Option<Instant>,
+}
+
+impl RenderStability {
+    fn observe(&mut self, now: Instant, required: Duration) -> bool {
+        let since = *self.visible_since.get_or_insert(now);
+        now.duration_since(since) >= required
+    }
+
+    fn reset(&mut self) {
+        self.visible_since = None;
     }
 }
 
@@ -268,7 +299,7 @@ async fn observe_stable_marker(
     baseline_paste_placeholder: Option<&[u8]>,
 ) -> Result<MarkerObservation, swarm_terminal::IpcError> {
     let render_deadline = Instant::now() + Duration::from_secs(10);
-    let mut rendered_stability = SequenceStability::default();
+    let mut rendered_stability = RenderStability::default();
     loop {
         sleep(Duration::from_millis(50)).await;
         let snapshot = match client
@@ -307,11 +338,7 @@ async fn observe_stable_marker(
             .filter(|placeholder| Some(*placeholder) != baseline_paste_placeholder);
         let new_claude_paste_is_visible = new_claude_paste.is_some();
         if (marker_is_visible || new_claude_paste_is_visible)
-            && rendered_stability.observe(
-                snapshot.sequence,
-                Instant::now(),
-                Duration::from_millis(750),
-            )
+            && rendered_stability.observe(Instant::now(), Duration::from_millis(750))
         {
             return Ok(MarkerObservation::Rendered {
                 sequence: snapshot.sequence,
@@ -620,6 +647,70 @@ fn terminal_safe_text(value: &str) -> String {
 mod tests {
     use super::*;
     use swarm_terminal::{CanonicalTerminalState, JournalLimits, TerminalSize, TerminalSnapshot};
+
+    #[test]
+    fn a_delivery_is_confirmed_while_the_provider_keeps_working() {
+        // Observed 2026-08-20 02:47:38: marker visible, paste chip visible, and
+        // the delivery still went unconfirmed — so Enter was withheld and the
+        // message sat in the operator's prompt. The old rule waited for the
+        // terminal's sequence to stop advancing, which asks the provider to be
+        // idle. A provider that is thinking streams output the whole time,
+        // which is exactly when automation delivers.
+        let start = Instant::now();
+        let mut stability = RenderStability::default();
+
+        // Seen for the first time: not yet long enough to trust.
+        assert!(!stability.observe(start, Duration::from_millis(750)));
+        // Still there a moment later, while output keeps flowing around it.
+        assert!(!stability.observe(
+            start + Duration::from_millis(500),
+            Duration::from_millis(750)
+        ));
+        assert!(stability.observe(
+            start + Duration::from_millis(800),
+            Duration::from_millis(750)
+        ));
+    }
+
+    #[test]
+    fn losing_sight_of_a_delivery_starts_the_clock_again() {
+        // Reset is what keeps this honest: it measures how long the delivery
+        // has been continuously visible, not how long ago it first appeared.
+        let start = Instant::now();
+        let mut stability = RenderStability::default();
+        assert!(!stability.observe(start, Duration::from_millis(750)));
+
+        stability.reset();
+
+        assert!(!stability.observe(
+            start + Duration::from_millis(800),
+            Duration::from_millis(750)
+        ));
+        assert!(stability.observe(
+            start + Duration::from_millis(1_600),
+            Duration::from_millis(750)
+        ));
+    }
+
+    #[test]
+    fn acceptance_still_waits_for_the_terminal_to_settle() {
+        // The check after submission asks a genuinely different question —
+        // whether the provider came to rest — and keeps measuring the sequence.
+        let start = Instant::now();
+        let mut stability = SequenceStability::default();
+
+        assert!(!stability.observe(10, start, Duration::from_millis(750)));
+        assert!(!stability.observe(
+            11,
+            start + Duration::from_millis(800),
+            Duration::from_millis(750)
+        ));
+        assert!(stability.observe(
+            11,
+            start + Duration::from_millis(1_600),
+            Duration::from_millis(750)
+        ));
+    }
 
     /// Renders a message through the same canonical state a real terminal uses,
     /// at a given width, and reports whether the delivery marker survives.
