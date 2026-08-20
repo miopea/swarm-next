@@ -565,7 +565,7 @@ rule stopping a busy worker being handed more, but the task being briefed no
 longer counts against itself, and queue order no longer applies to work already
 under way.
 
-### 27. Pop-out duplicates the whole window instead of detaching one thing
+### 27. Pop-out duplicates the whole window instead of detaching one thing — *fixed*
 
 Raised as three parts:
 
@@ -575,6 +575,21 @@ Raised as three parts:
 - The item that was popped out should then be greyed out in the main window, or
   clicking it should focus the window that already holds it. Two copies of one
   surface is the outcome to avoid.
+
+Fixed. A detached window drops the navigation rail and the pop-out control, so
+it shows the one surface it was opened for. The opener remembers what it has
+detached: that surface reads as spoken for in the rail, and choosing it brings
+the existing window forward instead of drawing a second copy. A window the
+operator closed is forgotten on the way past, because browsers report closure
+only when asked and never announce it.
+
+One thing this turned up: `?surface=` already meant "open Swarm here", which is
+what a notification deep link carries. Reusing it for detaching would have
+opened notifications into a window with no navigation and no way out. An
+existing test caught it. Detaching now carries its own flag.
+
+The control's placement — the third part of the report — is unchanged and still
+open.
 
 ### 28. Queen automation reports a stuck review, and nothing moves it
 

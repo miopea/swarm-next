@@ -874,6 +874,21 @@ test("the phone names the task its worker is carrying, without taking a row for 
   expect(trigger).toHaveTextContent("Queen");
 });
 
+test("a detached window shows its surface and nothing else", async () => {
+  // Popping out produced a second copy of the whole app, which is
+  // indistinguishable from another window of the same thing. A window opened
+  // for one surface shows that surface, without navigation and without the
+  // control to pop out again.
+  window.history.replaceState({}, "", "/?surface=tasks&detached=1");
+  vi.stubGlobal("fetch", bootFetch());
+
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "Task board" })).toBeInTheDocument();
+  expect(screen.queryByRole("navigation", { name: "Swarm navigation" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Open .* in a new window/ })).not.toBeInTheDocument();
+});
+
 function bootFetch() {
   return vi.fn((input: string | URL | Request) => {
     const url = String(input);

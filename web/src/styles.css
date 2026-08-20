@@ -572,6 +572,12 @@ button:active:not(:disabled) { transform: translateY(1px); }
    span belongs here; `min-width: 0` stops a long reference or address forcing
    the card wider than its column and clipping at the edge. */
 .task-card-panel { grid-column: 1 / -1; min-width: 0; }
+/* A window detached to show one surface has no rail to leave room for. */
+.app-shell.detached-surface { grid-template-columns: 1fr; }
+/* A surface already open in its own window is shown as spoken for; clicking it
+   brings that window forward rather than drawing it a second time. */
+.surface-nav button[data-detached] { color: var(--muted); }
+.surface-nav button[data-detached] span::after { content: " ↗"; }
 .email-resolution-panel { grid-column: 1 / -1; display: grid; gap: 12px; margin-top: 8px; padding: 14px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--honey-soft) 24%, transparent); }
 .email-resolution-sources { display: grid; min-width: 0; gap: 7px; }
 .email-resolution-sources ul, .email-reply-targets { display: grid; margin: 0; padding: 0; gap: 5px; list-style: none; }

@@ -97,7 +97,12 @@ import { useWorkerRailWidth } from "./layout/useWorkerRailWidth";
 import { useModalFocus } from "./shared/useModalFocus";
 import { isExpectedRuntimeHandoff, requestRuntimeHandoff } from "./runtime/runtimeMaintenance";
 import { useRuntimeUpdate } from "./runtime/useRuntimeUpdate";
-import { openSurfaceWindow } from "./navigation/surfaceWindow";
+import {
+  detachedSurface,
+  focusDetachedSurface,
+  openSurfaceWindow,
+  surfaceIsDetached,
+} from "./navigation/surfaceWindow";
 import { measureRoutePaint } from "./runtime/routePaint";
 import { workerEngineMatches } from "./runtime/workerEngine";
 
@@ -149,6 +154,10 @@ export function App() {
   const { runtimeUpdates, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
   const [repository, setRepository] = useState<RepositoryState | null>();
   const [popoutBlocked, setPopoutBlocked] = useState(false);
+  // A window opened to show one surface shows exactly that: no navigation, no
+  // second copy of everything. Duplicating the whole app was what made a
+  // pop-out indistinguishable from another window of the same thing.
+  const detached = detachedSurface();
   const [surface, setSurface] = useState<Surface>(() => new URLSearchParams(window.location.search).has("jira") || readSettingsSection() ? "settings" : readSavedSurface());
   const [taskFocus, setTaskFocus] = useState<{ id: string; request: number }>();
   const [taskComposeRequest, setTaskComposeRequest] = useState(0);
@@ -631,6 +640,17 @@ export function App() {
     await perform(async () => setTasks(await reorderTasks(operatorToken, taskIds)));
   }
 
+  /**
+   * Shows a surface, unless it is already open in a window of its own — then
+   * that window comes forward. Two copies of one surface is what the pop-out
+   * was creating, and the rail is where the operator would otherwise make the
+   * second one.
+   */
+  function showSurface(next: Surface) {
+    if (next !== "settings" && focusDetachedSurface(next)) return;
+    setSurface(next);
+  }
+
   async function resumeQueenReview() {
     if (!operatorToken) return;
     setQueenAutomation(await runQueenAutomation(operatorToken));
@@ -999,8 +1019,8 @@ export function App() {
   }, [surface, activeSessionId]);
 
   return (
-    <main className={`app-shell${workerRail.resizing ? " resizing-rail" : ""}`} style={{ "--rail-width": `${workerRail.width}px` } as CSSProperties}>
-      <aside className={`control-rail surface-${surface}`} aria-label="Swarm navigation">
+    <main className={`app-shell${workerRail.resizing ? " resizing-rail" : ""}${detached ? " detached-surface" : ""}`} style={{ "--rail-width": `${workerRail.width}px` } as CSSProperties}>
+      {detached ? null : <aside className={`control-rail surface-${surface}`} aria-label="Swarm navigation">
         <div className="brand-lockup">
           <div className="brand-mark"><BeeMascot expression="available" /></div>
           <div className="brand-copy"><p className="eyebrow">Swarm Next</p><h1>Control room</h1><HiveContextIndicator identity={hiveIdentity} /></div>
@@ -1018,16 +1038,16 @@ export function App() {
         {operatorToken ? (
           <>
             <nav className={`surface-nav${federated ? " with-apiary" : ""}`} aria-label="Primary">
-              <button className={surface === "decisions" ? "selected" : ""} aria-current={surface === "decisions" ? "page" : undefined} onClick={() => setSurface("decisions")}>
+              <button className={surface === "decisions" ? "selected" : ""} aria-current={surface === "decisions" ? "page" : undefined} data-detached={surfaceIsDetached("decisions") || undefined} onClick={() => showSurface("decisions")}>
                 <span><DecisionIcon /> Needs you</span><small>{attentionCount}</small>
               </button>
-              <button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} onClick={() => setSurface("tasks")}>
+              <button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} data-detached={surfaceIsDetached("tasks") || undefined} onClick={() => showSurface("tasks")}>
                 <span><TaskIcon /> Tasks</span><small>{openTaskCount}</small>
               </button>
-              <button className={surface === "workers" ? "selected" : ""} aria-current={surface === "workers" ? "page" : undefined} aria-label={`Workers, ${liveWorkerCount} active of ${rosterWorkerCount}`} onClick={() => setSurface("workers")}>
+              <button className={surface === "workers" ? "selected" : ""} aria-current={surface === "workers" ? "page" : undefined} data-detached={surfaceIsDetached("workers") || undefined} aria-label={`Workers, ${liveWorkerCount} active of ${rosterWorkerCount}`} onClick={() => showSurface("workers")}>
                 <span><TerminalIcon /> Workers</span><small>{liveWorkerCount}/{rosterWorkerCount}</small>
               </button>
-              {federated ? <button className={`apiary-nav-button${surface === "apiary" ? " selected" : ""}`} aria-current={surface === "apiary" ? "page" : undefined} onClick={() => setSurface("apiary")}><span><ApiaryIcon /> Apiary</span>{pendingAssistCount ? <small aria-label={`${pendingAssistCount} pending help offer${pendingAssistCount === 1 ? "" : "s"}`}>{pendingAssistCount}</small> : null}</button> : null}
+              {federated ? <button className={`apiary-nav-button${surface === "apiary" ? " selected" : ""}`} aria-current={surface === "apiary" ? "page" : undefined} data-detached={surfaceIsDetached("apiary") || undefined} onClick={() => showSurface("apiary")}><span><ApiaryIcon /> Apiary</span>{pendingAssistCount ? <small aria-label={`${pendingAssistCount} pending help offer${pendingAssistCount === 1 ? "" : "s"}`}>{pendingAssistCount}</small> : null}</button> : null}
               <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => openSettings()}>
                 <span><SettingsIcon /> Settings</span>
               </button>
@@ -1146,7 +1166,7 @@ export function App() {
           )) : null}
         </div>
         <div className="rail-resize-handle" role="separator" aria-label="Resize worker area" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={480} aria-valuenow={workerRail.width} tabIndex={0} onPointerDown={workerRail.start} onPointerMove={workerRail.move} onPointerUp={workerRail.finish} onPointerCancel={workerRail.finish} onKeyDown={workerRail.resizeWithKeyboard} />
-      </aside>
+      </aside>}
 
       {/* Replacing the paint boundary on a workspace change prevents Chromium
           from retaining xterm's detached accelerated layer over the next view. */}
@@ -1201,7 +1221,7 @@ export function App() {
               />
             ) : null}
             {operatorToken && presence && <span className={`operator-presence-chip ${presence.mode}`} title={`Operator presence: ${presenceModeLabel(presence.mode)}`}><span className="state-dot" /><span>{presenceModeLabel(presence.mode)}</span></span>}
-            {operatorToken && (
+            {operatorToken && !detached && (
               <button
                 type="button"
                 className="icon-button popout-button"
