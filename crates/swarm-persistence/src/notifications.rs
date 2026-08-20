@@ -676,6 +676,7 @@ mod tests {
             kind: DecisionRequestKind::Input,
             urgency,
             title: "Need a decision",
+            summary: "Whether to proceed, and what it costs if we do not.",
             reason: "A bounded reason",
             risk: "",
             evidence: "",

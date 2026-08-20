@@ -2189,6 +2189,7 @@ impl TaskService {
                 kind: input.kind,
                 urgency: input.urgency,
                 title: &input.title,
+                summary: &input.summary,
                 reason: &input.reason,
                 risk: &input.risk,
                 evidence: &input.evidence,
@@ -2239,6 +2240,8 @@ pub struct DecisionRequestInput {
     pub kind: DecisionRequestKind,
     pub urgency: DecisionUrgency,
     pub title: String,
+    /// One or two sentences on what the operator is deciding.
+    pub summary: String,
     pub reason: String,
     pub risk: String,
     pub evidence: String,
@@ -2720,6 +2723,29 @@ mod tests {
         );
     }
 
+    /// A decision request with the fields this test does not vary.
+    fn decision_input(
+        task_id: Option<TaskId>,
+        kind: DecisionRequestKind,
+        title: &str,
+        actions: &[&str],
+    ) -> DecisionRequestInput {
+        DecisionRequestInput {
+            task_id,
+            kind,
+            urgency: DecisionUrgency::Normal,
+            title: title.into(),
+            summary: "Whether to proceed, and what it costs if we do not.".into(),
+            reason: "Two valid implementations remain".into(),
+            risk: String::new(),
+            evidence: "Both prototypes pass".into(),
+            suggested_action: actions[0].into(),
+            allowed_actions: actions.iter().map(|action| (*action).to_string()).collect(),
+            questions: Vec::new(),
+            deadline: None,
+        }
+    }
+
     #[test]
     fn decision_visibility_and_task_correlation_follow_agent_authority() {
         let (service, queen, worker) = setup();
@@ -2756,37 +2782,23 @@ mod tests {
         let worker_request = service
             .create_decision(
                 worker_principal,
-                &DecisionRequestInput {
-                    task_id: Some(assigned.id),
-                    kind: DecisionRequestKind::Input,
-                    urgency: DecisionUrgency::Normal,
-                    title: "Choose the safer path".into(),
-                    reason: "Two valid implementations remain".into(),
-                    risk: "The wrong choice adds migration work".into(),
-                    evidence: "Both prototypes pass".into(),
-                    suggested_action: "Use the durable variant".into(),
-                    allowed_actions: vec!["durable".into(), "minimal".into()],
-                    questions: Vec::new(),
-                    deadline: None,
-                },
+                &decision_input(
+                    Some(assigned.id),
+                    DecisionRequestKind::Input,
+                    "Choose the safer path",
+                    &["durable", "minimal"],
+                ),
             )
             .unwrap();
         service
             .create_decision(
                 queen_principal,
-                &DecisionRequestInput {
-                    task_id: None,
-                    kind: DecisionRequestKind::Approval,
-                    urgency: DecisionUrgency::TimeSensitive,
-                    title: "Approve release".into(),
-                    reason: "The release candidate is ready".into(),
-                    risk: String::new(),
-                    evidence: "All checks pass".into(),
-                    suggested_action: "Ship".into(),
-                    allowed_actions: vec!["ship".into(), "hold".into()],
-                    questions: Vec::new(),
-                    deadline: None,
-                },
+                &decision_input(
+                    None,
+                    DecisionRequestKind::Approval,
+                    "Approve release",
+                    &["ship", "hold"],
+                ),
             )
             .unwrap();
 
@@ -2811,6 +2823,7 @@ mod tests {
                     kind: DecisionRequestKind::Help,
                     urgency: DecisionUrgency::Normal,
                     title: "Foreign work".into(),
+                    summary: "Whether to proceed, and what it costs if we do not.".into(),
                     reason: "Should remain private".into(),
                     risk: String::new(),
                     evidence: String::new(),

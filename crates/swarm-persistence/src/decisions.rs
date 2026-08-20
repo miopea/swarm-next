@@ -9,12 +9,12 @@ use swarm_domain::{
     DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
     MAX_DECISION_QUESTION_HEADER_BYTES, MAX_DECISION_QUESTION_OPTION_BYTES,
     MAX_DECISION_QUESTION_OPTIONS, MAX_DECISION_QUESTION_TEXT_BYTES, MAX_DECISION_QUESTIONS,
-    MIN_DECISION_QUESTION_OPTIONS, TaskId, WorkerId, WorkerSessionId,
+    MAX_DECISION_SUMMARY_BYTES, MIN_DECISION_QUESTION_OPTIONS, TaskId, WorkerId, WorkerSessionId,
 };
 
 use super::{
-    DECISION_QUESTIONS_SCHEMA_VERSION, DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION, TaskStore,
-    TaskStoreError, insert_control_room_event,
+    DECISION_QUESTIONS_SCHEMA_VERSION, DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION,
+    DECISION_SUMMARY_SCHEMA_VERSION, TaskStore, TaskStoreError, insert_control_room_event,
 };
 
 /// Carries the questions an interview asks and the answers it collects.
@@ -24,6 +24,32 @@ use super::{
 ///
 /// # Errors
 /// Returns an error when the step cannot be applied.
+/// Carries the one or two sentences saying what the operator is deciding.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+pub(super) fn migrate_decision_summary(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let decisions_exist: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_requests')",
+        [],
+        |row| row.get(0),
+    )?;
+    let present: bool = decisions_exist
+        && transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('decision_requests') WHERE name = 'summary')",
+            [],
+            |row| row.get(0),
+        )?;
+    if decisions_exist && !present {
+        transaction.execute_batch(
+            "ALTER TABLE decision_requests ADD COLUMN summary TEXT NOT NULL DEFAULT '';",
+        )?;
+    }
+    transaction.pragma_update(None, "user_version", DECISION_SUMMARY_SCHEMA_VERSION)
+}
+
 pub(super) fn migrate_decision_questions(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -132,6 +158,8 @@ pub struct NewDecisionRequest<'a> {
     pub kind: DecisionRequestKind,
     pub urgency: DecisionUrgency,
     pub title: &'a str,
+    /// One or two sentences on what the operator is deciding.
+    pub summary: &'a str,
     pub reason: &'a str,
     pub risk: &'a str,
     pub evidence: &'a str,
@@ -197,9 +225,10 @@ impl TaskStore {
         let inserted = transaction.execute(
             "INSERT INTO decision_requests (
                 id, hive_id, requesting_worker_id, task_id, kind, urgency, title, reason,
-                risk, evidence, suggested_action, allowed_actions, deadline, questions
+                risk, evidence, suggested_action, allowed_actions, deadline, questions,
+                summary
              )
-             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+             SELECT ?1, w.hive_id, w.id, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
              FROM worker_profiles w
              JOIN local_hive_identity l ON l.hive_id = w.hive_id AND l.singleton = 1
              WHERE w.id = ?2
@@ -220,6 +249,7 @@ impl TaskStore {
                 actions,
                 request.deadline,
                 questions,
+                request.summary,
             ],
         )?;
         if inserted == 0 {
@@ -251,7 +281,7 @@ impl TaskStore {
                 "SELECT id, hive_id, requesting_worker_id, task_id, kind, urgency, title,
                         reason, risk, evidence, suggested_action, allowed_actions, deadline,
                         state, resolution_action, resolution_note, resolved_by_operator_id,
-                        resolution_surface, questions, resolution_answers,
+                        resolution_surface, questions, resolution_answers, summary,
                         created_at, updated_at, resolved_at,
                         (SELECT state FROM decision_deliveries WHERE decision_id = decision_requests.id)
                  FROM decision_requests WHERE id = ?1",
@@ -272,7 +302,7 @@ impl TaskStore {
             "SELECT d.id, d.hive_id, d.requesting_worker_id, d.task_id, d.kind, d.urgency, d.title,
                     reason, risk, evidence, suggested_action, allowed_actions, deadline,
                     state, resolution_action, resolution_note, resolved_by_operator_id,
-                    resolution_surface, questions, resolution_answers,
+                    resolution_surface, questions, resolution_answers, summary,
                     created_at, updated_at, resolved_at,
                     (SELECT state FROM decision_deliveries WHERE decision_id = d.id)
              FROM decision_requests d
@@ -661,6 +691,14 @@ fn validate_new_request(request: &NewDecisionRequest<'_>) -> Result<(), TaskStor
         request.evidence,
         request.suggested_action,
     ];
+    // The summary is what the operator reads first and, often, only. It is
+    // required and tightly bounded because reason, risk and evidence are each
+    // capped at ten thousand characters and routinely run to thousands — about
+    // five thousand characters to read before a decision can be made. A cap
+    // that generous invites the argument to stand in for the ask.
+    if request.summary.trim().is_empty() || request.summary.len() > MAX_DECISION_SUMMARY_BYTES {
+        return Err(TaskStoreError::InvalidDecisionSummary);
+    }
     if request.title.is_empty()
         || request.reason.is_empty()
         || request.suggested_action.is_empty()
@@ -765,11 +803,12 @@ fn decision_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionReques
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
         resolution_answers: serde_json::from_str(&row.get::<_, String>(19)?)
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
-        created_at: row.get(20)?,
-        updated_at: row.get(21)?,
-        resolved_at: row.get(22)?,
+        summary: row.get(20)?,
+        created_at: row.get(21)?,
+        updated_at: row.get(22)?,
+        resolved_at: row.get(23)?,
         delivery_state: row
-            .get::<_, Option<String>>(23)?
+            .get::<_, Option<String>>(24)?
             .map(|value| DecisionDeliveryState::from_str(&value))
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidQuery)?,
@@ -791,6 +830,7 @@ mod tests {
             kind: DecisionRequestKind::Input,
             urgency: DecisionUrgency::Normal,
             title: "Choose the rollout window",
+            summary: "Whether to proceed, and what it costs if we do not.",
             reason: "The change is ready but needs operator timing.",
             risk: "An active user could see a brief reconnect.",
             evidence: "All automated checks passed.",
@@ -919,6 +959,44 @@ mod tests {
         assert_eq!(resolved.resolution_surface, "inbox_interview");
         // Delivered back to the asker the same way a ruling is.
         assert_eq!(resolved.delivery_state, Some(DecisionDeliveryState::Queued));
+    }
+
+    #[test]
+    fn a_request_must_say_what_the_operator_is_deciding_and_say_it_briefly() {
+        // Raised as: the assessment is way too long and does not give a concise
+        // analysis of what is being decided. Measured on the live inbox, a
+        // single request ran to roughly five thousand characters across reason,
+        // risk and evidence — each of which is capped at ten thousand. A cap
+        // that generous lets the argument stand in for the ask.
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace").unwrap();
+        let actions = ["ship".to_owned()];
+
+        assert!(matches!(
+            store.create_decision_request(&NewDecisionRequest {
+                summary: "   ",
+                ..request(queen.id, &actions)
+            }),
+            Err(TaskStoreError::InvalidDecisionSummary)
+        ));
+        assert!(matches!(
+            store.create_decision_request(&NewDecisionRequest {
+                summary: &"x".repeat(MAX_DECISION_SUMMARY_BYTES + 1),
+                ..request(queen.id, &actions)
+            }),
+            Err(TaskStoreError::InvalidDecisionSummary)
+        ));
+
+        let created = store
+            .create_decision_request(&NewDecisionRequest {
+                summary: "Whether to ship tonight or wait for the mapping fix.",
+                ..request(queen.id, &actions)
+            })
+            .unwrap();
+        assert_eq!(
+            created.summary,
+            "Whether to ship tonight or wait for the mapping fix."
+        );
     }
 
     #[test]

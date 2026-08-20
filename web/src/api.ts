@@ -731,6 +731,8 @@ export type DecisionRequest = {
   kind: "input" | "approval" | "credentials" | "conflict" | "help";
   urgency: "normal" | "time_sensitive";
   title: string;
+  /** What the operator is deciding, in one or two sentences. */
+  summary?: string;
   reason: string;
   risk: string;
   evidence: string;

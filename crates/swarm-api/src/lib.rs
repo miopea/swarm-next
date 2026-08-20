@@ -6571,6 +6571,11 @@ fn email_attachment_error(error: email_attachments::EmailAttachmentError) -> Api
 #[allow(clippy::too_many_lines)]
 fn task_store_error(error: &TaskStoreError) -> ApiError {
     match error {
+        TaskStoreError::InvalidDecisionSummary => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_decision_summary",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidDecisionQuestions => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_decision_questions",
@@ -11993,6 +11998,7 @@ mod tests {
                 kind: swarm_domain::DecisionRequestKind::Approval,
                 urgency: swarm_domain::DecisionUrgency::TimeSensitive,
                 title: "Approve the release",
+                summary: "Whether to proceed, and what it costs if we do not.",
                 reason: "The candidate is ready",
                 risk: "Users wait if held",
                 evidence: "All checks pass",
@@ -12009,6 +12015,7 @@ mod tests {
                 kind: swarm_domain::DecisionRequestKind::Approval,
                 urgency: swarm_domain::DecisionUrgency::Normal,
                 title: "Review an obsolete request",
+                summary: "Whether to proceed, and what it costs if we do not.",
                 reason: "The underlying work changed",
                 risk: "None; this request is stale",
                 evidence: "The operator already handled it elsewhere",
@@ -12116,6 +12123,7 @@ mod tests {
                 kind: swarm_domain::DecisionRequestKind::Approval,
                 urgency: swarm_domain::DecisionUrgency::Normal,
                 title: "Approve the release",
+                summary: "Whether to proceed, and what it costs if we do not.",
                 reason: "The candidate is ready",
                 risk: "Users wait if held",
                 evidence: "All checks pass",
@@ -12253,6 +12261,7 @@ mod tests {
                 kind: swarm_domain::DecisionRequestKind::Approval,
                 urgency: swarm_domain::DecisionUrgency::Normal,
                 title: "Approve the release",
+                summary: "Whether to proceed, and what it costs if we do not.",
                 reason: "The candidate is ready",
                 risk: "Users wait if held",
                 evidence: "All checks pass",

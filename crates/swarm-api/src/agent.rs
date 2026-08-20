@@ -466,6 +466,7 @@ impl ServerHandler for AgentMcp {
                                 kind: input.kind,
                                 urgency: input.urgency,
                                 title: input.title,
+                                summary: input.summary,
                                 reason: input.reason,
                                 risk: input.risk,
                                 evidence: input.evidence,
@@ -854,6 +855,11 @@ struct RequestDecisionInput {
     risk: String,
     #[serde(default)]
     evidence: String,
+    /// One or two sentences saying what the operator is deciding and what
+    /// turns on it. Required, and short: the reason, risk and evidence around
+    /// it may each run to ten thousand characters, and the operator reads this
+    /// first.
+    summary: String,
     suggested_action: String,
     /// Empty when the record is an interview: a record is one or the other.
     #[serde(default)]
@@ -890,14 +896,16 @@ fn request_decision_tool() -> Tool {
                 "kind": { "type": "string", "enum": ["input", "approval", "credentials", "conflict", "help"] },
                 "urgency": { "type": "string", "enum": ["normal", "time_sensitive"], "default": "normal" },
                 "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+                "summary": { "type": "string", "minLength": 1, "maxLength": 400, "description": "One or two sentences saying what the operator is deciding and what turns on it. This is what they read first and often the only part they read; reason, risk and evidence are the argument behind it, not a substitute for it." },
                 "reason": { "type": "string", "maxLength": 10000 },
                 "risk": { "type": "string", "maxLength": 10000, "default": "" },
                 "evidence": { "type": "string", "maxLength": 10000, "default": "" },
                 "suggested_action": { "type": "string", "maxLength": 80, "description": "The recommended button label. During Queen automation this must exactly match one allowed_actions value." },
+                "questions": { "type": "array", "maxItems": 4, "description": "Ask instead of guessing. Each question offers 2 to 4 options and a unique header; the operator may still answer with something none of them offered. A record carries questions or allowed_actions, never both.", "items": { "type": "object", "properties": { "header": { "type": "string", "maxLength": 40 }, "question": { "type": "string", "maxLength": 600 }, "options": { "type": "array", "minItems": 2, "maxItems": 4, "items": { "type": "string", "maxLength": 200 } }, "multi_select": { "type": "boolean", "default": false } }, "required": ["header", "question", "options"], "additionalProperties": false } },
                 "allowed_actions": { "type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "description": "Short, task-specific operator choices. Do not encode actions for other tasks.", "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
                 "deadline": { "type": ["integer", "null"] }
             },
-            "required": ["kind", "title", "reason", "suggested_action", "allowed_actions"],
+            "required": ["kind", "title", "summary", "reason", "suggested_action"],
             "additionalProperties": false
         }),
         false,
@@ -1664,6 +1672,7 @@ mod tests {
                     "kind": "approval",
                     "title": "Approve all queued work",
                     "reason": "Several tasks are waiting",
+                    "summary": "Whether to proceed, and what it costs if we do not.",
                     "suggested_action": "Dispatch all",
                     "allowed_actions": ["Dispatch all", "Hold all"]
                 })),
@@ -1687,6 +1696,7 @@ mod tests {
                     "kind": "approval",
                     "title": "Route this task",
                     "reason": "The repository owner is known",
+                    "summary": "Whether to proceed, and what it costs if we do not.",
                     "suggested_action": "Dispatch to Petal",
                     "allowed_actions": ["Approve", "Hold"]
                 })),
@@ -1710,6 +1720,7 @@ mod tests {
                     "kind": "approval",
                     "title": "Route this task to Petal",
                     "reason": "Petal owns the repository",
+                    "summary": "Whether to proceed, and what it costs if we do not.",
                     "suggested_action": "Dispatch to Petal",
                     "allowed_actions": ["Dispatch to Petal", "Hold this task"]
                 })),
@@ -2098,6 +2109,7 @@ mod tests {
                             "reason": "Two valid paths remain",
                             "risk": "A wrong choice adds migration work",
                             "evidence": "Both prototypes pass",
+                            "summary": "Whether to proceed, and what it costs if we do not.",
                             "suggested_action": "Use the durable path",
                             "allowed_actions": ["durable", "minimal"]
                         }

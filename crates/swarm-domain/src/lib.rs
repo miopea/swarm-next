@@ -600,6 +600,12 @@ pub struct DecisionRequest {
     pub kind: DecisionRequestKind,
     pub urgency: DecisionUrgency,
     pub title: String,
+    /// One or two sentences saying what the operator is deciding and what turns
+    /// on it. Bounded hard, because the reason, risk and evidence around it are
+    /// bounded at ten thousand characters each and routinely run to thousands —
+    /// roughly five thousand characters to read before a decision can be made.
+    #[serde(default)]
+    pub summary: String,
     pub reason: String,
     pub risk: String,
     pub evidence: String,

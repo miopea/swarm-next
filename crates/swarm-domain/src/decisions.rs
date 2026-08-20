@@ -214,3 +214,9 @@ pub const MAX_DECISION_QUESTION_OPTIONS: usize = 4;
 pub const MAX_DECISION_QUESTION_HEADER_BYTES: usize = 40;
 pub const MAX_DECISION_QUESTION_TEXT_BYTES: usize = 600;
 pub const MAX_DECISION_QUESTION_OPTION_BYTES: usize = 200;
+/// The most a decision's summary may run to.
+///
+/// Short enough that it has to be the decision rather than the argument for it:
+/// reason, risk and evidence are each capped at ten thousand characters and
+/// routinely run to thousands.
+pub const MAX_DECISION_SUMMARY_BYTES: usize = 400;

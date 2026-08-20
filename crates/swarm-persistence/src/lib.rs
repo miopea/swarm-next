@@ -124,7 +124,8 @@ const TASK_OPERATOR_INSTRUCTION_SCHEMA_VERSION: i64 = 75;
 const WORKER_REVIVAL_INTENT_SCHEMA_VERSION: i64 = 76;
 const DECISION_RESOLUTION_SURFACE_SCHEMA_VERSION: i64 = 77;
 const DECISION_QUESTIONS_SCHEMA_VERSION: i64 = 78;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_QUESTIONS_SCHEMA_VERSION;
+const DECISION_SUMMARY_SCHEMA_VERSION: i64 = 79;
+const CURRENT_SCHEMA_VERSION: i64 = DECISION_SUMMARY_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -241,6 +242,10 @@ pub enum TaskStoreError {
     DecisionNotFound,
     #[error("decision request content is invalid")]
     InvalidDecisionContent,
+    #[error(
+        "a decision request needs a summary of at most 400 characters saying what the operator is deciding and what turns on it"
+    )]
+    InvalidDecisionSummary,
     #[error("decision request must offer 1 to 6 unique actions")]
     InvalidDecisionActions,
     #[error(
@@ -1953,6 +1958,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < DECISION_QUESTIONS_SCHEMA_VERSION {
         decisions::migrate_decision_questions(transaction)?;
+    }
+    if schema_version < DECISION_SUMMARY_SCHEMA_VERSION {
+        decisions::migrate_decision_summary(transaction)?;
     }
     Ok(())
 }
@@ -4753,6 +4761,10 @@ mod tests {
         SchemaStep {
             table: "decision_requests",
             artifact: "questions",
+        },
+        SchemaStep {
+            table: "decision_requests",
+            artifact: "summary",
         },
     ];
 

@@ -1530,6 +1530,7 @@ mod tests {
                 kind: DecisionRequestKind::Input,
                 urgency: DecisionUrgency::Normal,
                 title: "Which reading of the number is right?",
+                summary: "Whether to proceed, and what it costs if we do not.",
                 reason: "The console and the wire disagree.",
                 risk: "",
                 evidence: "",

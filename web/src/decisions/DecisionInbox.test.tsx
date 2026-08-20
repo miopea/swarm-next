@@ -17,6 +17,7 @@ const pending: DecisionRequest = {
   reason: "Two valid paths remain",
   risk: "The wrong choice adds migration work",
   evidence: "Both prototypes pass",
+  summary: "Whether to take the durable route now or the minimal one and migrate later.",
   suggested_action: "Use the durable path",
   allowed_actions: ["durable_path", "minimal_path"],
   deadline: null,
@@ -350,4 +351,19 @@ test("will not send an empty answer in place of a button", () => {
 
   fireEvent.click(screen.getByRole("button", { name: "Say something else" }));
   expect(screen.getByRole("button", { name: "Send this instead" })).toBeDisabled();
+});
+
+test("leads with what is being decided and folds the argument behind it", () => {
+  // Raised as: the assessment is way too long and gives no concise analysis of
+  // what is being decided. On the live inbox one request ran to roughly five
+  // thousand characters of reason, risk and evidence.
+  render(
+    <DecisionInbox decisions={[pending]} tasks={[task]} workers={[worker]} busy={false} onResolve={vi.fn()} />,
+  );
+
+  expect(screen.getByText(/Whether to take the durable route now/)).toBeInTheDocument();
+  // The argument is present and not in the way.
+  const argument = screen.getByText("Why, and what it rests on");
+  expect(argument).toBeInTheDocument();
+  expect(argument.closest("details")).not.toHaveAttribute("open");
 });

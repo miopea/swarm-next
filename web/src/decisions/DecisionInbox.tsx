@@ -122,7 +122,15 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                   </div>
                   <span className={`decision-urgency ${decision.urgency}`}>{decision.urgency === "time_sensitive" ? "Time-sensitive" : "When ready"}</span>
                 </header>
-                <DecisionReason reason={decision.reason} />
+                {/* What is being decided comes first and stays short. The
+                    reason, risk and evidence are the argument behind it — on
+                    the live inbox they ran to about five thousand characters
+                    together — so they fold behind it rather than in front. */}
+                {decision.summary ? <p className="decision-summary">{decision.summary}</p> : null}
+                <details className="decision-argument">
+                  <summary>Why, and what it rests on</summary>
+                  <DecisionReason reason={decision.reason} />
+                </details>
                 <dl className="decision-context">
                   {decision.task_id && <div><dt>Task</dt><dd>{onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(decision.task_id!)}>{taskNames.get(decision.task_id) ?? "Linked task"}</button> : taskNames.get(decision.task_id) ?? "Linked task"}</dd></div>}
                   {decision.risk && <div><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" /></dd></div>}

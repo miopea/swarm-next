@@ -476,6 +476,29 @@ for a restart, but replacing the engine also restarts the providers, and unlike
 an App and API release a provider update is installed and running **nowhere**
 until each worker restarts.
 
+### 39. Queen's assessment is long and never says what is being decided — *fixed*
+
+Raised as: replying with anything is better, but her assessment on the Needs-you
+page is still way too long and gives no concise analysis of what is being
+decided.
+
+Measured on the live inbox — the three most recent requests carried **4,857,
+5,500 and 5,409 characters** across title, reason, risk and evidence. Each of
+those fields is capped at ten thousand characters, and a cap that generous lets
+the argument stand in for the ask. There was no field for the ask at all: the
+reason was doing double duty as both.
+
+Fixed by adding one, required and bounded to 400 characters: what the operator
+is deciding and what turns on it. The card leads with it and folds the reason
+behind "Why, and what it rests on", so the argument is present without being in
+the way.
+
+Requiring it is deliberate. An optional field would go unused by exactly the
+askers who most need it, and the error says what is wanted rather than that
+something is missing. The tool schema now also describes the interview
+questions array from item `01a016be`, which was accepted by the API but never
+advertised.
+
 ### 37. "With you" and "awaiting you" were the same colour — *fixed*
 
 Raised as: "with you needs another colour? Maybe a purple? Right now it is the
@@ -634,9 +657,25 @@ whether a reply was written but never sent — drafting is not answering. It doe
 not send anything; the reply is still written and reviewed on the task, where
 the thread and the deployment evidence are.
 
-Still undecided, and still the operator's: whether a worker should draft the
-reply as part of finishing, and whether completion should be refused without
-one.
+**Operator ruling, 2026-08-20:** *"When Tim sends via email, I shouldn't have to
+go digging through tasks to close it out. And the system made me generate a
+reply instead of doing it automatically. That whole process should be part of
+the agent working on it."*
+
+So the reply belongs to the worker, as part of doing the work — not to the
+operator afterwards. That settles both questions this item left open, and it
+settles item 35 the same way: the agent that did the work owns the evidence and
+the answer, because it is the only actor that has them.
+
+What that needs, none of which exists yet:
+
+- A worker-facing tool to draft the reply, since the MCP surface has nothing for
+  email at all.
+- The briefing for an email-sourced task to say that a person is waiting and a
+  reply is part of finishing.
+- The operator's role reduced to reviewing and sending, which is where the
+  existing panel is already good — not to writing it from scratch after hunting
+  for the task.
 
 ### 33. The completed email task's panels overlap and run off the card
 
