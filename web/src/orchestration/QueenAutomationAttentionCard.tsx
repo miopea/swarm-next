@@ -11,16 +11,18 @@ import {
 type Props = {
   status: QueenAutomationStatus | undefined;
   coveredBySpecificDecision?: boolean;
+  /** Whether one of Queen's own requests is actually waiting to be answered. */
+  queenRequestPending?: boolean;
   onOpenQueen: () => void;
   onReviewSettings: () => void;
   /** Resumes the review. Absent when there is nothing to resume. */
   onRetry?: () => Promise<void>;
 };
 
-export default function QueenAutomationAttentionCard({ status, coveredBySpecificDecision = false, onOpenQueen, onReviewSettings, onRetry }: Props) {
+export default function QueenAutomationAttentionCard({ status, coveredBySpecificDecision = false, queenRequestPending = false, onOpenQueen, onReviewSettings, onRetry }: Props) {
   const [retrying, setRetrying] = useState(false);
   const [failed, setFailed] = useState(false);
-  if (!queenAutomationNeedsAttention(status) || coveredBySpecificDecision) return null;
+  if (!queenAutomationNeedsAttention(status, queenRequestPending) || coveredBySpecificDecision) return null;
   // The card said what was wrong in three places and offered no way to end it;
   // the only control that resolved this lived in settings. Opening Queen stays
   // first, because the message asks the operator to check her terminal before

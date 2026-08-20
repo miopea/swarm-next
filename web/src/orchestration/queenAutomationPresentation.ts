@@ -59,7 +59,24 @@ export function queenAutomationStateTone(status: QueenAutomationStatus | undefin
   return "waiting";
 }
 
-export function queenAutomationNeedsAttention(status: QueenAutomationStatus | undefined) {
-  return status?.state === "uncertain"
-    || (status?.state === "completed" && status.outcome === "needs_operator");
+/**
+ * Whether Queen's automation needs the operator.
+ *
+ * `needs_operator` is a claim about something they can act on, so it only holds
+ * while one of her requests is actually pending. Without that check the control
+ * room told the operator she had "filed a request and stopped" when she had
+ * filed nothing — a card that reappeared on every run, said to open her, and
+ * had nothing behind it when they did.
+ *
+ * `uncertain` is different and still stands on its own: a delivery nobody could
+ * confirm is a real stall whether or not anything was filed.
+ */
+export function queenAutomationNeedsAttention(
+  status: QueenAutomationStatus | undefined,
+  queenRequestPending = false,
+) {
+  if (status?.state === "uncertain") return true;
+  return status?.state === "completed"
+    && status.outcome === "needs_operator"
+    && queenRequestPending;
 }

@@ -24,5 +24,15 @@ test("only treats interrupted or operator-blocked Queen reviews as attention", (
   expect(queenAutomationNeedsAttention({ ...idle, state: "completed", outcome: "completed" })).toBe(false);
   expect(queenAutomationNeedsAttention({ ...idle, state: "completed", outcome: "no_action" })).toBe(false);
   expect(queenAutomationNeedsAttention({ ...idle, state: "uncertain" })).toBe(true);
-  expect(queenAutomationNeedsAttention({ ...idle, state: "completed", outcome: "needs_operator" })).toBe(true);
+
+  // "Queen needs you" is a claim about something the operator can act on, so it
+  // only holds while one of her requests is actually pending. Without that the
+  // control room said she had "filed a request and stopped" when she had filed
+  // nothing, on every run, with nothing behind it when the operator opened her.
+  const blocked = { ...idle, state: "completed", outcome: "needs_operator" } as const;
+  expect(queenAutomationNeedsAttention(blocked)).toBe(false);
+  expect(queenAutomationNeedsAttention(blocked, true)).toBe(true);
+
+  // An unconfirmed delivery is a real stall either way, and is untouched.
+  expect(queenAutomationNeedsAttention({ ...idle, state: "uncertain" }, false)).toBe(true);
 });

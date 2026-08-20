@@ -551,7 +551,15 @@ test("notification navigation overrides a previously saved surface", async () =>
   expect(screen.getByRole("button", { name: "Needs you 0" })).toHaveAttribute("aria-current", "page");
 });
 
-test("makes an operator-blocked Queen review first-class attention", async () => {
+/**
+ * The operator kept seeing "Queen needs you", opened her, and found nothing.
+ * This fixture is exactly that state: a review finished reporting
+ * needs_operator, with no pending request from Queen anywhere.
+ *
+ * It used to produce a card saying she had filed a request and stopped. It
+ * should produce nothing, because there is nothing to resolve.
+ */
+test("does not invent a Queen request that was never filed", async () => {
   const queenSession = "019fedfc-1c30-70e1-a5e2-9a3c94268093";
   const queen = {
     id: "worker-queen",
@@ -600,12 +608,11 @@ test("makes an operator-blocked Queen review first-class attention", async () =>
 
   render(<App />);
 
-  const needsYou = await screen.findByRole("button", { name: "Needs you 1" });
+  // Nothing is waiting, so the queue says so rather than counting a phantom.
+  const needsYou = await screen.findByRole("button", { name: "Needs you 0" });
   fireEvent.click(needsYou);
-  expect(await screen.findByRole("heading", { name: "Queen needs you" })).toBeInTheDocument();
-  expect(screen.getByRole("tab", { name: "Needs you 1" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Open Queen" }));
-  expect(await screen.findByText("Terminal ready")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Nothing needs your attention" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Queen needs you" })).not.toBeInTheDocument();
 });
 test("keyboard shortcuts switch workspaces but pause while editing a field", async () => {
   // Deliberately not bootFetch: this test navigates into Settings, which calls

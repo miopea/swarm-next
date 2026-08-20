@@ -931,7 +931,13 @@ export function App() {
   const pendingAssistCount = stewardAssists?.incoming?.filter((request) => request.state === "pending").length ?? 0;
   const queenWorkerId = workers.find((worker) => worker.role === "queen")?.id;
   const pendingQueenDecisionCount = decisions.filter((decision) => decision.state === "pending" && decision.requesting_worker_id === queenWorkerId).length;
-  const queenAutomationAttentionCount = queenAutomationNeedsAttention(queenAutomation) && pendingQueenDecisionCount === 0 ? 1 : 0;
+  // Counted only when it is not already counted as the specific request it
+  // refers to, so one thing needing the operator is one item in the queue.
+  const queenAutomationAttentionCount =
+    queenAutomationNeedsAttention(queenAutomation, pendingQueenDecisionCount > 0)
+      && pendingQueenDecisionCount === 0
+      ? 1
+      : 0;
   const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
     + (awaitingReply.length > 0 ? 1 : 0);
   const orphanSessions = useMemo(
@@ -1426,7 +1432,7 @@ export function App() {
               additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + (awaitingReply.length > 0 ? 1 : 0)}
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
-                <QueenAutomationAttentionCard status={queenAutomation} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-queen")} onRetry={resumeQueenReview} />
+                <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-queen")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
               </>}
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}

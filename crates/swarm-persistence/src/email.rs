@@ -632,10 +632,28 @@ impl TaskStore {
             [&id],
             email_reply_from_row,
         )?;
+        // One reply per person, on the thread they wrote in most recently.
+        //
+        // Every linked message used to become a target, so a task merged from
+        // five messages by one person offered to send that person five
+        // identical emails. Merging is what the operator did to make it one
+        // piece of work; answering it five times undoes that where it is most
+        // visible — in their inbox.
+        //
+        // Keyed by sender address rather than by thread, so a task merged from
+        // several people still answers each of them, once.
         let source_ids = {
             let mut statement = transaction.prepare(
-                "SELECT id FROM email_message_links WHERE task_id = ?1
-                 ORDER BY received_at, imported_at, id",
+                "SELECT id FROM email_message_links source
+                 WHERE source.task_id = ?1
+                   AND source.id = (
+                       SELECT newest.id FROM email_message_links newest
+                       WHERE newest.task_id = source.task_id
+                         AND newest.sender_address = source.sender_address
+                       ORDER BY newest.received_at DESC, newest.imported_at DESC, newest.id DESC
+                       LIMIT 1
+                   )
+                 ORDER BY source.received_at, source.imported_at, source.id",
             )?;
             statement
                 .query_map([task_id.to_string()], |row| row.get::<_, String>(0))?
@@ -2195,5 +2213,55 @@ mod tests {
             ),
             Err(TaskStoreError::InvalidTaskDeployment)
         ));
+    }
+
+    /// The operator's screenshot: "Send this reply to 5 original threads?"
+    /// listing Bradford Schleifer five times, one per merged message. Merging
+    /// is what made it one piece of work; answering it five times undoes that
+    /// in the place it shows most — their inbox.
+    #[test]
+    fn a_ticket_merged_from_one_person_is_answered_once() {
+        let store = TaskStore::in_memory().unwrap();
+        // Five messages from one person, imported as one merged task.
+        let ids = ["AAMk-1", "AAMk-2", "AAMk-3", "AAMk-4", "AAMk-5"];
+        let merged: Vec<_> = ids
+            .iter()
+            .enumerate()
+            .map(|(index, message_id)| {
+                let mut snapshot = message(&[]);
+                snapshot.message_id = message_id;
+                snapshot.internet_message_id = None;
+                snapshot.received_at = 1_786_730_000 + i64::try_from(index).unwrap_or(0) * 100;
+                snapshot
+            })
+            .collect();
+        let imported = store
+            .import_email_messages(
+                &merged,
+                &EmailTaskDraft {
+                    title: "Re: Adjustment Request",
+                    description: "",
+                    priority: TaskPriority::Normal,
+                    worker_id: None,
+                    state: TaskState::Draft,
+                },
+            )
+            .unwrap();
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+        store
+            .record_task_deployment(imported.task.id, "production", "release-60", 1_786_730_500)
+            .unwrap();
+
+        store
+            .prepare_email_reply(imported.task.id, "Thank you — this is fixed and released.")
+            .unwrap();
+
+        let reply = store
+            .email_reply_for_task(imported.task.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reply.targets.len(), 1, "one person, one reply");
     }
 }

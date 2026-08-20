@@ -23,7 +23,7 @@ const status: QueenAutomationStatus = {
 test("routes an operator-blocked review to Queen or its settings", () => {
   const onOpenQueen = vi.fn();
   const onReviewSettings = vi.fn();
-  render(<QueenAutomationAttentionCard status={status} onOpenQueen={onOpenQueen} onReviewSettings={onReviewSettings} />);
+  render(<QueenAutomationAttentionCard status={status} queenRequestPending onOpenQueen={onOpenQueen} onReviewSettings={onReviewSettings} />);
 
   expect(screen.getByRole("heading", { name: "Queen needs you" })).toBeInTheDocument();
   // Worded for this surface: the Needs-you card answers "what wants me and
@@ -93,4 +93,28 @@ test("says something different from the settings panel about the same state", ()
 
   expect(screen.getByText(/Check her terminal, then resume it/)).toBeInTheDocument();
   expect(screen.queryByText(/Retry resumes this same review/)).not.toBeInTheDocument();
+});
+
+test("says nothing when Queen reports needing the operator and filed nothing", () => {
+  // The operator kept opening Queen from this card and finding nothing there.
+  // She had reported needs_operator without filing a request, and the card
+  // repeated the claim on every run: "Queen filed a request and stopped."
+  //
+  // A claim about something the operator can act on only holds while something
+  // is actually waiting for them.
+  const { container } = render(
+    <QueenAutomationAttentionCard status={status} onOpenQueen={() => undefined} onReviewSettings={() => undefined} />,
+  );
+
+  expect(container).toBeEmptyDOMElement();
+});
+
+test("an unconfirmed delivery still speaks for itself", () => {
+  // Different case, deliberately untouched: nobody could confirm the review
+  // reached Queen. That is a real stall whether or not anything was filed.
+  render(
+    <QueenAutomationAttentionCard status={{ ...status, state: "uncertain" }} onOpenQueen={() => undefined} onReviewSettings={() => undefined} />,
+  );
+
+  expect(screen.getByRole("heading")).toBeInTheDocument();
 });

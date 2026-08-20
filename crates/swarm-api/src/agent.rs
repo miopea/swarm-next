@@ -1757,8 +1757,12 @@ mod tests {
             finished["result"]["structuredContent"]["state"],
             "completed"
         );
+        // Queen reported needing the operator without filing anything for them
+        // to answer, so the claim does not stand. Recorded as what actually
+        // happened — a finished run with nothing outstanding — rather than as a
+        // request the operator can neither find nor resolve.
         let status = store.queen_automation_status(13).unwrap();
-        assert_eq!(status.outcome, Some(QueenAutomationOutcome::NeedsOperator));
+        assert_eq!(status.outcome, Some(QueenAutomationOutcome::NoAction));
     }
 
     #[test]

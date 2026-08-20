@@ -426,6 +426,35 @@ impl TaskStore {
     ) -> Result<bool, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        // "I need the operator" is a claim about something they can act on, so
+        // it only holds while something is actually waiting for them. Queen
+        // reported it with no pending request of her own and the control room
+        // then said she had "filed a request and stopped" when she had filed
+        // nothing — a card with nothing behind it, which came back on every run
+        // and could not be resolved by opening her.
+        //
+        // Downgraded rather than refused: the run really did finish, and
+        // leaving it stuck in 'running' to punish a bad outcome would be worse
+        // than recording what actually happened.
+        let outcome = match outcome {
+            QueenAutomationOutcome::NeedsOperator => {
+                let waiting: bool = transaction.query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM decision_requests decision
+                         JOIN worker_profiles worker ON worker.id = decision.requesting_worker_id
+                         WHERE decision.state = 'pending' AND worker.role = 'queen'
+                     )",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if waiting {
+                    QueenAutomationOutcome::NeedsOperator
+                } else {
+                    QueenAutomationOutcome::NoAction
+                }
+            }
+            other => other,
+        };
         let changed = transaction.execute(
             "UPDATE queen_automation SET state = 'completed', outcome = ?2, finished_at = ?3,
                  delivered_fingerprint = pending_fingerprint, pending_fingerprint = NULL, updated_at = ?3
@@ -1218,5 +1247,83 @@ mod tests {
             store.queen_automation_status(702).unwrap().actionable_count,
             0
         );
+    }
+
+    /// The operator kept seeing "Queen needs you", opened her, and found
+    /// nothing. Her own panel said "0 worker cases needing judgment" while the
+    /// card said she had filed a request and stopped. Re-running reproduced it.
+    ///
+    /// The claim was never checked against anything. "I need the operator" is a
+    /// statement about something they can act on, so it only holds while
+    /// something is actually waiting for them.
+    #[test]
+    fn queen_cannot_report_needing_the_operator_with_nothing_waiting() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.request_queen_automation_run(10).unwrap();
+        let delivery = store.claim_queen_automation(11).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&delivery.run_id, 12)
+            .unwrap();
+
+        assert!(
+            store
+                .finish_queen_automation_run(
+                    &delivery.run_id,
+                    QueenAutomationOutcome::NeedsOperator,
+                    13,
+                )
+                .unwrap()
+        );
+
+        // The run finished — it really did happen — but it does not leave a
+        // request behind that nobody can find.
+        let status = store.queen_automation_status(14).unwrap();
+        assert_eq!(status.state, QueenAutomationState::Completed);
+        assert_eq!(status.outcome, Some(QueenAutomationOutcome::NoAction));
+    }
+
+    /// And when something genuinely is waiting, the claim stands.
+    #[test]
+    fn queen_reports_needing_the_operator_when_her_request_is_pending() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store
+            .create_decision_request(&crate::NewDecisionRequest {
+                requesting_worker_id: queen.id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Input,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Which repository owns this?",
+                summary: "Two repositories both look like the owner of this work.",
+                reason: "The change touches both.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Route to the platform repository",
+                allowed_actions: &["Route to the platform repository".to_owned()],
+                questions: &[],
+                deadline: None,
+            })
+            .unwrap();
+        store.request_queen_automation_run(10).unwrap();
+        let delivery = store.claim_queen_automation(11).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&delivery.run_id, 12)
+            .unwrap();
+
+        store
+            .finish_queen_automation_run(
+                &delivery.run_id,
+                QueenAutomationOutcome::NeedsOperator,
+                13,
+            )
+            .unwrap();
+
+        let status = store.queen_automation_status(14).unwrap();
+        assert_eq!(status.outcome, Some(QueenAutomationOutcome::NeedsOperator));
     }
 }
