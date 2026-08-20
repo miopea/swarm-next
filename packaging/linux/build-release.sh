@@ -5,7 +5,31 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 base_version=$(sed -n 's/^version = "\([0-9][0-9.]*\)"/\1/p' "$repo_root/Cargo.toml" | tr -d '\r' | head -n 1)
 revision=$(git -C "$repo_root" rev-parse --short=12 HEAD)
 source_revision=${SWARM_SOURCE_REVISION:-$revision}
-version="$base_version-$revision"
+# A release is a plain semantic version and nothing else, so that two of them
+# can be compared. It used to carry the revision as well, which made every
+# release incomparable to every other and left an updater with nothing to go on.
+#
+# The tag is what declares a release, so the tag is where the number comes from.
+# Refusing an untagged build is the point: a version nobody declared is a
+# version nobody can reason about later.
+# Captured without a pipe: a pipeline reports the last command's status, so
+# piping git through sed would hide the very failure being checked for.
+release_tag=$(git -C "$repo_root" describe --exact-match --tags HEAD 2>/dev/null) || {
+  echo "refusing to package a release from an untagged commit: tag it first, for example 'git tag -a v$base_version -m \"Swarm $base_version\"'" >&2
+  exit 1
+}
+version=${release_tag#v}
+case "$version" in
+  [0-9]*.[0-9]*.[0-9]*) ;;
+  *)
+    echo "release tag must be a semantic version such as v0.2.0, found '$version'" >&2
+    exit 1
+    ;;
+esac
+[ "$version" = "$base_version" ] || {
+  echo "release tag $version does not match the workspace version $base_version in Cargo.toml" >&2
+  exit 1
+}
 protocol=$(sed -n 's/^pub const PROTOCOL_VERSION: u16 = \([0-9][0-9]*\);/\1/p' "$repo_root/crates/swarm-terminal/src/ipc.rs" | tr -d '\r')
 worker_engine_build_id=$(sh "$repo_root/packaging/linux/worker-engine-build-id.sh" "$repo_root")
 [ -n "$base_version" ] && [ -n "$revision" ] && [ -n "$source_revision" ] && [ -n "$protocol" ] && [ -n "$worker_engine_build_id" ] || { echo "could not determine package metadata" >&2; exit 1; }

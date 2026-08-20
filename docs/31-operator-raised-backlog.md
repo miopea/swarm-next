@@ -885,7 +885,28 @@ permanent.
 They are now forgotten once their work moves on. The mark still means what it
 says for work still waiting.
 
-### 43. Swarm Next needs a versioning system before others can use it
+### 43. Swarm Next needs a versioning system before others can use it — *fixed*
+
+Operator ruling: SemVer for releases, SHA for dev builds.
+
+A release now carries a plain semantic version and nothing else — `0.2.0`. It
+used to carry the revision too (`0.1.0-<sha12>`), which made every release
+incomparable to every other and left an updater with nothing to go on. A
+development build is unchanged: `0.1.0-dev-<sha12>-<stamp>-<pid>`, because that
+is exactly what it is and it should never be mistaken for a release.
+
+`SwarmVersion` in `swarm-domain` parses both and orders them. Two rules matter
+and are pinned by tests: releases order by number rather than as text, so 0.10.0
+supersedes 0.2.0; and a development build is never offered as an update to
+anyone, nor is anything offered as an update over one, because there is no
+telling what a working copy already contains.
+
+The tag is what declares a release, so the tag is where the number comes from.
+`build-release.sh` refuses an untagged commit, refuses a tag that is not a
+semantic version, and refuses a tag that disagrees with `Cargo.toml`. A version
+nobody declared is a version nobody can reason about later.
+
+
 
 Raised as: "we need to introduce a versioning system as we get close to opening
 Swarm Next to others."

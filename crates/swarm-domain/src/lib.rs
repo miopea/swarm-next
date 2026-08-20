@@ -6,12 +6,14 @@ mod apiary;
 mod control_room;
 mod decisions;
 mod tasks;
+mod version;
 mod workers;
 
 pub use apiary::*;
 pub use control_room::*;
 pub use decisions::*;
 pub use tasks::*;
+pub use version::{DevelopmentBuild, SwarmVersion};
 pub use workers::*;
 
 macro_rules! domain_id {
