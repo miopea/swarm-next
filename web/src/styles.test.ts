@@ -257,7 +257,11 @@ test("offers no detaching on a phone, and keeps the header's own text centred", 
   // A phone cannot usefully open a second window, so the pop-out controls do
   // not belong in its navigation row — making them permanently visible because
   // touch has no hover was the wrong answer to the right observation.
-  expect(stylesheet).toContain(".surface-nav-popout { display: none; }");
+  // Scoped to the nav, and that scoping is the point rather than a detail:
+  // this control is a button inside `.surface-nav`, whose own rule sets display
+  // at higher specificity. The unscoped version lost to it at every width, so
+  // the pop-out kept showing on phones and the rule looked correct in the file.
+  expect(stylesheet).toContain(".surface-nav .surface-nav-popout { display: none; }");
 
   // And a fixed height on a block button leaves its text wherever the padding
   // put it: Lock's label measured 3.5px below the centre of its own box.

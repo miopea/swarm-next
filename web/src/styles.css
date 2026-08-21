@@ -140,7 +140,11 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    the rail still reads as five destinations rather than ten controls. */
 .surface-nav-item { display: flex; min-width: 0; align-items: center; gap: 2px; }
 .surface-nav-item > button:first-child { flex: 1 1 auto; min-width: 0; }
-.surface-nav-popout { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border: 1px solid transparent; border-radius: 8px; opacity: 0; color: var(--muted); background: transparent; transition: opacity 120ms ease; }
+/* Scoped to the nav on purpose. This is a button inside `.surface-nav`, and
+   `.surface-nav button` sets its own display at higher specificity — an
+   unscoped rule here loses to it silently, which is how the mobile hide below
+   appeared to work and did not. */
+.surface-nav .surface-nav-popout { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border: 1px solid transparent; border-radius: 8px; opacity: 0; color: var(--muted); background: transparent; transition: opacity 120ms ease; }
 .surface-nav-item:hover .surface-nav-popout,
 .surface-nav-item:focus-within .surface-nav-popout,
 .surface-nav-item:has(> button.selected) .surface-nav-popout { opacity: 1; }
@@ -1570,7 +1574,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      there at all. Making these permanently visible because touch has no hover
      was the wrong answer to the right observation — it put five controls in the
      navigation row that do nothing a phone can use. */
-  .surface-nav-popout { display: none; }
+  .surface-nav .surface-nav-popout { display: none; }
   /* A detached window on a phone goes back to being the whole width. The rail
      gives it nothing here — its context is hidden at this width — so it stood
      as an empty column taking half the screen, which is what the operator was
