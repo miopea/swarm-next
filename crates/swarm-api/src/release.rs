@@ -85,6 +85,12 @@ pub(super) struct ReleaseStatusResponse {
     carries_new_worker_engine: bool,
     /// The verified, unpacked release waiting to be installed, if any.
     downloaded_version: Option<String>,
+    /// Why the install unit refused, when it did: `outside-downloads`,
+    /// `missing`, or `not-a-release`.
+    ///
+    /// It writes one and nothing read it, so a refusal reached the operator as
+    /// a bare "did not run" with the explanation sitting in a file.
+    apply_reason: Option<String>,
     /// What the install unit last reported: `installing`, `installed`,
     /// `failed`, or `refused`.
     ///
@@ -285,6 +291,11 @@ async fn build_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, Ap
             .is_some_and(|offer| offer.worker_engine_build_id != worker_engine_build_id()),
         upgrade_available,
         apply_state: apply_state(state, offer.as_ref().map(|offer| offer.version.as_str())),
+        apply_reason: apply_field(
+            state,
+            offer.as_ref().map(|offer| offer.version.as_str()),
+            "reason=",
+        ),
         downloaded_version: download_root(state)
             .as_deref()
             .and_then(|root| {
@@ -391,12 +402,18 @@ async fn fetch_manifest(
 
 /// What the install unit last wrote about itself.
 fn apply_state(state: &AppState, offered: Option<&str>) -> Option<String> {
+    apply_field(state, offered, "state=")
+}
+
+/// One field of the install unit's status, when the status is about the
+/// release in hand.
+fn apply_field(state: &AppState, offered: Option<&str>, field: &str) -> Option<String> {
     let path = state
         .release_state_root
         .as_ref()?
         .join("release-apply.status");
     let contents = std::fs::read_to_string(path).ok()?;
-    apply_state_from(&contents, offered)
+    apply_field_from(&contents, offered, field)
 }
 
 /// The rule, separated so it can be tested against this function rather than
@@ -407,13 +424,17 @@ fn apply_state(state: &AppState, offered: Option<&str>) -> Option<String> {
 /// with no version at all was written before stamping existed and is ignored
 /// rather than guessed at.
 fn apply_state_from(contents: &str, offered: Option<&str>) -> Option<String> {
+    apply_field_from(contents, offered, "state=")
+}
+
+fn apply_field_from(contents: &str, offered: Option<&str>, wanted: &str) -> Option<String> {
     let field = |name: &str| {
         contents
             .lines()
             .find_map(|line| line.strip_prefix(name).map(str::to_owned))
     };
     let version = field("version=")?;
-    (version == offered?).then(|| field("state="))?
+    (version == offered?).then(|| field(wanted))?
 }
 
 /// Records which signed artifact a download came from.

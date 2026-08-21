@@ -9,6 +9,19 @@ import {
   type ReleaseStatus,
 } from "../api";
 
+/**
+ * What the install unit's refusal codes mean.
+ *
+ * It records one and nothing read it, so a refusal reached the operator as a
+ * bare "did not run" with the explanation sitting in a file on disk.
+ */
+function refusalReason(code: string): string {
+  if (code === "outside-downloads") return "the request named a directory outside the download folder";
+  if (code === "missing") return "the downloaded release was no longer there";
+  if (code === "not-a-release") return "the downloaded directory is not a Swarm release";
+  return code;
+}
+
 type Props = {
   busy: boolean;
   operatorToken: string;
@@ -106,7 +119,11 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
           )}
           {status.offer?.notes_url && <p><a href={status.offer.notes_url} target="_blank" rel="noreferrer noopener">What changed in {status.offer.version}</a></p>}
           {status.apply_state === "failed" || status.apply_state === "refused" ? (
-            <p className="form-error" role="alert">The install did not run. Nothing was changed and this Hive is still on {status.current_version}. <code>journalctl --user -u swarm-release-apply.service -n 30</code> says why.</p>
+            <p className="form-error" role="alert">
+              The install did not run. Nothing was changed and this Hive is still on {status.current_version}.
+              {status.apply_reason ? <> Reason: <strong>{refusalReason(status.apply_reason)}</strong></> : null}
+              {" "}<code>journalctl --user -u swarm-release-apply.service -n 30</code> says more.
+            </p>
           ) : null}
           {installed && status.apply_state !== "failed" && status.apply_state !== "refused" ? (
             <p className="form-message" role="status">Installing. Swarm restarts the API on its own; this page reconnects when it answers again. If nothing changes after a minute, the install did not start — check <code>systemctl --user status swarm-release-apply.path</code>.</p>

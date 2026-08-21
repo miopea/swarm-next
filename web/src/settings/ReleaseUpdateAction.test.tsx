@@ -36,6 +36,7 @@ function status(overrides: Partial<ReleaseStatus> = {}): ReleaseStatus {
     carries_new_worker_engine: false,
     downloaded_version: null,
     apply_state: null,
+    apply_reason: null,
     ...overrides,
   };
 }
@@ -201,4 +202,16 @@ test("does not say that to an install running a release", async () => {
 
   expect(await screen.findByText("Check for new Swarm releases?")).toBeInTheDocument();
   expect(screen.queryByText(/builds from a working copy/)).not.toBeInTheDocument();
+});
+
+/** A refusal records why. Reaching the operator without it made a specific
+ *  failure read as a generic one. */
+test("says why the install unit refused, not just that it did", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({ downloaded_version: "0.2.0", apply_state: "refused", apply_reason: "not-a-release" }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText(/The install did not run/)).toBeInTheDocument();
+  expect(screen.getByText(/is not a Swarm release/)).toBeInTheDocument();
 });

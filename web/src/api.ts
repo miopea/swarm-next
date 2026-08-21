@@ -303,6 +303,8 @@ export type ReleaseStatus = {
   downloaded_version: string | null;
   /** What the install unit last reported, so a failure is visible. */
   apply_state: "installing" | "installed" | "failed" | "refused" | null;
+  /** Why it refused, when it did. */
+  apply_reason: string | null;
 };
 
 export async function fetchReleaseStatus(operatorToken: string): Promise<ReleaseStatus> {
