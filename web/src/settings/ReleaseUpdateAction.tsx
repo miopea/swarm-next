@@ -80,7 +80,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
 
   return (
     <article
-      className={`runtime-subsystem-card release-update-action ${status.stops_workers && offered ? "runtime-subsystem-attention" : "runtime-subsystem-safe"}`}
+      className="runtime-subsystem-card runtime-subsystem-safe release-update-action"
       aria-label="Release updates"
     >
       <header>
@@ -88,7 +88,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
           <span className="runtime-component-name">Updates</span>
           <strong>{offered ? `Swarm ${status.offer?.version} is available` : status.development_build ? "This Hive builds from a working copy" : "Swarm is up to date"}</strong>
         </div>
-        {offered && <span className={`runtime-status-badge ${status.stops_workers ? "attention" : "safe"}`}>{status.stops_workers ? "Stops workers" : "Workers stay online"}</span>}
+        {offered && <span className="runtime-status-badge safe">Workers stay online</span>}
       </header>
 
       {status.development_build && status.offer && (
@@ -97,19 +97,21 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
 
       {offered && !status.development_build && (
         <>
-          <p>
-            {status.stops_workers
-              ? "This release carries a different worker engine. Installing it stops every running worker, then brings back the ones that were loaded from their saved conversations."
-              : "This release keeps the same worker engine, so your workers stay online while it installs."}
-          </p>
+          <p>Installing this updates the app and API. Your workers keep running — Swarm restarts the API and leaves the terminal engine they are attached to alone.</p>
+          {status.carries_new_worker_engine && (
+            <p>It also carries a newer worker engine. That part is <strong>deferred while any worker is running</strong> and applied once they are idle, or when you ask for it from the worker engine card. Applying it restarts workers and brings back the ones loaded from their saved conversations.</p>
+          )}
           {status.offer?.notes_url && <p><a href={status.offer.notes_url} target="_blank" rel="noreferrer noopener">What changed in {status.offer.version}</a></p>}
-          {installed ? (
-            <p className="form-message" role="status">Installing. Swarm will restart on its own; this page reconnects when it answers again.</p>
+          {status.apply_state === "failed" || status.apply_state === "refused" ? (
+            <p className="form-error" role="alert">The install did not run. Nothing was changed and this Hive is still on {status.current_version}. <code>journalctl --user -u swarm-release-apply.service -n 30</code> says why.</p>
+          ) : null}
+          {installed && status.apply_state !== "failed" && status.apply_state !== "refused" ? (
+            <p className="form-message" role="status">Installing. Swarm restarts the API on its own; this page reconnects when it answers again. If nothing changes after a minute, the install did not start — check <code>systemctl --user status swarm-release-apply.path</code>.</p>
           ) : ready ? (
             confirming ? (
               <div className="maintenance-confirmation" role="group" aria-label="Confirm release install">
                 <strong>Install Swarm {status.offer?.version} now?</strong>
-                <span>{status.stops_workers ? "Every running worker stops and is brought back." : "Workers stay online."} Your Hive database, tasks and settings are kept, and the previous release is restored automatically if the new one does not answer.</span>
+                <span>Workers stay online.{status.carries_new_worker_engine ? " The newer worker engine waits until they are idle." : ""} Your Hive database, tasks and settings are kept, and the previous release is restored automatically if the new one does not answer.</span>
                 <div className="settings-actions">
                   <button className="secondary-button" disabled={disabled} onClick={() => setConfirming(false)}>Not now</button>
                   <button

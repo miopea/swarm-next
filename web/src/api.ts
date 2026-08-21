@@ -294,9 +294,15 @@ export type ReleaseStatus = {
   last_outcome: "offered" | "current" | "unreachable" | "rejected" | null;
   offer: ReleaseOffer | null;
   upgrade_available: boolean;
-  /** Whether installing stops workers, said at the moment of consent. */
-  stops_workers: boolean;
+  /**
+   * Whether the release carries a different worker engine. NOT "installing
+   * stops your workers" — the install preserves the running terminal host and
+   * the engine is swapped later, when sessions are idle.
+   */
+  carries_new_worker_engine: boolean;
   downloaded_version: string | null;
+  /** What the install unit last reported, so a failure is visible. */
+  apply_state: "installing" | "installed" | "failed" | "refused" | null;
 };
 
 export async function fetchReleaseStatus(operatorToken: string): Promise<ReleaseStatus> {

@@ -72,11 +72,26 @@ pub(super) struct ReleaseStatusResponse {
     offer: Option<ReleaseOffer>,
     /// Whether `offer` is something this Hive could actually install.
     upgrade_available: bool,
-    /// Whether installing it stops workers. ADR 0050 point 5: stated at the
-    /// moment of consent, not discovered by a timer half an hour later.
-    stops_workers: bool,
+    /// Whether the release carries a different worker engine.
+    ///
+    /// This is NOT "installing stops your workers", which is what it used to
+    /// say and is the opposite of what the product does. `swarm-package update`
+    /// restarts the API and preserves the running terminal host, so workers
+    /// stay online through the install. The engine is swapped later, when
+    /// sessions are idle or the operator asks — and that is the part that
+    /// restarts anything. ADR 0050 point 5 wants the consequence stated at the
+    /// moment of consent; the consequence is a deferred engine update, not an
+    /// immediate stop.
+    carries_new_worker_engine: bool,
     /// The verified, unpacked release waiting to be installed, if any.
     downloaded_version: Option<String>,
+    /// What the install unit last reported: `installing`, `installed`,
+    /// `failed`, or `refused`.
+    ///
+    /// Without this the control room cannot tell "restarting, hold on" from
+    /// "nothing happened", and both look like a card that goes back to
+    /// offering the release it just accepted.
+    apply_state: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,10 +275,11 @@ async fn build_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, Ap
         development_build,
         last_checked_at: stored.last_checked_at,
         last_outcome: stored.last_outcome,
-        stops_workers: offer
+        carries_new_worker_engine: offer
             .as_ref()
             .is_some_and(|offer| offer.worker_engine_build_id != worker_engine_build_id()),
         upgrade_available,
+        apply_state: apply_state(state),
         downloaded_version: download_root(state)
             .as_deref()
             .and_then(downloaded_release)
@@ -361,6 +377,18 @@ async fn fetch_manifest(
     verify_release_manifest(&document, compiled_release_verifying_key(), now)
         .map(Clone::clone)
         .map_err(|_| "rejected")
+}
+
+/// What the install unit last wrote about itself.
+fn apply_state(state: &AppState) -> Option<String> {
+    let path = state
+        .release_state_root
+        .as_ref()?
+        .join("release-apply.status");
+    let contents = std::fs::read_to_string(path).ok()?;
+    contents
+        .lines()
+        .find_map(|line| line.strip_prefix("state=").map(str::to_owned))
 }
 
 /// The single unpacked release under the download root, if there is one.

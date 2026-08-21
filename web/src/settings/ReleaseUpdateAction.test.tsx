@@ -33,8 +33,9 @@ function status(overrides: Partial<ReleaseStatus> = {}): ReleaseStatus {
       notes_url: null,
     },
     upgrade_available: true,
-    stops_workers: false,
+    carries_new_worker_engine: false,
     downloaded_version: null,
+    apply_state: null,
     ...overrides,
   };
 }
@@ -72,23 +73,46 @@ test("stays out of the way entirely when this build cannot check", async () => {
 });
 
 /**
- * ADR 0050 point 5, which is item 22's lesson encoded: the engine consequence
- * is stated at the moment of consent, not discovered by a timer afterwards.
+ * The point of separating the terminal host from the API is that an app update
+ * does not stop workers, and `swarm-package update` preserves the running host
+ * exactly so. This card used to claim the opposite, which the operator caught:
+ * "The whole point of our breaking between worker engine and app is to make
+ * sure that doesn't happen."
  */
-test("says whether installing stops workers before asking to install", async () => {
-  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ stops_workers: true, downloaded_version: "0.2.0" }));
+test("promises workers stay online, and defers the engine rather than stopping them", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({ carries_new_worker_engine: true, downloaded_version: "0.2.0" }),
+  );
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
-  expect(await screen.findByText("Stops workers")).toBeInTheDocument();
-  expect(screen.getByText(/Installing it stops every running worker/)).toBeInTheDocument();
+  expect(await screen.findByText("Workers stay online")).toBeInTheDocument();
+  expect(screen.queryByText(/stops every running worker/)).not.toBeInTheDocument();
+  expect(screen.getByText(/Your workers keep running/)).toBeInTheDocument();
+  expect(screen.getByText(/deferred while any worker is running/)).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Install Swarm 0.2.0" }));
   expect(screen.getByText("Install Swarm 0.2.0 now?")).toBeInTheDocument();
-  expect(screen.getByText(/Every running worker stops and is brought back/)).toBeInTheDocument();
+  expect(screen.getByText(/The newer worker engine waits until they are idle/)).toBeInTheDocument();
   expect(api.applyRelease).not.toHaveBeenCalled();
 
   fireEvent.click(screen.getByRole("button", { name: "Install 0.2.0" }));
   await waitFor(() => expect(api.applyRelease).toHaveBeenCalledWith("token"));
+});
+
+/**
+ * "I am still sitting here after 60 seconds... if I refresh the page it goes
+ * back to asking me to install." A silent failure that reverts to offering the
+ * release is indistinguishable from nothing having happened.
+ */
+test("says the install did not run rather than quietly offering it again", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({ downloaded_version: "0.2.0", apply_state: "failed" }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText(/The install did not run/)).toBeInTheDocument();
+  expect(screen.getByText(/still on 0.1.0/)).toBeInTheDocument();
+  expect(screen.getByText(/swarm-release-apply.service/)).toBeInTheDocument();
 });
 
 /** Downloading is reversible and installing is not, so they are two consents. */
