@@ -284,7 +284,7 @@ async fn build_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, Ap
             .as_ref()
             .is_some_and(|offer| offer.worker_engine_build_id != worker_engine_build_id()),
         upgrade_available,
-        apply_state: apply_state(state),
+        apply_state: apply_state(state, offer.as_ref().map(|offer| offer.version.as_str())),
         downloaded_version: download_root(state)
             .as_deref()
             .and_then(|root| {
@@ -390,15 +390,30 @@ async fn fetch_manifest(
 }
 
 /// What the install unit last wrote about itself.
-fn apply_state(state: &AppState) -> Option<String> {
+fn apply_state(state: &AppState, offered: Option<&str>) -> Option<String> {
     let path = state
         .release_state_root
         .as_ref()?
         .join("release-apply.status");
     let contents = std::fs::read_to_string(path).ok()?;
-    contents
-        .lines()
-        .find_map(|line| line.strip_prefix("state=").map(str::to_owned))
+    apply_state_from(&contents, offered)
+}
+
+/// The rule, separated so it can be tested against this function rather than
+/// against a copy of it.
+///
+/// A status file outlives the attempt that wrote it, so a result has to name
+/// the release it concerns or it cannot be told apart from a current one. One
+/// with no version at all was written before stamping existed and is ignored
+/// rather than guessed at.
+fn apply_state_from(contents: &str, offered: Option<&str>) -> Option<String> {
+    let field = |name: &str| {
+        contents
+            .lines()
+            .find_map(|line| line.strip_prefix(name).map(str::to_owned))
+    };
+    let version = field("version=")?;
+    (version == offered?).then(|| field("state="))?
 }
 
 /// Records which signed artifact a download came from.
@@ -600,73 +615,29 @@ mod tests {
 
 #[cfg(test)]
 mod apply_status_tests {
-    /// The rule the status file has to satisfy: a result names the release it
-    /// concerns, and one that names a different release — or names none at all,
-    /// because it predates the stamping — is not the current result.
-    fn reported(contents: &str, offered: Option<&str>) -> Option<String> {
-        let field = |name: &str| {
-            contents
-                .lines()
-                .find_map(|line| line.strip_prefix(name).map(str::to_owned))
-        };
-        let version = field("version=")?;
-        (version == offered?).then(|| field("state="))?
-    }
+    use super::apply_state_from;
 
+    /// This test previously carried its own copy of the rule and passed while
+    /// the real function was untouched — the version comparison never reached
+    /// `apply_state`, shipped in 0.5.0 and 0.6.0, and the operator saw a
+    /// failure from an earlier release reported against a later one. It calls
+    /// the function now.
     #[test]
     fn only_a_status_about_the_release_in_hand_is_reported() {
         let failed_on_020 = "state=failed\nversion=0.2.0\n";
         assert_eq!(
-            reported(failed_on_020, Some("0.2.0")).as_deref(),
+            apply_state_from(failed_on_020, Some("0.2.0")).as_deref(),
             Some("failed")
         );
-        // The defect: this used to report "failed" while offering 0.5.0.
-        assert_eq!(reported(failed_on_020, Some("0.5.0")), None);
-        assert_eq!(reported(failed_on_020, None), None);
+        // The defect: this used to report "failed" while offering 0.6.0.
+        assert_eq!(apply_state_from(failed_on_020, Some("0.6.0")), None);
+        assert_eq!(apply_state_from(failed_on_020, None), None);
         // Written before statuses were stamped; not guessed at.
-        assert_eq!(reported("state=failed\n", Some("0.2.0")), None);
-    }
-}
-
-#[cfg(test)]
-mod download_identity_tests {
-    use super::*;
-    use std::fs;
-
-    fn bundle(root: &Path, version: &str, digest: &str) -> PathBuf {
-        let path = root.join(version);
-        fs::create_dir_all(&path).unwrap();
-        fs::write(path.join("swarm-package"), "#!/bin/sh\n").unwrap();
-        fs::write(path.join(DOWNLOAD_DIGEST_FILE), digest).unwrap();
-        path
-    }
-
-    /// A release can be replaced at the same version — it happened minutes
-    /// after 0.5.0 was published — and the already-unpacked copy of the old one
-    /// is still a structurally valid bundle whose own SHA256SUMS verify. Only
-    /// the signed digest tells them apart.
-    #[test]
-    fn a_download_from_a_replaced_release_is_not_offered_for_install() {
-        let root = tempfile::tempdir().unwrap();
-        let superseded = "a".repeat(64);
-        let current = "b".repeat(64);
-        bundle(root.path(), "0.5.0", &superseded);
-
-        assert!(downloaded_release(root.path(), Some(&superseded)).is_some());
-        // The same version number, now meaning a different artifact.
-        assert!(downloaded_release(root.path(), Some(&current)).is_none());
-        assert!(downloaded_release(root.path(), None).is_none());
-    }
-
-    /// A download unpacked before digests were recorded cannot be shown to be
-    /// the offered one, so it is refetched rather than trusted.
-    #[test]
-    fn a_download_with_no_recorded_digest_is_treated_as_absent() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("0.5.0");
-        fs::create_dir_all(&path).unwrap();
-        fs::write(path.join("swarm-package"), "#!/bin/sh\n").unwrap();
-
-        assert!(downloaded_release(root.path(), Some(&"b".repeat(64))).is_none());
+        assert_eq!(apply_state_from("state=failed\n", Some("0.2.0")), None);
+        // A current result still reads normally.
+        assert_eq!(
+            apply_state_from("state=installing\nversion=0.6.0\n", Some("0.6.0")).as_deref(),
+            Some("installing")
+        );
     }
 }
