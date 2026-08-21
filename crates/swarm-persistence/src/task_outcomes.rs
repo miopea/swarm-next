@@ -1,7 +1,9 @@
 use std::str::FromStr;
 
 use rusqlite::{OptionalExtension, params};
-use swarm_domain::{ControlRoomEventKind, TaskId, TaskState, WorkerId, WorkerSessionId};
+use swarm_domain::{
+    ControlRoomEventKind, TaskActivityActor, TaskId, TaskState, WorkerId, WorkerSessionId,
+};
 
 use super::{TaskStore, TaskStoreError, insert_control_room_event};
 
@@ -703,6 +705,79 @@ mod completion_evidence_tests {
         );
     }
 
+    /// The operator's ruling: the coordinator approves when the evidence is
+    /// well-formed, and Queen sees only what needs judgment. Deployed work is
+    /// the well-formed case and the common one.
+    #[test]
+    fn reviewed_work_that_shipped_is_closed_without_asking_queen() {
+        let store = TaskStore::in_memory().unwrap();
+        let shipped = task(&store);
+        store
+            .record_task_deployment(shipped, "production", "release 42", 1_000)
+            .unwrap();
+
+        let closed = store.complete_reviewed_work_with_deployment().unwrap();
+
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].task_id, shipped);
+        assert_eq!(closed[0].reference, "release 42");
+        assert_eq!(store.get_task(shipped).unwrap().state, TaskState::Completed);
+
+        // The note is derived from the evidence, not a claim about the work.
+        let activity = store.list_task_activity(shipped, 10).unwrap();
+        assert_eq!(
+            activity.events.last().unwrap().note,
+            "Running in production as release 42."
+        );
+
+        // And it does not close the same work twice.
+        assert!(
+            store
+                .complete_reviewed_work_with_deployment()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Work with nothing to show, and work whose exemption nobody approved,
+    /// both stay in review. The second is the case that matters: a worker
+    /// cannot approve its own claim by leaving it lying there.
+    #[test]
+    fn reviewed_work_without_settled_evidence_is_left_for_queen() {
+        let store = TaskStore::in_memory().unwrap();
+        let nothing = task(&store);
+        let claimed = task(&store);
+        store
+            .claim_completion_exemption(claimed, "Documentation only.", None, 1_000)
+            .unwrap();
+
+        assert!(
+            store
+                .complete_reviewed_work_with_deployment()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.get_task(nothing).unwrap().state, TaskState::Review);
+        assert_eq!(store.get_task(claimed).unwrap().state, TaskState::Review);
+
+        let waiting = store.reviewed_work_awaiting_judgment().unwrap();
+        assert!(waiting.contains(&nothing));
+        assert!(waiting.contains(&claimed));
+
+        // Once Queen approves the claim, it is settled and no longer waiting —
+        // but the coordinator still does not close it, because there is no
+        // deployment. Approving the exemption is the approval.
+        store
+            .approve_completion_exemption(claimed, "queen", 2_000)
+            .unwrap();
+        assert!(
+            !store
+                .reviewed_work_awaiting_judgment()
+                .unwrap()
+                .contains(&claimed)
+        );
+    }
+
     #[test]
     fn approving_an_exemption_nobody_claimed_is_refused() {
         let store = TaskStore::in_memory().unwrap();
@@ -717,5 +792,119 @@ mod completion_evidence_tests {
                 .approve_completion_exemption(unclaimed, "the worker", 1_000)
                 .is_err()
         );
+    }
+}
+
+/// One task the coordinator closed, and what it closed it on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeterministicCompletion {
+    pub task_id: TaskId,
+    pub title: String,
+    pub environment: String,
+    pub reference: String,
+}
+
+impl TaskStore {
+    /// Closes reviewed work that can show where it is running.
+    ///
+    /// The operator's ruling on who approves a completion: the coordinator
+    /// does it when the evidence is well-formed, and Queen sees only what needs
+    /// judgment. This is the well-formed case, and it is the common one — so
+    /// putting Queen on it would mean a model call per completion and a Hive
+    /// that stops closing anything when she is unavailable.
+    ///
+    /// Nothing here decides whether the work was good. It decides that a
+    /// deployment was recorded, which is a fact in a table, not an opinion. A
+    /// task with no evidence, or with an exemption nobody has approved, is left
+    /// in review for Queen.
+    ///
+    /// # Errors
+    /// Returns a persistence error. A task that cannot be closed is skipped
+    /// rather than aborting the pass, because one stuck row should not stop
+    /// every other completion.
+    pub fn complete_reviewed_work_with_deployment(
+        &self,
+    ) -> Result<Vec<DeterministicCompletion>, TaskStoreError> {
+        let candidates = {
+            let connection = self.connection()?;
+            let mut statement = connection.prepare(
+                "SELECT task.id, task.title, deployment.environment, deployment.reference
+                 FROM tasks task
+                 JOIN task_deployments deployment ON deployment.task_id = task.id
+                 WHERE task.state = ?1
+                   AND task.removed_at IS NULL
+                   AND deployment.id = (
+                       SELECT newest.id FROM task_deployments newest
+                       WHERE newest.task_id = task.id
+                       ORDER BY newest.deployed_at DESC, newest.recorded_at DESC, newest.id DESC
+                       LIMIT 1
+                   )
+                 ORDER BY task.updated_at",
+            )?;
+            let rows = statement.query_map([TaskState::Review.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut closed = Vec::new();
+        for (id, title, environment, reference) in candidates {
+            let Ok(task_id) = TaskId::from_str(&id) else {
+                continue;
+            };
+            // The note is derived from the evidence rather than written about
+            // it. "Verified" would be a claim this pass is not entitled to
+            // make; where it is running is what was actually established.
+            let note = format!("Running in {environment} as {reference}.");
+            match self.transition_task_with_note_as(
+                task_id,
+                TaskState::Completed,
+                &note,
+                &TaskActivityActor::system(),
+            ) {
+                Ok(_) => closed.push(DeterministicCompletion {
+                    task_id,
+                    title,
+                    environment,
+                    reference,
+                }),
+                Err(TaskStoreError::NotFound | TaskStoreError::InvalidTransition { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(closed)
+    }
+
+    /// Reviewed work the coordinator will not close: no deployment, or an
+    /// exemption nobody has approved.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn reviewed_work_awaiting_judgment(&self) -> Result<Vec<TaskId>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT task.id FROM tasks task
+             WHERE task.state = ?1
+               AND task.removed_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM task_deployments d WHERE d.task_id = task.id)
+               AND NOT EXISTS (
+                   SELECT 1 FROM task_completion_exemptions e
+                   WHERE e.task_id = task.id AND e.approved_at IS NOT NULL
+               )
+             ORDER BY task.updated_at",
+        )?;
+        let rows = statement.query_map([TaskState::Review.to_string()], |row| {
+            row.get::<_, String>(0)
+        })?;
+        Ok(rows
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|id| TaskId::from_str(&id).ok())
+            .collect())
     }
 }

@@ -1031,6 +1031,7 @@ impl AppState {
     }
 
     async fn run_deterministic_coordinator(&self, store: &TaskStore) {
+        self.close_reviewed_work_that_shipped(store);
         self.observe_exited_worker_owned_work(store);
         self.observe_assigned_ready_work_not_started(store).await;
         self.observe_stale_owned_work(store).await;
@@ -1038,6 +1039,38 @@ impl AppState {
         self.coordinator_start_admission
             .store(admission.code(), Ordering::Relaxed);
         self.run_deterministic_worker_wakes(store, admission).await;
+    }
+
+    /// Closes reviewed work that recorded where it is running.
+    ///
+    /// The operator's ruling on approval: the coordinator settles the
+    /// well-formed case and Queen sees only what needs judgment. A recorded
+    /// deployment is a fact in a table rather than an opinion, so no model call
+    /// is involved — which also means a Hive keeps closing work when Queen is
+    /// unavailable, and there is no per-completion cost.
+    ///
+    /// Anything without evidence, or carrying an exemption nobody approved,
+    /// stays in review.
+    fn close_reviewed_work_that_shipped(&self, store: &TaskStore) {
+        match store.complete_reviewed_work_with_deployment() {
+            Ok(closed) => {
+                for completion in &closed {
+                    tracing::info!(
+                        task = %completion.task_id,
+                        environment = %completion.environment,
+                        reference = %completion.reference,
+                        "deterministic coordinator closed reviewed work on its recorded deployment"
+                    );
+                }
+                if !closed.is_empty() {
+                    self.control_room_notify.notify_waiters();
+                }
+            }
+            Err(error) => tracing::warn!(
+                message = %error,
+                "deterministic coordinator could not close reviewed work"
+            ),
+        }
     }
 
     fn observe_exited_worker_owned_work(&self, store: &TaskStore) {
