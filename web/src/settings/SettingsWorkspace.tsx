@@ -12,6 +12,7 @@ import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenA
 import { engineUpdateCost, workerEngineUpdateRequired, workersMidCommand } from "../runtime/workerEngine";
 import ApiarySettings from "./ApiarySettings";
 import DevelopmentReloadAction from "./DevelopmentReloadAction";
+import ReleaseUpdateAction from "./ReleaseUpdateAction";
 import ProviderReleaseAction from "./ProviderReleaseAction";
 import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
@@ -480,6 +481,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
             )}</> : <><p>The installed worker engine is compatible with this App/API release. Running workers do not need to restart.</p><small>Claude and Codex processes remain attached to this engine across ordinary app and API reloads.</small></>}
           </article>
           <DevelopmentReloadAction busy={busy} runtime={developmentRuntime} reachable={developmentReachable} healthVersion={health?.version} onReload={onReloadDevelopment} />
+          <ReleaseUpdateAction busy={busy} operatorToken={operatorToken} />
           <ProviderReleaseAction superseded={providers?.superseded ?? []} busy={busy} onRestart={onRestartProviders} />
         </div>
       </section>

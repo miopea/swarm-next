@@ -29,6 +29,14 @@ test("keeps the mobile settings section rail flush with its scroll viewport", ()
   expect(stylesheet).toContain(".settings-section-nav { top: 0; margin-inline: -4px; padding: 7px; }");
 });
 
+test("keeps the worker-stopping update badge legible", () => {
+  // --warn on --warn-soft measures 1.93:1 in the light theme, well under AA's
+  // 4.5:1 for this badge's small uppercase text. --warn-strong is the text
+  // colour; --warn stays a border and icon colour.
+  expect(stylesheet).toContain(".runtime-status-badge.attention { color: var(--warn-strong); background: var(--warn-soft); }");
+  expect(stylesheet).toContain("--warn-strong: #7d5a0d;");
+});
+
 test("lets a repository path be edited without stretching the worker editor", () => {
   // A worker is moved by typing a path, and a long one must not widen the row
   // past its column — the grid child needs min-width: 0 for that.

@@ -50,6 +50,9 @@
   --sage-soft: var(--good-soft);
   --warn: #d69c28;
   --warn-soft: #f5e4b7;
+  /* Warning text on --warn-soft. --warn itself measures 1.93:1 there, so it
+     is a border and icon colour, never a text one. */
+  --warn-strong: #7d5a0d;
   --warning: var(--warn);
   --bad: #9b6967;
   --danger: var(--bad);
@@ -91,6 +94,7 @@
   --good-soft: #314333;
   --warn: #dfaa40;
   --warn-soft: #4a4026;
+  --warn-strong: #dfaa40;
   --bad: #d58e89;
   --bad-soft: #4a302e;
   --blocked: #b4a1c8;
@@ -2023,6 +2027,13 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .runtime-subsystem-safe, .runtime-subsystem-current { border-color: color-mix(in srgb, var(--good) 40%, var(--line)); background: color-mix(in srgb, var(--good-soft) 34%, var(--panel)); }
 .runtime-subsystem-unavailable { border-color: color-mix(in srgb, var(--danger) 42%, var(--line)); background: color-mix(in srgb, var(--bad-soft) 28%, var(--panel)); }
 .runtime-subsystem-checking { border-color: var(--line); background: var(--panel); }
+/* An update that stops workers is warned about, not coloured like a fault:
+   it is a consequence the operator is agreeing to, not something broken. */
+.runtime-subsystem-attention { border-color: color-mix(in srgb, var(--warn) 46%, var(--line)); background: color-mix(in srgb, var(--warn-soft) 32%, var(--panel)); }
+.release-check-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); }
+.release-check-footer small { min-width: 0; color: var(--text-muted); line-height: 1.35; white-space: normal; }
+.release-check-footer .settings-actions { flex: 0 0 auto; margin: 0; }
+.runtime-status-badge.attention { color: var(--warn-strong); background: var(--warn-soft); }
 .runtime-status-badge { flex: 0 0 auto; padding: 4px 8px; border-radius: 999px; font-size: .66rem; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
 .runtime-status-badge.restart { color: var(--danger); background: var(--bad-soft); }
 .runtime-status-badge.safe, .runtime-status-badge.current { color: var(--good); background: var(--good-soft); }

@@ -273,6 +273,60 @@ export type DevelopmentRuntime = {
   source_revision: string | null;
   source_dirty: boolean;
 };
+/** One release the origin currently offers. Absent from the manifest means withdrawn. */
+export type ReleaseOffer = {
+  version: string;
+  protocol: string;
+  artifact_url: string;
+  artifact_sha256: string;
+  artifact_bytes: number;
+  worker_engine_build_id: string;
+  notes_url: string | null;
+};
+export type ReleaseStatus = {
+  /** False when this build has no verifying key or no origin: the path is inert, not broken. */
+  available: boolean;
+  /** "unset" is a Hive nobody asked, which is not the same as one that said no. */
+  mode: "unset" | "off" | "daily";
+  current_version: string;
+  development_build: boolean;
+  last_checked_at: number | null;
+  last_outcome: "offered" | "current" | "unreachable" | "rejected" | null;
+  offer: ReleaseOffer | null;
+  upgrade_available: boolean;
+  /** Whether installing stops workers, said at the moment of consent. */
+  stops_workers: boolean;
+  downloaded_version: string | null;
+};
+
+export async function fetchReleaseStatus(operatorToken: string): Promise<ReleaseStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/release");
+  return response.json() as Promise<ReleaseStatus>;
+}
+
+export async function setReleaseCheckMode(operatorToken: string, mode: "off" | "daily"): Promise<ReleaseStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/release", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  return response.json() as Promise<ReleaseStatus>;
+}
+
+export async function checkForRelease(operatorToken: string): Promise<ReleaseStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/release/check", { method: "POST" });
+  return response.json() as Promise<ReleaseStatus>;
+}
+
+export async function downloadRelease(operatorToken: string): Promise<ReleaseStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/release/download", { method: "POST" });
+  return response.json() as Promise<ReleaseStatus>;
+}
+
+export async function applyRelease(operatorToken: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/runtime/release/apply", { method: "POST" });
+}
+
 export type ResourcePressure = "normal" | "advisory" | "critical" | "unavailable";
 export type RuntimeResources = {
   sampled_at: number;
