@@ -201,6 +201,46 @@ impl TaskStore {
             .collect()
     }
 
+    /// Forgets unconfirmed decision deliveries that no longer mean anything.
+    ///
+    /// An uncertain delivery marks its worker: Swarm wrote an answer and could
+    /// not confirm it landed. That mark is worth carrying while the answer
+    /// still matters. It stops meaning anything once the decision is resolved
+    /// and the session it was written to has ended — there is nothing left to
+    /// deliver and no terminal left to check.
+    ///
+    /// Briefings already had this. Decisions did not, so their marks
+    /// accumulated: five of them, every one against a resolved decision on a
+    /// dead session, on workers the operator reported had been showing the mark
+    /// for days with no open work at all.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn forget_moot_unconfirmed_answers(&self) -> Result<usize, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let forgotten = transaction.execute(
+            "DELETE FROM decision_deliveries
+             WHERE state = 'uncertain'
+               AND NOT EXISTS (
+                   SELECT 1 FROM decision_requests request
+                   WHERE request.id = decision_deliveries.decision_id
+                     AND request.state = 'pending'
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM worker_sessions session
+                   WHERE session.session_id = decision_deliveries.session_id
+                     AND session.ended_at IS NULL
+               )",
+            [],
+        )?;
+        if forgotten > 0 {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(forgotten)
+    }
+
     /// How long each worker has been holding for an operator answer, and
     /// whether that wait has passed the deadline the asker set.
     ///
@@ -1506,5 +1546,71 @@ mod tests {
                 .delivery_state,
             Some(DecisionDeliveryState::Uncertain)
         );
+    }
+
+    /// The operator, days apart: "Public Website shows a (!) saying Swarm wrote
+    /// a briefing to this worker and could not confirm it landed and has been
+    /// that way for ages. It has no open tasks. Same with Sculpt Studio."
+    ///
+    /// Briefings were given a way to stop meaning something. Answers were not,
+    /// so their marks accumulated — five of them in the live database, every
+    /// one against a decision already resolved on a session already ended.
+    #[test]
+    fn an_answer_nobody_is_waiting_for_stops_marking_its_worker() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Sculpt Studio",
+                ProviderKind::ClaudeCode,
+                "/workspace/ss",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let decision = store
+            .create_decision_request(&NewDecisionRequest {
+                requesting_worker_id: worker.id,
+                task_id: None,
+                kind: DecisionRequestKind::Input,
+                urgency: DecisionUrgency::Normal,
+                title: "Which store listing?",
+                summary: "Two listings could own this build.",
+                reason: "Both are configured.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Use the production listing",
+                allowed_actions: &["Use the production listing".to_owned()],
+                questions: &[],
+                deadline: None,
+            })
+            .unwrap();
+        // The delivery carries the answer, so it exists once the decision is
+        // resolved rather than when it is asked.
+        store
+            .resolve_decision_request(
+                decision.id,
+                "Use the production listing",
+                "",
+                "inbox_action",
+            )
+            .unwrap();
+        let claimed = store.claim_decision_deliveries(10).unwrap();
+        assert_eq!(claimed.len(), 1, "the answer is delivered to its asker");
+        let marked = store
+            .fail_decision_delivery(decision.id, 11, DecisionDeliveryFailure::Uncertain)
+            .unwrap();
+        assert!(marked, "the delivery is recorded as unconfirmed");
+
+        // While that terminal is still live the mark is worth carrying: the
+        // operator can go and look at it.
+        assert_eq!(store.forget_moot_unconfirmed_answers().unwrap(), 0);
+
+        // Once the session has ended there is no terminal left to check and
+        // nothing left to deliver.
+        store.release_worker_session(session).unwrap();
+        assert_eq!(store.forget_moot_unconfirmed_answers().unwrap(), 1);
+        assert_eq!(store.forget_moot_unconfirmed_answers().unwrap(), 0);
     }
 }
