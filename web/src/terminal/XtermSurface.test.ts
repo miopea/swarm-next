@@ -677,3 +677,43 @@ test("a rebuilt screen uncovers itself without waiting for a later fit", async (
   surface.dispose();
   element.remove();
 });
+
+test("scrolls by a real row height rather than one guessed from the mount", async () => {
+  // "I still cannot scroll" — and a reload did not fix it.
+  //
+  // The row height was the mount's height divided by the row count, which is
+  // only correct while the terminal fills its element. A device that does not
+  // own the geometry now keeps the owner's row count instead of fitting its own
+  // viewport, so the rows occupy part of a taller element, the estimate comes
+  // out far too large, and an ordinary drag rounds to zero lines.
+  vi.stubGlobal("ResizeObserver", class { observe(): void {} disconnect(): void {} });
+  const surface = new XtermSurface();
+  const element = document.createElement("div");
+  // A tall mount holding a short terminal: the case that broke.
+  Object.defineProperty(element, "clientHeight", { value: 800, configurable: true });
+  document.body.append(element);
+  surface.open(element);
+
+  // xterm's rendered rows, which are what the reading should come from.
+  const rows = document.createElement("div");
+  rows.className = "xterm-rows";
+  const row = document.createElement("div");
+  Object.defineProperty(row, "getBoundingClientRect", {
+    value: () => ({ height: 17, width: 100, top: 0, bottom: 17, left: 0, right: 100 }),
+  });
+  rows.append(row);
+  element.append(rows);
+
+  xterm.scrollLines.mockClear();
+  const touch = (type: "touchstart" | "touchmove", clientY: number) =>
+    element.dispatchEvent(touchEvent(type, [{ identifier: 1, clientY }]));
+
+  touch("touchstart", 400);
+  touch("touchmove", 360);
+
+  // Forty pixels against a real seventeen-pixel row is two lines. Against the
+  // guessed height it was zero, and nothing moved.
+  expect(xterm.scrollLines).toHaveBeenCalled();
+  surface.dispose();
+  element.remove();
+});

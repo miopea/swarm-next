@@ -296,7 +296,23 @@ export class XtermSurface implements TerminalSurface {
     this.#publishBufferMetrics();
   }
 
+  /**
+   * The height of one rendered row.
+   *
+   * Measured from a row xterm actually drew, not from the mount divided by the
+   * row count. That division assumed the terminal fills its element, which
+   * stopped being true once a device that does not own the geometry keeps the
+   * owner's row count instead of fitting its own viewport: the rows then occupy
+   * part of the element, the estimate comes out far too large, and an ordinary
+   * drag rounds to zero lines. Scrolling looked dead rather than wrong.
+   */
   #terminalLineHeight(): number {
+    const rendered = this.#element?.querySelector<HTMLElement>(".xterm-rows > div");
+    const renderedHeight = rendered?.getBoundingClientRect().height ?? 0;
+    if (renderedHeight > 0) return renderedHeight;
+    const rows = this.#element?.querySelector<HTMLElement>(".xterm-rows");
+    const rowsHeight = rows?.getBoundingClientRect().height ?? 0;
+    if (rowsHeight > 0 && this.#terminal.rows > 0) return rowsHeight / this.#terminal.rows;
     const height = this.#element?.clientHeight ?? 0;
     if (height > 0 && this.#terminal.rows > 0) return height / this.#terminal.rows;
     return FALLBACK_CELL_HEIGHT_PX;
