@@ -4,6 +4,33 @@ Swarm runs as a set of systemd **user** services on one Linux machine. It is not
 a server you administer and not a container you orchestrate: it installs under
 your home directory, runs as you, and listens only on localhost.
 
+## Install it
+
+Download the latest release from
+**https://github.com/miopea/swarm-next/releases/latest**, then:
+
+```
+tar -xzf swarm-0.1.0-linux-x86_64.tar.gz
+sh ./swarm-0.1.0-linux-x86_64/swarm-package install ./swarm-0.1.0-linux-x86_64
+```
+
+The path appears twice because `swarm-package` lives inside the release: once to
+run it, once to tell it what to install.
+
+It verifies the bundle's checksums, installs it, writes the systemd units,
+starts the services, and **waits for the API to answer before saying it
+worked**. On success:
+
+```
+Swarm 0.1.0 is healthy at http://127.0.0.1:8766/health
+```
+
+Open that address. The token to sign in with is in
+`~/.config/swarm/swarm.env` — `grep SWARM_OPERATOR_TOKEN ~/.config/swarm/swarm.env`.
+
+That is the whole installation. The rest of this page is what it put on your
+machine, what to do when it does not work, and how to update.
+
 ## Before you start
 
 You need five commands on the machine. All but the first are on most
@@ -60,75 +87,7 @@ sudo loginctl enable-linger "$USER"
 Without it, Swarm stops when you log out and starts again when you log back in.
 That is a legitimate way to run it; it is only a surprise if nobody said so.
 
-## Getting a release
-
-Everything below installs a **release directory** — a folder containing `bin/`,
-`web/`, `systemd-user/`, `swarm-package`, and the `VERSION`, `PROTOCOL`,
-`SOURCE_REVISION` and `SHA256SUMS` files that describe it. There are two ways to
-get one.
-
-### You were given a tarball
-
-```
-tar -xzf swarm-0.1.0-linux-x86_64.tar.gz
-```
-
-That leaves a `swarm-0.1.0-linux-x86_64/` directory beside it. Skip to
-**Installing**.
-
-### You are building it yourself
-
-You need a Rust toolchain and `pnpm` as well as the commands above, and the
-build takes a few minutes because it compiles in release mode and bundles the
-browser assets.
-
-```
-git clone https://github.com/miopea/swarm-next.git swarm
-cd swarm
-./packaging/linux/build-development-release.sh /tmp/swarm-build
-```
-
-That prints nothing on success and leaves one directory under `/tmp/swarm-build`,
-named for the revision it was built from:
-
-```
-/tmp/swarm-build/swarm-0.1.0-dev-<revision>-<timestamp>-<pid>-linux-x86_64/
-```
-
-That directory is the release directory. Use it wherever the commands below say
-one.
-
-> **Cutting a release for other people** is a different procedure, in
-> `docs/cutting-a-release.md`.
-
-> **Building a tagged release instead.** `build-release.sh` produces a
-> distributable tarball under `dist/`, but it **refuses to run on an untagged
-> commit** — a release version has to come from a tag so that two releases can be
-> compared. Tag first (`git tag -a v0.1.0 -m "Swarm 0.1.0"`) or use the
-> development build above, which is the normal thing when working from a clone.
-
-## Installing
-
-```
-sh ./swarm-0.1.0-linux-x86_64/swarm-package install ./swarm-0.1.0-linux-x86_64
-```
-
-Substitute your own release directory — the built one is under `/tmp/swarm-build`
-and has a longer name. `swarm-package` lives inside it, so the path appears
-twice: once to run it, once to tell it what to install.
-
-The installer verifies the bundle's checksums, installs the release under
-`~/.local/lib/swarm/releases/`, writes the systemd units, starts the services,
-and then **waits for the API to answer before reporting success**. If it does
-not answer, the install does not claim to have worked.
-
-On success it prints:
-
-```
-Swarm 0.1.0 is healthy at http://127.0.0.1:8766/health
-```
-
-### What it creates
+## What it put on your machine
 
 ```
 ~/.local/lib/swarm/       the installed releases and the `current` link
@@ -136,14 +95,14 @@ Swarm 0.1.0 is healthy at http://127.0.0.1:8766/health
 ~/.config/swarm/          swarm.env — your configuration and operator token
 ~/.local/bin/             swarmctl
 ~/swarm-workspaces/       where repositories live, unless you set another root
-~/.config/systemd/user/   the eight units below
+~/.config/systemd/user/   the ten units below
 ```
 
 Everything is named `swarm`, including when you installed from a directory
 called something else. The release directory's name does not survive the
 install.
 
-### The services
+### The services it runs
 
 ```
 swarm.target                      what you start and stop; pulls in the two below
@@ -220,19 +179,19 @@ the whole story.
 
 ### Installing a release by hand
 
+Same place as the first one —
+**https://github.com/miopea/swarm-next/releases/latest** — and the same command
+as installing, with `update` instead of `install`:
+
 ```
+tar -xzf swarm-0.2.0-linux-x86_64.tar.gz
 sh ./swarm-0.2.0-linux-x86_64/swarm-package update ./swarm-0.2.0-linux-x86_64
 ```
 
-From a source checkout it is the same command, applied to a freshly built
-release directory:
-
-```
-cd ~/swarm
-git pull
-./packaging/linux/build-development-release.sh /tmp/swarm-build
-sh /tmp/swarm-build/swarm-*/swarm-package update /tmp/swarm-build/swarm-*
-```
+You do not need to uninstall first, and it does not matter where you unpack the
+tarball. The release is copied into `~/.local/lib/swarm/releases/` and the
+`current` link is moved to it, so Swarm always runs from the same place
+regardless of where you downloaded it. The old release is kept for rollback.
 
 An update keeps your database, your configuration and your workers. It verifies
 the new release's health before retiring the old one, and **restores the
@@ -248,7 +207,23 @@ swarm-package: terminal host update deferred; 1 sessions remain
 Apply it when you are ready, from the runtime area in the control room or by
 running the update again once workers are asleep.
 
-### Building from a working copy instead
+## Building it yourself
+
+Only if you are working on Swarm rather than using it. You need a Rust
+toolchain and `pnpm`, and the build takes a few minutes.
+
+```
+git clone https://github.com/miopea/swarm-next.git swarm
+cd swarm
+./packaging/linux/build-development-release.sh /tmp/swarm-build
+sh /tmp/swarm-build/swarm-*/swarm-package install /tmp/swarm-build/swarm-*
+```
+
+A build made this way is a **development build**, not a release. Swarm will tell
+you when a release exists but will never offer to replace it, because replacing
+a binary built from your checkout would discard work nothing can enumerate.
+
+### Turning the rebuild into a button
 
 If you are working on Swarm itself, the rebuild-and-update loop above can be a
 button in the control room instead. Point Swarm at your checkout once:
