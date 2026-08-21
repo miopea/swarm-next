@@ -857,10 +857,29 @@ impl TaskStore {
         owner_device_id: PresenceDeviceId,
     ) -> Result<bool, TaskStoreError> {
         let connection = self.connection()?;
+        // The device holding the worker decides its size, and nothing else does.
+        //
+        // Two viewers of one worker both believed they were the foreground —
+        // one browser's idea of focus says nothing about another machine — so
+        // each claimed geometry, restored at the other's size, re-fitted to its
+        // own and claimed again. The operator watched a desktop and a phone
+        // resize a terminal at each other indefinitely.
+        //
+        // Engagement already names one device and the operator can move it by
+        // taking the worker, so it is the arbiter. A claim from anywhere else is
+        // refused rather than queued: the other viewer then accepts the
+        // canonical size instead of arguing with it.
         let claimed = connection.execute(
             "UPDATE worker_sessions
              SET geometry_owner_device_id = ?2
-             WHERE session_id = ?1 AND ended_at IS NULL",
+             WHERE session_id = ?1 AND ended_at IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM worker_engagements engagement
+                   WHERE engagement.worker_id = worker_sessions.worker_id
+                     AND engagement.expires_at > unixepoch()
+                     AND engagement.owner_device_id IS NOT NULL
+                     AND engagement.owner_device_id <> ?2
+               )",
             params![session_id.to_string(), owner_device_id.to_string()],
         )? == 1;
         Ok(claimed)
@@ -2072,5 +2091,56 @@ mod tests {
             store.authenticate_worker_agent(&[1_u8; 31]),
             Err(TaskStoreError::InvalidAgentCredentialDigest)
         ));
+    }
+    /// "When I open the desktop and mobile on the same worker it is jumping ALL
+    /// over the place still."
+    ///
+    /// Both believed they were the foreground — one browser's idea of focus
+    /// says nothing about another machine — so each claimed geometry, restored
+    /// at the other's size, re-fitted to its own and claimed again. The device
+    /// holding the worker now decides, and nothing else does.
+    #[test]
+    fn only_the_device_holding_a_worker_decides_its_terminal_size() {
+        // The lease is compared against the wall clock in SQL, so the test's
+        // idea of "now" has to be one the database agrees is the future.
+        const FUTURE: i64 = 4_000_000_000;
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Swarm",
+                ProviderKind::ClaudeCode,
+                "/workspace/swarm",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let desktop = PresenceDeviceId::new();
+        let phone = PresenceDeviceId::new();
+
+        // Nobody holds it, so the first to ask may size it.
+        assert!(store.claim_worker_geometry(session, desktop).unwrap());
+
+        // The desktop takes the worker.
+        store
+            .renew_worker_engagement(session, Some(desktop), FUTURE, 300)
+            .unwrap();
+
+        // The phone is watching, and its idea of being in front is its own.
+        assert!(
+            !store.claim_worker_geometry(session, phone).unwrap(),
+            "a viewer cannot resize a worker another device is holding"
+        );
+        // The holder still can.
+        assert!(store.claim_worker_geometry(session, desktop).unwrap());
+
+        // Moving the worker moves the authority with it, which is what "Work
+        // here" does.
+        store
+            .renew_worker_engagement(session, Some(phone), FUTURE + 1, 300)
+            .unwrap();
+        assert!(store.claim_worker_geometry(session, phone).unwrap());
+        assert!(!store.claim_worker_geometry(session, desktop).unwrap());
     }
 }

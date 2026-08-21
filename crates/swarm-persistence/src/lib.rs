@@ -127,7 +127,8 @@ const DECISION_QUESTIONS_SCHEMA_VERSION: i64 = 78;
 const DECISION_SUMMARY_SCHEMA_VERSION: i64 = 79;
 const EMAIL_REPLY_FROM_REVIEW_SCHEMA_VERSION: i64 = 80;
 const WORKER_FILED_DRAFT_SCHEMA_VERSION: i64 = 81;
-const CURRENT_SCHEMA_VERSION: i64 = WORKER_FILED_DRAFT_SCHEMA_VERSION;
+const START_SURFACE_SCHEMA_VERSION: i64 = 82;
+const CURRENT_SCHEMA_VERSION: i64 = START_SURFACE_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -736,6 +737,58 @@ impl TaskStore {
             workspace,
             &TaskActivityActor::system(),
         )
+    }
+
+    /// The screen Swarm opens on, and the default when the operator has not
+    /// chosen one.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn start_surface(&self) -> Result<String, TaskStoreError> {
+        let connection = self.connection()?;
+        let surface = connection
+            .query_row(
+                "SELECT preference.start_surface
+                 FROM operator_preferences preference
+                 JOIN local_hive_identity local ON local.singleton = 1
+                 JOIN hives hive ON hive.id = local.hive_id
+                 WHERE preference.operator_id = hive.operator_id",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(surface.unwrap_or_else(|| "tasks".to_owned()))
+    }
+
+    /// Chooses the screen Swarm opens on, for every device.
+    ///
+    /// # Errors
+    /// Rejects a surface that is not one of the product's own.
+    pub fn set_start_surface(&self, surface: &str) -> Result<String, TaskStoreError> {
+        if !matches!(
+            surface,
+            "decisions" | "tasks" | "workers" | "apiary" | "settings"
+        ) {
+            return Err(TaskStoreError::IntegrityFailure(format!(
+                "{surface} is not a screen this product opens on"
+            )));
+        }
+        let connection = self.connection()?;
+        connection.execute(
+            "INSERT INTO operator_preferences (operator_id, start_surface, updated_at)
+             SELECT hive.operator_id, ?1, unixepoch()
+             FROM local_hive_identity local
+             JOIN hives hive ON hive.id = local.hive_id
+             WHERE local.singleton = 1
+             ON CONFLICT(operator_id) DO UPDATE
+                 SET start_surface = excluded.start_surface, updated_at = excluded.updated_at",
+            [surface],
+        )?;
+        // The guard is released before anything else asks for it: reading back
+        // through `start_surface` here would take the same connection lock and
+        // wait on this call forever.
+        drop(connection);
+        self.start_surface()
     }
 
     /// Creates a validated draft and records its authenticated origin.
@@ -1739,6 +1792,28 @@ fn insert_task_outcome(
     )?;
     Ok(())
 }
+
+/// Which screen Swarm opens on, chosen once by the operator.
+///
+/// Not a presentation preference: those are per device class, and the operator
+/// asked for one choice used everywhere. A phone landing somewhere a desktop
+/// would not is the problem being solved, so storing it per device class would
+/// build the problem into the schema.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+fn migrate_start_surface(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS operator_preferences (
+             operator_id TEXT PRIMARY KEY REFERENCES operators(id) ON DELETE CASCADE,
+             start_surface TEXT NOT NULL DEFAULT 'tasks'
+                 CHECK (start_surface IN ('decisions','tasks','workers','apiary','settings')),
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );",
+    )?;
+    transaction.pragma_update(None, "user_version", START_SURFACE_SCHEMA_VERSION)
+}
+
 fn migrate_schema(
     transaction: &rusqlite::Transaction<'_>,
     schema_version: i64,
@@ -1972,6 +2047,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < WORKER_FILED_DRAFT_SCHEMA_VERSION {
         coordinator::migrate_worker_filed_draft_attention(transaction)?;
+    }
+    if schema_version < START_SURFACE_SCHEMA_VERSION {
+        migrate_start_surface(transaction)?;
     }
     Ok(())
 }
@@ -4857,6 +4935,12 @@ mod tests {
                  WHERE type = 'table' AND name = 'coordinator_actions'
                    AND sql LIKE '%worker_filed_draft_attention%')",
         },
+        SchemaStep {
+            table: "operator_preferences",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
     ];
 
     fn newest_step() -> &'static SchemaStep {
@@ -4960,5 +5044,27 @@ mod tests {
         );
         drop(connection);
         migrated.verify_integrity().unwrap();
+    }
+
+    /// The operator asked for one choice used everywhere, because a phone
+    /// landing somewhere a desktop would not is the problem. Storing it per
+    /// device class would have built that problem into the schema.
+    #[test]
+    fn the_screen_swarm_opens_on_is_one_choice_for_every_device() {
+        let store = TaskStore::in_memory().unwrap();
+
+        // A default that is a real answer rather than an empty one.
+        assert_eq!(store.start_surface().unwrap(), "tasks");
+
+        assert_eq!(store.set_start_surface("workers").unwrap(), "workers");
+        assert_eq!(store.start_surface().unwrap(), "workers");
+
+        // Choosing again replaces the choice rather than accumulating one.
+        assert_eq!(store.set_start_surface("decisions").unwrap(), "decisions");
+        assert_eq!(store.start_surface().unwrap(), "decisions");
+
+        // Only screens this product actually opens on.
+        assert!(store.set_start_surface("elsewhere").is_err());
+        assert_eq!(store.start_surface().unwrap(), "decisions");
     }
 }
