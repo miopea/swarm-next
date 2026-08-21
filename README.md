@@ -1,11 +1,23 @@
 # Swarm
 
-Swarm is a ground-up redesign of Swarm: a persistent control room for AI
-coding agents. It preserves proven user outcomes while replacing accidental
-architecture, obsolete automation, and implementation-driven product behavior.
+Swarm is a persistent control room for a group of AI coding agents. It runs on
+one Linux machine as your own systemd user services, keeps agent sessions alive
+across browser reloads and application updates, and gives you a single queue for
+the decisions only you can make.
 
-The product and architecture baseline is accepted. Runtime development now
-begins with the terminal-first walking skeleton.
+It is a ground-up redesign of the earlier Python Swarm — now called Swarm
+Legacy — preserving the outcomes that proved useful while replacing accidental
+architecture and implementation-driven behaviour.
+
+## Start here
+
+| If you want to | Read |
+| --- | --- |
+| Install it | [docs/install.md](docs/install.md) |
+| Use it day to day | [docs/using-swarm.md](docs/using-swarm.md) |
+| Understand what changed from Legacy | [docs/moving-from-legacy.md](docs/moving-from-legacy.md) |
+
+The rest of this file is for people working on Swarm itself.
 
 ## Intended product qualities
 
@@ -101,8 +113,8 @@ unprivileged systemd user services:
 
 ```sh
 ./packaging/linux/build-release.sh
-tar -xzf dist/swarm-next-0.1.0-<commit>-linux-x86_64.tar.gz
-./swarm-next-0.1.0-<commit>-linux-x86_64/swarm-package install ./swarm-next-0.1.0-<commit>-linux-x86_64
+tar -xzf dist/swarm-0.1.0-<commit>-linux-x86_64.tar.gz
+./swarm-0.1.0-<commit>-linux-x86_64/swarm-package install ./swarm-0.1.0-<commit>-linux-x86_64
 ```
 
 The packaged UI listens on `http://127.0.0.1:8766`. Releases are staged under
