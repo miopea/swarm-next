@@ -92,7 +92,7 @@ fn provider_start_request(
     size: TerminalSize,
     mcp_config: Option<PathBuf>,
 ) -> Result<HostRequest, ApiError> {
-    let worker_workspace = PathBuf::from(&profile.workspace);
+    let worker_workspace = PathBuf::from(expand_home(&profile.workspace));
     let allow_outside_roots = !state
         .workspace_roots
         .iter()
@@ -180,6 +180,30 @@ fn claude_resume_history_available(profile: &WorkerProfile) -> bool {
     available
 }
 
+/// Resolves a leading `~` against the operator's home.
+///
+/// A workspace may be stored with one, and only the resume-history lookup
+/// expanded it — the start passed the string through verbatim, so the terminal
+/// host was asked to open a directory literally named `~` and the worker could
+/// never start. It also made the path fail every workspace-root comparison,
+/// because no root begins with a tilde.
+fn expand_home(workspace: &str) -> String {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return workspace.to_owned();
+    };
+    expand_home_against(workspace, &home)
+}
+
+fn expand_home_against(workspace: &str, home: &Path) -> String {
+    if workspace == "~" {
+        home.to_string_lossy().into_owned()
+    } else if let Some(relative) = workspace.strip_prefix("~/") {
+        home.join(relative).to_string_lossy().into_owned()
+    } else {
+        workspace.to_owned()
+    }
+}
+
 fn ensure_claude_resume_history_between(
     workspace: &str,
     conversation_id: &str,
@@ -187,13 +211,7 @@ fn ensure_claude_resume_history_between(
     target_root: &Path,
     home: &Path,
 ) -> Result<(), std::io::Error> {
-    let workspace = if workspace == "~" {
-        home.to_string_lossy().into_owned()
-    } else if let Some(relative) = workspace.strip_prefix("~/") {
-        home.join(relative).to_string_lossy().into_owned()
-    } else {
-        workspace.to_owned()
-    };
+    let workspace = expand_home_against(workspace, home);
     let encoded = workspace.replace(['/', '.'], "-");
     let destination_directory = target_root.join(&encoded);
     let destination = destination_directory.join(format!("{conversation_id}.jsonl"));
@@ -324,6 +342,23 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
 
+    /// A workspace stored with a tilde was expanded when looking for resume
+    /// history and not when starting the worker, so the terminal host was asked
+    /// to open a directory literally named `~`. One worker on the operator's
+    /// roster was stored that way and could never start.
+    #[test]
+    fn a_workspace_written_with_a_tilde_means_the_same_thing_everywhere() {
+        let home = Path::new("/home/bschleifer");
+        assert_eq!(
+            expand_home_against("~/projects/rcg/rcg-dev-install", home),
+            "/home/bschleifer/projects/rcg/rcg-dev-install"
+        );
+        assert_eq!(expand_home_against("~", home), "/home/bschleifer");
+        // An absolute path is already what it says, and a tilde inside one is
+        // part of the name rather than a reference to home.
+        assert_eq!(expand_home_against("/srv/petal", home), "/srv/petal");
+        assert_eq!(expand_home_against("/srv/~petal", home), "/srv/~petal");
+    }
     /// A worker with nothing saved has nothing to look for, so nothing can
     /// block it. This is the case the caller must not treat as a failure.
     #[test]
