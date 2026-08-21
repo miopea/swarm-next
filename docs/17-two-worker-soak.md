@@ -31,7 +31,7 @@ SWARM_SOAK_DURATION_SECONDS=86400 \
 scripts/dogfood/two-worker-soak.sh
 ```
 
-Reports default to `~/.local/state/swarm-next/soak`. The raw CSV is evidence;
+Reports default to `~/.local/state/swarm/soak`. The raw CSV is evidence;
 passing requires no missing session, failed API call, unbounded history, or
 sustained application-memory growth. Provider-process memory is reported with
 the terminal-host cgroup but evaluated separately from Rust-host idle memory.

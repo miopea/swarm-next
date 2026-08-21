@@ -14,7 +14,7 @@ cleanup() {
   case "$test_root" in /tmp/*) rm -rf -- "$test_root";; esac
 }
 trap cleanup EXIT HUP INT TERM
-[ -x "$bundle/swarm-next-package" ]
+[ -x "$bundle/swarm-package" ]
 
 socket="$test_root/runtime/terminal.sock"
 history="$test_root/state/history"

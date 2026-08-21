@@ -41,7 +41,14 @@ use swarm_persistence::{
 use tokio::sync::Notify;
 use tower::ServiceExt;
 
-const CONFIG_SERVER_NAME: &str = "swarm-next";
+/// The MCP server name a worker sees.
+///
+/// Renaming this removes every running worker's Swarm access at once rather
+/// than degrading it: a worker's tool schema is fixed when its session
+/// connects, so the old name keeps being used until that session reconnects.
+/// The config payload replaces the whole file, so a restarted worker gets this
+/// name and no stale entry beside it.
+const CONFIG_SERVER_NAME: &str = "swarm";
 const MCP_BRIDGE_COMMAND: &str = "swarm-terminal-host";
 const TOKEN_BYTES: usize = 32;
 
@@ -1319,11 +1326,26 @@ fn generate_token() -> Result<String, AgentBridgeError> {
     Ok(token)
 }
 
+/// The name this config filed Swarm under.
+///
+/// Reads both, writes one. A config written before the product was renamed
+/// still says `swarm-next`, and the token inside it is the only copy — refusing
+/// to look there would lose every existing worker's credential at the moment of
+/// migration, which is the moment it can least afford to be lost.
+fn config_server_names() -> [&'static str; 2] {
+    [CONFIG_SERVER_NAME, "swarm-next"]
+}
+
+fn config_value<'a>(config: &'a Value, suffix: &str) -> Option<&'a Value> {
+    config_server_names()
+        .into_iter()
+        .find_map(|name| config.pointer(&format!("/mcpServers/{name}/{suffix}")))
+}
+
 fn token_from_config(contents: &str) -> Option<String> {
     let config: Value = serde_json::from_str(contents).ok()?;
-    config
-        .pointer("/mcpServers/swarm-next/env/SWARM_MCP_AUTHORIZATION")
-        .or_else(|| config.pointer("/mcpServers/swarm-next/headers/Authorization"))?
+    config_value(&config, "env/SWARM_MCP_AUTHORIZATION")
+        .or_else(|| config_value(&config, "headers/Authorization"))?
         .as_str()?
         .strip_prefix("Bearer ")
         .filter(|token| token.len() == TOKEN_BYTES * 2)
@@ -1334,14 +1356,8 @@ fn config_uses_stdio_bridge(contents: &str) -> bool {
     let Ok(config) = serde_json::from_str::<Value>(contents) else {
         return false;
     };
-    config
-        .pointer("/mcpServers/swarm-next/type")
-        .and_then(Value::as_str)
-        == Some("stdio")
-        && config
-            .pointer("/mcpServers/swarm-next/command")
-            .and_then(Value::as_str)
-            == Some(MCP_BRIDGE_COMMAND)
+    config_value(&config, "type").and_then(Value::as_str) == Some("stdio")
+        && config_value(&config, "command").and_then(Value::as_str) == Some(MCP_BRIDGE_COMMAND)
 }
 
 fn write_private_atomic(path: &Path, payload: &[u8]) -> Result<(), std::io::Error> {
@@ -1498,7 +1514,7 @@ mod tests {
             &path,
             serde_json::to_vec_pretty(&json!({
                 "mcpServers": {
-                    "swarm-next": {
+                    "swarm": {
                         "type": "http",
                         "url": "http://127.0.0.1:8876/mcp",
                         "headers": { "Authorization": format!("Bearer {token}") }
@@ -1514,11 +1530,11 @@ mod tests {
         let upgraded: Value =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(
-            upgraded.pointer("/mcpServers/swarm-next/type"),
+            upgraded.pointer("/mcpServers/swarm/type"),
             Some(&Value::String("stdio".into()))
         );
         assert_eq!(
-            upgraded.pointer("/mcpServers/swarm-next/command"),
+            upgraded.pointer("/mcpServers/swarm/command"),
             Some(&Value::String(MCP_BRIDGE_COMMAND.into()))
         );
     }

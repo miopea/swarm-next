@@ -65,8 +65,8 @@ Run the terminal host and API in separate shells with a shared socket path. The
 host and API are separate process owners shipped as one application:
 
 ```sh
-export SWARM_TERMINAL_SOCKET="$HOME/.local/state/swarm-next/run/terminal.sock"
-export SWARM_TERMINAL_HISTORY_DIR="$HOME/.local/state/swarm-next/terminal-history"
+export SWARM_TERMINAL_SOCKET="$HOME/.local/state/swarm/run/terminal.sock"
+export SWARM_TERMINAL_HISTORY_DIR="$HOME/.local/state/swarm/terminal-history"
 export SWARM_WORKSPACE_ROOTS="/absolute/path/to/workspaces"
 cargo run -p swarm-terminal-host
 
@@ -102,24 +102,24 @@ unprivileged systemd user services:
 ```sh
 ./packaging/linux/build-release.sh
 tar -xzf dist/swarm-next-0.1.0-<commit>-linux-x86_64.tar.gz
-./swarm-next-0.1.0-<commit>-linux-x86_64/swarm-next-package install ./swarm-next-0.1.0-<commit>-linux-x86_64
+./swarm-next-0.1.0-<commit>-linux-x86_64/swarm-package install ./swarm-next-0.1.0-<commit>-linux-x86_64
 ```
 
 The packaged UI listens on `http://127.0.0.1:8766`. Releases are staged under
-`~/.local/lib/swarm-next`, configuration is written once under
-`~/.config/swarm-next`, and durable terminal history remains under
-`~/.local/state/swarm-next`. Content-hashed browser assets are retained under
-`~/.local/lib/swarm-next/assets` so a tab opened before an update can still load
+`~/.local/lib/swarm`, configuration is written once under
+`~/.config/swarm`, and durable terminal history remains under
+`~/.local/state/swarm`. Content-hashed browser assets are retained under
+`~/.local/lib/swarm/assets` so a tab opened before an update can still load
 a deferred terminal module afterward. The writable workspace defaults to
 `~/swarm-workspaces`; set `SWARM_WORKSPACE_ROOT` during the first install to
 choose a different absolute path. Use `update RELEASE_DIR`, `rollback`, or
 `uninstall`. Uninstall preserves configuration and state.
 Compatible updates switch the API and browser release, then restart only
-`swarm-next-api.service`; the independently versioned terminal-host process and
-its worker PTYs stay alive. Run `swarm-next-package reconcile-host` when workers
+`swarm-api.service`; the independently versioned terminal-host process and
+its worker PTYs stay alive. Run `swarm-package reconcile-host` when workers
 are idle to move the sidecar to the current release.
 When a release changes the terminal protocol, stop all Swarm workers and
-run `swarm-next-package migrate-protocol RELEASE_DIR`. The migration drains the
+run `swarm-package migrate-protocol RELEASE_DIR`. The migration drains the
 old host, refuses active sessions, switches the API and sidecar together, and
 restores both previous pointers if health verification fails.
 

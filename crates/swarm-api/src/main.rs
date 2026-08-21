@@ -230,13 +230,13 @@ fn database_path_from_env() -> PathBuf {
     env::var_os("SWARM_DATABASE_PATH").map_or_else(
         || {
             env::var_os("HOME").map_or_else(
-                || PathBuf::from("swarm-next.sqlite3"),
+                || PathBuf::from("swarm.sqlite3"),
                 |home| {
                     PathBuf::from(home)
                         .join(".local")
                         .join("state")
-                        .join("swarm-next")
-                        .join("swarm-next.sqlite3")
+                        .join("swarm")
+                        .join("swarm.sqlite3")
                 },
             )
         },

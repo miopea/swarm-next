@@ -57,7 +57,7 @@ binary paths; ordinary updates establish drain state and replace the host only
 when readiness is true.
 
 The socket path defaults to
-`$HOME/.local/state/swarm-next/run/terminal.sock` and may be overridden with
+`$HOME/.local/state/swarm/run/terminal.sock` and may be overridden with
 `SWARM_TERMINAL_SOCKET` for isolated deployments and side-by-side dogfooding.
 
 ## Development usage

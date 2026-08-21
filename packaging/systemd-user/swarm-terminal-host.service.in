@@ -1,18 +1,18 @@
 [Unit]
-Description=Swarm Next terminal host
-PartOf=swarm-next.target
+Description=Swarm terminal host
+PartOf=swarm.target
 
 [Service]
 Type=simple
-EnvironmentFile=@CONFIG_ROOT@/swarm-next.env
+EnvironmentFile=@CONFIG_ROOT@/swarm.env
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-Environment=SWARM_TERMINAL_SOCKET=%t/swarm-next/terminal.sock
+Environment=SWARM_TERMINAL_SOCKET=%t/swarm/terminal.sock
 Environment=SWARM_TERMINAL_HISTORY_DIR=@STATE_ROOT@/terminal-history
 Environment=SWARM_CLAUDE_SETTINGS_PATH=%h/.claude/settings.json
 ExecStart=@INSTALL_ROOT@/host-current/bin/swarm-terminal-host
 Restart=on-failure
 RestartSec=2s
-RuntimeDirectory=swarm-next
+RuntimeDirectory=swarm
 RuntimeDirectoryMode=0700
 TimeoutStopSec=30s
 NoNewPrivileges=yes
@@ -26,4 +26,4 @@ ReadWritePaths=%h/.claude.json
 UMask=0077
 
 [Install]
-WantedBy=swarm-next.target
+WantedBy=swarm.target

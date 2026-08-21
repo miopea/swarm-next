@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn schema_v54_adds_receiving_hive_handoff_journal() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         let identity = store.local_hive_identity().unwrap();
         store

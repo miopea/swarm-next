@@ -1,11 +1,11 @@
 [Unit]
-Description=Apply a requested or safely deferred Swarm Next worker engine update
-After=swarm-next-terminal-host.service swarm-next-api.service
-Requires=swarm-next-terminal-host.service
+Description=Apply a requested or safely deferred Swarm worker engine update
+After=swarm-terminal-host.service swarm-api.service
+Requires=swarm-terminal-host.service
 
 [Service]
 Type=oneshot
-ExecStart=@INSTALL_ROOT@/current/swarm-next-package reconcile-host-requested
+ExecStart=@INSTALL_ROOT@/current/swarm-package reconcile-host-requested
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict

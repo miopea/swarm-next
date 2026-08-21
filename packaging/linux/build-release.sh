@@ -49,7 +49,7 @@ git -C "$repo_root" diff --quiet && git -C "$repo_root" diff --cached --quiet ||
 }
 
 output=${1:-"$repo_root/dist"}
-bundle="$output/swarm-next-$version-linux-x86_64"
+bundle="$output/swarm-$version-linux-x86_64"
 rm -rf -- "$bundle"
 mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 
@@ -80,15 +80,15 @@ cp "$repo_root/target/release/swarm-terminal-host" "$bundle/bin/"
 cp "$repo_root/target/release/swarmctl" "$bundle/bin/"
 cp -R "$repo_root/web/dist/." "$bundle/web/"
 cp "$repo_root/packaging/systemd-user/"*.in "$bundle/systemd-user/"
-cp "$repo_root/packaging/linux/swarm-next-package" "$bundle/"
-chmod 0755 "$bundle/swarm-next-package"
+cp "$repo_root/packaging/linux/swarm-package" "$bundle/"
+chmod 0755 "$bundle/swarm-package"
 printf '%s\n' "$version" > "$bundle/VERSION"
 printf '%s\n' "$source_revision" > "$bundle/SOURCE_REVISION"
 printf '%s\n' "$protocol" > "$bundle/PROTOCOL"
 (
   cd "$bundle"
   find bin web systemd-user -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
-  sha256sum swarm-next-package >> SHA256SUMS
+  sha256sum swarm-package >> SHA256SUMS
 )
-tar -C "$output" -czf "$output/swarm-next-$version-linux-x86_64.tar.gz" "$(basename "$bundle")"
-printf '%s\n' "$output/swarm-next-$version-linux-x86_64.tar.gz"
+tar -C "$output" -czf "$output/swarm-$version-linux-x86_64.tar.gz" "$(basename "$bundle")"
+printf '%s\n' "$output/swarm-$version-linux-x86_64.tar.gz"

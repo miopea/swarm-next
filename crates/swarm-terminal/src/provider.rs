@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn claude_loads_the_private_mcp_config_in_every_recovery_mode() {
-        let config = Path::new("/state/swarm-next/agents/worker.json");
+        let config = Path::new("/state/swarm/agents/worker.json");
         for start in [
             ClaudeConversationStart::New {
                 session_id: ProviderConversationId::new(),
@@ -305,7 +305,7 @@ mod tests {
                 &command.arguments[command.arguments.len() - 3..],
                 [
                     "--mcp-config",
-                    "/state/swarm-next/agents/worker.json",
+                    "/state/swarm/agents/worker.json",
                     "--strict-mcp-config"
                 ]
             );
@@ -318,7 +318,7 @@ mod tests {
             .command_for_with_configuration(
                 Path::new("/workspace/example"),
                 ClaudeConversationStart::Continue,
-                Some(Path::new("/state/swarm-next/agents/worker.json")),
+                Some(Path::new("/state/swarm/agents/worker.json")),
                 Some(Path::new("/home/operator/.claude/settings.json")),
             )
             .unwrap();
@@ -327,7 +327,7 @@ mod tests {
             [
                 "--continue",
                 "--mcp-config",
-                "/state/swarm-next/agents/worker.json",
+                "/state/swarm/agents/worker.json",
                 "--strict-mcp-config",
                 "--settings",
                 "/home/operator/.claude/settings.json",

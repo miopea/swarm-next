@@ -3663,7 +3663,7 @@ mod tests {
     #[test]
     fn reopens_file_database_without_losing_tasks() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let id = {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -3732,7 +3732,7 @@ mod tests {
     #[test]
     fn reopens_current_schema_without_replacing_hive_identity() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -3748,7 +3748,7 @@ mod tests {
     #[test]
     fn migrates_schema_v21_to_durable_jira_transition_deliveries() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             let connection = store.connection().unwrap();
@@ -3787,7 +3787,7 @@ mod tests {
     #[test]
     fn migrates_schema_v22_to_durable_jira_comment_deliveries() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             let connection = store.connection().unwrap();
@@ -3862,7 +3862,7 @@ mod tests {
     #[test]
     fn migrates_v10_decisions_to_the_guarded_delivery_outbox() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             let connection = store.connection().unwrap();
@@ -4202,7 +4202,7 @@ mod tests {
     #[test]
     fn migrates_schema_v24_to_explicit_stewardship_grants() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -4334,7 +4334,7 @@ mod tests {
     #[test]
     fn migrates_schema_v4_without_losing_existing_hive_data() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let (task_id, hive_id) = {
             let store = TaskStore::open(&path).unwrap();
             let task = store.create_task("Existing v4 task", "/workspace").unwrap();
@@ -4369,7 +4369,7 @@ mod tests {
     #[test]
     fn migrates_schema_v6_without_assigning_ambiguous_existing_conversations() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let worker_id = {
             let store = TaskStore::open(&path).unwrap();
             let worker = store
@@ -4413,7 +4413,7 @@ mod tests {
     #[test]
     fn migrates_schema_v7_to_bounded_worker_engagements() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -4440,7 +4440,7 @@ mod tests {
     #[test]
     fn migrates_schema_v11_to_durable_task_dispatches() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -4474,7 +4474,7 @@ mod tests {
     #[test]
     fn migrates_schema_v12_to_task_handoff_notes_and_outbox() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -4521,7 +4521,7 @@ mod tests {
     #[test]
     fn migrates_schema_v13_to_bounded_operator_presence() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -4559,7 +4559,7 @@ mod tests {
     #[test]
     fn migrates_schema_v14_to_bounded_mobile_attention() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -4606,7 +4606,7 @@ mod tests {
     #[test]
     fn migrates_schema_v15_to_device_owned_engagements() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -4639,7 +4639,7 @@ mod tests {
     #[test]
     fn migrates_schema_v16_to_queen_autonomy_preferences() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -4668,7 +4668,7 @@ mod tests {
     #[test]
     fn migrates_schema_v17_to_device_presentation_preferences() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store
@@ -4699,7 +4699,7 @@ mod tests {
     #[test]
     fn fresh_store_owns_tasks_and_workers_in_one_durable_hive() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let (hive_id, operator_id) = {
             let store = TaskStore::open(&path).unwrap();
             let identity = store.local_hive_identity().unwrap();
@@ -4749,7 +4749,7 @@ mod tests {
     #[test]
     fn migrates_schema_v43_to_durable_task_activity_actors() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let task_id = {
             let store = TaskStore::open(&path).unwrap();
             let task = store
@@ -4964,7 +4964,7 @@ mod tests {
     #[test]
     fn migrates_the_immediately_previous_schema_to_the_declared_ceiling() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         {
             let store = TaskStore::open(&path).unwrap();
             store

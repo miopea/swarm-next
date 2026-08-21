@@ -4402,7 +4402,7 @@ mod tests {
         ));
 
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let keeper = TaskStore::open(&path).unwrap();
         keeper
             .create_apiary_for_local_hive("Garden", SharedWorkBackend::Jira, 9_000)
@@ -4762,7 +4762,7 @@ mod tests {
     #[test]
     fn federation_identity_survives_database_reopen() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let first = TaskStore::open(&path)
             .unwrap()
             .issue_hive_connection_card(10_000, 3_600)
@@ -5095,7 +5095,7 @@ mod tests {
     #[test]
     fn schema_v30_migrates_to_separate_hive_candidates() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         store
             .connection()
@@ -5126,7 +5126,7 @@ mod tests {
     #[test]
     fn schema_v31_migrates_to_one_time_federation_invitations() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         store
             .connection()
@@ -5157,7 +5157,7 @@ mod tests {
     #[test]
     fn schema_v32_migrates_to_private_join_invitations() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         store
             .connection()
@@ -5188,7 +5188,7 @@ mod tests {
     #[test]
     fn schema_v33_migrates_to_private_invitation_project_manifests() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         store
             .connection()
@@ -6111,7 +6111,7 @@ mod tests {
     #[test]
     fn schema_v34_migrates_to_federation_memberships() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         store
             .connection()
@@ -6143,7 +6143,7 @@ mod tests {
     #[test]
     fn schema_v35_migrates_to_local_federation_membership() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         store
             .connection()
@@ -6174,7 +6174,7 @@ mod tests {
     #[test]
     fn schema_v36_migrates_to_local_federation_catalog() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         store
             .connection()
@@ -6205,7 +6205,7 @@ mod tests {
     #[test]
     fn schema_v37_migrates_to_federation_claims() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         store
             .connection()
@@ -6236,7 +6236,7 @@ mod tests {
     #[test]
     fn schema_v38_migrates_to_local_federation_sync() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         store
             .connection()

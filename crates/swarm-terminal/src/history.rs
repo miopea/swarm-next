@@ -615,7 +615,7 @@ impl HistoryStore {
 #[must_use]
 pub fn default_terminal_history_path() -> PathBuf {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
-    home.join(".local/state/swarm-next/terminal-history")
+    home.join(".local/state/swarm/terminal-history")
 }
 
 enum PageStart {

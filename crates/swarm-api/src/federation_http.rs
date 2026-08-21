@@ -83,7 +83,7 @@ impl FederationHttpClient {
             .connect_timeout(request_timeout)
             .timeout(request_timeout)
             .redirect(reqwest::redirect::Policy::none())
-            .user_agent("swarm-next-federation/1")
+            .user_agent("swarm-federation/1")
             .build()
             .map_err(|_| FederationHttpError::TransportUnavailable)?;
         Ok(Self { client, base_url })

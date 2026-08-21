@@ -346,7 +346,7 @@ Sequence, 2026-08-19:
 
 - **21:15** App/API deployed at `65e5db0`. That commit changed `swarm-terminal`,
   so the expected worker-engine build id changed with it.
-- **21:47** `swarm-next-host-reconcile` saw the mismatch and applied the worker
+- **21:47** `swarm-host-reconcile` saw the mismatch and applied the worker
   engine update **on its own**, stopping all seven workers. Nobody asked it to;
   a timer acted on a build id that a deploy had moved.
 - The revival intents from item 10 were recorded correctly — six workers owed a
@@ -616,12 +616,12 @@ demand. Swarm needs the equivalent before anyone else can use it.
 
 What exists today, confirmed by reading the surface rather than assuming:
 
-- **Developer mode is real and complete.** `swarm-next-package` carries
+- **Developer mode is real and complete.** `swarm-package` carries
   `enable-development CHECKOUT`, `disable-development`, and
   `reload-development`, and `development.enabled` in the runtime response is
   literally "is a development reload path configured". That is the mode being
   used to build Swarm in Swarm.
-- **Applying a release already exists.** `swarm-next-package install|update
+- **Applying a release already exists.** `swarm-package install|update
   RELEASE_DIR` installs a prepared release directory, and that directory
   carries `SHA256SUMS`, `VERSION`, `PROTOCOL`, and `SOURCE_REVISION`, so
   integrity and compatibility checking are already part of the release format.
@@ -945,7 +945,7 @@ Worth separating when this is picked up, because the risk is not evenly spread:
 
 - **User-visible naming** — window title, control-room lockup, page copy,
   documentation. Cheap and safe.
-- **On-disk and service identifiers** — `~/.local/state/swarm-next`, the
+- **On-disk and service identifiers** — `~/.local/state/swarm`, the
   systemd unit names, the release directory, the MCP server key `swarm-next`,
   crate names. Renaming these is a migration with real failure modes and no
   user-visible benefit, and the two Swarms have to coexist on this machine

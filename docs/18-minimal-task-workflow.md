@@ -35,7 +35,7 @@ failure remains visible rather than fabricating a completed transition.
   terminal lifetime.
 
 The SQLite database defaults to
-`~/.local/state/swarm-next/swarm-next.sqlite3`. The packaged API receives the
+`~/.local/state/swarm/swarm.sqlite3`. The packaged API receives the
 smallest writable systemd path needed for that state and retains a `0077`
 umask.
 

@@ -265,7 +265,7 @@ product decisions.
 
 Ring 1 now has direct same-host evidence for the resource-ownership outcome as
 well. The live Next roster reported two awake workers out of 30 configured, and
-the `swarm-next-terminal-host.service` cgroup owned exactly those two provider
+the `swarm-terminal-host.service` cgroup owned exactly those two provider
 processes. The remaining 28 sleeping workers owned no provider process. Extra
 Claude processes on the machine were traced to Legacy's separate `swarm.service`
 cgroup. The simultaneous snapshots—Legacy 23,591,497,728 bytes and 438 tasks,

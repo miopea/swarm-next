@@ -65,7 +65,7 @@ A normal compatible package update:
 1. verifies the release checksum and exact host protocol;
 2. retains the old API/browser release and its hashed assets;
 3. atomically switches the API/browser `current` pointer;
-4. restarts and health-checks only `swarm-next-api.service`;
+4. restarts and health-checks only `swarm-api.service`;
 5. leaves `host-current`, the host PID, socket, and all worker PTYs untouched.
 
 The explicit `reconcile-host` action:

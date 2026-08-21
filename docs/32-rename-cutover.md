@@ -21,10 +21,10 @@ Five identifiers, and each one breaks something while it changes.
 
 | Identifier | Occurrences | What breaks during the change |
 | --- | --- | --- |
-| `~/.local/state/swarm-next/` and `swarm-next.sqlite3` | 56 | The live database. Every task, decision, worker and email thread. |
-| `swarm-next-api.service` | 39 | The API stops. |
-| `swarm-next-terminal-host.service` | 33 | Every worker's terminal. |
-| `swarm-next-host-reconcile` and `-development-reload` units | 32 | The reload and reconcile paths. |
+| `~/.local/state/swarm/` and `swarm.sqlite3` | 56 | The live database. Every task, decision, worker and email thread. |
+| `swarm-api.service` | 39 | The API stops. |
+| `swarm-terminal-host.service` | 33 | Every worker's terminal. |
+| `swarm-host-reconcile` and `-development-reload` units | 32 | The reload and reconcile paths. |
 | MCP server key `swarm-next` | 5 | **Every running worker's Swarm access, at once.** |
 
 The last one is why this is a cutover rather than a commit. A worker's MCP tool

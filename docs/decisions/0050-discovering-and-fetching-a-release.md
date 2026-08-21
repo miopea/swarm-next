@@ -16,12 +16,12 @@ item 43, without which none of this is expressible.
 The gap is narrower than it looks, and reading the surface rather than assuming
 is what narrows it.
 
-**Developer mode is real and complete.** `swarm-next-package` carries
+**Developer mode is real and complete.** `swarm-package` carries
 `enable-development CHECKOUT`, `disable-development`, and `reload-development`.
 `development.enabled` in the runtime response means precisely "is a development
 reload path configured". This is the mode Swarm is being built in.
 
-**Applying a release already exists.** `swarm-next-package install|update
+**Applying a release already exists.** `swarm-package install|update
 RELEASE_DIR` installs a prepared release directory, and that directory carries
 `SHA256SUMS`, `VERSION`, `PROTOCOL`, and `SOURCE_REVISION`. Integrity and
 compatibility checking are already part of the release format.

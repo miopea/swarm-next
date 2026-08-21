@@ -1,9 +1,9 @@
 [Unit]
-Description=Apply an operator-requested Swarm Next worker engine update
+Description=Apply an operator-requested Swarm worker engine update
 
 [Path]
 PathChanged=@STATE_ROOT@/worker-engine-maintenance.request
-Unit=swarm-next-host-reconcile.service
+Unit=swarm-host-reconcile.service
 
 [Install]
-WantedBy=swarm-next.target
+WantedBy=swarm.target

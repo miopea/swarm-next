@@ -21,7 +21,7 @@ preserves an interactive PTY; descriptor handoff remains a separate milestone.
   output.
 
 The default root is
-`$HOME/.local/state/swarm-next/terminal-history`. Override it with
+`$HOME/.local/state/swarm/terminal-history`. Override it with
 `SWARM_TERMINAL_HISTORY_DIR`.
 
 ## Resource policy

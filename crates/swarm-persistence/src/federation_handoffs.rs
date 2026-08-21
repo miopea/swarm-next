@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn schema_v53_adds_atomic_claim_handoffs_without_replacing_identity() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         let identity = store.local_hive_identity().unwrap();
         store

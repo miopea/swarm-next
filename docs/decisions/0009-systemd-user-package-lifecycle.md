@@ -14,13 +14,13 @@ editing service files or deleting state by hand.
 Swarm ships one release artifact containing the Rust API, terminal host,
 `swarmctl`, and compiled browser assets. Installation uses:
 
-- versioned immutable releases under `~/.local/lib/swarm-next/releases`;
+- versioned immutable releases under `~/.local/lib/swarm/releases`;
 - an atomically replaced `current` API/browser symlink and one retained
   `previous` link;
 - an independent `host-current` symlink for the terminal sidecar;
-- systemd user units grouped by `swarm-next.target`;
-- configuration under `~/.config/swarm-next`;
-- durable data under `~/.local/state/swarm-next`;
+- systemd user units grouped by `swarm.target`;
+- configuration under `~/.config/swarm`;
+- durable data under `~/.local/state/swarm`;
 - a same-user Unix socket under the systemd user runtime directory;
 - the side-by-side HTTP endpoint `127.0.0.1:8766`.
 
@@ -33,7 +33,7 @@ updates one product even though terminal ownership remains in its independent
 process.
 
 Content-hashed browser files are also published into a stable asset library
-under `~/.local/lib/swarm-next/assets`. Updates retain existing files and add
+under `~/.local/lib/swarm/assets`. Updates retain existing files and add
 the previous and incoming release assets before switching the current link. An
 open tab can therefore load a deferred module from its own release after an
 update. The current release remains the fallback source, unknown asset names

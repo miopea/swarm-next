@@ -1,18 +1,18 @@
 [Unit]
-Description=Swarm Next application and web UI
-PartOf=swarm-next.target
-After=swarm-next-terminal-host.service
-Wants=swarm-next-terminal-host.service
+Description=Swarm application and web UI
+PartOf=swarm.target
+After=swarm-terminal-host.service
+Wants=swarm-terminal-host.service
 
 [Service]
 Type=simple
-EnvironmentFile=@CONFIG_ROOT@/swarm-next.env
-EnvironmentFile=-@CONFIG_ROOT@/swarm-next-dev.env
+EnvironmentFile=@CONFIG_ROOT@/swarm.env
+EnvironmentFile=-@CONFIG_ROOT@/swarm-dev.env
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-Environment=SWARM_TERMINAL_SOCKET=%t/swarm-next/terminal.sock
+Environment=SWARM_TERMINAL_SOCKET=%t/swarm/terminal.sock
 Environment=SWARM_WEB_ROOT=@INSTALL_ROOT@/current/web
 Environment=SWARM_ASSET_ROOT=@INSTALL_ROOT@/assets
-Environment=SWARM_DATABASE_PATH=@STATE_ROOT@/swarm-next.sqlite3
+Environment=SWARM_DATABASE_PATH=@STATE_ROOT@/swarm.sqlite3
 Environment=SWARM_MAINTENANCE_REQUEST_PATH=@STATE_ROOT@/worker-engine-maintenance.request
 ExecStart=@INSTALL_ROOT@/current/bin/swarm-api
 Restart=on-failure
@@ -27,4 +27,4 @@ ReadWritePaths=%h/.claude.json
 UMask=0077
 
 [Install]
-WantedBy=swarm-next.target
+WantedBy=swarm.target

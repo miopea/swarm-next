@@ -3367,7 +3367,7 @@ async fn invite_apiary_hive_candidate(
     response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response_headers.insert(
         header::CONTENT_DISPOSITION,
-        HeaderValue::from_static("attachment; filename=swarm-next-apiary-invitation.json"),
+        HeaderValue::from_static("attachment; filename=swarm-apiary-invitation.json"),
     );
     Ok((StatusCode::CREATED, response_headers, Json(bundle)).into_response())
 }
@@ -8500,7 +8500,7 @@ mod tests {
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         assert_eq!(
             response.headers()[header::CONTENT_DISPOSITION],
-            "attachment; filename=swarm-next-apiary-invitation.json"
+            "attachment; filename=swarm-apiary-invitation.json"
         );
         let bundle: swarm_domain::ApiaryInvitationBundle =
             serde_json::from_value(response_json(response).await).unwrap();

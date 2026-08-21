@@ -8,7 +8,7 @@ Accepted for dogfooding. Reverses the `CLAUDE_CONFIG_DIR` redirect recorded in
 ## Context
 
 ADR 0009 pointed `CLAUDE_CONFIG_DIR` at
-`~/.local/state/swarm-next/providers/claude` so a worker's credentials,
+`~/.local/state/swarm/providers/claude` so a worker's credentials,
 settings, session history, and plugins stayed inside application state. The
 service units already run with `ProtectHome=read-only`, so the redirect was also
 the only reason Claude could write anything at all.

@@ -4,9 +4,9 @@ set -eu
 action=${1:-}
 bundle=${2:-}
 home_dir=${HOME:?HOME is required}
-install_root=${SWARM_INSTALL_ROOT:-"$home_dir/.local/lib/swarm-next"}
-config_root=${SWARM_CONFIG_ROOT:-"$home_dir/.config/swarm-next"}
-state_root=${SWARM_STATE_ROOT:-"$home_dir/.local/state/swarm-next"}
+install_root=${SWARM_INSTALL_ROOT:-"$home_dir/.local/lib/swarm"}
+config_root=${SWARM_CONFIG_ROOT:-"$home_dir/.config/swarm"}
+state_root=${SWARM_STATE_ROOT:-"$home_dir/.local/state/swarm"}
 unit_root=${SWARM_SYSTEMD_USER_ROOT:-"$home_dir/.config/systemd/user"}
 bin_root=${SWARM_BIN_ROOT:-"$home_dir/.local/bin"}
 systemctl_bin=${SWARM_SYSTEMCTL_BIN:-systemctl}
@@ -14,7 +14,7 @@ curl_bin=${SWARM_CURL_BIN:-curl}
 health_url=${SWARM_HEALTH_URL:-http://127.0.0.1:8766/health}
 health_attempts=${SWARM_HEALTH_ATTEMPTS:-30}
 workspace_root=${SWARM_WORKSPACE_ROOT:-}
-[ -n "$workspace_root" ] || workspace_root=$(sed -n 's/^SWARM_WORKSPACE_ROOTS=//p' "$config_root/swarm-next.env" 2>/dev/null || true)
+[ -n "$workspace_root" ] || workspace_root=$(sed -n 's/^SWARM_WORKSPACE_ROOTS=//p' "$config_root/swarm.env" 2>/dev/null || true)
 [ -n "$workspace_root" ] || workspace_root="$home_dir/swarm-workspaces"
 drain_release=
 rollback_release=
@@ -25,15 +25,15 @@ restore_incoming=
 update_rollback=
 update_auth=
 update_incoming=
-dev_config="$config_root/swarm-next-dev.env"
+dev_config="$config_root/swarm-dev.env"
 dev_reload_started=
 dev_status_path=
 dev_build_root=
 dev_reload_revision=
 
-die() { printf 'swarm-next-package: %s\n' "$*" >&2; exit 1; }
+die() { printf 'swarm-package: %s\n' "$*" >&2; exit 1; }
 run_systemctl() { "$systemctl_bin" --user "$@"; }
-terminal_socket() { printf '%s/swarm-next/terminal.sock\n' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; }
+terminal_socket() { printf '%s/swarm/terminal.sock\n' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"; }
 
 on_exit() {
   result=$?
@@ -43,23 +43,23 @@ on_exit() {
   [ -z "$update_auth" ] || rm -f "$update_auth"
   [ -z "$update_incoming" ] || rm -f "$update_incoming"
   if [ -n "$restore_rollback" ] && [ -f "$restore_rollback" ]; then
-    run_systemctl stop swarm-next-api.service >/dev/null 2>&1 || true
-    cp "$restore_rollback" "$state_root/swarm-next.sqlite3" >/dev/null 2>&1 || true
-    chmod 0600 "$state_root/swarm-next.sqlite3" >/dev/null 2>&1 || true
-    rm -f "$state_root/swarm-next.sqlite3-wal" "$state_root/swarm-next.sqlite3-shm"
-    run_systemctl start swarm-next-api.service >/dev/null 2>&1 || true
+    run_systemctl stop swarm-api.service >/dev/null 2>&1 || true
+    cp "$restore_rollback" "$state_root/swarm.sqlite3" >/dev/null 2>&1 || true
+    chmod 0600 "$state_root/swarm.sqlite3" >/dev/null 2>&1 || true
+    rm -f "$state_root/swarm.sqlite3-wal" "$state_root/swarm.sqlite3-shm"
+    run_systemctl start swarm-api.service >/dev/null 2>&1 || true
   fi
   if [ -n "$rollback_host_release" ] && [ -d "$rollback_host_release" ]; then
     activate_link "$rollback_release" >/dev/null 2>&1 || true
     activate_host_link "$rollback_host_release" >/dev/null 2>&1 || true
     install_units "$rollback_release" >/dev/null 2>&1 || true
     restore_update_database >/dev/null 2>&1 || true
-    run_systemctl enable --now swarm-next.target >/dev/null 2>&1 || true
+    run_systemctl enable --now swarm.target >/dev/null 2>&1 || true
   elif [ -n "$rollback_release" ] && [ -d "$rollback_release" ]; then
     activate_link "$rollback_release" >/dev/null 2>&1 || true
     install_units "$rollback_release" >/dev/null 2>&1 || true
     restore_update_database >/dev/null 2>&1 || true
-    run_systemctl restart swarm-next-api.service >/dev/null 2>&1 || true
+    run_systemctl restart swarm-api.service >/dev/null 2>&1 || true
   fi
   if [ -n "$drain_release" ]; then
     SWARM_TERMINAL_SOCKET=$(terminal_socket) \
@@ -90,13 +90,13 @@ prune_update_backups() {
 create_update_backup() {
   current_release=$1
   verifier_release=${2:-$current_release}
-  database="$state_root/swarm-next.sqlite3"
+  database="$state_root/swarm.sqlite3"
   [ -f "$database" ] || return 0
   mkdir -p "$state_root/backups"
   chmod 0700 "$state_root/backups"
   update_incoming="$state_root/.update-backup-$$.sqlite3"
   update_auth="$state_root/.update-auth-$$"
-  token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm-next.env")
+  token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm.env")
   umask 077
   printf 'header = "Authorization: Bearer %s"\n' "$token" > "$update_auth"
   "$curl_bin" --fail --silent --show-error --config "$update_auth" --output "$update_incoming" "${health_url%/health}/api/v1/backups/database" || die "could not create the pre-update database backup"
@@ -113,8 +113,8 @@ create_update_backup() {
 restore_update_database() {
   [ -n "$update_rollback" ] || return 0
   [ -f "$update_rollback" ] || die "pre-update rollback backup is missing"
-  database="$state_root/swarm-next.sqlite3"
-  run_systemctl stop swarm-next-api.service
+  database="$state_root/swarm.sqlite3"
+  run_systemctl stop swarm-api.service
   cp "$update_rollback" "$database"
   chmod 0600 "$database"
   rm -f "$database-wal" "$database-shm"
@@ -155,24 +155,24 @@ restore_database() {
   current=$(release_from_link "$install_root/current")
   [ -n "$current" ] || die "no current release is installed"
   "$current/bin/swarmctl" verify-database "$backup" >/dev/null || die "restore database failed integrity verification"
-  database="$state_root/swarm-next.sqlite3"
+  database="$state_root/swarm.sqlite3"
   restore_rollback="$state_root/.restore-rollback-$$.sqlite3"
   restore_auth="$state_root/.restore-auth-$$"
-  token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm-next.env")
+  token=$(sed -n 's/^SWARM_OPERATOR_TOKEN=//p' "$config_root/swarm.env")
   umask 077
   printf 'header = "Authorization: Bearer %s"\n' "$token" > "$restore_auth"
   "$curl_bin" --fail --silent --show-error --config "$restore_auth" --output "$restore_rollback" "${health_url%/health}/api/v1/backups/database" || die "could not create the pre-restore rollback backup"
   rm -f "$restore_auth"
   restore_auth=
   "$current/bin/swarmctl" verify-database "$restore_rollback" >/dev/null || die "pre-restore rollback backup failed verification"
-  run_systemctl stop swarm-next-api.service
+  run_systemctl stop swarm-api.service
   restore_incoming="$state_root/.restore-incoming-$$.sqlite3"
   cp "$backup" "$restore_incoming"
   chmod 0600 "$restore_incoming"
   mv -f "$restore_incoming" "$database"
   restore_incoming=
   rm -f "$database-wal" "$database-shm"
-  run_systemctl start swarm-next-api.service
+  run_systemctl start swarm-api.service
   wait_for_health || die "restored API failed health verification; previous database will be restored"
   rm -f "$restore_rollback"
   restore_rollback=
@@ -185,9 +185,9 @@ validate_roots() {
     case "$managed_root" in "$home_dir"/*) :;; *) die "managed paths must remain below HOME";; esac
     case "$managed_root" in *[!A-Za-z0-9_./-]*) die "managed paths contain unsupported characters";; esac
   done
-  case "$install_root" in */swarm-next) :;; *) die "install root must end in /swarm-next";; esac
-  case "$config_root" in */swarm-next) :;; *) die "config root must end in /swarm-next";; esac
-  case "$state_root" in */swarm-next) :;; *) die "state root must end in /swarm-next";; esac
+  case "$install_root" in */swarm) :;; *) die "install root must end in /swarm";; esac
+  case "$config_root" in */swarm) :;; *) die "config root must end in /swarm";; esac
+  case "$state_root" in */swarm) :;; *) die "state root must end in /swarm";; esac
   case "$workspace_root" in /*) :;; *) die "workspace root must be absolute";; esac
   case "$workspace_root" in *[!A-Za-z0-9_./-]*) die "workspace root contains unsupported characters";; esac
   case "$health_attempts" in *[!0-9]*|"") die "health attempts must be an integer";; esac
@@ -203,13 +203,13 @@ validate_bundle() {
   [ -x "$bundle/bin/swarm-api" ] || die "swarm-api is missing or not executable"
   [ -x "$bundle/bin/swarm-terminal-host" ] || die "terminal host is missing or not executable"
   [ -x "$bundle/bin/swarmctl" ] || die "swarmctl is missing or not executable"
-  [ -x "$bundle/swarm-next-package" ] || die "packaged updater is missing or not executable"
+  [ -x "$bundle/swarm-package" ] || die "packaged updater is missing or not executable"
   [ -f "$bundle/web/index.html" ] || die "compiled web index is missing"
   (cd "$bundle" && sha256sum -c SHA256SUMS >/dev/null) || die "release checksum verification failed"
 }
 
 validate_config() {
-  config_file="$config_root/swarm-next.env"
+  config_file="$config_root/swarm.env"
   [ -f "$config_file" ] || die "configuration file is missing"
   [ "$(sed -n 's/^SWARM_API_BIND=//p' "$config_file")" = "127.0.0.1:8766" ] || die "packaged API bind must remain 127.0.0.1:8766"
   [ "$(sed -n 's/^SWARM_WORKSPACE_ROOTS=//p' "$config_file")" = "$workspace_root" ] || die "configured workspace root differs from the service write boundary"
@@ -238,7 +238,7 @@ render_unit() {
 }
 
 write_initial_config() {
-  config_file="$config_root/swarm-next.env"
+  config_file="$config_root/swarm.env"
   [ -e "$config_file" ] && return
   token=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
   umask 077
@@ -255,7 +255,7 @@ install_release() {
     staging="$install_root/releases/.staging-$version-$$"
     mkdir -p "$staging"
     cp -R "$bundle/." "$staging/"
-    chmod 0755 "$staging/bin/"* "$staging/swarm-next-package"
+    chmod 0755 "$staging/bin/"* "$staging/swarm-package"
     mv "$staging" "$release"
   fi
   (cd "$release" && sha256sum -c SHA256SUMS >/dev/null) || die "installed release checksum verification failed"
@@ -301,7 +301,7 @@ activate_host_link() {
 
 install_units() {
   unit_release=$1
-  for name in swarm-next-terminal-host.service swarm-next-api.service swarm-next-host-reconcile.service swarm-next-host-reconcile.path swarm-next-host-reconcile.timer swarm-next-development-reload.service swarm-next-development-reload.path swarm-next.target; do
+  for name in swarm-terminal-host.service swarm-api.service swarm-host-reconcile.service swarm-host-reconcile.path swarm-host-reconcile.timer swarm-development-reload.service swarm-development-reload.path swarm.target; do
     render_unit "$unit_release/systemd-user/$name.in" "$unit_root/$name"
   done
   run_systemctl daemon-reload
@@ -331,8 +331,8 @@ enable_development() {
   rm -f "$state_root/development-reload.request"
   printf 'state=idle\n' > "$state_root/development-reload.status"
   install_units "$current"
-  run_systemctl enable --now swarm-next-development-reload.path
-  run_systemctl restart swarm-next-api.service
+  run_systemctl enable --now swarm-development-reload.path
+  run_systemctl restart swarm-api.service
   wait_for_health || die "development mode could not restart the API"
   printf 'Development reload enabled for %s on %s\n' "$dev_checkout" "$health_url"
 }
@@ -340,10 +340,10 @@ enable_development() {
 disable_development() {
   current=$(release_from_link "$install_root/current")
   [ -n "$current" ] || die "no current release is installed"
-  run_systemctl disable --now swarm-next-development-reload.path >/dev/null 2>&1 || true
+  run_systemctl disable --now swarm-development-reload.path >/dev/null 2>&1 || true
   rm -f "$dev_config" "$state_root/development-reload.request" "$state_root/development-reload.status"
   install_units "$current"
-  run_systemctl restart swarm-next-api.service
+  run_systemctl restart swarm-api.service
   wait_for_health || die "API did not recover after disabling development mode"
   printf 'Development reload disabled; the current release remains active.\n'
 }
@@ -364,7 +364,7 @@ reload_development() {
   clear_managed_directory "$dev_build_root"
   bundle_path=$("$dev_checkout/packaging/linux/build-development-release.sh" "$dev_build_root")
   [ -d "$bundle_path" ] || die "development builder did not return a release directory"
-  "$bundle_path/swarm-next-package" update "$bundle_path"
+  "$bundle_path/swarm-package" update "$bundle_path"
 }
 
 wait_for_health() {
@@ -419,14 +419,14 @@ install_or_update() {
     activate_link "$new_release"
     activate_host_link "$new_release"
     install_units "$new_release"
-    if run_systemctl enable --now swarm-next.target \
-      && run_systemctl enable --now swarm-next-host-reconcile.path swarm-next-host-reconcile.timer \
+    if run_systemctl enable --now swarm.target \
+      && run_systemctl enable --now swarm-host-reconcile.path swarm-host-reconcile.timer \
       && wait_for_health && wait_for_host "$new_release"; then
       prune_superseded_releases
-      printf 'Swarm Next %s is healthy at %s\n' "$version" "$health_url"
+      printf 'Swarm %s is healthy at %s\n' "$version" "$health_url"
       return
     fi
-    run_systemctl stop swarm-next.target || true
+    run_systemctl stop swarm.target || true
     die "initial installation failed health verification"
   fi
 
@@ -434,20 +434,20 @@ install_or_update() {
   activate_link "$new_release"
   install_units "$new_release"
   rollback_release=$old_release
-  if run_systemctl enable --now swarm-next.target \
-    && run_systemctl enable --now swarm-next-host-reconcile.path swarm-next-host-reconcile.timer \
-    && run_systemctl restart swarm-next-api.service && wait_for_health; then
+  if run_systemctl enable --now swarm.target \
+    && run_systemctl enable --now swarm-host-reconcile.path swarm-host-reconcile.timer \
+    && run_systemctl restart swarm-api.service && wait_for_health; then
     rollback_release=
     update_rollback=
     prune_superseded_releases
-    printf 'Swarm Next API %s is healthy at %s; terminal host %s was preserved\n' \
+    printf 'Swarm API %s is healthy at %s; terminal host %s was preserved\n' \
       "$version" "$health_url" "$(basename "$host_release")"
     return
   fi
   activate_link "$old_release"
   install_units "$old_release"
   restore_update_database
-  run_systemctl restart swarm-next-api.service
+  run_systemctl restart swarm-api.service
   if wait_for_health; then
     rollback_release=
     die "new API failed health verification; previous API release restored"
@@ -468,10 +468,10 @@ rollback() {
   activate_link "$previous"
   ln -sfn "$current" "$install_root/previous"
   install_units "$previous"
-  run_systemctl restart swarm-next-api.service
+  run_systemctl restart swarm-api.service
   wait_for_health || die "rollback release failed health verification"
   rollback_release=
-  printf 'Swarm Next API rolled back to %s; terminal host %s was preserved\n' \
+  printf 'Swarm API rolled back to %s; terminal host %s was preserved\n' \
     "$(basename "$previous")" "$(basename "$host_release")"
 }
 
@@ -502,14 +502,14 @@ reconcile_host() {
 
   activate_host_link "$current"
   install_units "$current"
-  if run_systemctl restart swarm-next-terminal-host.service && wait_for_host "$current"; then
+  if run_systemctl restart swarm-terminal-host.service && wait_for_host "$current"; then
     drain_release=
     printf 'Terminal host now uses %s\n' "$(basename "$current")"
     return
   fi
   activate_host_link "$host_release"
   install_units "$current"
-  run_systemctl restart swarm-next-terminal-host.service || true
+  run_systemctl restart swarm-terminal-host.service || true
   wait_for_host "$host_release" || true
   drain_release=
   die "terminal host restart failed; previous host release restored"
@@ -559,27 +559,27 @@ migrate_protocol() {
 
   rollback_release=$old_release
   rollback_host_release=$host_release
-  run_systemctl stop swarm-next.target || true
+  run_systemctl stop swarm.target || true
   activate_link "$new_release"
   activate_host_link "$new_release"
   install_units "$new_release"
-  if run_systemctl enable --now swarm-next.target && wait_for_host "$new_release" && wait_for_health; then
+  if run_systemctl enable --now swarm.target && wait_for_host "$new_release" && wait_for_health; then
     drain_release=
     rollback_release=
     rollback_host_release=
     update_rollback=
     prune_superseded_releases
-    printf 'Swarm Next protocol migrated to %s and is healthy at %s\n' "$version" "$health_url"
+    printf 'Swarm protocol migrated to %s and is healthy at %s\n' "$version" "$health_url"
     return
   fi
   die "protocol migration failed health verification; previous release will be restored"
 }
 
 uninstall_product() {
-  run_systemctl disable --now swarm-next.target 2>/dev/null || true
-  rm -f "$unit_root/swarm-next-terminal-host.service" "$unit_root/swarm-next-api.service" \
-    "$unit_root/swarm-next-host-reconcile.service" "$unit_root/swarm-next-host-reconcile.path" "$unit_root/swarm-next-host-reconcile.timer" \
-    "$unit_root/swarm-next.target"
+  run_systemctl disable --now swarm.target 2>/dev/null || true
+  rm -f "$unit_root/swarm-terminal-host.service" "$unit_root/swarm-api.service" \
+    "$unit_root/swarm-host-reconcile.service" "$unit_root/swarm-host-reconcile.path" "$unit_root/swarm-host-reconcile.timer" \
+    "$unit_root/swarm.target"
   run_systemctl daemon-reload
   [ ! -L "$bin_root/swarmctl" ] || rm -f "$bin_root/swarmctl"
   [ ! -L "$bin_root/swarm-terminal-host" ] || rm -f "$bin_root/swarm-terminal-host"
@@ -600,5 +600,5 @@ case "$action" in
   migrate-protocol) migrate_protocol;;
   uninstall) uninstall_product;;
   restore) restore_database;;
-  *) die "usage: swarm-next-package <install|update|migrate-protocol> RELEASE_DIR | enable-development CHECKOUT | disable-development | reload-development | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | reconcile-host-requested | uninstall";;
+  *) die "usage: swarm-package <install|update|migrate-protocol> RELEASE_DIR | enable-development CHECKOUT | disable-development | reload-development | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | reconcile-host-requested | uninstall";;
 esac

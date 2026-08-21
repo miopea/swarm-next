@@ -115,7 +115,7 @@ fn classify_input(bytes: &[u8]) -> TerminalInputKind {
 #[must_use]
 pub fn default_terminal_socket_path() -> PathBuf {
     let home = env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
-    home.join(".local/state/swarm-next/run/terminal.sock")
+    home.join(".local/state/swarm/run/terminal.sock")
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

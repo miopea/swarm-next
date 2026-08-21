@@ -1502,7 +1502,7 @@ the independently updated terminal host through the API to worker settings:
   proof tab was closed.
 - A same-host Ring 1 process-attribution sample resolves the apparent mismatch
   between the **2/30** Swarm worker count and the many visible Claude
-  processes. The `swarm-next-terminal-host.service` cgroup owned exactly two
+  processes. The `swarm-terminal-host.service` cgroup owned exactly two
   provider processes—Queen and Scout—in their expected repositories, matching
   the two awake workers. None of the other 28 configured sleeping workers had
   a provider process. The other observed Claude processes belonged to the

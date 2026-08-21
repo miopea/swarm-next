@@ -915,7 +915,7 @@ mod tests {
         // production before it existed and every Queen automation read failed
         // until a forward step was added. Only a step reaches both.
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("swarm-next.sqlite3");
+        let path = directory.path().join("swarm.sqlite3");
         let store = TaskStore::open(&path).unwrap();
         store
             .connection()
