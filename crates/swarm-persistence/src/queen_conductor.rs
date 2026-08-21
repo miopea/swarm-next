@@ -529,10 +529,32 @@ fn queue_run(
     Ok(())
 }
 
+/// Work Queen has something to do about, as one definition.
+///
+/// Blocked and review work needs her judgment; unassigned ready work needs
+/// routing. So does ready work assigned to a worker that is not running —
+/// which nothing counted, so nothing noticed. A wake is queued once, at
+/// assignment, and never again; when one came back uncertain the work sat
+/// assigned to a sleeping worker indefinitely, invisible to every detector,
+/// because they all begin from a live session that does not exist.
+const ACTIONABLE_TASKS: &str = "task.removed_at IS NULL
+             AND (
+                 task.state IN ('blocked','review')
+                 OR (task.state = 'ready' AND task.assigned_worker_id IS NULL)
+                 OR (task.state = 'ready'
+                     AND task.assigned_worker_id IS NOT NULL
+                     AND NOT EXISTS (
+                         SELECT 1 FROM worker_sessions live
+                         WHERE live.worker_id = task.assigned_worker_id
+                           AND live.ended_at IS NULL
+                     ))
+             )";
+
 fn actionable_count(connection: &rusqlite::Connection) -> Result<i64, rusqlite::Error> {
     let task_count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM tasks WHERE removed_at IS NULL AND (state IN ('blocked','review') OR (state = 'ready' AND assigned_worker_id IS NULL))",
-        [], |row| row.get(0),
+        &format!("SELECT COUNT(*) FROM tasks task WHERE {ACTIONABLE_TASKS}"),
+        [],
+        |row| row.get(0),
     )?;
     let coordination_attention_count: i64 = connection.query_row(
         &format!(
@@ -549,12 +571,12 @@ fn actionable_fingerprint(
     connection: &rusqlite::Connection,
 ) -> Result<(String, usize), TaskStoreError> {
     let count = actionable_count(connection)?;
-    let mut statement = connection.prepare(
+    let mut statement = connection.prepare(&format!(
         "SELECT task.id, task.state, COALESCE(MAX(activity.sequence), 0)
          FROM tasks task LEFT JOIN task_activity activity ON activity.task_id = task.id
-         WHERE task.removed_at IS NULL AND (task.state IN ('blocked','review') OR (task.state = 'ready' AND task.assigned_worker_id IS NULL))
-         GROUP BY task.id, task.state ORDER BY task.id LIMIT ?1",
-    )?;
+         WHERE {ACTIONABLE_TASKS}
+         GROUP BY task.id, task.state ORDER BY task.id LIMIT ?1"
+    ))?;
     let mut rows = statement
         .query_map([MAX_FINGERPRINT_TASKS], |row| {
             Ok(format!(
@@ -1308,5 +1330,81 @@ mod tests {
             store.observe_queen_automation(11).unwrap(),
             "a worker filing work should wake Queen"
         );
+    }
+
+    /// Real Truth had Ready work assigned, its only session had ended a week
+    /// earlier, and its wake had been attempted once and come back uncertain.
+    /// A wake is queued at assignment and never again, and every detector
+    /// begins from a live session — so nothing retried and nothing noticed.
+    /// The work simply sat there, and Queen was not even told there was
+    /// anything to look at.
+    #[test]
+    fn ready_work_whose_worker_never_woke_is_something_queen_should_see() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let queen_session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, queen_session).unwrap();
+        let worker = store
+            .create_worker(
+                "Real Truth",
+                ProviderKind::ClaudeCode,
+                "/workspace/real-truth",
+                false,
+                1,
+            )
+            .unwrap();
+        store.set_queen_automation_enabled(true, 9).unwrap();
+
+        // Assigned while it was running, as assignment requires.
+        let worker_session = WorkerSessionId::new();
+        store
+            .bind_worker_session(worker.id, worker_session)
+            .unwrap();
+        let task = store
+            .create_task("Bring the staging slot current", "/workspace/real-truth")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, worker_session).unwrap();
+        // Then it went away, and its wake came back uncertain.
+        store.release_worker_session(worker_session).unwrap();
+
+        // The worker is not running, so this work is going nowhere on its own.
+        assert!(
+            store.observe_queen_automation(11).unwrap(),
+            "stranded ready work should be something Queen reviews"
+        );
+    }
+
+    /// The same work, once its worker is actually running, is that worker's to
+    /// get on with rather than something for Queen to re-examine.
+    #[test]
+    fn ready_work_with_a_running_worker_is_not_queens_to_chase() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let worker_session = WorkerSessionId::new();
+        store
+            .bind_worker_session(worker.id, worker_session)
+            .unwrap();
+        store.set_queen_automation_enabled(true, 9).unwrap();
+
+        let task = store
+            .create_task("Carry on with this", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, worker_session).unwrap();
+
+        assert!(!store.observe_queen_automation(11).unwrap());
     }
 }
