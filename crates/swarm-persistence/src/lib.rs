@@ -5212,7 +5212,10 @@ mod tests {
     fn a_hive_does_not_check_for_releases_until_it_is_told_to() {
         let store = TaskStore::in_memory().unwrap();
 
-        assert_eq!(store.release_check_state().unwrap(), ReleaseCheckState::default());
+        assert_eq!(
+            store.release_check_state().unwrap(),
+            ReleaseCheckState::default()
+        );
         assert_eq!(store.release_check_state().unwrap().mode, "unset");
 
         assert_eq!(store.set_release_check_mode("daily").unwrap().mode, "daily");
@@ -5232,9 +5235,14 @@ mod tests {
             .record_release_check("offered", Some(r#"{"version":"0.2.0"}"#), 1_000)
             .unwrap();
         assert_eq!(offered.last_outcome.as_deref(), Some("offered"));
-        assert_eq!(offered.last_offer.as_deref(), Some(r#"{"version":"0.2.0"}"#));
+        assert_eq!(
+            offered.last_offer.as_deref(),
+            Some(r#"{"version":"0.2.0"}"#)
+        );
 
-        let failed = store.record_release_check("unreachable", None, 2_000).unwrap();
+        let failed = store
+            .record_release_check("unreachable", None, 2_000)
+            .unwrap();
         assert_eq!(failed.last_outcome.as_deref(), Some("unreachable"));
         assert_eq!(failed.last_checked_at, Some(2_000));
         assert_eq!(failed.last_offer.as_deref(), Some(r#"{"version":"0.2.0"}"#));

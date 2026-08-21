@@ -25,6 +25,7 @@ mod presence;
 mod presentation;
 mod private_store;
 mod provider_activity;
+mod release;
 mod runtime;
 mod session_history;
 mod tasks;
@@ -166,6 +167,9 @@ pub struct AppState {
     development_reload_request_path: Option<Arc<PathBuf>>,
     development_reload_status_path: Option<Arc<PathBuf>>,
     development_checkout_path: Option<Arc<PathBuf>>,
+    release_manifest_url: Option<Arc<String>>,
+    release_state_root: Option<Arc<PathBuf>>,
+    release_apply_request_path: Option<Arc<PathBuf>>,
     maintenance_timeout: Duration,
     jira_readiness: jira::JiraReadinessProbe,
     outlook: Arc<RwLock<outlook::OutlookProbe>>,
@@ -223,6 +227,9 @@ impl AppState {
             development_reload_request_path: None,
             development_reload_status_path: None,
             development_checkout_path: None,
+            release_manifest_url: None,
+            release_state_root: None,
+            release_apply_request_path: None,
             maintenance_timeout: Duration::from_secs(45),
             jira_readiness: jira::JiraReadinessProbe::default(),
             outlook: Arc::new(RwLock::new(outlook::OutlookProbe::default())),
@@ -439,6 +446,24 @@ impl AppState {
     #[must_use]
     pub fn with_development_checkout_path(mut self, checkout: PathBuf) -> Self {
         self.development_checkout_path = Some(Arc::new(checkout));
+        self
+    }
+
+    /// Where releases are fetched to, and where the install request goes.
+    ///
+    /// A Hive without these can still be told a release exists; it just has
+    /// nothing to put one in and no way to ask for it to be installed.
+    #[must_use]
+    pub fn with_release_paths(mut self, state_root: PathBuf, apply_request: PathBuf) -> Self {
+        self.release_state_root = Some(Arc::new(state_root));
+        self.release_apply_request_path = Some(Arc::new(apply_request));
+        self
+    }
+
+    /// Overrides the origin releases are announced at.
+    #[must_use]
+    pub fn with_release_manifest_url(mut self, url: String) -> Self {
+        self.release_manifest_url = Some(Arc::new(url));
         self
     }
 
@@ -2417,6 +2442,13 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/runtime/development", get(runtime::development))
         .route(
+            "/api/v1/runtime/release",
+            get(release::status).put(release::set_mode),
+        )
+        .route("/api/v1/runtime/release/check", post(release::check_now))
+        .route("/api/v1/runtime/release/download", post(release::download))
+        .route("/api/v1/runtime/release/apply", post(release::apply))
+        .route(
             "/api/v1/runtime/development/reload",
             post(maintenance::request_development_reload),
         )
@@ -2724,6 +2756,14 @@ async fn health() -> Json<HealthResponse> {
         version: build_version(),
         worker_engine_build_id: worker_engine_build_id(),
     })
+}
+
+/// Runs a due release check, if this Hive was told to make them.
+///
+/// Public so the binary's background services can drive it; the decision
+/// about whether anything happens lives with the check itself.
+pub async fn poll_for_release(state: Arc<AppState>) {
+    release::poll(&state).await;
 }
 
 fn build_version() -> &'static str {

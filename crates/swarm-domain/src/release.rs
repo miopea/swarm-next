@@ -315,12 +315,18 @@ mod tests {
         let (signing_key, public) = keypair();
         let mut newer = offer("0.9.0", "engine-z");
         newer.protocol = "4".to_owned();
-        let document = sign(manifest(vec![newer, offer("0.2.0", "engine-b")]), &signing_key);
+        let document = sign(
+            manifest(vec![newer, offer("0.2.0", "engine-b")]),
+            &signing_key,
+        );
 
         let payload = verify_release_manifest(&document, Some(&public), 2_000).unwrap();
         let current = SwarmVersion::parse("0.1.0").unwrap();
 
-        assert_eq!(payload.upgrade_for(&current, PROTOCOL).unwrap().version, "0.2.0");
+        assert_eq!(
+            payload.upgrade_for(&current, PROTOCOL).unwrap().version,
+            "0.2.0"
+        );
         assert_eq!(payload.newest_offer(PROTOCOL).unwrap().version, "0.2.0");
     }
 

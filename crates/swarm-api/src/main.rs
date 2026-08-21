@@ -38,6 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_email_attachment_store(email_attachment_root_from_database(&database_path))
         .with_legacy_database_path(legacy_database_path_from_env())
         .with_maintenance_request_path(maintenance_request_path_from_env(&database_path))
+        .with_release_paths(
+            release_state_root(&database_path),
+            release_apply_request_path(&database_path),
+        )
         .with_workspace_roots(workspace_roots)
         .with_task_store(store)
         .with_notifications(vapid_subject_from_env())?;
@@ -46,6 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(checkout) = env::var_os("SWARM_DEV_CHECKOUT") {
             state = state.with_development_checkout_path(PathBuf::from(checkout));
         }
+    }
+    if let Ok(manifest_url) = env::var("SWARM_RELEASE_MANIFEST_URL") {
+        state = state.with_release_manifest_url(manifest_url);
     }
     if let Ok(public_base_url) = env::var("SWARM_PUBLIC_BASE_URL") {
         state = state.with_public_base_url(&public_base_url)?;
@@ -77,6 +84,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn start_background_services(state: &AppState) {
+    // Hourly, but a check only happens when the operator asked for daily ones
+    // and the last is a day old. Nothing is contacted otherwise.
+    let release_poller = std::sync::Arc::new(state.clone());
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+        // Startup is a poor moment to make a network call, and a first tick
+        // fires immediately.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            swarm_api::poll_for_release(release_poller.clone()).await;
+        }
+    });
     let supervisor = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -371,6 +391,17 @@ fn email_configuration_path(database_path: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("secrets")
         .join("email-oauth-config.json")
+}
+
+fn release_state_root(database_path: &std::path::Path) -> PathBuf {
+    database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf()
+}
+
+fn release_apply_request_path(database_path: &std::path::Path) -> PathBuf {
+    release_state_root(database_path).join("release-apply.request")
 }
 
 fn maintenance_request_path_from_env(database_path: &std::path::Path) -> PathBuf {

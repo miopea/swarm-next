@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for an operator-requested Swarm release install
+
+[Path]
+PathExists=@STATE_ROOT@/release-apply.request
+Unit=swarm-release-apply.service
+
+[Install]
+WantedBy=swarm.target

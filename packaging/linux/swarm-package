@@ -301,7 +301,7 @@ activate_host_link() {
 
 install_units() {
   unit_release=$1
-  for name in swarm-terminal-host.service swarm-api.service swarm-host-reconcile.service swarm-host-reconcile.path swarm-host-reconcile.timer swarm-development-reload.service swarm-development-reload.path swarm.target; do
+  for name in swarm-terminal-host.service swarm-api.service swarm-host-reconcile.service swarm-host-reconcile.path swarm-host-reconcile.timer swarm-development-reload.service swarm-development-reload.path swarm-release-apply.service swarm-release-apply.path swarm.target; do
     render_unit "$unit_release/systemd-user/$name.in" "$unit_root/$name"
   done
   run_systemctl daemon-reload
@@ -367,6 +367,43 @@ reload_development() {
   "$bundle_path/swarm-package" update "$bundle_path"
 }
 
+# Installs a release the operator accepted in the control room.
+#
+# The API cannot do this itself: installing restarts swarm-api, so the request
+# arrives as a file and this runs detached from the process that wrote it. The
+# request is consumed before the install starts, so a failure is reported once
+# rather than retried forever by the path unit that noticed it.
+apply_release() {
+  request_path="$state_root/release-apply.request"
+  [ -f "$request_path" ] || die "no release install was requested"
+  requested=$(tr -d '\r\n' < "$request_path")
+  rm -f "$request_path"
+  status_path="$state_root/release-apply.status"
+  case "$requested" in
+    "$state_root"/downloads/*) :;;
+    *) printf 'state=refused\nreason=outside-downloads\n' > "$status_path"
+       die "a release install must name a downloaded release";;
+  esac
+  [ -d "$requested" ] || {
+    printf 'state=refused\nreason=missing\n' > "$status_path"
+    die "the requested release directory is not there"
+  }
+  [ -x "$requested/swarm-package" ] || {
+    printf 'state=refused\nreason=not-a-release\n' > "$status_path"
+    die "the requested directory is not a Swarm release"
+  }
+  printf 'state=installing\n' > "$status_path"
+  # The bundle verifies its own SHA256SUMS on update, so integrity does not
+  # depend on whoever wrote the request having been honest.
+  if "$requested/swarm-package" update "$requested"; then
+    printf 'state=installed\n' > "$status_path"
+    rm -rf "$requested"
+  else
+    printf 'state=failed\n' > "$status_path"
+    die "the requested release did not install"
+  fi
+}
+
 wait_for_health() {
   attempts=0
   while [ "$attempts" -lt "$health_attempts" ]; do
@@ -420,7 +457,7 @@ install_or_update() {
     activate_host_link "$new_release"
     install_units "$new_release"
     if run_systemctl enable --now swarm.target \
-      && run_systemctl enable --now swarm-host-reconcile.path swarm-host-reconcile.timer \
+      && run_systemctl enable --now swarm-host-reconcile.path swarm-host-reconcile.timer swarm-release-apply.path \
       && wait_for_health && wait_for_host "$new_release"; then
       prune_superseded_releases
       printf 'Swarm %s is healthy at %s\n' "$version" "$health_url"
@@ -435,7 +472,7 @@ install_or_update() {
   install_units "$new_release"
   rollback_release=$old_release
   if run_systemctl enable --now swarm.target \
-    && run_systemctl enable --now swarm-host-reconcile.path swarm-host-reconcile.timer \
+    && run_systemctl enable --now swarm-host-reconcile.path swarm-host-reconcile.timer swarm-release-apply.path \
     && run_systemctl restart swarm-api.service && wait_for_health; then
     rollback_release=
     update_rollback=
@@ -579,6 +616,8 @@ uninstall_product() {
   run_systemctl disable --now swarm.target 2>/dev/null || true
   rm -f "$unit_root/swarm-terminal-host.service" "$unit_root/swarm-api.service" \
     "$unit_root/swarm-host-reconcile.service" "$unit_root/swarm-host-reconcile.path" "$unit_root/swarm-host-reconcile.timer" \
+    "$unit_root/swarm-development-reload.service" "$unit_root/swarm-development-reload.path" \
+    "$unit_root/swarm-release-apply.service" "$unit_root/swarm-release-apply.path" \
     "$unit_root/swarm.target"
   run_systemctl daemon-reload
   [ ! -L "$bin_root/swarmctl" ] || rm -f "$bin_root/swarmctl"
@@ -598,7 +637,8 @@ case "$action" in
   reconcile-host-if-idle) reconcile_host if-idle;;
   reconcile-host-requested) reconcile_host_requested;;
   migrate-protocol) migrate_protocol;;
+  apply-release) apply_release;;
   uninstall) uninstall_product;;
   restore) restore_database;;
-  *) die "usage: swarm-package <install|update|migrate-protocol> RELEASE_DIR | enable-development CHECKOUT | disable-development | reload-development | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | reconcile-host-requested | uninstall";;
+  *) die "usage: swarm-package <install|update|migrate-protocol> RELEASE_DIR | apply-release | enable-development CHECKOUT | disable-development | reload-development | restore DATABASE | rollback | reconcile-host | reconcile-host-if-idle | reconcile-host-requested | uninstall";;
 esac

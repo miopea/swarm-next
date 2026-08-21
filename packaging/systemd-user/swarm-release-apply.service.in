@@ -1,0 +1,16 @@
+[Unit]
+Description=Install a Swarm release the operator accepted
+After=swarm-api.service
+
+[Service]
+Type=oneshot
+ExecStart=@INSTALL_ROOT@/current/swarm-package apply-release
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@INSTALL_ROOT@
+ReadWritePaths=@UNIT_ROOT@
+ReadWritePaths=@STATE_ROOT@
+ReadWritePaths=@CONFIG_ROOT@
+ReadWritePaths=@BIN_ROOT@

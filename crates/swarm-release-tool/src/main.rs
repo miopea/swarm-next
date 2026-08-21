@@ -17,15 +17,19 @@ use std::process::ExitCode;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use ed25519_dalek::{Signer, SigningKey};
 use swarm_domain::{
-    ReleaseManifest, SignedReleaseManifest, canonical_release_manifest,
-    RELEASE_MANIFEST_SCHEMA_VERSION,
+    RELEASE_MANIFEST_SCHEMA_VERSION, ReleaseManifest, SignedReleaseManifest,
+    canonical_release_manifest,
 };
 
 const USAGE: &str = "usage: swarm-release <keygen PRIVATE_KEY_PATH | sign PRIVATE_KEY_PATH>";
 
 fn main() -> ExitCode {
     let mut arguments = env::args().skip(1);
-    let result = match (arguments.next().as_deref(), arguments.next(), arguments.next()) {
+    let result = match (
+        arguments.next().as_deref(),
+        arguments.next(),
+        arguments.next(),
+    ) {
         (Some("keygen"), Some(path), None) => keygen(Path::new(&path)),
         (Some("sign"), Some(path), None) => sign(Path::new(&path)),
         _ => Err(USAGE.to_owned()),
@@ -91,8 +95,8 @@ fn sign(path: &Path) -> Result<(), String> {
     io::stdin()
         .read_to_string(&mut document)
         .map_err(|error| format!("could not read the payload: {error}"))?;
-    let payload: ReleaseManifest =
-        serde_json::from_str(&document).map_err(|error| format!("payload is not a manifest: {error}"))?;
+    let payload: ReleaseManifest = serde_json::from_str(&document)
+        .map_err(|error| format!("payload is not a manifest: {error}"))?;
     if payload.schema_version != RELEASE_MANIFEST_SCHEMA_VERSION {
         return Err(format!(
             "payload declares schema {} but this tool signs schema {RELEASE_MANIFEST_SCHEMA_VERSION}",
@@ -100,8 +104,8 @@ fn sign(path: &Path) -> Result<(), String> {
         ));
     }
 
-    let canonical =
-        canonical_release_manifest(&payload).map_err(|_| "payload could not be encoded".to_owned())?;
+    let canonical = canonical_release_manifest(&payload)
+        .map_err(|_| "payload could not be encoded".to_owned())?;
     let signed = SignedReleaseManifest {
         signature: Base64UrlUnpadded::encode_string(&signing_key.sign(&canonical).to_bytes()),
         payload,
