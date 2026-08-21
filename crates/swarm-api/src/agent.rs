@@ -218,6 +218,7 @@ impl ServerHandler for AgentMcp {
             list_jira_comments_tool(),
             comment_jira_task_tool(),
             record_deployment_tool(),
+            record_no_deployment_tool(),
             draft_email_reply_tool(),
             create_task_tool(),
             list_decisions_tool(),
@@ -280,6 +281,7 @@ impl ServerHandler for AgentMcp {
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
             "swarm_record_deployment" => self.record_deployment(arguments),
+            "swarm_record_no_deployment" => self.record_no_deployment(arguments),
             "swarm_draft_email_reply" => self.draft_email_reply(arguments),
             "swarm_list_workers" => self
                 .tasks
@@ -641,6 +643,27 @@ impl AgentMcp {
         }))
     }
 
+    /// Records that a task has nothing to deploy, with the argument for why.
+    ///
+    /// This does not close the task. It is a claim Queen approves, because a
+    /// worker deciding its own work needs no evidence cannot also be the one
+    /// who accepts that decision.
+    fn record_no_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<RecordNoDeploymentInput>(arguments)?;
+        let task_id = self.visible_task_id(&input.task_id)?;
+        let evidence = self.tasks.store().claim_completion_exemption(
+            task_id,
+            &input.reason,
+            Some(self.principal.worker_id),
+            crate::unix_timestamp(),
+        )?;
+        structured(json!({
+            "task_id": task_id,
+            "evidence": format!("{evidence:?}"),
+            "awaiting": "Queen's approval before this task can complete",
+        }))
+    }
+
     /// Writes the reply the person who emailed in will receive.
     ///
     /// Drafting only. Sending is an external effect and stays an explicit
@@ -912,6 +935,12 @@ struct RecordDeploymentInput {
     task_id: String,
     environment: String,
     reference: String,
+}
+
+#[derive(Deserialize)]
+struct RecordNoDeploymentInput {
+    task_id: String,
+    reason: String,
 }
 
 #[derive(Deserialize)]
@@ -1268,6 +1297,23 @@ fn record_deployment_tool() -> Tool {
     )
 }
 
+fn record_no_deployment_tool() -> Tool {
+    tool(
+        "swarm_record_no_deployment",
+        "State that this task has nothing to deploy, and why. For work that genuinely does not ship — a spike, a document, an investigation that found no defect, a duplicate. This does not complete the task: Queen approves the claim, because you cannot both decide your own work needs no evidence and accept that decision. If something did ship, use swarm_record_deployment instead; a reason given here that turns out to be wrong is worse than no claim at all, because it reads as evidence.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" },
+                "reason": { "type": "string", "minLength": 1, "maxLength": 500, "description": "Why there is nothing running to point at. Say what you did instead." }
+            },
+            "required": ["task_id", "reason"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
 fn draft_email_reply_tool() -> Tool {
     tool(
         "swarm_draft_email_reply",
@@ -1597,6 +1643,7 @@ mod tests {
                 // running, the reply to whoever asked, and the follow-up it
                 // found. Sending and routing stay above it.
                 "swarm_record_deployment",
+                "swarm_record_no_deployment",
                 "swarm_draft_email_reply",
                 "swarm_create_task",
                 "swarm_list_decisions",

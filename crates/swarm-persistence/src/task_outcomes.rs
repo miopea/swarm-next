@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use swarm_domain::{ControlRoomEventKind, TaskId, TaskState, WorkerId, WorkerSessionId};
 
 use super::{TaskStore, TaskStoreError, insert_control_room_event};
@@ -404,6 +404,318 @@ mod tests {
                 .unwrap()
                 .outcome_delivery_state,
             Some(TaskOutcomeDeliveryState::Uncertain)
+        );
+    }
+}
+
+/// What a task has to show before it may be called done.
+///
+/// "Completed" and "deployed" are different claims, and the product's own
+/// shipping vocabulary depends on not confusing them. This is the durable
+/// answer to which one a task can make.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CompletionEvidence {
+    /// At least one recorded deployment. The task shipped.
+    Deployed,
+    /// A worker claimed there is nothing to deploy and Queen approved it.
+    ExemptionApproved,
+    /// A worker claimed there is nothing to deploy. Nobody has agreed yet.
+    ExemptionClaimed,
+    /// Neither. Nothing has shown this work to be anywhere.
+    None,
+}
+
+impl CompletionEvidence {
+    /// Whether this is enough to close a task without further judgment.
+    ///
+    /// A claimed-but-unapproved exemption deliberately is not. The worker
+    /// asserting its own work needs no evidence is the one claim that cannot
+    /// also be the approval of that claim.
+    #[must_use]
+    pub const fn closes_a_task(&self) -> bool {
+        matches!(self, Self::Deployed | Self::ExemptionApproved)
+    }
+}
+
+impl TaskStore {
+    /// What this task can show for itself.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn completion_evidence(
+        &self,
+        task_id: TaskId,
+    ) -> Result<CompletionEvidence, TaskStoreError> {
+        let connection = self.connection()?;
+        let deployed: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_deployments WHERE task_id = ?1)",
+            [task_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if deployed {
+            return Ok(CompletionEvidence::Deployed);
+        }
+        let exemption: Option<Option<i64>> = connection
+            .query_row(
+                "SELECT approved_at FROM task_completion_exemptions WHERE task_id = ?1",
+                [task_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(match exemption {
+            None => CompletionEvidence::None,
+            Some(None) => CompletionEvidence::ExemptionClaimed,
+            Some(Some(_)) => CompletionEvidence::ExemptionApproved,
+        })
+    }
+
+    /// Records a worker's claim that a task has nothing to deploy.
+    ///
+    /// Replaces an unapproved claim by the same route, so a worker can correct
+    /// its own reason. It cannot overwrite one Queen has already approved:
+    /// changing the argument after it was accepted would make the approval
+    /// vouch for something nobody read.
+    ///
+    /// # Errors
+    /// Rejects an empty reason, or a claim on an already-approved exemption.
+    pub fn claim_completion_exemption(
+        &self,
+        task_id: TaskId,
+        reason: &str,
+        worker_id: Option<WorkerId>,
+        now: i64,
+    ) -> Result<CompletionEvidence, TaskStoreError> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err(TaskStoreError::CompletionEvidenceRequired);
+        }
+        let connection = self.connection()?;
+        let approved: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_completion_exemptions
+             WHERE task_id = ?1 AND approved_at IS NOT NULL)",
+            [task_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if approved {
+            return Err(TaskStoreError::CompletionEvidenceRequired);
+        }
+        connection.execute(
+            "INSERT INTO task_completion_exemptions
+                 (task_id, reason, claimed_by_worker_id, claimed_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(task_id) DO UPDATE
+                 SET reason = excluded.reason,
+                     claimed_by_worker_id = excluded.claimed_by_worker_id,
+                     claimed_at = excluded.claimed_at",
+            params![
+                task_id.to_string(),
+                reason,
+                worker_id.map(|id| id.to_string()),
+                now
+            ],
+        )?;
+        drop(connection);
+        self.completion_evidence(task_id)
+    }
+
+    /// Approves a claimed exemption, which is what lets the task close.
+    ///
+    /// # Errors
+    /// Returns an error when no exemption has been claimed.
+    pub fn approve_completion_exemption(
+        &self,
+        task_id: TaskId,
+        approver: &str,
+        now: i64,
+    ) -> Result<CompletionEvidence, TaskStoreError> {
+        if !matches!(approver, "queen" | "operator") {
+            return Err(TaskStoreError::IntegrityFailure(format!(
+                "{approver} cannot approve a completion exemption"
+            )));
+        }
+        let connection = self.connection()?;
+        let updated = connection.execute(
+            "UPDATE task_completion_exemptions
+             SET approved_at = ?2, approved_by = ?3
+             WHERE task_id = ?1 AND approved_at IS NULL",
+            params![task_id.to_string(), now, approver],
+        )?;
+        drop(connection);
+        if updated == 0 {
+            let evidence = self.completion_evidence(task_id)?;
+            if evidence == CompletionEvidence::ExemptionApproved {
+                return Ok(evidence);
+            }
+            return Err(TaskStoreError::CompletionEvidenceRequired);
+        }
+        self.completion_evidence(task_id)
+    }
+
+    /// The reason a worker gave for a task having nothing to deploy.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn completion_exemption_reason(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<String>, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection
+            .query_row(
+                "SELECT reason FROM task_completion_exemptions WHERE task_id = ?1",
+                [task_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+}
+
+#[cfg(test)]
+mod completion_evidence_tests {
+    use super::*;
+    use crate::TaskStore;
+
+    /// A task far enough along to have something to say about deployment.
+    /// Recording one is only allowed from Review or Completed.
+    fn task(store: &TaskStore) -> TaskId {
+        let id = store
+            .create_task("Ship the thing", "/projects/app")
+            .unwrap()
+            .id;
+        for state in [TaskState::Ready, TaskState::Active, TaskState::Review] {
+            store.transition_task(id, state).unwrap();
+        }
+        id
+    }
+
+    /// "We need to make sure a task is deployed before we close it, doesn't
+    /// matter if it is email, jira or swarm local." A task that shipped can
+    /// show it; one that did nothing cannot.
+    #[test]
+    fn only_a_deployment_or_an_approved_exemption_closes_a_task() {
+        let store = TaskStore::in_memory().unwrap();
+
+        let nothing = task(&store);
+        assert_eq!(
+            store.completion_evidence(nothing).unwrap(),
+            CompletionEvidence::None
+        );
+        assert!(!store.completion_evidence(nothing).unwrap().closes_a_task());
+
+        let shipped = task(&store);
+        store
+            .record_task_deployment(shipped, "production", "v0.2.0", 1_000)
+            .unwrap();
+        assert_eq!(
+            store.completion_evidence(shipped).unwrap(),
+            CompletionEvidence::Deployed
+        );
+        assert!(store.completion_evidence(shipped).unwrap().closes_a_task());
+    }
+
+    /// The worker asserting its own work needs no evidence cannot also be the
+    /// one who accepts that assertion.
+    #[test]
+    fn a_claimed_exemption_does_not_close_a_task_until_it_is_approved() {
+        let store = TaskStore::in_memory().unwrap();
+        let spike = task(&store);
+
+        let claimed = store
+            .claim_completion_exemption(
+                spike,
+                "Investigated; the reported defect does not reproduce.",
+                None,
+                1_000,
+            )
+            .unwrap();
+        assert_eq!(claimed, CompletionEvidence::ExemptionClaimed);
+        assert!(!claimed.closes_a_task());
+
+        let approved = store
+            .approve_completion_exemption(spike, "queen", 2_000)
+            .unwrap();
+        assert_eq!(approved, CompletionEvidence::ExemptionApproved);
+        assert!(approved.closes_a_task());
+    }
+
+    /// An assertion with no argument behind it is what this gate exists to
+    /// stop, so an empty reason is not a claim.
+    #[test]
+    fn an_exemption_without_a_reason_is_not_a_claim() {
+        let store = TaskStore::in_memory().unwrap();
+        let spike = task(&store);
+
+        assert!(
+            store
+                .claim_completion_exemption(spike, "   ", None, 1_000)
+                .is_err()
+        );
+        assert_eq!(
+            store.completion_evidence(spike).unwrap(),
+            CompletionEvidence::None
+        );
+    }
+
+    /// Rewriting the reason after Queen accepted it would make her approval
+    /// vouch for something nobody read.
+    #[test]
+    fn an_approved_exemption_cannot_have_its_reason_rewritten() {
+        let store = TaskStore::in_memory().unwrap();
+        let spike = task(&store);
+        store
+            .claim_completion_exemption(spike, "A duplicate of an earlier task.", None, 1_000)
+            .unwrap();
+        store
+            .approve_completion_exemption(spike, "queen", 2_000)
+            .unwrap();
+
+        assert!(
+            store
+                .claim_completion_exemption(spike, "Actually it shipped, trust me.", None, 3_000)
+                .is_err()
+        );
+        assert_eq!(
+            store.completion_exemption_reason(spike).unwrap().as_deref(),
+            Some("A duplicate of an earlier task.")
+        );
+    }
+
+    /// A worker correcting its own argument before anyone accepted it is fine.
+    #[test]
+    fn an_unapproved_exemption_can_be_restated() {
+        let store = TaskStore::in_memory().unwrap();
+        let spike = task(&store);
+        store
+            .claim_completion_exemption(spike, "No idea yet.", None, 1_000)
+            .unwrap();
+        store
+            .claim_completion_exemption(spike, "Documentation only; nothing runs.", None, 2_000)
+            .unwrap();
+
+        assert_eq!(
+            store.completion_exemption_reason(spike).unwrap().as_deref(),
+            Some("Documentation only; nothing runs.")
+        );
+        assert!(
+            store
+                .approve_completion_exemption(spike, "operator", 3_000)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn approving_an_exemption_nobody_claimed_is_refused() {
+        let store = TaskStore::in_memory().unwrap();
+        let unclaimed = task(&store);
+        assert!(
+            store
+                .approve_completion_exemption(unclaimed, "queen", 1_000)
+                .is_err()
+        );
+        assert!(
+            store
+                .approve_completion_exemption(unclaimed, "the worker", 1_000)
+                .is_err()
         );
     }
 }

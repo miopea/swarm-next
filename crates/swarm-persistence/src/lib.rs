@@ -129,7 +129,8 @@ const EMAIL_REPLY_FROM_REVIEW_SCHEMA_VERSION: i64 = 80;
 const WORKER_FILED_DRAFT_SCHEMA_VERSION: i64 = 81;
 const START_SURFACE_SCHEMA_VERSION: i64 = 82;
 const RELEASE_CHECK_SCHEMA_VERSION: i64 = 83;
-const CURRENT_SCHEMA_VERSION: i64 = RELEASE_CHECK_SCHEMA_VERSION;
+const COMPLETION_EXEMPTION_SCHEMA_VERSION: i64 = 84;
+const CURRENT_SCHEMA_VERSION: i64 = COMPLETION_EXEMPTION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1962,6 +1963,36 @@ fn migrate_release_check(transaction: &rusqlite::Transaction<'_>) -> rusqlite::R
     transaction.pragma_update(None, "user_version", RELEASE_CHECK_SCHEMA_VERSION)
 }
 
+/// A worker's claim that a task has nothing to deploy, and Queen's approval of
+/// it.
+///
+/// Kept in its own table rather than as a row in `task_deployments` with an
+/// empty reference. A completion nobody deployed and a completion that shipped
+/// are different claims, and the board has to be able to tell them apart — a
+/// blank reference in the deployments table would read as the second while
+/// meaning the first.
+///
+/// The reason is required because "nothing to deploy" is an assertion about the
+/// work, and an assertion with no argument behind it is what this whole gate
+/// exists to stop.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+fn migrate_completion_exemption(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_completion_exemptions (
+             task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+             reason TEXT NOT NULL,
+             claimed_by_worker_id TEXT REFERENCES worker_profiles(id) ON DELETE SET NULL,
+             claimed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             approved_at INTEGER,
+             approved_by TEXT
+                 CHECK (approved_by IS NULL OR approved_by IN ('queen','operator'))
+         );",
+    )?;
+    transaction.pragma_update(None, "user_version", COMPLETION_EXEMPTION_SCHEMA_VERSION)
+}
+
 fn migrate_schema(
     transaction: &rusqlite::Transaction<'_>,
     schema_version: i64,
@@ -2201,6 +2232,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < RELEASE_CHECK_SCHEMA_VERSION {
         migrate_release_check(transaction)?;
+    }
+    if schema_version < COMPLETION_EXEMPTION_SCHEMA_VERSION {
+        migrate_completion_exemption(transaction)?;
     }
     Ok(())
 }
@@ -5094,6 +5128,12 @@ mod tests {
         },
         SchemaStep {
             table: "release_check_preferences",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "task_completion_exemptions",
             artifact: "",
             undo_sql: "",
             probe_sql: "",

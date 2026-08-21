@@ -1985,7 +1985,7 @@ impl TaskService {
         target: TaskState,
         note: &str,
     ) -> Result<Task, ApplicationError> {
-        require_completion_evidence(target, note)?;
+        require_completion_evidence(&self.store, target, task_id, note)?;
         self.store
             .transition_task_with_note_as(task_id, target, note, &TaskActivityActor::operator())
             .map_err(Into::into)
@@ -2129,7 +2129,7 @@ impl TaskService {
                 .transition_worker_task(task_id, target, note, session_id)
                 .map_err(Into::into);
         }
-        require_completion_evidence(target, note)?;
+        require_completion_evidence(&self.store, target, task_id, note)?;
         if target == TaskState::Active {
             let task = self.store.get_task(task_id)?;
             let session_id = task
@@ -2280,14 +2280,32 @@ fn require_queen(principal: AgentPrincipal) -> Result<(), ApplicationError> {
     }
 }
 
-fn require_completion_evidence(target: TaskState, note: &str) -> Result<(), ApplicationError> {
-    if target == TaskState::Completed && note.trim().is_empty() {
-        Err(ApplicationError::Store(
-            TaskStoreError::CompletionEvidenceRequired,
-        ))
-    } else {
-        Ok(())
+/// A task may not be called done on prose alone.
+///
+/// The operator's ruling, 2026-08-21: nothing closes without a deployment,
+/// whether it came from email, Jira, or was written here. Before this, only the
+/// email path enforced it, so "COMPLETED" meant two different things depending
+/// on where the task came from — and the weaker meaning was the common one.
+///
+/// A worker that genuinely has nothing to deploy says so and gives a reason,
+/// and Queen approves that claim. The claim alone is not enough: the worker
+/// asserting its own work needs no evidence cannot also be the one who accepts
+/// that assertion.
+fn require_completion_evidence(
+    store: &TaskStore,
+    target: TaskState,
+    task_id: TaskId,
+    note: &str,
+) -> Result<(), ApplicationError> {
+    if target != TaskState::Completed {
+        return Ok(());
     }
+    if note.trim().is_empty() || !store.completion_evidence(task_id)?.closes_a_task() {
+        return Err(ApplicationError::Store(
+            TaskStoreError::CompletionEvidenceRequired,
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Error)]
@@ -2566,6 +2584,10 @@ mod tests {
             service.transition_operator_task(mine.id, state).unwrap();
         }
         service
+            .store()
+            .record_task_deployment(mine.id, "production", "release 42", 1_000)
+            .unwrap();
+        service
             .transition_operator_task_with_note(
                 mine.id,
                 TaskState::Completed,
@@ -2676,6 +2698,24 @@ mod tests {
                 TaskStoreError::CompletionEvidenceRequired
             ))
         ));
+        // Prose no longer closes a task on its own. Operator ruling,
+        // 2026-08-21: nothing completes without a deployment, whatever the
+        // task's source.
+        assert!(matches!(
+            service.transition_task(
+                AgentPrincipal::from(&queen),
+                task.id,
+                TaskState::Completed,
+                "Tests passed and the approved release is live.",
+            ),
+            Err(ApplicationError::Store(
+                TaskStoreError::CompletionEvidenceRequired
+            ))
+        ));
+        service
+            .store()
+            .record_task_deployment(task.id, "production", "release 42", 1_000)
+            .unwrap();
         let completed = service
             .transition_task(
                 AgentPrincipal::from(&queen),

@@ -12975,6 +12975,31 @@ mod tests {
         assert_eq!(response_json(missing).await["code"], "invalid_task");
         assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Review);
 
+        // Operator ruling, 2026-08-21: prose is not evidence. This request
+        // used to succeed, and that is what made COMPLETED mean two different
+        // things depending on where the task came from.
+        let unproven = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/tasks/{}/state", task.id))
+                    .header("authorization", "Bearer secret")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"state":"completed","note":"Desktop and Android checks passed; release 42 is live."}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unproven.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(store.get_task(task.id).unwrap().state, TaskState::Review);
+
+        store
+            .record_task_deployment(task.id, "production", "release 42", 1_000)
+            .unwrap();
+
         let completed = app
             .oneshot(
                 Request::builder()
