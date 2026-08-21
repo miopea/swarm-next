@@ -11,6 +11,8 @@ export interface WorkerContextBarProps {
   repository?: RepositoryState | null;
   /** Set only when a device other than this one is driving the worker. */
   engagement?: { deviceClass: "desktop" | "mobile"; detail: string };
+  /** Takes the worker back for this screen, without sending it anything. */
+  onClaim?: () => void;
   /** Swarm wrote a briefing to this worker and could not confirm it landed. */
   unconfirmedDelivery?: boolean;
   taskStateLabel: (task: Task) => string;
@@ -31,6 +33,7 @@ export default function WorkerContextBar({
   workSummary,
   repository,
   engagement,
+  onClaim,
   unconfirmedDelivery,
   taskStateLabel,
   onOpenQueue,
@@ -75,6 +78,17 @@ export default function WorkerContextBar({
           role="status"
           title={engagement.detail}
         >{engagement.deviceClass === "mobile" ? "On phone" : "On another desktop"}</span>
+      ) : null}
+      {/* Naming the device that holds it and offering nothing to do about it
+          left one remedy: type into the worker, which sends real input to a
+          real provider. Reclaiming a screen is not instructing an agent. */}
+      {engagement && onClaim ? (
+        <button
+          type="button"
+          className="worker-claim"
+          title="Show this worker here. It is not sent anything, and the other screen keeps running."
+          onClick={onClaim}
+        >Work here</button>
       ) : null}
       {openCount > 1 ? (
         <button

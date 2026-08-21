@@ -38,6 +38,7 @@ export {
   startWorker,
   stopWorker,
   updateWorker,
+  claimWorker,
 } from "./api/workers";
 export {
   assignTask,

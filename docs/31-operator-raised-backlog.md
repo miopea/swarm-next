@@ -178,7 +178,7 @@ answer was treated as "nothing to update", so the indicator vanished at the
 same moment the card did. It now keeps its last answer until something is
 actually learned.
 
-### 8. Takeover is visibility only — *fixed*
+### 8. Takeover is visibility only — *fixed, and now reachable*
 
 Engagement now names the device driving a worker (`a39a95c`), but there is no
 control to take it back. Claiming engagement without sending input would be a

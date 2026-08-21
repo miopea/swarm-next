@@ -1444,6 +1444,10 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .brand-lockup { position: relative; }
 .brand-diagnostics { position: absolute; top: 0; right: 0; width: 28px; height: 28px; color: var(--quiet); }
 .brand-diagnostics:hover { color: var(--text); background: var(--panel-raised); }
+/* Takes the worker back for this screen. Beside the badge naming the device
+   that holds it, because that badge is where the operator asks the question. */
+.worker-claim { min-height: var(--pill-height); flex: 0 0 auto; padding: 0 10px; border: 1px solid var(--accent-strong); border-radius: 999px; color: var(--text); background: var(--accent-soft); font-size: .69rem; font-weight: 600; }
+.worker-claim:hover { background: var(--panel-raised); }
 .worker-context { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 6px; }
 .worker-context-task { display: flex; box-sizing: border-box; min-height: var(--pill-height); min-width: 0; max-width: 100%; align-items: center; gap: 8px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); }
 .worker-context-task:hover { border-color: var(--accent-strong); background: var(--panel-raised); }

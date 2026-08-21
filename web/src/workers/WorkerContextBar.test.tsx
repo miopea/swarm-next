@@ -111,3 +111,41 @@ test("stays quiet when every briefing was confirmed", () => {
 
   expect(screen.queryByText(/Briefing unconfirmed/)).not.toBeInTheDocument();
 });
+
+test("offers to take a worker held by another screen, without typing into it", () => {
+  // ADR 0049. The badge named the device holding the worker and offered nothing
+  // to do about it, so the only way to take it back was to type into the worker
+  // — which sends real input to a real provider. Reclaiming a screen and
+  // instructing an agent are not the same act.
+  const onClaim = vi.fn();
+  render(
+    <WorkerContextBar
+      worker={worker}
+      currentTask={task}
+      openCount={1}
+      engagement={{ deviceClass: "desktop", detail: "Held by another desktop" }}
+      taskStateLabel={() => "Active"}
+      onOpenQueue={vi.fn()}
+      onClaim={onClaim}
+    />,
+  );
+
+  expect(screen.getByText("On another desktop")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Work here" }));
+  expect(onClaim).toHaveBeenCalledOnce();
+});
+
+test("says nothing about claiming a worker no other screen holds", () => {
+  render(
+    <WorkerContextBar
+      worker={worker}
+      currentTask={task}
+      openCount={1}
+      taskStateLabel={() => "Active"}
+      onOpenQueue={vi.fn()}
+      onClaim={vi.fn()}
+    />,
+  );
+
+  expect(screen.queryByRole("button", { name: "Work here" })).not.toBeInTheDocument();
+});

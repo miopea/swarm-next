@@ -8,6 +8,7 @@ import {
   fetchDevelopmentRuntime,
   answerDecision,
   resolveDecision,
+  claimWorker,
   fetchEmailTasksAwaitingReply,
   sendEmailReply,
   restartSupersededWorkers,
@@ -810,6 +811,21 @@ export function App() {
     }, "Sending the reply…");
   }
 
+  /**
+   * Takes a worker back for this screen, without sending it anything.
+   *
+   * ADR 0049. The claim is granted rather than negotiated — one operator moving
+   * between screens is not two parties contending — on a shorter lease than
+   * typing earns, and it does not move terminal geometry.
+   */
+  async function claimActiveWorker(workerId: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await claimWorker(operatorToken, workerId, presenceDeviceId());
+      await refreshControlRoom(false);
+    }, "Taking this worker…");
+  }
+
   async function restartProviders() {
     if (!operatorToken) return;
     await perform(async () => {
@@ -1329,6 +1345,7 @@ export function App() {
               repository={repository}
               engagement={activeWorkerEngagement}
               unconfirmedDelivery={activeWorker.unconfirmed_delivery}
+              onClaim={() => void claimActiveWorker(activeWorker.id)}
               taskStateLabel={taskStateLabel}
               onOpenQueue={openWorkerQueue}
             />

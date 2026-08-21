@@ -161,3 +161,23 @@ export async function stopWorker(operatorToken: string, workerId: string): Promi
   });
   return response.json() as Promise<Worker>;
 }
+
+/**
+ * Claims a worker for this device without sending it anything.
+ *
+ * ADR 0049. Reclaiming a screen and instructing an agent are not the same act,
+ * and until this they were the same button: the only way to take a worker back
+ * from a device you had walked away from was to type into it, which sends real
+ * input to a real provider.
+ */
+export async function claimWorker(
+  operatorToken: string,
+  workerId: string,
+  deviceId: string,
+): Promise<void> {
+  await authenticatedFetch(
+    operatorToken,
+    `/api/v1/workers/${encodeURIComponent(workerId)}/engagement/${encodeURIComponent(deviceId)}`,
+    { method: "POST" },
+  );
+}
