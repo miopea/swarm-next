@@ -99,13 +99,18 @@ fn provider_start_request(
         .any(|root| worker_workspace.starts_with(root));
     let request = match profile.provider {
         ProviderKind::ClaudeCode => {
-            ensure_claude_resume_history(profile)?;
+            // A conversation Claude no longer holds is a lost thread, not a
+            // reason the worker cannot run. Refusing to start left seventeen
+            // workers permanently unstartable with nothing in the product able
+            // to clear them, because Claude prunes its own history on a
+            // schedule Swarm does not control.
+            let resumable = claude_resume_history_available(profile);
             HostRequest::StartClaude {
                 workspace: worker_workspace.clone(),
                 size,
                 conversation: match (
                     profile.provider_conversation_id,
-                    profile.has_session_history,
+                    profile.has_session_history && resumable,
                 ) {
                     (Some(session_id), false) => ClaudeConversationStart::New { session_id },
                     (Some(session_id), true) => ClaudeConversationStart::Resume { session_id },
@@ -138,34 +143,41 @@ fn provider_start_request(
     Ok(request)
 }
 
-fn ensure_claude_resume_history(profile: &WorkerProfile) -> Result<(), ApiError> {
+/// Whether this worker's saved Claude conversation can be resumed, making it
+/// available where the worker's Claude will look for it if it is not there yet.
+///
+/// Returns false rather than failing when it cannot be found. The worker then
+/// starts a fresh conversation under the same session id, which is a lost
+/// thread rather than a lost worker — Claude prunes its own history on a
+/// schedule Swarm does not control, and refusing to start left workers
+/// unstartable with nothing in the product able to clear them.
+fn claude_resume_history_available(profile: &WorkerProfile) -> bool {
     let Some(conversation_id) = profile
         .provider_conversation_id
         .filter(|_| profile.has_session_history)
     else {
-        return Ok(());
+        return true;
     };
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| unavailable_conversation(&profile.name))?;
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return false;
+    };
     let target =
         std::env::var_os("CLAUDE_CONFIG_DIR").map_or_else(|| home.join(".claude"), PathBuf::from);
-    ensure_claude_resume_history_between(
+    let available = ensure_claude_resume_history_between(
         &profile.workspace,
         &conversation_id.to_string(),
         &home.join(".claude/projects"),
         &target.join("projects"),
         &home,
     )
-    .map_err(|_| unavailable_conversation(&profile.name))
-}
-
-fn unavailable_conversation(worker_name: &str) -> ApiError {
-    ApiError::new(
-        StatusCode::CONFLICT,
-        "provider_conversation_unavailable",
-        format!("The saved Claude conversation for {worker_name} is not available on this machine"),
-    )
+    .is_ok();
+    if !available {
+        tracing::info!(
+            worker = %profile.name,
+            "the saved Claude conversation is no longer on this machine; starting a fresh one"
+        );
+    }
+    available
 }
 
 fn ensure_claude_resume_history_between(
@@ -290,8 +302,16 @@ mod tests {
         );
     }
 
+    /// The lookup still reports a missing conversation. What changed is what
+    /// the caller does with that: it starts a fresh conversation under the same
+    /// session id rather than refusing to start the worker at all.
+    ///
+    /// Seventeen of the operator's workers were unstartable because Claude had
+    /// pruned conversations Swarm still had ids for — a schedule Swarm does not
+    /// control — and nothing in the product could clear them. A lost thread is
+    /// a smaller loss than a worker that will not run.
     #[test]
-    fn first_wake_fails_closed_when_the_saved_conversation_is_missing() {
+    fn a_missing_saved_conversation_is_reported_rather_than_hidden() {
         let directory = tempfile::tempdir().unwrap();
         let error = ensure_claude_resume_history_between(
             "/home/projects/petal",
@@ -302,5 +322,67 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// A worker with nothing saved has nothing to look for, so nothing can
+    /// block it. This is the case the caller must not treat as a failure.
+    #[test]
+    fn a_worker_with_no_saved_conversation_is_never_blocked() {
+        let directory = tempfile::tempdir().unwrap();
+        let profile = worker_profile(&directory.path().join("projects/petal"), None, false);
+        assert!(claude_resume_history_available(&profile));
+    }
+
+    /// And a conversation that is present is found where the worker's Claude
+    /// will look for it, which is the whole point of the copy.
+    #[test]
+    fn a_surviving_conversation_is_made_available_to_the_worker() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path();
+        let workspace = "/home/projects/petal";
+        let conversation = "8e9ed267-7ed8-4b64-94ef-dde3ab17f21a";
+        let source = home.join("source").join(workspace.replace(['/', '.'], "-"));
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join(format!("{conversation}.jsonl")), b"history").unwrap();
+
+        ensure_claude_resume_history_between(
+            workspace,
+            conversation,
+            &home.join("source"),
+            &home.join("target"),
+            Path::new("/home"),
+        )
+        .unwrap();
+
+        assert!(
+            home.join("target")
+                .join(workspace.replace(['/', '.'], "-"))
+                .join(format!("{conversation}.jsonl"))
+                .is_file()
+        );
+    }
+
+    fn worker_profile(
+        workspace: &Path,
+        conversation: Option<&str>,
+        has_session_history: bool,
+    ) -> WorkerProfile {
+        WorkerProfile {
+            id: swarm_domain::WorkerId::new(),
+            hive_id: swarm_domain::HiveId::new(),
+            name: "Petal".into(),
+            description: String::new(),
+            role: swarm_domain::WorkerRole::Worker,
+            provider: ProviderKind::ClaudeCode,
+            workspace: workspace.to_string_lossy().into_owned(),
+            autostart: false,
+            position: 0,
+            active_session_id: None,
+            provider_conversation_id: conversation.map(|id| id.parse().unwrap()),
+            has_session_history,
+            engagement_expires_at: None,
+            created_at: 1,
+            updated_at: 1,
+        }
     }
 }
