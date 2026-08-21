@@ -98,6 +98,9 @@ named for the revision it was built from:
 That directory is the release directory. Use it wherever the commands below say
 one.
 
+> **Cutting a release for other people** is a different procedure, in
+> `docs/cutting-a-release.md`.
+
 > **Building a tagged release instead.** `build-release.sh` produces a
 > distributable tarball under `dist/`, but it **refuses to run on an untagged
 > commit** — a release version has to come from a tag so that two releases can be
@@ -151,7 +154,12 @@ swarm-host-reconcile.path         runs it when you ask for one from the UI
 swarm-host-reconcile.timer        runs it when no worker is running
 swarm-development-reload.service  rebuilds a working copy (developer mode only)
 swarm-development-reload.path     runs it when you ask for one from the UI
+swarm-release-apply.service       installs a release you accepted
+swarm-release-apply.path          runs it when you press Install
 ```
+
+The last pair exists because installing restarts the API, so the API cannot do
+it: the request is written to a file and a separate unit does the work.
 
 The API and the terminal engine are deliberately separate services. That is why
 updating the app does not stop your workers, and why updating the engine does.
@@ -183,10 +191,34 @@ to type it in.
 
 ## Updating
 
-**Swarm does not check for updates and cannot fetch one.** There is no update
-server, no channel and no notification: a new version reaches you because
-someone hands you a release, or because you build one. Updating is always a
-command you run.
+Swarm can tell you a release exists and install it for you, or you can install
+one by hand. Both are below.
+
+### Letting Swarm check
+
+The first time you open **Settings → System** you are asked once whether to
+check daily. Until you answer, this Hive contacts nothing — and if you say no
+it never does.
+
+A check fetches one small signed file and compares it locally. **Nothing is
+sent**: not your version, not your Hive's identity, not how many workers you
+run. There is no account and nothing to sign in to.
+
+When a release is offered you get two separate buttons, because downloading is
+reversible and installing is not. **Download** fetches the release and checks
+it against the digest the signature covers; anything that fails is discarded
+rather than installed and rolled back. **Install** then asks to confirm, and
+tells you first whether it stops your workers — an App and API release does
+not, a release carrying a new worker engine does.
+
+Swarm will not offer anything to a Hive built from a working copy. It says a
+release exists and stops there, because replacing your checkout's binary would
+discard work nothing can enumerate. Rebuild from the App and API card instead.
+
+If you never turn checking on, none of this happens and the command below is
+the whole story.
+
+### Installing a release by hand
 
 ```
 sh ./swarm-0.2.0-linux-x86_64/swarm-package update ./swarm-0.2.0-linux-x86_64

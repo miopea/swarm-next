@@ -29,6 +29,9 @@ chmod 0755 "$bundle/swarm-package"
 printf '%s\n' "$version" > "$bundle/VERSION"
 printf '%s\n' "$revision" > "$bundle/SOURCE_REVISION"
 printf '%s\n' "$protocol" > "$bundle/PROTOCOL"
+# Recorded so the release manifest can say whether installing this stops
+# workers, at the moment of consent rather than after a reconcile timer.
+printf '%s\n' "$worker_engine_build_id" > "$bundle/WORKER_ENGINE_BUILD_ID"
 (
   cd "$bundle"
   find bin web systemd-user -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS

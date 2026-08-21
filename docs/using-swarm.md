@@ -116,11 +116,15 @@ last.
 ## Keeping it running
 
 The runtime area at the bottom of the rail shows the version and anything
-waiting. What you can start from there depends on what is waiting: a worker
-engine update and a provider restart are always offered, and an App and API
-rebuild appears only if this Hive was pointed at a working copy. Swarm never
-fetches a release on its own — an ordinary update is a command you run, and
-`docs/install.md` has it.
+waiting. A worker engine update and a provider restart are always offered; an
+App and API rebuild appears only if this Hive was pointed at a working copy.
+
+Swarm asks you once whether to check for new releases, and contacts nothing
+until you answer. A check sends no version, no identity and no counts — it
+fetches one signed file and compares it here. When a release is offered,
+downloading and installing are separate, and the card says whether installing
+stops your workers before you agree to it. `docs/install.md` covers both that
+and installing a release by hand.
 
 Every update asks first, and the warning is proportional: an App and API release
 keeps your workers online and says so, while a worker engine or provider restart
