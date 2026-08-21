@@ -2268,6 +2268,7 @@ mod tests {
                 Some("Reviewed owner description"),
                 None,
                 None,
+                None,
             )
             .unwrap();
 

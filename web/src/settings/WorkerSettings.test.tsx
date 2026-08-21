@@ -50,12 +50,12 @@ test("configures and reorders durable workers with progressive path completion",
 
   fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
   const editForm = screen.getByRole("form", { name: "Edit Daisy" });
-  expect(within(editForm).getByText(budget.workspace)).toBeInTheDocument();
+  expect(within(editForm).getByLabelText("Repository")).toHaveValue(budget.workspace);
   fireEvent.change(within(editForm).getByLabelText("Worker name"), { target: { value: "Marigold" } });
   fireEvent.change(within(editForm).getByLabelText("Queen routing description"), { target: { value: "Owns budgets and bills." } });
   fireEvent.click(within(editForm).getByLabelText("Keep this worker active automatically"));
   fireEvent.click(within(editForm).getByRole("button", { name: "Save description to worker" }));
-  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", "Owns budgets and bills.", "claude_code", true);
+  expect(onUpdate).toHaveBeenCalledWith(budget.id, "Marigold", "Owns budgets and bills.", "claude_code", true, undefined, false);
 });
 
 test("requires explicit confirmation before removing a sleeping worker", async () => {
@@ -194,7 +194,73 @@ test("drafts private repository context into an editable unsaved description", a
     "BudgetBug owns household budgeting, bills, and financial planning.",
     budget.provider,
     budget.autostart,
+    undefined,
+    false,
   );
+});
+
+/// "There is no way to update the repo path, which I need to do for swarm
+/// legacy."
+///
+/// A repository that moved on disk left its worker pointing at nothing, and the
+/// only recorded path was rendered as text.
+test("moves a sleeping worker to a repository that is not a discovered one", () => {
+  const onUpdate = vi.fn().mockResolvedValue(undefined);
+  render(
+    <WorkerSettings
+      workers={[queen, budget]}
+      workspaces={[{ name: "budgetbug", path: budget.workspace, kind: "repository", configured_worker_id: budget.id }]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()}
+      onUpdate={onUpdate}
+      onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
+      onReorder={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const editForm = screen.getByRole("form", { name: "Edit Daisy" });
+  const repository = within(editForm).getByLabelText("Repository");
+  expect(repository).toHaveValue(budget.workspace);
+  fireEvent.change(repository, { target: { value: "/projects/moved-budgetbug" } });
+
+  // An unknown path needs the same consent a new worker's would, so the move
+  // cannot be saved until it is given.
+  expect(within(editForm).getByRole("button", { name: "Move worker" })).toBeDisabled();
+  expect(within(editForm).getByText(/Moving a worker forgets its saved conversation/)).toBeInTheDocument();
+  fireEvent.click(within(editForm).getByRole("checkbox", { name: /outside discovered project folders/ }));
+
+  fireEvent.click(within(editForm).getByRole("button", { name: "Move worker" }));
+  expect(onUpdate).toHaveBeenCalledWith(
+    budget.id,
+    budget.name,
+    "",
+    budget.provider,
+    budget.autostart,
+    "/projects/moved-budgetbug",
+    true,
+  );
+});
+
+test("will not move a running worker out from under itself", () => {
+  render(
+    <WorkerSettings
+      workers={[queen, { ...budget, running: true, attention_state: "resting" }]}
+      workspaces={[]}
+      busy={false}
+      providers={{ claude_code: true, codex: true }}
+      onCreate={vi.fn()}
+      onUpdate={vi.fn()}
+      onRemove={vi.fn()}
+      onDraftDescription={vi.fn()}
+      onReorder={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const runningForm = screen.getByRole("form", { name: "Edit Daisy" });
+  expect(within(runningForm).getByLabelText("Repository")).toBeDisabled();
+  expect(screen.getByText("Put this worker to sleep before moving it to another repository.")).toBeInTheDocument();
 });
 
 test("does not guess provider availability when the worker engine cannot be checked", () => {

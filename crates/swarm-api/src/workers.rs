@@ -44,6 +44,12 @@ pub(super) struct UpdateWorkerRequest {
     description: Option<String>,
     provider: Option<ProviderKind>,
     autostart: Option<bool>,
+    /// Where this worker's repository now is. Validated exactly as it is when a
+    /// worker is created, because a path that would not be accepted for a new
+    /// worker is not one an existing worker should be moved to.
+    workspace: Option<String>,
+    #[serde(default)]
+    allow_outside_roots: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -340,6 +346,15 @@ pub(super) async fn update_worker(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let worker_id = parse_worker_id(&worker_id)?;
+    let workspace = match request.workspace.as_deref() {
+        Some(workspace) => Some(
+            resolve_workspace_path(&state, workspace, request.allow_outside_roots)
+                .await?
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        None => None,
+    };
     let profile = task_store(&state)?
         .update_worker_profile(
             worker_id,
@@ -347,6 +362,7 @@ pub(super) async fn update_worker(
             request.description.as_deref(),
             request.provider,
             request.autostart,
+            workspace.as_deref(),
         )
         .map_err(|error| task_store_error(&error))?;
     if request.autostart.is_some() {

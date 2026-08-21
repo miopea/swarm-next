@@ -61,6 +61,8 @@ export type UpdateWorkerInput = {
   description?: string;
   provider?: ProviderKind;
   autostart?: boolean;
+  workspace?: string;
+  allow_outside_roots?: boolean;
 };
 
 export type RepositoryState = {

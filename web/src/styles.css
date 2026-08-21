@@ -190,8 +190,8 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .task-project-row > button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-project-row > a { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 8px; color: var(--muted); text-decoration: none; }
 .task-project-row > a:hover, .task-project-row > a:focus-visible { background: var(--panel-soft); color: var(--text); }
-.worker-repository-path { display: grid; gap: 3px; color: var(--quiet); }
-.worker-repository-path code { overflow-wrap: anywhere; color: var(--muted); font: inherit; user-select: text; }
+.worker-repository-field { display: grid; gap: 3px; color: var(--quiet); }
+.worker-repository-field input { min-width: 0; font: inherit; }
 .outside-workspace-warning { display: flex !important; align-items: flex-start; gap: 8px !important; margin-top: 4px; padding: 9px; border: 1px solid var(--warn); border-radius: 9px; background: var(--warn-soft); color: var(--text) !important; }
 .outside-workspace-warning input { width: auto; margin-top: 2px; }
 .outside-workspace-warning span { display: grid; gap: 3px; }
@@ -990,8 +990,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .worker-description-heading { align-items: center; display: flex; gap: 10px; justify-content: space-between; }
 .worker-description-heading .secondary-button { min-height: 30px; padding: 4px 8px; }
 .worker-provider-field small { color: var(--text-muted); font-weight: 400; line-height: 1.35; }
-.worker-repository-path { display: grid; grid-column: 1 / -1; gap: 3px; overflow: visible !important; white-space: normal !important; }
-.worker-repository-path code { min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: .76rem; font-weight: 500; line-height: 1.35; }
+.worker-repository-field { display: grid; grid-column: 1 / -1; gap: 4px; color: var(--muted); font-size: .72rem; font-weight: 700; overflow: visible !important; white-space: normal !important; }
+.worker-repository-field input { min-width: 0; overflow-wrap: anywhere; font-size: .82rem; font-weight: 500; }
+.worker-repository-field small { min-width: 0; color: var(--text-muted); font-weight: 400; line-height: 1.35; white-space: normal !important; }
 .worker-description-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .worker-preference-form > small { grid-column: 1 / -1; }
 .worker-autostart { display: flex; align-items: center; gap: 7px; font-size: .8rem; }

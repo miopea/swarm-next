@@ -216,8 +216,14 @@ impl TaskStore {
         description: Option<&str>,
         provider: Option<ProviderKind>,
         autostart: Option<bool>,
+        workspace: Option<&str>,
     ) -> Result<WorkerProfile, TaskStoreError> {
-        if name.is_none() && description.is_none() && provider.is_none() && autostart.is_none() {
+        if name.is_none()
+            && description.is_none()
+            && provider.is_none()
+            && autostart.is_none()
+            && workspace.is_none()
+        {
             return Err(TaskStoreError::EmptyWorkerUpdate);
         }
         let name = name.map(str::trim);
@@ -295,6 +301,29 @@ impl TaskStore {
                 "UPDATE worker_profiles SET autostart = ?2 WHERE id = ?1",
                 params![worker_id.to_string(), autostart],
             )?;
+        }
+        if let Some(workspace) = workspace {
+            let current_workspace: String = transaction.query_row(
+                "SELECT workspace FROM worker_profiles WHERE id = ?1",
+                [worker_id.to_string()],
+                |row| row.get(0),
+            )?;
+            if workspace != current_workspace {
+                if running {
+                    return Err(TaskStoreError::WorkerMustBeSleeping);
+                }
+                // A saved conversation belongs to the repository it happened in:
+                // the provider keys its history by project path, so carrying the
+                // identity across would resume the wrong thread in the wrong
+                // place. Moving a worker starts it fresh where it now lives.
+                transaction.execute(
+                    "UPDATE worker_profiles
+                     SET workspace = ?2, provider_conversation_id = NULL,
+                         provider_conversation_resume = 0
+                     WHERE id = ?1",
+                    params![worker_id.to_string(), workspace],
+                )?;
+            }
         }
         transaction.execute(
             "UPDATE worker_profiles SET updated_at = unixepoch() WHERE id = ?1",
@@ -1410,7 +1439,7 @@ mod tests {
         assert!(!scout.autostart);
         assert_eq!(store.scout_worker_id().unwrap(), Some(scout.id));
         assert!(matches!(
-            store.update_worker_profile(scout.id, Some("Root"), None, None, None),
+            store.update_worker_profile(scout.id, Some("Root"), None, None, None, None),
             Err(TaskStoreError::ScoutIdentityImmutable)
         ));
         assert!(matches!(
@@ -1424,6 +1453,7 @@ mod tests {
                 Some("Routes larger cross-repository work."),
                 Some(ProviderKind::Codex),
                 Some(false),
+                None,
             )
             .unwrap();
         assert_eq!(updated.provider, ProviderKind::Codex);
@@ -1546,6 +1576,7 @@ mod tests {
                 Some("Owns subscriptions and billing."),
                 None,
                 Some(true),
+                None,
             )
             .unwrap();
 
@@ -1580,15 +1611,15 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            store.update_worker_profile(queen.id, Some("Empress"), None, None, None),
+            store.update_worker_profile(queen.id, Some("Empress"), None, None, None, None),
             Err(TaskStoreError::QueenProfileImmutable)
         ));
         assert!(matches!(
-            store.update_worker_profile(daisy.id, Some("poppy"), None, None, None),
+            store.update_worker_profile(daisy.id, Some("poppy"), None, None, None, None),
             Err(TaskStoreError::DuplicateWorkerName)
         ));
         assert!(matches!(
-            store.update_worker_profile(poppy.id, None, None, None, None),
+            store.update_worker_profile(poppy.id, None, None, None, None, None),
             Err(TaskStoreError::EmptyWorkerUpdate)
         ));
     }
@@ -1608,7 +1639,7 @@ mod tests {
         let conversation = worker.provider_conversation_id;
 
         let updated = store
-            .update_worker_profile(worker.id, None, None, Some(ProviderKind::Codex), None)
+            .update_worker_profile(worker.id, None, None, Some(ProviderKind::Codex), None, None)
             .unwrap();
         assert_eq!(updated.provider, ProviderKind::Codex);
         assert_eq!(updated.provider_conversation_id, conversation);
@@ -1621,6 +1652,7 @@ mod tests {
                 None,
                 None,
                 Some(ProviderKind::ClaudeCode),
+                None,
                 None,
             ),
             Err(TaskStoreError::WorkerMustBeSleeping)
@@ -2091,6 +2123,77 @@ mod tests {
             store.authenticate_worker_agent(&[1_u8; 31]),
             Err(TaskStoreError::InvalidAgentCredentialDigest)
         ));
+    }
+    /// The operator could not repoint a worker after Legacy vacated the folder
+    /// it lived in, because a workspace was immutable once set — the field was
+    /// display-only and the store had nowhere to put a new one.
+    ///
+    /// Moving a worker clears its saved conversation. The provider keys history
+    /// by project path, so carrying that identity across would resume the wrong
+    /// thread in the wrong repository.
+    #[test]
+    fn moving_a_worker_repoints_it_and_forgets_the_old_conversation() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Swarm (legacy)",
+                ProviderKind::ClaudeCode,
+                "/projects/old",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        assert!(
+            store
+                .get_worker_profile(worker.id)
+                .unwrap()
+                .provider_conversation_id
+                .is_some()
+        );
+
+        // A running worker keeps the repository it is running in.
+        assert!(matches!(
+            store.update_worker_profile(worker.id, None, None, None, None, Some("/projects/new")),
+            Err(TaskStoreError::WorkerMustBeSleeping)
+        ));
+
+        store.release_worker_session(session).unwrap();
+        let moved = store
+            .update_worker_profile(worker.id, None, None, None, None, Some("/projects/new"))
+            .unwrap();
+
+        assert_eq!(moved.workspace, "/projects/new");
+        assert!(
+            moved.provider_conversation_id.is_none(),
+            "a conversation belongs to the repository it happened in"
+        );
+    }
+
+    /// Saving the same path is not a move, so it costs nothing.
+    #[test]
+    fn repeating_a_workers_own_repository_changes_nothing() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/projects/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        // Running, but the repository is unchanged, so nothing is refused.
+        let same = store
+            .update_worker_profile(worker.id, None, None, None, None, Some("/projects/petal"))
+            .unwrap();
+
+        assert_eq!(same.workspace, "/projects/petal");
+        assert!(same.provider_conversation_id.is_some());
     }
     /// "When I open the desktop and mobile on the same worker it is jumping ALL
     /// over the place still."

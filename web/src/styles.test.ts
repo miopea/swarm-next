@@ -29,8 +29,11 @@ test("keeps the mobile settings section rail flush with its scroll viewport", ()
   expect(stylesheet).toContain(".settings-section-nav { top: 0; margin-inline: -4px; padding: 7px; }");
 });
 
-test("lets repository paths wrap inside the worker editor", () => {
-  expect(stylesheet).toContain(".worker-repository-path code { min-width: 0; overflow-wrap: anywhere;");
+test("lets a repository path be edited without stretching the worker editor", () => {
+  // A worker is moved by typing a path, and a long one must not widen the row
+  // past its column — the grid child needs min-width: 0 for that.
+  expect(stylesheet).toContain(".worker-repository-field input { min-width: 0; overflow-wrap: anywhere;");
+  expect(stylesheet).toContain(".worker-repository-field small { min-width: 0;");
 });
 
 test("keeps Queen autonomy explanations readable on phones", () => {

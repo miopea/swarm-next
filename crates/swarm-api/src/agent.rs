@@ -1924,6 +1924,7 @@ mod tests {
                 Some("Owns petal rendering and its repository-scoped release checks."),
                 None,
                 None,
+                None,
             )
             .unwrap();
         let queen_token = bearer_from_path(&bridge.ensure_worker_config(queen_id).unwrap());
