@@ -14619,4 +14619,65 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(response_json(response).await["code"], "worker_not_running");
     }
+
+    /// A status file the API cannot read was reported as "idle", which is the
+    /// same thing it says when nothing is happening. After the migration the
+    /// path pointed into a directory that no longer existed, so development
+    /// mode looked calm while every build request went somewhere nobody was
+    /// watching. Not knowing and knowing nothing is happening are different
+    /// answers and now read differently.
+    #[test]
+    fn development_mode_pointing_nowhere_says_so_rather_than_idle() {
+        let directory = TempDir::new().unwrap();
+        let missing = directory.path().join("gone/development-reload.status");
+        let state = AppState::default()
+            .with_development_reload_paths(missing.with_extension("request"), missing.clone());
+        assert_eq!(
+            runtime::development_reload_state_for_source(&state, Some("abcdef123456")),
+            "unavailable"
+        );
+
+        // The directory existing with no file in it is the ordinary quiet case.
+        let present = directory.path().join("development-reload.status");
+        let state = AppState::default()
+            .with_development_reload_paths(present.with_extension("request"), present.clone());
+        assert_eq!(
+            runtime::development_reload_state_for_source(&state, Some("abcdef123456")),
+            "idle"
+        );
+    }
+
+    /// A build reports progress by rewriting this file. One untouched for
+    /// longer than any build takes has stopped — whether it failed, was never
+    /// picked up, or its watcher is not running — and saying "building"
+    /// indefinitely is worse than saying that.
+    #[test]
+    fn a_build_making_no_progress_stops_claiming_to_be_running() {
+        let directory = TempDir::new().unwrap();
+        let status = directory.path().join("development-reload.status");
+        std::fs::write(&status, "state=building\nrevision=abcdef123456\n").unwrap();
+        let state = AppState::default()
+            .with_development_reload_paths(status.with_extension("request"), status.clone());
+
+        // Just written, so it is genuinely in progress.
+        assert_eq!(
+            runtime::development_reload_state_for_source(&state, Some("abcdef123456")),
+            "building"
+        );
+
+        // Backdated well past any build this workspace performs.
+        assert!(
+            Command::new("touch")
+                .arg("-d")
+                .arg("1 hour ago")
+                .arg(&status)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            runtime::development_reload_state_for_source(&state, Some("abcdef123456")),
+            "stalled"
+        );
+    }
 }

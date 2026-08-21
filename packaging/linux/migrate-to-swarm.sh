@@ -69,6 +69,15 @@ for name in swarm-next.env swarm-next-dev.env; do
   [ -f "$old_config/$name" ] || continue
   mv "$old_config/$name" "$new_config/$(printf '%s' "$name" | sed 's/swarm-next/swarm/')"
 done
+# The names are not the only thing that moved. These files carry absolute paths
+# into the state directory, and renaming the file leaves those pointing at a
+# directory that no longer exists — which is silent, because the API accepts a
+# reload request written to a path it cannot create and then reports a build
+# that nobody will ever pick up.
+for env_file in "$new_config/swarm.env" "$new_config/swarm-dev.env"; do
+  [ -f "$env_file" ] || continue
+  sed -i "s#$old_state#$new_state#g" "$env_file"
+done
 say "config moved to $new_config"
 
 # --- 4. Install the new release at the new paths ------------------------------
@@ -76,6 +85,19 @@ release=${SWARM_MIGRATION_RELEASE:?SWARM_MIGRATION_RELEASE is required}
 [ -d "$release" ] || die "release directory $release is missing"
 sh "$release/swarm-package" install "$release" || die "install failed"
 say "new release installed"
+
+# --- 4a. Development mode, if this machine had it ----------------------------
+# Installing a release does not enable the reload watcher: that only happens
+# through enable-development, so a migrated machine keeps its development
+# configuration and loses the unit that acts on it. Re-enabling regenerates the
+# env against the new state root and starts the watcher, which is the supported
+# path rather than a second implementation of it.
+dev_checkout=$(sed -n 's/^SWARM_DEV_CHECKOUT=//p' "$new_config/swarm-dev.env" 2>/dev/null || true)
+if [ -n "$dev_checkout" ] && [ -d "$dev_checkout" ]; then
+  sh "$release/swarm-package" enable-development "$dev_checkout" \
+    || die "development mode could not be re-enabled for $dev_checkout"
+  say "development reload re-enabled for $dev_checkout"
+fi
 
 # --- 5. Verify from the machine, not from the build --------------------------
 ok=""

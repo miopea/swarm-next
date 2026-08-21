@@ -300,6 +300,11 @@ pub(super) fn build_source_revision() -> Option<String> {
         .or_else(|| deployed_source_revision(build_version()))
 }
 
+/// Longer than a release build of this workspace takes, by a wide margin. A
+/// build that has made no progress in this long has stopped, whether it failed,
+/// was never picked up, or its watcher is not running.
+const STALLED_BUILD_AFTER: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
 pub(super) fn development_reload_state_for_source(
     state: &AppState,
     source_revision: Option<&str>,
@@ -308,7 +313,15 @@ pub(super) fn development_reload_state_for_source(
         return "disabled";
     };
     let Ok(value) = std::fs::read_to_string(path.as_ref()) else {
-        return "idle";
+        // A file that cannot be read is not the same as one saying nothing is
+        // happening. When its directory is not there either, development mode
+        // is pointing somewhere that does not exist — which is what a migrated
+        // install looked like, reporting idle while every build request went to
+        // a path nobody was watching.
+        let configured = std::path::Path::new(path.as_ref())
+            .parent()
+            .is_some_and(std::path::Path::is_dir);
+        return if configured { "idle" } else { "unavailable" };
     };
     let marker_revision = value
         .lines()
@@ -319,7 +332,16 @@ pub(super) fn development_reload_state_for_source(
     {
         return "idle";
     }
+    // A build reports progress by rewriting this file. One that has not been
+    // touched for longer than any build takes is not in progress; nothing is
+    // acting on it, and saying "building" forever is worse than saying so.
+    let stalled = std::fs::metadata(path.as_ref())
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|since| since > STALLED_BUILD_AFTER);
     match marker_state {
+        Some("requested" | "building") if stalled => "stalled",
         Some("requested") => "requested",
         Some("building") => "building",
         Some("failed") => "failed",

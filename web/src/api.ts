@@ -265,7 +265,9 @@ export type WorkerEngineMaintenanceResult = {
 export type DevelopmentRuntime = {
   enabled: boolean;
   version: string;
-  state: "disabled" | "idle" | "requested" | "building" | "failed" | "ready" | "source_mismatch";
+  state: "disabled" | "idle" | "requested" | "building" | "failed" | "ready" | "source_mismatch"
+    /** Progress stopped, or the paths it reports progress to do not exist. */
+    | "stalled" | "unavailable";
   reload_available: boolean;
   deployed_source_revision?: string | null;
   source_revision: string | null;

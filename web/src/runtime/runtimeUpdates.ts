@@ -91,6 +91,28 @@ function providerUpdate(superseded: SupersededProvider[]): RuntimeUpdateSummary 
 }
 
 function appUpdate(development: DevelopmentRuntime | undefined): RuntimeUpdateSummary | undefined {
+  // A build that stopped making progress, and a development mode configured to
+  // write somewhere that does not exist. Both used to read as "nothing is
+  // happening", which is what left a build apparently running with nothing
+  // behind it.
+  if (development?.state === "stalled") {
+    return {
+      kind: "failed",
+      label: "Build stopped responding",
+      detail: "The build has made no progress for some time. Nothing is compiling; it was most likely never picked up.",
+      busy: false,
+      action: "build",
+      actionLabel: "Start it again",
+    };
+  }
+  if (development?.state === "unavailable") {
+    return {
+      kind: "failed",
+      label: "Development mode is misconfigured",
+      detail: "This Hive is set to build from a working copy, but the path it reports progress to does not exist. Re-enable development mode to repair it.",
+      busy: false,
+    };
+  }
   if (development?.state === "failed") {
     return {
       kind: "failed",

@@ -253,3 +253,24 @@ test("only the updates that take workers away carry a consequence", () => {
   expect(release?.consequence).toBeUndefined();
   expect(release?.action).toBe("build");
 });
+
+test("says a build stopped rather than showing it running forever", () => {
+  // The operator watched a build sit at "building" while nothing was compiling:
+  // the reload watcher was not enabled, so the request was never picked up.
+  // Reporting progress nobody is making is worse than reporting that.
+  const stalled = runtimeUpdates(undefined, undefined, { enabled: true, state: "stalled", reload_available: true, source_revision: "b9cd807", deployed_source_revision: "3c1c508", source_dirty: false } as never, []);
+  const build = stalled.find((update) => update.kind === "failed");
+  expect(build?.label).toBe("Build stopped responding");
+  expect(build?.busy).toBe(false);
+  expect(build?.action).toBe("build");
+});
+
+test("names a development mode pointing at somewhere that does not exist", () => {
+  // After a migration the reload paths pointed into a directory that had moved,
+  // so every request went somewhere nobody was watching while the API reported
+  // calm. It offers no build action, because building is not what would fix it.
+  const broken = runtimeUpdates(undefined, undefined, { enabled: true, state: "unavailable", reload_available: false, source_revision: null, deployed_source_revision: null, source_dirty: false } as never, []);
+  const misconfigured = broken.find((update) => update.kind === "failed");
+  expect(misconfigured?.label).toBe("Development mode is misconfigured");
+  expect(misconfigured?.action).toBeUndefined();
+});
