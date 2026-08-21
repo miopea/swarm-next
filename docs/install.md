@@ -133,7 +133,28 @@ Swarm 0.1.0 is healthy at http://127.0.0.1:8766/health
 ~/.config/swarm/          swarm.env — your configuration and operator token
 ~/.local/bin/             swarmctl
 ~/swarm-workspaces/       where repositories live, unless you set another root
+~/.config/systemd/user/   the eight units below
 ```
+
+Everything is named `swarm`, including when you installed from a directory
+called something else. The release directory's name does not survive the
+install.
+
+### The services
+
+```
+swarm.target                      what you start and stop; pulls in the two below
+swarm-api.service                 the application and the web UI
+swarm-terminal-host.service       the terminal engine the workers run under
+swarm-host-reconcile.service      applies a worker engine update
+swarm-host-reconcile.path         runs it when you ask for one from the UI
+swarm-host-reconcile.timer        runs it when no worker is running
+swarm-development-reload.service  rebuilds a working copy (developer mode only)
+swarm-development-reload.path     runs it when you ask for one from the UI
+```
+
+The API and the terminal engine are deliberately separate services. That is why
+updating the app does not stop your workers, and why updating the engine does.
 
 Nothing is written outside your home directory, and nothing needs root except
 the optional `enable-linger` above.
@@ -162,8 +183,23 @@ to type it in.
 
 ## Updating
 
+**Swarm does not check for updates and cannot fetch one.** There is no update
+server, no channel and no notification: a new version reaches you because
+someone hands you a release, or because you build one. Updating is always a
+command you run.
+
 ```
 sh ./swarm-0.2.0-linux-x86_64/swarm-package update ./swarm-0.2.0-linux-x86_64
+```
+
+From a source checkout it is the same command, applied to a freshly built
+release directory:
+
+```
+cd ~/swarm
+git pull
+./packaging/linux/build-development-release.sh /tmp/swarm-build
+sh /tmp/swarm-build/swarm-*/swarm-package update /tmp/swarm-build/swarm-*
 ```
 
 An update keeps your database, your configuration and your workers. It verifies
@@ -179,6 +215,23 @@ swarm-package: terminal host update deferred; 1 sessions remain
 
 Apply it when you are ready, from the runtime area in the control room or by
 running the update again once workers are asleep.
+
+### Building from a working copy instead
+
+If you are working on Swarm itself, the rebuild-and-update loop above can be a
+button in the control room instead. Point Swarm at your checkout once:
+
+```
+sh ~/.local/lib/swarm/current/swarm-package enable-development ~/swarm
+```
+
+From then on **Settings → System** carries an *App and API* card that rebuilds
+that checkout and activates it, and the runtime area says this Hive builds from
+a working copy. Without this step there is no App and API update control in the
+interface at all, which is correct — there is nothing local for it to build.
+
+`disable-development` returns you to installed releases. This is a developer
+convenience and not how Swarm is meant to be run.
 
 ## If an update goes wrong
 

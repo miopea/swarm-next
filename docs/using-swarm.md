@@ -115,9 +115,14 @@ last.
 
 ## Keeping it running
 
-The runtime area at the bottom of the rail shows the version, whether this Hive
-builds from a working copy, and any update waiting. Updates are started from
-there and always ask first — the warning is proportional: an App and API release
+The runtime area at the bottom of the rail shows the version and anything
+waiting. What you can start from there depends on what is waiting: a worker
+engine update and a provider restart are always offered, and an App and API
+rebuild appears only if this Hive was pointed at a working copy. Swarm never
+fetches a release on its own — an ordinary update is a command you run, and
+`docs/install.md` has it.
+
+Every update asks first, and the warning is proportional: an App and API release
 keeps your workers online and says so, while a worker engine or provider restart
 names exactly what stops before offering the button.
 
