@@ -68,6 +68,32 @@ const CLOSE_PROTOCOL_FAILURE = 4008;
 const CLOSE_FRESH_SNAPSHOT = 4013;
 
 /** Owns one browser attachment independently from React component lifetime. */
+/**
+ * What a refused attach grant means, in words rather than a status code.
+ *
+ * A 502, 503 or 504 here is the ordinary shape of an update: the API is
+ * restarting and cannot hand out a socket for a few seconds. Reporting
+ * "Attach grant returned 503" made a routine reload read as a fault — the
+ * operator's words, watching a worker come back: "It works, but a bit of a
+ * false flag."
+ *
+ * The reconnect behaviour is unchanged; only what the operator is told about
+ * it. A status this does not recognise keeps its number, because an unexpected
+ * one is worth being able to look up.
+ */
+export function attachGrantFailure(status: number): string {
+  if (status === 502 || status === 503 || status === 504) {
+    return "Swarm is restarting; reconnecting";
+  }
+  if (status === 401 || status === 403) {
+    return "this terminal is no longer authorized";
+  }
+  if (status === 404) {
+    return "this terminal session is no longer on the worker engine";
+  }
+  return `Swarm could not attach this terminal (${status})`;
+}
+
 export class TerminalConnection {
   readonly #sessionId: string;
   readonly #operatorToken: string;
@@ -175,7 +201,7 @@ export class TerminalConnection {
           signal: grantAbortController.signal,
         },
       );
-      if (!response.ok) throw new Error(`Attach grant returned ${response.status}`);
+      if (!response.ok) throw new Error(attachGrantFailure(response.status));
       const grant = (await response.json()) as GrantResponse;
       if (this.#disposed || this.#grantAbortController !== grantAbortController) return;
       this.#grantAbortController = undefined;

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { BROWSER_SESSION_AUTH } from "../api";
-import { TerminalConnection, type TerminalConnectionHandlers } from "./TerminalConnection";
+import { TerminalConnection, attachGrantFailure, type TerminalConnectionHandlers } from "./TerminalConnection";
 
 class FakeWebSocket extends EventTarget {
   static readonly OPEN = WebSocket.OPEN;
@@ -521,4 +521,52 @@ test("a rebuilt screen says which cause rebuilt it", async () => {
   expect(handlers.onSnapshot).toHaveBeenLastCalledWith(
     expect.objectContaining({ reason: "dropped_output" }),
   );
+});
+
+/**
+ * "When the worker is reloading I see this at the top. It works, but a bit of
+ * a false flag." — a 503 while the API restarts is the ordinary shape of an
+ * update, and reporting the status code made a routine reconnect read as a
+ * fault.
+ */
+test("a restart in progress reads as reconnecting, not as a status code", async () => {
+  expect(attachGrantFailure(503)).toBe("Swarm is restarting; reconnecting");
+  expect(attachGrantFailure(502)).toBe("Swarm is restarting; reconnecting");
+  expect(attachGrantFailure(504)).toBe("Swarm is restarting; reconnecting");
+
+  // An unexpected status keeps its number, because it is worth looking up.
+  expect(attachGrantFailure(418)).toBe("Swarm could not attach this terminal (418)");
+  expect(attachGrantFailure(401)).toBe("this terminal is no longer authorized");
+  expect(attachGrantFailure(404)).toBe("this terminal session is no longer on the worker engine");
+});
+
+test("the terminal keeps retrying through a restart and says so", async () => {
+  vi.useFakeTimers();
+  const handlers: TerminalConnectionHandlers = {
+    onOutput: vi.fn(),
+    onSnapshot: vi.fn(),
+    onState: vi.fn(),
+    onRunningChange: vi.fn(),
+  };
+  const fetch = vi.fn(async () => new Response("", { status: 503 }));
+  const connection = new TerminalConnection({
+    sessionId: "session-1",
+    operatorToken: "secret",
+    fetch: fetch as unknown as typeof window.fetch,
+    retryDelaysMs: [1, 1],
+    confirmationTimeoutMs: 1,
+    websocketFactory: vi.fn(),
+  });
+  connection.resize(24, 80);
+  connection.start(handlers);
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(handlers.onState).toHaveBeenCalledWith("disconnected", "Swarm is restarting; reconnecting");
+  expect(handlers.onState).not.toHaveBeenCalledWith("disconnected", expect.stringContaining("503"));
+
+  // And it is still trying, rather than having given up on the worker.
+  await vi.advanceTimersByTimeAsync(1);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  connection.dispose();
 });
