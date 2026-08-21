@@ -307,6 +307,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 /* One height for everything on this row, phone and desktop alike. Measured
    before this: 21, 26, 34, 38 and 39 pixels side by side. */
 .header-actions .icon-button, .header-actions .secondary-button { box-sizing: border-box; height: var(--pill-height); min-height: var(--pill-height); }
+/* A fixed height on a block button leaves its text wherever the padding put it:
+   measured 3.5px low once the height stopped following the content. */
+.header-actions .secondary-button { display: inline-flex; align-items: center; justify-content: center; }
 /* The chrome gives way before the control the screen exists for. This row was
    a rigid 252px at every phone width, so the worker selector took the whole
    shortfall — 84px at 360px, with both the worker name and its task clipped. */
@@ -1563,8 +1566,17 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .start-worker-disclosure .start-worker { display: none; margin-top: 9px; padding: 10px 0 2px; }
   .start-worker-disclosure .start-worker.mobile-expanded { display: grid; }
   .rail-footer { display: none; }
-  /* No hover on a touch screen, so it cannot hide behind one. */
-  .surface-nav-popout { width: var(--pill-touch-height); height: var(--pill-touch-height); opacity: 1; }
+  /* A phone cannot usefully open a second window, so detaching is not offered
+     there at all. Making these permanently visible because touch has no hover
+     was the wrong answer to the right observation — it put five controls in the
+     navigation row that do nothing a phone can use. */
+  .surface-nav-popout { display: none; }
+  /* A detached window on a phone goes back to being the whole width. The rail
+     gives it nothing here — its context is hidden at this width — so it stood
+     as an empty column taking half the screen, which is what the operator was
+     looking at. The worker picker they need is already in the header. */
+  .app-shell.detached-surface { grid-template-columns: minmax(0, 1fr); }
+  .control-rail.detached-rail { display: none; }
   .workspace-header { min-height: 52px; padding: 7px 12px; }
   .workspace-header .eyebrow { display: none; }
   .workspace-header h2 { font-size: 1rem; }
@@ -1836,7 +1848,9 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
      back the vertical space the phone layout just reclaimed. */
   .worker-context { flex: 0 0 auto; }
   .worker-context-task, .worker-context-queue, .worker-repository { display: none; }
-  .terminal-connection-dot { display: inline-block; width: 10px; height: 10px; flex: 0 0 auto; border-radius: 999px; background: var(--good); }
+  /* Sized to match the presence indicator beside it. A 10px dot next to a 24px
+     one reads as something that fell off rather than a pair of states. */
+  .terminal-connection-dot { display: inline-block; box-sizing: content-box; width: 10px; height: 10px; flex: 0 0 auto; padding: 7px; border-radius: 999px; background: var(--good); background-clip: content-box; }
   .terminal-connection-dot.connection-connecting { background: var(--accent-strong); }
   .terminal-connection-dot.connection-disconnected, .terminal-connection-dot.connection-closed { background: var(--bad); }
   .terminal-sleep-button { display: inline-flex; color: var(--bad); }

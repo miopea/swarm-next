@@ -250,3 +250,26 @@ test("lets a long task status wrap in its own cell instead of crossing the next 
   expect(stylesheet).toContain(".task-state, .task-priority { min-width: 0; white-space: normal; overflow-wrap: anywhere; }");
   expect(stylesheet).toContain(".task-state::before { flex: 0 0 auto; }");
 });
+
+test("offers no detaching on a phone, and keeps the header's own text centred", () => {
+  // Two regressions from giving these controls a fixed height and a touch size.
+  //
+  // A phone cannot usefully open a second window, so the pop-out controls do
+  // not belong in its navigation row — making them permanently visible because
+  // touch has no hover was the wrong answer to the right observation.
+  expect(stylesheet).toContain(".surface-nav-popout { display: none; }");
+
+  // And a fixed height on a block button leaves its text wherever the padding
+  // put it: Lock's label measured 3.5px below the centre of its own box.
+  expect(stylesheet).toContain(".header-actions .secondary-button { display: inline-flex; align-items: center; justify-content: center; }");
+});
+
+test("a detached window on a phone is the whole width", () => {
+  // Measured against the deployed stylesheet: a popped-out window at 390px gave
+  // its rail 260px and the workspace 130px — a third of the screen, with the
+  // rail empty because its context is hidden at that width. The rail earns its
+  // place on a desktop, where it carries the worker picker; on a phone that
+  // picker is already in the header, so the rail is only cost.
+  expect(stylesheet).toContain(".app-shell.detached-surface { grid-template-columns: minmax(0, 1fr); }");
+  expect(stylesheet).toContain(".control-rail.detached-rail { display: none; }");
+});
