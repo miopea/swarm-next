@@ -228,11 +228,16 @@ render_unit() {
     configured_checkout=$(sed -n 's/^SWARM_DEV_CHECKOUT=//p' "$dev_config")
     [ -z "$configured_checkout" ] || unit_dev_checkout=$configured_checkout
   fi
+  # Every @PLACEHOLDER@ must be substituted here. systemd does not fail on an
+  # unrecognised ReadWritePaths= entry, it logs and carries on — so a template
+  # using a name this renderer does not know produces a unit that starts and
+  # then cannot write where it needs to. Checked after rendering, below.
   sed \
     -e "s|@INSTALL_ROOT@|$install_root|g" \
     -e "s|@CONFIG_ROOT@|$config_root|g" \
     -e "s|@STATE_ROOT@|$state_root|g" \
     -e "s|@UNIT_ROOT@|$unit_root|g" \
+    -e "s|@BIN_ROOT@|$bin_root|g" \
     -e "s|@WORKSPACE_ROOT@|$workspace_root|g" \
     -e "s|@DEV_CHECKOUT@|$unit_dev_checkout|g" \
     "$source_file" > "$destination.tmp"
@@ -361,6 +366,9 @@ install_units() {
   unit_release=$1
   for name in swarm-terminal-host.service swarm-api.service swarm-host-reconcile.service swarm-host-reconcile.path swarm-host-reconcile.timer swarm-development-reload.service swarm-development-reload.path swarm-release-apply.service swarm-release-apply.path swarm.target; do
     render_unit "$unit_release/systemd-user/$name.in" "$unit_root/$name"
+    if grep -q '@[A-Z_]*@' "$unit_root/$name"; then
+      die "$name still contains an unsubstituted placeholder: $(grep -o '@[A-Z_]*@' "$unit_root/$name" | sort -u | tr '\n' ' ')"
+    fi
   done
   run_systemctl daemon-reload
 }
