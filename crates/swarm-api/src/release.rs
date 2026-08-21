@@ -425,7 +425,7 @@ async fn fetch_artifact(offer: &ReleaseOffer, root: &Path) -> Result<PathBuf, St
     file.flush().await.map_err(|error| error.to_string())?;
     drop(file);
 
-    if written != offer.artifact_bytes || hex(&digest.finalize()) != offer.artifact_sha256 {
+    if !artifact_matches(offer, written, &hex(&digest.finalize())) {
         // Discarded rather than kept: an artifact that fails this check is not
         // a candidate for anything, and keeping it invites installing it.
         let _ = tokio::fs::remove_dir_all(&staging).await;
@@ -473,10 +473,58 @@ async fn unpack(
     Ok(destination)
 }
 
+/// Whether the bytes that arrived are the bytes the manifest signed for.
+///
+/// Both halves matter. The digest is what proves the content, and the length
+/// is what stops a stream being read further than the signature covers.
+fn artifact_matches(offer: &ReleaseOffer, written: u64, digest: &str) -> bool {
+    written == offer.artifact_bytes && digest == offer.artifact_sha256
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut rendered, byte| {
         use std::fmt::Write;
         let _ = write!(rendered, "{byte:02x}");
         rendered
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offer() -> ReleaseOffer {
+        ReleaseOffer {
+            version: "0.2.0".to_owned(),
+            protocol: "9".to_owned(),
+            artifact_url: "https://releases.example/swarm-0.2.0.tar.gz".to_owned(),
+            artifact_sha256: "a".repeat(64),
+            artifact_bytes: 16_213_012,
+            worker_engine_build_id: "engine-b".to_owned(),
+            notes_url: None,
+        }
+    }
+
+    /// The artifact is what actually runs on the machine. A digest that only
+    /// nearly matches is a different program.
+    #[test]
+    fn an_artifact_is_taken_only_when_both_its_digest_and_length_match() {
+        let offer = offer();
+        assert!(artifact_matches(&offer, 16_213_012, &"a".repeat(64)));
+
+        // A different program of exactly the right length.
+        assert!(!artifact_matches(&offer, 16_213_012, &"b".repeat(64)));
+        // The right program, truncated — the digest of what arrived cannot
+        // match, but the length check catches it without hashing anything.
+        assert!(!artifact_matches(&offer, 16_213_011, &"a".repeat(64)));
+        // Padded past what the signature covers.
+        assert!(!artifact_matches(&offer, 16_213_013, &"a".repeat(64)));
+        // An empty response that hashes to something.
+        assert!(!artifact_matches(&offer, 0, &"a".repeat(64)));
+    }
+
+    #[test]
+    fn hex_renders_a_digest_the_way_a_manifest_writes_one() {
+        assert_eq!(hex(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
+    }
 }
