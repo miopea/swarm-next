@@ -6,16 +6,27 @@ your home directory, runs as you, and listens only on localhost.
 
 ## Install it
 
-Download the latest release from
-**https://github.com/miopea/swarm-next/releases/latest**, then:
+Three commands, nothing to click:
 
 ```
+curl -fsSLO https://github.com/miopea/swarm-next/releases/download/v0.1.0/swarm-0.1.0-linux-x86_64.tar.gz
 tar -xzf swarm-0.1.0-linux-x86_64.tar.gz
 sh ./swarm-0.1.0-linux-x86_64/swarm-package install ./swarm-0.1.0-linux-x86_64
 ```
 
-The path appears twice because `swarm-package` lives inside the release: once to
-run it, once to tell it what to install.
+The path appears twice on the last line because `swarm-package` lives inside the
+release: once to run it, once to tell it what to install.
+
+For a later version, change the number in all three places. To always take the
+newest without looking it up:
+
+```
+curl -fsSL https://api.github.com/repos/miopea/swarm-next/releases/latest \
+  | grep -o 'https://[^"]*linux-x86_64\.tar\.gz' | head -1 | xargs curl -fsSLO
+```
+
+Every release is listed at
+**https://github.com/miopea/swarm-next/releases** if you would rather look.
 
 It verifies the bundle's checksums, installs it, writes the systemd units,
 starts the services, and **waits for the API to answer before saying it
@@ -179,11 +190,10 @@ the whole story.
 
 ### Installing a release by hand
 
-Same place as the first one —
-**https://github.com/miopea/swarm-next/releases/latest** — and the same command
-as installing, with `update` instead of `install`:
+The same three commands as installing, with `update` instead of `install`:
 
 ```
+curl -fsSLO https://github.com/miopea/swarm-next/releases/download/v0.2.0/swarm-0.2.0-linux-x86_64.tar.gz
 tar -xzf swarm-0.2.0-linux-x86_64.tar.gz
 sh ./swarm-0.2.0-linux-x86_64/swarm-package update ./swarm-0.2.0-linux-x86_64
 ```
