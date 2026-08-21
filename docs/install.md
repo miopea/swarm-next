@@ -9,9 +9,9 @@ your home directory, runs as you, and listens only on localhost.
 Three commands, nothing to click:
 
 ```
-curl -fsSLO https://github.com/miopea/swarm-next/releases/download/v0.1.0/swarm-0.1.0-linux-x86_64.tar.gz
-tar -xzf swarm-0.1.0-linux-x86_64.tar.gz
-sh ./swarm-0.1.0-linux-x86_64/swarm-package install ./swarm-0.1.0-linux-x86_64
+curl -fsSLO https://github.com/miopea/swarm-next/releases/download/v0.2.0/swarm-0.2.0-linux-x86_64.tar.gz
+tar -xzf swarm-0.2.0-linux-x86_64.tar.gz
+sh ./swarm-0.2.0-linux-x86_64/swarm-package install ./swarm-0.2.0-linux-x86_64
 ```
 
 The path appears twice on the last line because `swarm-package` lives inside the
@@ -33,7 +33,7 @@ starts the services, and **waits for the API to answer before saying it
 worked**. On success:
 
 ```
-Swarm 0.1.0 is healthy at http://127.0.0.1:8766/health
+Swarm 0.2.0 is healthy at http://127.0.0.1:8766/health
 ```
 
 Open that address. The token to sign in with is in
