@@ -5,6 +5,7 @@ members = [
   "crates/swarm-application",
   "crates/swarm-domain",
   "crates/swarm-persistence",
+  "crates/swarm-release-tool",
   "crates/swarm-terminal",
   "crates/swarm-terminal-host",
 ]

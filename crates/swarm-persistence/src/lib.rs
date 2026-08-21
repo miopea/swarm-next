@@ -128,7 +128,8 @@ const DECISION_SUMMARY_SCHEMA_VERSION: i64 = 79;
 const EMAIL_REPLY_FROM_REVIEW_SCHEMA_VERSION: i64 = 80;
 const WORKER_FILED_DRAFT_SCHEMA_VERSION: i64 = 81;
 const START_SURFACE_SCHEMA_VERSION: i64 = 82;
-const CURRENT_SCHEMA_VERSION: i64 = START_SURFACE_SCHEMA_VERSION;
+const RELEASE_CHECK_SCHEMA_VERSION: i64 = 83;
+const CURRENT_SCHEMA_VERSION: i64 = RELEASE_CHECK_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -138,6 +139,31 @@ pub(crate) fn normalize_public_identity_name(value: &str) -> Option<&str> {
         && value.len() <= MAX_PUBLIC_IDENTITY_NAME_BYTES
         && !value.chars().any(char::is_control))
     .then_some(value)
+}
+
+/// Whether this Hive checks for releases, and what the last check saw.
+///
+/// `mode` is `unset` until the operator answers, which is not the same as
+/// `off`: one is a Hive that was never asked, the other a Hive that said no.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseCheckState {
+    pub mode: String,
+    pub last_checked_at: Option<i64>,
+    pub last_outcome: Option<String>,
+    /// The verified offer as it was last seen, kept so the card says something
+    /// on a machine that is currently offline.
+    pub last_offer: Option<String>,
+}
+
+impl Default for ReleaseCheckState {
+    fn default() -> Self {
+        Self {
+            mode: "unset".to_owned(),
+            last_checked_at: None,
+            last_outcome: None,
+            last_offer: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -789,6 +815,99 @@ impl TaskStore {
         // wait on this call forever.
         drop(connection);
         self.start_surface()
+    }
+
+    /// Whether this Hive checks for releases, and what the last check saw.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn release_check_state(&self) -> Result<ReleaseCheckState, TaskStoreError> {
+        let connection = self.connection()?;
+        let state = connection
+            .query_row(
+                "SELECT preference.mode, preference.last_checked_at,
+                        preference.last_outcome, preference.last_offer
+                 FROM release_check_preferences preference
+                 JOIN local_hive_identity local ON local.singleton = 1
+                 JOIN hives hive ON hive.id = local.hive_id
+                 WHERE preference.operator_id = hive.operator_id",
+                [],
+                |row| {
+                    Ok(ReleaseCheckState {
+                        mode: row.get(0)?,
+                        last_checked_at: row.get(1)?,
+                        last_outcome: row.get(2)?,
+                        last_offer: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(state.unwrap_or_default())
+    }
+
+    /// Chooses whether this Hive contacts a release origin at all.
+    ///
+    /// # Errors
+    /// Rejects a mode this product does not offer.
+    pub fn set_release_check_mode(&self, mode: &str) -> Result<ReleaseCheckState, TaskStoreError> {
+        if !matches!(mode, "off" | "daily") {
+            return Err(TaskStoreError::IntegrityFailure(format!(
+                "{mode} is not a release check mode"
+            )));
+        }
+        let connection = self.connection()?;
+        connection.execute(
+            "INSERT INTO release_check_preferences (operator_id, mode, updated_at)
+             SELECT hive.operator_id, ?1, unixepoch()
+             FROM local_hive_identity local
+             JOIN hives hive ON hive.id = local.hive_id
+             WHERE local.singleton = 1
+             ON CONFLICT(operator_id) DO UPDATE
+                 SET mode = excluded.mode, updated_at = excluded.updated_at",
+            [mode],
+        )?;
+        // Released before reading back, which would otherwise wait on the
+        // connection lock this call still holds.
+        drop(connection);
+        self.release_check_state()
+    }
+
+    /// Records what a check saw, without disturbing the operator's choice.
+    ///
+    /// A failed check keeps the previous offer rather than erasing it: an
+    /// origin that is unreachable today does not make yesterday's answer
+    /// untrue, and blanking the card would read as "nothing available".
+    ///
+    /// # Errors
+    /// Rejects an outcome this product does not record.
+    pub fn record_release_check(
+        &self,
+        outcome: &str,
+        offer: Option<&str>,
+        now: i64,
+    ) -> Result<ReleaseCheckState, TaskStoreError> {
+        if !matches!(outcome, "offered" | "current" | "unreachable" | "rejected") {
+            return Err(TaskStoreError::IntegrityFailure(format!(
+                "{outcome} is not a release check outcome"
+            )));
+        }
+        let connection = self.connection()?;
+        connection.execute(
+            "UPDATE release_check_preferences
+             SET last_checked_at = ?2,
+                 last_outcome = ?1,
+                 last_offer = COALESCE(?3, last_offer),
+                 updated_at = ?2
+             WHERE operator_id = (
+                 SELECT hive.operator_id
+                 FROM local_hive_identity local
+                 JOIN hives hive ON hive.id = local.hive_id
+                 WHERE local.singleton = 1
+             )",
+            params![outcome, now, offer],
+        )?;
+        drop(connection);
+        self.release_check_state()
     }
 
     /// Creates a validated draft and records its authenticated origin.
@@ -1814,6 +1933,35 @@ fn migrate_start_surface(transaction: &rusqlite::Transaction<'_>) -> rusqlite::R
     transaction.pragma_update(None, "user_version", START_SURFACE_SCHEMA_VERSION)
 }
 
+/// Whether this Hive checks an origin for new releases, and what it last saw.
+///
+/// `mode` starts at `unset` rather than `off` on purpose. ADR 0050 requires
+/// that a Hive never contact an origin its owner did not choose, and an
+/// unanswered question is not a choice — but neither is a silent default the
+/// operator never sees. `unset` lets the control room ask once and lets a
+/// Hive that is never asked stay silent, which `off` alone cannot express.
+///
+/// The last result is cached so the card says something on a machine that is
+/// offline, and so a restart does not look like a fresh check.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+fn migrate_release_check(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS release_check_preferences (
+             operator_id TEXT PRIMARY KEY REFERENCES operators(id) ON DELETE CASCADE,
+             mode TEXT NOT NULL DEFAULT 'unset'
+                 CHECK (mode IN ('unset','off','daily')),
+             last_checked_at INTEGER,
+             last_outcome TEXT
+                 CHECK (last_outcome IS NULL OR last_outcome IN ('offered','current','unreachable','rejected')),
+             last_offer TEXT,
+             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+         );",
+    )?;
+    transaction.pragma_update(None, "user_version", RELEASE_CHECK_SCHEMA_VERSION)
+}
+
 fn migrate_schema(
     transaction: &rusqlite::Transaction<'_>,
     schema_version: i64,
@@ -2050,6 +2198,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < START_SURFACE_SCHEMA_VERSION {
         migrate_start_surface(transaction)?;
+    }
+    if schema_version < RELEASE_CHECK_SCHEMA_VERSION {
+        migrate_release_check(transaction)?;
     }
     Ok(())
 }
@@ -4941,6 +5092,12 @@ mod tests {
             undo_sql: "",
             probe_sql: "",
         },
+        SchemaStep {
+            table: "release_check_preferences",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
     ];
 
     fn newest_step() -> &'static SchemaStep {
@@ -5049,6 +5206,43 @@ mod tests {
     /// The operator asked for one choice used everywhere, because a phone
     /// landing somewhere a desktop would not is the problem. Storing it per
     /// device class would have built that problem into the schema.
+    /// "A Hive never contacts an origin its owner did not choose." An
+    /// unanswered question is not a choice, so it is stored as neither.
+    #[test]
+    fn a_hive_does_not_check_for_releases_until_it_is_told_to() {
+        let store = TaskStore::in_memory().unwrap();
+
+        assert_eq!(store.release_check_state().unwrap(), ReleaseCheckState::default());
+        assert_eq!(store.release_check_state().unwrap().mode, "unset");
+
+        assert_eq!(store.set_release_check_mode("daily").unwrap().mode, "daily");
+        assert_eq!(store.set_release_check_mode("off").unwrap().mode, "off");
+        assert!(store.set_release_check_mode("hourly").is_err());
+        assert_eq!(store.release_check_state().unwrap().mode, "off");
+    }
+
+    /// An origin that is unreachable today does not make yesterday's answer
+    /// untrue. Blanking the offer would read as "nothing available".
+    #[test]
+    fn a_failed_check_records_the_failure_without_erasing_what_was_offered() {
+        let store = TaskStore::in_memory().unwrap();
+        store.set_release_check_mode("daily").unwrap();
+
+        let offered = store
+            .record_release_check("offered", Some(r#"{"version":"0.2.0"}"#), 1_000)
+            .unwrap();
+        assert_eq!(offered.last_outcome.as_deref(), Some("offered"));
+        assert_eq!(offered.last_offer.as_deref(), Some(r#"{"version":"0.2.0"}"#));
+
+        let failed = store.record_release_check("unreachable", None, 2_000).unwrap();
+        assert_eq!(failed.last_outcome.as_deref(), Some("unreachable"));
+        assert_eq!(failed.last_checked_at, Some(2_000));
+        assert_eq!(failed.last_offer.as_deref(), Some(r#"{"version":"0.2.0"}"#));
+        assert_eq!(failed.mode, "daily");
+
+        assert!(store.record_release_check("shrugged", None, 3_000).is_err());
+    }
+
     #[test]
     fn the_screen_swarm_opens_on_is_one_choice_for_every_device() {
         let store = TaskStore::in_memory().unwrap();

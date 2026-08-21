@@ -703,6 +703,7 @@ checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
+ "rand_core 0.6.4",
  "serde",
  "sha2 0.10.9",
  "subtle",
@@ -2736,7 +2737,10 @@ dependencies = [
 name = "swarm-domain"
 version = "0.1.0"
 dependencies = [
+ "base64ct",
+ "ed25519-dalek",
  "serde",
+ "serde_json",
  "uuid",
 ]
 
@@ -2757,6 +2761,17 @@ dependencies = [
  "thiserror 2.0.20",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "swarm-release-tool"
+version = "0.1.0"
+dependencies = [
+ "base64ct",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "serde_json",
+ "swarm-domain",
 ]
 
 [[package]]

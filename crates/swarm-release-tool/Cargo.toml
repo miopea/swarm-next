@@ -1,0 +1,21 @@
+[package]
+name = "swarm-release-tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "swarm-release"
+path = "src/main.rs"
+
+[dependencies]
+base64ct.workspace = true
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+getrandom.workspace = true
+serde_json.workspace = true
+swarm-domain = { path = "../swarm-domain" }
+
+[lints]
+workspace = true
