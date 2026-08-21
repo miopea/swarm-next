@@ -608,7 +608,7 @@ Related and already built: item 32's card now reports a completed email task
 nobody answered. The same reasoning applies one step earlier, to whether it
 should have been called complete at all.
 
-### 34. Swarm has a developer update path and no user one — *decided, needs signing before code*
+### 34. Swarm has a developer update path and no user one — *fixed*
 
 Raised as: the Python Swarm had a "dev" mode for local work with fast hot
 updates, and a normal user mode that polled GitHub for updates or checked on
@@ -650,6 +650,20 @@ changed the worker-engine build id and a reconcile timer then restarted the
 engine on its own thirty minutes later (item 22). Whatever the user-mode
 updater does, it inherits that lesson — a release is not isolated from the
 workers just because the card says workers stay online.
+
+**Built 2026-08-21.** The operator overruled the "signing before code" staging:
+telling a user a release exists without letting them install it has not helped
+them, so the whole path landed together and signing was paid for rather than
+deferred. ADR 0050 is Accepted; the keypair exists, with the public half
+compiled in from `packaging/release-verifying-key` and the private half in
+1Password. Checking is asked once and contacts nothing until answered; a check
+sends no version, no identity and no counts. Downloading and installing are
+separate consents, and item 22's lesson is encoded — the card says whether
+installing stops workers before the confirm, rather than leaving a reconcile
+timer to discover it. Procedure: `docs/cutting-a-release.md`.
+
+Not yet exercised end to end: no release has been fetched and installed through
+the button, because no tag exists yet for the manifest to point at.
 
 ### 32. A worker can finish an email task without anyone answering the email — *partly fixed*
 
