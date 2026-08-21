@@ -45,6 +45,9 @@ type Props = {
   workspaces: WorkspaceChoice[];
   onThemeChange: (theme: ColorTheme) => void;
   onPresenceChange: (mode: PresenceMode | null) => Promise<void>;
+  /** The screen Swarm opens on, one choice for every device. */
+  startSurface: string;
+  onStartSurfaceChange: (surface: string) => void;
   onEnableLockDetection: () => Promise<void>;
   onNotificationPolicyChange: (policy: NotificationPolicy) => Promise<void>;
   onQueenPolicyChange: (policy: QueenAutonomyPolicy) => Promise<void>;
@@ -63,7 +66,7 @@ type Props = {
   onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
-export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
+export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, startSurface, onStartSurfaceChange, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -209,6 +212,24 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
       <WorkerSettings workers={workers} workspaces={workspaces} busy={busy} providers={providers} providerCapabilitiesUnavailable={providerCapabilitiesUnavailable} onCreate={onCreateWorker} onUpdate={onUpdateWorker} onRemove={onRemoveWorker} onDraftDescription={async (workerId) => (await draftWorkerDescription(operatorToken, workerId)).description} onImproveDescription={async (workerId) => (await improveWorkerDescription(operatorToken, workerId)).description} onReorder={onReorderWorkers} />
       <section id="settings-presence" className="settings-card presence-settings" aria-labelledby="presence-heading">
         <div><p className="eyebrow">Presence</p><h3 id="presence-heading">Let attention follow you</h3></div>
+        {/* One choice for every device. A phone opening somewhere a desktop
+            would not is the thing this exists to stop, so it is deliberately
+            not a per-device preference like the theme below it. */}
+        <label htmlFor="start-surface"><span>Opening screen</span>
+          <select
+            id="start-surface"
+            value={startSurface}
+            disabled={busy}
+            onChange={(event) => onStartSurfaceChange(event.target.value)}
+          >
+            <option value="decisions">Needs you</option>
+            <option value="tasks">Task board</option>
+            <option value="workers">Workers</option>
+            <option value="apiary">Apiary</option>
+            <option value="settings">Settings</option>
+          </select>
+          <small>Every device opens here.</small>
+        </label>
         <p>Automatic presence uses this device's activity, visibility, and expiry. A manual mode stays in effect until you return to Automatic.</p>
         <label htmlFor="presence-mode"><span>Presence policy</span>
           <select

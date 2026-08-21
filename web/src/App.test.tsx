@@ -754,6 +754,12 @@ test("creates a persisted task draft from the task board", async () => {
     if (String(url).includes("/api/v1/runtime/development")) {
       return Promise.resolve(ok({ enabled: false, version: "0.1.0", state: "idle", reload_available: false, source_revision: null, source_dirty: false }));
     }
+    // Answered by name rather than from the queue below: that queue is consumed
+    // in call order, so an unnamed endpoint silently takes another request's
+    // response.
+    if (String(url).includes("/api/v1/preferences/start-surface")) {
+      return Promise.resolve(ok({ start_surface: "tasks" }));
+    }
     const response = responses.shift();
     if (!response) throw new Error(`Unexpected request: ${String(url)}`);
     return Promise.resolve(response);

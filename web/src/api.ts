@@ -202,6 +202,21 @@ export type PresentationPreferences = {
 };
 export type ControlRoomEventKind = "tasks_changed" | "workers_changed" | "sessions_changed" | "runtime_changed" | "decisions_changed" | "presence_changed" | "notifications_changed";
 export type NotificationPolicy = "important_only" | "all_decisions" | "off";
+/** The screen Swarm opens on, chosen once for every device. */
+export async function fetchStartSurface(operatorToken: string): Promise<string> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/preferences/start-surface");
+  return ((await response.json()) as { start_surface: string }).start_surface;
+}
+
+export async function setStartSurface(operatorToken: string, startSurface: string): Promise<string> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/preferences/start-surface", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ start_surface: startSurface }),
+  });
+  return ((await response.json()) as { start_surface: string }).start_surface;
+}
+
 export type NotificationSettings = { policy: NotificationPolicy; subscription_count: number; vapid_public_key: string };
 export type QueenAutonomyLevel = "advisory" | "coordinate" | "local_execution";
 export type QueenAutonomyPolicy = { at_hive: QueenAutonomyLevel; away: QueenAutonomyLevel; night_watch: QueenAutonomyLevel };

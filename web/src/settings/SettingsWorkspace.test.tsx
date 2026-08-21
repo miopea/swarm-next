@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import SettingsWorkspace from "./SettingsWorkspace";
@@ -73,6 +73,8 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
     <SettingsWorkspace
       busy={false}
       colorTheme="light"
+      startSurface="tasks"
+      onStartSurfaceChange={vi.fn()}
       feedbackRevision={0}
       liveFeedState="connected"
       operatorToken="secret-token"
@@ -158,10 +160,13 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
   const resourceRequestsBeforeRefresh = resourceRequests();
   fireEvent.click(screen.getByRole("button", { name: "Refresh now" }));
   await vi.waitFor(() => expect(resourceRequests()).toBeGreaterThan(resourceRequestsBeforeRefresh), { timeout: 5_000 });
-  expect(screen.getByText("Needs you").parentElement).toHaveTextContent("Needs youAlt1");
-  expect(screen.getByText("Tasks").parentElement).toHaveTextContent("TasksAlt2");
-  expect(screen.getByText("Workers").parentElement).toHaveTextContent("WorkersAlt3");
-  expect(screen.getByText("Settings").parentElement).toHaveTextContent("SettingsAlt4");
+  // Scoped to the shortcut list: the opening-screen chooser names the same
+  // surfaces, so an unscoped query now matches both.
+  const shortcuts = document.querySelector(".shortcut-list") as HTMLElement;
+  expect(within(shortcuts).getByText("Needs you").parentElement).toHaveTextContent("Needs youAlt1");
+  expect(within(shortcuts).getByText("Tasks").parentElement).toHaveTextContent("TasksAlt2");
+  expect(within(shortcuts).getByText("Workers").parentElement).toHaveTextContent("WorkersAlt3");
+  expect(within(shortcuts).getByText("Settings").parentElement).toHaveTextContent("SettingsAlt4");
   expect(screen.getByText("Quick navigation").parentElement).toHaveTextContent("Quick navigationAltK");
   const savedReportSummary = await screen.findByText("Terminal wrapped too narrowly", { selector: "summary span" }, { timeout: 5_000 });
   expect(savedReportSummary).toBeInTheDocument();
@@ -527,6 +532,8 @@ function minimalProps() {
     hiveIdentity: { operator: { id: "operator-1", display_name: "Bea" }, hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null } },
     onThemeChange: vi.fn(), onPresenceChange: vi.fn(), onEnableLockDetection: vi.fn(), onNotificationPolicyChange: vi.fn(),
     onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onRemoveWorker: vi.fn(), onReorderWorkers: vi.fn(), onRestartProviders: vi.fn(), onUpdateWorkerEngine: vi.fn(), onReloadDevelopment: vi.fn(), onHiveIdentityChange: vi.fn(),
+  startSurface: "tasks",
+  onStartSurfaceChange: vi.fn(),
   };
 }
 function ok(body: unknown) {
@@ -549,3 +556,19 @@ function queenAutomation(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test("chooses the screen Swarm opens on, for every device", () => {
+  // "We should have an option in settings as to the start up screen, since
+  // mobile always goes there." One choice, deliberately not per device class
+  // like the theme beside it — a phone opening somewhere a desktop would not is
+  // the thing this exists to stop.
+  const onStartSurfaceChange = vi.fn();
+  render(<SettingsWorkspace {...minimalProps()} startSurface="tasks" onStartSurfaceChange={onStartSurfaceChange} />);
+
+  const choice = screen.getByRole("combobox", { name: /Opening screen/ });
+  expect(choice).toHaveValue("tasks");
+  expect(screen.getByText("Every device opens here.")).toBeInTheDocument();
+
+  fireEvent.change(choice, { target: { value: "workers" } });
+  expect(onStartSurfaceChange).toHaveBeenCalledWith("workers");
+});

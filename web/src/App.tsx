@@ -10,6 +10,8 @@ import {
   resolveDecision,
   claimWorker,
   fetchEmailTasksAwaitingReply,
+  fetchStartSurface,
+  setStartSurface as setStartSurfaceRequest,
   sendEmailReply,
   restartSupersededWorkers,
   runQueenAutomation,
@@ -160,6 +162,9 @@ export function App() {
   const [terminalConnection, setTerminalConnection] = useState<string>();
   const { runtimeUpdates, developmentMode, refreshRuntimeUpdate } = useRuntimeUpdate(operatorToken || undefined);
   const [runtimeConfirm, setRuntimeConfirm] = useState<RuntimeUpdateSummary>();
+  const [startSurface, setStartSurface] = useState("tasks");
+  /** Applied once, and only while nothing else has claimed the screen. */
+  const openedAtLaunch = useRef(true);
   // Settings navigates from the rail like every other surface, so the rail has
   // to know which section is current. The hash stays the source of truth, since
   // a link into a section has to keep working.
@@ -241,6 +246,24 @@ export function App() {
       setPresence(undefined);
       return;
     }
+    // The operator's chosen opening screen, applied when nothing more specific
+    // asked for one — a link, a settings section, or a surface already chosen
+    // in this tab all still win, because they are a request rather than a
+    // default.
+    // Wrapped so a synchronous throw from fetch cannot abort this effect before
+    // presence starts. A rejected promise was handled; a thrown one was not.
+    void (async () => fetchStartSurface(operatorToken))()
+      .then((chosen) => {
+        setStartSurface(chosen);
+        if (!openedAtLaunch.current) return;
+        openedAtLaunch.current = false;
+        if (surfaceWasRequested()) return;
+        if (chosen === "decisions" || chosen === "tasks" || chosen === "workers"
+          || chosen === "apiary" || chosen === "settings") {
+          setSurface(chosen);
+        }
+      })
+      .catch(() => undefined);
     presenceController.start(operatorToken, setPresence, setLockDetectionState);
     return () => presenceController.stop();
   }, [operatorToken, presenceController]);
@@ -824,6 +847,12 @@ export function App() {
       await claimWorker(operatorToken, workerId, presenceDeviceId());
       await refreshControlRoom(false);
     }, "Taking this worker…");
+  }
+
+  /** Chooses the screen Swarm opens on, for every device. */
+  async function chooseStartSurface(next: string) {
+    if (!operatorToken) return;
+    await perform(async () => setStartSurface(await setStartSurfaceRequest(operatorToken, next)));
   }
 
   async function restartProviders() {
@@ -1530,6 +1559,8 @@ export function App() {
               workspaces={workspaces}
               onThemeChange={changeColorTheme}
               onPresenceChange={changePresenceMode}
+              startSurface={startSurface}
+              onStartSurfaceChange={(next) => void chooseStartSurface(next)}
               onEnableLockDetection={enableLockDetection}
               onNotificationPolicyChange={changeNotificationPolicy}
               onQueenPolicyChange={changeQueenPolicy}
@@ -1663,6 +1694,22 @@ function RuntimeStatus({ state, developmentMode }: { state: LoadState; developme
 
 function TaskIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>; }
 function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 7 4 4-4 4M11 17h8" /></svg>; }
+/**
+ * Whether something asked for a particular screen, as opposed to simply opening
+ * the app. A deep link, a settings section, or a surface remembered from this
+ * tab are all requests; the operator's chosen opening screen is the default
+ * they fall back to.
+ */
+function surfaceWasRequested(): boolean {
+  try {
+    const search = new URLSearchParams(window.location.search);
+    if (readSettingsSection() || search.has("jira") || search.has("surface")) return true;
+    return window.sessionStorage.getItem(SURFACE_STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function readSavedSurface(): Surface { try { if (readSettingsSection()) return "settings"; const linked = new URLSearchParams(window.location.search).get("surface"); if (linked === "decisions" || linked === "tasks" || linked === "workers" || linked === "apiary" || linked === "settings") return linked; const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "decisions" || saved === "workers" || saved === "apiary" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
 function saveSurface(surface: Surface) { try { window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface); } catch { /* Surface persistence is a non-critical convenience. */ } }
 function surfaceLabel(surface: Surface): string {

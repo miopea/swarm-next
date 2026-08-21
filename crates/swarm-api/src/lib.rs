@@ -2390,6 +2390,10 @@ fn api_router(state: AppState) -> Router {
             get(orchestration::coordinator_status),
         )
         .route(
+            "/api/v1/preferences/start-surface",
+            get(presentation::start_surface).put(presentation::set_start_surface),
+        )
+        .route(
             "/api/v1/preferences/presentation/{device_class}",
             get(presentation::presentation_preferences)
                 .put(presentation::set_presentation_preferences),
