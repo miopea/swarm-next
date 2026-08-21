@@ -13,5 +13,8 @@ PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=read-only
 ReadWritePaths=@INSTALL_ROOT@ @STATE_ROOT@ @DEV_CHECKOUT@
+# The rebuild ends in `swarm-package update`, which relinks swarmctl here.
+ReadWritePaths=@BIN_ROOT@
+ReadWritePaths=@UNIT_ROOT@
 ReadWritePaths=-%h/.cargo -%h/.cache -%h/.local/share/pnpm
 UMask=0077

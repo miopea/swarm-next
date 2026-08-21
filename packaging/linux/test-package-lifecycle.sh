@@ -44,6 +44,29 @@ printf '%s\n' "$version" >> "$HOME/curl.log"
 EOF
 chmod +x "$SWARM_SYSTEMCTL_BIN" "$SWARM_CURL_BIN"
 
+# Any unit that runs swarm-package must be able to write everywhere
+# swarm-package writes. systemd does not fail on a path outside ReadWritePaths;
+# the unit starts and then cannot write, which reads as a hang rather than a
+# permission error. This has now happened twice — the release install unit and
+# the worker engine reconcile — so it is checked rather than remembered.
+for unit in "$repo_root"/packaging/systemd-user/*.service.in; do
+  grep -q 'ExecStart=.*swarm-package' "$unit" || continue
+  for required in @INSTALL_ROOT@ @UNIT_ROOT@ @STATE_ROOT@ @BIN_ROOT@; do
+    grep -q "ReadWritePaths=.*$required" "$unit" || {
+      printf 'unit %s runs swarm-package but cannot write %s\n' "$(basename "$unit")" "$required" >&2
+      exit 1
+    }
+  done
+done
+
+# And every placeholder any template uses must be one the renderer substitutes.
+for placeholder in $(grep -ho '@[A-Z_]*@' "$repo_root"/packaging/systemd-user/*.in | sort -u); do
+  grep -q "s|$placeholder|" "$repo_root/packaging/linux/swarm-package" || {
+    printf 'template placeholder %s has no substitution in swarm-package\n' "$placeholder" >&2
+    exit 1
+  }
+done
+
 make_bundle() {
   version=$1
   protocol=${2:-5}

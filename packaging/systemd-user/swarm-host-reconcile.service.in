@@ -13,3 +13,5 @@ ProtectHome=read-only
 ReadWritePaths=@INSTALL_ROOT@
 ReadWritePaths=@UNIT_ROOT@
 ReadWritePaths=@STATE_ROOT@
+# reconcile_host relinks the terminal-host launcher, which lives here.
+ReadWritePaths=@BIN_ROOT@
