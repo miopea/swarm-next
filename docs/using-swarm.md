@@ -36,6 +36,11 @@ A worker is a name, a provider, and a repository. It is not a chat window: it is
 a persistent session that keeps its context between your visits, and Swarm keeps
 its terminal alive whether or not you are looking at it.
 
+If a repository moves on disk, edit the worker in Settings → Crew and change
+its path. The worker has to be asleep, and moving it forgets its saved
+conversation — the provider files history under the project path, so the old
+thread belongs to the old repository.
+
 **Queen** is the one worker you do not create. She coordinates: she notices work
 that needs routing, assigns it, and asks you when she cannot decide. Everything
 she does is bounded — she can be set to coordinate only, and external effects
