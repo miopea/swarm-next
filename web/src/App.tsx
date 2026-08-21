@@ -1076,6 +1076,10 @@ export function App() {
     ...(federated ? [{ id: "apiary", label: "Apiary", detail: pendingAssistCount ? `${pendingAssistCount} help offer${pendingAssistCount === 1 ? "" : "s"}` : keeper ? "Keeper overview" : "Membership overview", group: "Go to" as const, run: () => setSurface("apiary") }] : []),
     { id: "add-worker", label: "Add worker", detail: "Configure a repository worker", group: "Go to", run: () => openSettings("settings-crew") },
     { id: "settings", label: "Settings", detail: "Preferences and diagnostics", group: "Go to", run: () => openSettings() },
+    // Reachable rather than resident. Locking Swarm while leaving the machine
+    // unlocked is a rare thing to want, and it was taking a permanent place in
+    // every header on every surface to offer it.
+    { id: "lock", label: "Lock Swarm", detail: "Require the operator token again", group: "Go to", run: () => void logout() },
     ...workers.map((worker) => ({
       id: `worker-${worker.id}`,
       label: worker.name,
@@ -1397,7 +1401,7 @@ export function App() {
             {operatorToken && <button className="icon-button command-button" aria-label="Open quick navigation" onClick={() => setShowCommands(true)}><CommandIcon /></button>}
             <button className="icon-button theme-button" aria-label={`Switch to ${colorTheme === "light" ? "dark" : "light"} theme`} onClick={() => changeColorTheme(colorTheme === "light" ? "dark" : "light")}><ThemeIcon theme={colorTheme} /></button>
             {operatorToken && <button className="icon-button refresh-button" aria-label="Refresh control room" title="Refresh data and rebuild the visible terminal" onClick={() => void refreshControlRoom(true)} disabled={busy}><RefreshIcon /></button>}
-            {operatorToken && <button className="secondary-button" onClick={() => void logout()} disabled={busy}>Lock</button>}
+
           </div>
         </header>
         {operationError && <div className="operation-error" role="alert">{operationError}</div>}
@@ -1561,6 +1565,7 @@ export function App() {
               onPresenceChange={changePresenceMode}
               startSurface={startSurface}
               onStartSurfaceChange={(next) => void chooseStartSurface(next)}
+              onLock={() => void logout()}
               onEnableLockDetection={enableLockDetection}
               onNotificationPolicyChange={changeNotificationPolicy}
               onQueenPolicyChange={changeQueenPolicy}

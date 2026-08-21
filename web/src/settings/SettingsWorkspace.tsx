@@ -48,6 +48,8 @@ type Props = {
   /** The screen Swarm opens on, one choice for every device. */
   startSurface: string;
   onStartSurfaceChange: (surface: string) => void;
+  /** Requires the operator token again on this device. */
+  onLock: () => void;
   onEnableLockDetection: () => Promise<void>;
   onNotificationPolicyChange: (policy: NotificationPolicy) => Promise<void>;
   onQueenPolicyChange: (policy: QueenAutonomyPolicy) => Promise<void>;
@@ -66,7 +68,7 @@ type Props = {
   onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
-export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, startSurface, onStartSurfaceChange, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
+export default function SettingsWorkspace({ busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, startSurface, onStartSurfaceChange, onLock, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -215,6 +217,10 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
         {/* One choice for every device. A phone opening somewhere a desktop
             would not is the thing this exists to stop, so it is deliberately
             not a per-device preference like the theme below it. */}
+        <div className="settings-lock">
+          <div><strong>Lock Swarm</strong><small>Asks for the operator token again on this device. Locking your computer does not require this.</small></div>
+          <button type="button" className="secondary-button" disabled={busy} onClick={onLock}>Lock</button>
+        </div>
         <label htmlFor="start-surface"><span>Opening screen</span>
           <select
             id="start-surface"

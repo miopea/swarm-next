@@ -104,7 +104,11 @@ test("creates a durable browser session without storing the operator token", asy
   expect((sessionRequest?.[1]?.headers as Headers).get("Authorization")).toBe("Bearer secret");
   expect(JSON.stringify({ local: { ...window.localStorage }, session: { ...window.sessionStorage } })).not.toContain("secret");
 
-  fireEvent.click(screen.getByRole("button", { name: "Lock" }));
+  // Locking is reachable rather than resident now: it left every header, where
+  // it cost permanent room to offer something rarely wanted, and lives in the
+  // command palette and Settings instead.
+  fireEvent.click(screen.getByRole("button", { name: "Open quick navigation" }));
+  fireEvent.click(screen.getByRole("option", { name: /Lock Swarm/ }));
   await waitFor(() => expect(screen.getByLabelText("Operator token")).toBeInTheDocument());
   expect(fetch).toHaveBeenCalledWith(
     "/api/v1/auth/session",

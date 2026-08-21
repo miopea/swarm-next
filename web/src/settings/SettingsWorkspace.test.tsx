@@ -75,6 +75,7 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
       colorTheme="light"
       startSurface="tasks"
       onStartSurfaceChange={vi.fn()}
+      onLock={vi.fn()}
       feedbackRevision={0}
       liveFeedState="connected"
       operatorToken="secret-token"
@@ -534,6 +535,7 @@ function minimalProps() {
     onQueenPolicyChange: vi.fn(), onEnableNotifications: vi.fn(), onDisableNotifications: vi.fn(), onTestNotification: vi.fn(), onCreateWorker: vi.fn(), onUpdateWorker: vi.fn(), onRemoveWorker: vi.fn(), onReorderWorkers: vi.fn(), onRestartProviders: vi.fn(), onUpdateWorkerEngine: vi.fn(), onReloadDevelopment: vi.fn(), onHiveIdentityChange: vi.fn(),
   startSurface: "tasks",
   onStartSurfaceChange: vi.fn(),
+  onLock: vi.fn(),
   };
 }
 function ok(body: unknown) {
@@ -571,4 +573,19 @@ test("chooses the screen Swarm opens on, for every device", () => {
 
   fireEvent.change(choice, { target: { value: "workers" } });
   expect(onStartSurfaceChange).toHaveBeenCalledWith("workers");
+});
+
+test("keeps locking reachable without giving it a place in every header", () => {
+  // "The lock button seems a little bit silly that it's located on every single
+  // page. It feels like a waste of real estate because how often are people
+  // actually going to lock their terminal when they just lock their computer?"
+  //
+  // Locking Swarm while leaving the machine unlocked is a rare thing to want,
+  // so it is reachable rather than resident — here, and in the command palette.
+  const onLock = vi.fn();
+  render(<SettingsWorkspace {...minimalProps()} onLock={onLock} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Lock" }));
+
+  expect(onLock).toHaveBeenCalledOnce();
 });
