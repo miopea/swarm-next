@@ -1582,7 +1582,7 @@ export function App() {
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}:${terminalRevision}`}>
             <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
-              <TerminalView operatorToken={operatorToken} session={activeSession} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} queenAutomation={activeWorker?.role === "queen" ? queenAutomation : undefined} queenAutonomy={activeWorker?.role === "queen" ? queenPolicy?.[presence?.mode ?? "at_hive"] : undefined} onOpenQueenSettings={activeWorker?.role === "queen" ? () => openSettings("settings-queen") : undefined} onConnectionStateChange={setTerminalConnection} />
+              <TerminalView operatorToken={operatorToken} session={activeSession} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} onRedraw={() => void refreshControlRoom(true)} queenAutomation={activeWorker?.role === "queen" ? queenAutomation : undefined} queenAutonomy={activeWorker?.role === "queen" ? queenPolicy?.[presence?.mode ?? "at_hive"] : undefined} onOpenQueenSettings={activeWorker?.role === "queen" ? () => openSettings("settings-queen") : undefined} onConnectionStateChange={setTerminalConnection} />
             </Suspense>
           </TerminalLoadBoundary>
         ) : (

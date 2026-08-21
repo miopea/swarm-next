@@ -116,3 +116,34 @@ test("offers a first-class mobile image picker without submitting the draft", as
   await vi.waitFor(() => expect(onImage).toHaveBeenCalledWith(image));
   expect(screen.getByRole("button", { name: "Add image" })).toBeEnabled();
 });
+
+test("offers a way to rebuild a terminal that has gone wrong", () => {
+  // "We need to add that refresh button to clean out the terminal when things
+  // get weird... Because right now I can't scroll in this worker."
+  //
+  // The desktop header has always carried this. A phone — where the view is
+  // most likely to end up wrong, and where there is no other way to reach it —
+  // had nothing. It repairs this screen's view and sends the worker nothing,
+  // which is why it sits apart from the keys that do.
+  const onRedraw = vi.fn();
+  const onInput = vi.fn();
+  render(
+    <MobileTerminalComposer
+      connectionState="connected"
+      onInput={onInput}
+      keysExpanded
+      onRedraw={onRedraw}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Redraw" }));
+
+  expect(onRedraw).toHaveBeenCalledOnce();
+  expect(onInput).not.toHaveBeenCalled();
+});
+
+test("says nothing about redrawing when there is no way to do it", () => {
+  render(<MobileTerminalComposer connectionState="connected" onInput={vi.fn()} keysExpanded />);
+
+  expect(screen.queryByRole("button", { name: "Redraw" })).not.toBeInTheDocument();
+});

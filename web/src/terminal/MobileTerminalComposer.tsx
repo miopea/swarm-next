@@ -39,9 +39,11 @@ interface MobileTerminalComposerProps {
   onKeysExpandedChange?: (expanded: boolean) => void;
   onImage?: (image: File) => Promise<void>;
   attachmentState?: "idle" | "uploading" | "ready" | "error";
+  /** Rebuilds this screen's view of the session. Sends the worker nothing. */
+  onRedraw?: () => void;
 }
 
-export function MobileTerminalComposer({ connectionState, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onImage, attachmentState = "idle" }: MobileTerminalComposerProps) {
+export function MobileTerminalComposer({ connectionState, onInput, keysExpanded: controlledKeysExpanded, onKeysExpandedChange, onImage, attachmentState = "idle", onRedraw }: MobileTerminalComposerProps) {
   const [draft, setDraft] = useState("");
   const [localKeysExpanded, setLocalKeysExpanded] = useState(initialMobileKeysVisibility);
   const keysExpanded = controlledKeysExpanded ?? localKeysExpanded;
@@ -118,6 +120,14 @@ export function MobileTerminalComposer({ connectionState, onInput, keysExpanded:
           <button type="button" aria-label="Arrow right" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.right)} disabled={!connected}>→</button>
         </div>
         <div className="terminal-key-actions">
+          {/* The way out when the view itself has gone wrong — a terminal that
+              will not scroll, or is drawn at the wrong size. It rebuilds this
+              screen's view of the session and changes nothing in the worker.
+              The desktop header has carried this all along; a phone, where the
+              view is most likely to end up wrong, had no way to reach it. */}
+          {onRedraw ? (
+            <button type="button" className="terminal-redraw-button" onClick={onRedraw}>Redraw</button>
+          ) : null}
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.enter)} disabled={!connected}>Enter</button>
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.escape)} disabled={!connected}>Esc</button>
           <button type="button" onClick={() => sendKey(MOBILE_TERMINAL_KEYS.tab)} disabled={!connected}>Tab</button>
