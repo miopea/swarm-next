@@ -1101,6 +1101,79 @@ pub(super) fn migrate_coordinator_unstarted_work_attention(
 ///
 /// # Errors
 /// Returns an error when the step cannot be applied.
+/// Admits the kind an overdue decision will be recorded under, before anything
+/// writes one.
+///
+/// Item 53's hazard, applied deliberately this time rather than discovered:
+/// `coordinator_actions.kind` carries a CHECK and the detectors write with a
+/// conflict clause, so a kind the schema does not admit fails in a way that is
+/// easy to read as "nothing to do". Widening first means the detector that
+/// follows cannot be silently inert.
+///
+/// Nothing writes this kind yet. The detector needs Queen's inbox to tolerate a
+/// row whose worker has no live session — a worker that files a decision and
+/// stops is exactly the case — and that is a change to a query which has
+/// already been the source of one three-copies bug. It is worth doing on its
+/// own rather than inside a release cut to test an upgrade.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+pub(super) fn migrate_decision_deadline_attention(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%decision_deadline_passed_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    let ready: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%worker_filed_draft_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    if ready && !present {
+        transaction.execute_batch(
+            "DROP INDEX IF EXISTS coordinator_actions_queue;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE coordinator_actions RENAME TO coordinator_actions_v84;
+             CREATE TABLE coordinator_actions (
+                 id TEXT PRIMARY KEY,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention')),
+                 worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 session_id TEXT,
+                 evidence_revision INTEGER,
+                 observed_age_seconds INTEGER,
+                 state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                 reason TEXT NOT NULL,
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                 attempted_at INTEGER,
+                 finished_at INTEGER,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );
+             INSERT INTO coordinator_actions (
+                 id, idempotency_key, kind, worker_id, task_id, session_id,
+                 evidence_revision, observed_age_seconds, state, reason, attempts,
+                 attempted_at, finished_at, created_at, updated_at
+             ) SELECT id, idempotency_key, kind, worker_id, task_id, session_id,
+                      evidence_revision, observed_age_seconds, state, reason, attempts,
+                      attempted_at, finished_at, created_at, updated_at
+               FROM coordinator_actions_v84;
+             DROP TABLE coordinator_actions_v84;
+             CREATE INDEX coordinator_actions_queue
+                 ON coordinator_actions(state, created_at, id);
+             PRAGMA legacy_alter_table = OFF;",
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) fn migrate_worker_filed_draft_attention(
     transaction: &rusqlite::Transaction<'_>,
 ) -> rusqlite::Result<()> {
@@ -1163,6 +1236,39 @@ pub(super) fn migrate_worker_filed_draft_attention(
 
 #[cfg(test)]
 mod tests {
+
+    /// Item 53's hazard, avoided on purpose this time. The kind CHECK and the
+    /// conflict clause together turn an unadmitted kind into a write that does
+    /// nothing and reports nothing, so the schema admits the kind before any
+    /// detector writes it.
+    #[test]
+    fn the_overdue_decision_kind_is_admitted_before_anything_writes_one() {
+        let store = TaskStore::in_memory().unwrap();
+        let connection = store.connection().unwrap();
+
+        let admitted: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'coordinator_actions'
+                   AND sql LIKE '%decision_deadline_passed_attention%')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            admitted,
+            "the kind is not in the CHECK, so writing it would be silently inert"
+        );
+
+        // And a kind nobody admitted still fails loudly rather than quietly.
+        let rejected = connection.execute(
+            "INSERT INTO coordinator_actions
+                 (id, idempotency_key, kind, worker_id, task_id, state, reason)
+             VALUES ('x', 'x', 'not_a_kind', 'w', 't', 'completed', 'r')",
+            [],
+        );
+        assert!(rejected.is_err(), "an unadmitted kind was accepted");
+    }
     use super::*;
     use crate::decisions::NewDecisionRequest;
     use swarm_domain::{
