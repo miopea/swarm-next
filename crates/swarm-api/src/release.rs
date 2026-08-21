@@ -219,6 +219,7 @@ pub(super) async fn apply(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    let status = build_status(&state).await?;
     let request_path = state.release_apply_request_path.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::CONFLICT,
@@ -233,7 +234,11 @@ pub(super) async fn apply(
             "no release has been downloaded",
         )
     })?;
-    let release = downloaded_release(&root).ok_or_else(|| {
+    let expected = status
+        .offer
+        .as_ref()
+        .map(|offer| offer.artifact_sha256.clone());
+    let release = downloaded_release(&root, expected.as_deref()).ok_or_else(|| {
         ApiError::new(
             StatusCode::CONFLICT,
             "no_release_downloaded",
@@ -282,7 +287,12 @@ async fn build_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, Ap
         apply_state: apply_state(state),
         downloaded_version: download_root(state)
             .as_deref()
-            .and_then(downloaded_release)
+            .and_then(|root| {
+                downloaded_release(
+                    root,
+                    offer.as_ref().map(|offer| offer.artifact_sha256.as_str()),
+                )
+            })
             .and_then(|path| {
                 path.file_name()
                     .map(|name| name.to_string_lossy().into_owned())
@@ -391,12 +401,32 @@ fn apply_state(state: &AppState) -> Option<String> {
         .find_map(|line| line.strip_prefix("state=").map(str::to_owned))
 }
 
-/// The single unpacked release under the download root, if there is one.
-fn downloaded_release(root: &Path) -> Option<PathBuf> {
+/// Records which signed artifact a download came from.
+///
+/// A release can be replaced at the same version — it happened, minutes after
+/// 0.5.0 was published — and an already-unpacked copy of the old one is still
+/// a structurally valid bundle. `swarm-package` re-verifies the bundle's own
+/// SHA256SUMS, which a stale build satisfies perfectly well, so nothing
+/// downstream can tell the two apart. The digest the manifest signed is what
+/// distinguishes them, and it has to be written down at download time because
+/// the artifact is deleted once unpacked.
+const DOWNLOAD_DIGEST_FILE: &str = ".swarm-release-digest";
+
+/// The unpacked release under the download root, if it is the one currently
+/// offered.
+///
+/// A download that does not match the offer in hand is treated as absent, so
+/// the operator is asked to fetch again rather than being handed a stale build
+/// under a version number that now means something else.
+fn downloaded_release(root: &Path, expected_digest: Option<&str>) -> Option<PathBuf> {
     let mut entries = std::fs::read_dir(root).ok()?.flatten();
     entries.find_map(|entry| {
         let path = entry.path();
-        path.join("swarm-package").is_file().then_some(path)
+        if !path.join("swarm-package").is_file() {
+            return None;
+        }
+        let recorded = std::fs::read_to_string(path.join(DOWNLOAD_DIGEST_FILE)).ok()?;
+        (recorded.trim() == expected_digest?).then_some(path)
     })
 }
 
@@ -460,7 +490,14 @@ async fn fetch_artifact(offer: &ReleaseOffer, root: &Path) -> Result<PathBuf, St
         return Err("the artifact does not match the signed digest".to_owned());
     }
 
-    let unpacked = unpack(&archive, &staging, root, &offer.version).await;
+    let unpacked = unpack(
+        &archive,
+        &staging,
+        root,
+        &offer.version,
+        &offer.artifact_sha256,
+    )
+    .await;
     let _ = tokio::fs::remove_dir_all(&staging).await;
     unpacked
 }
@@ -470,6 +507,7 @@ async fn unpack(
     staging: &Path,
     root: &Path,
     version: &str,
+    digest: &str,
 ) -> Result<PathBuf, String> {
     let opened = staging.join("opened");
     tokio::fs::create_dir_all(&opened)
@@ -496,6 +534,9 @@ async fn unpack(
     let destination = root.join(version);
     let _ = tokio::fs::remove_dir_all(&destination).await;
     tokio::fs::rename(&bundle, &destination)
+        .await
+        .map_err(|error| error.to_string())?;
+    tokio::fs::write(destination.join(DOWNLOAD_DIGEST_FILE), digest)
         .await
         .map_err(|error| error.to_string())?;
     Ok(destination)
@@ -584,5 +625,48 @@ mod apply_status_tests {
         assert_eq!(reported(failed_on_020, None), None);
         // Written before statuses were stamped; not guessed at.
         assert_eq!(reported("state=failed\n", Some("0.2.0")), None);
+    }
+}
+
+#[cfg(test)]
+mod download_identity_tests {
+    use super::*;
+    use std::fs;
+
+    fn bundle(root: &Path, version: &str, digest: &str) -> PathBuf {
+        let path = root.join(version);
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("swarm-package"), "#!/bin/sh\n").unwrap();
+        fs::write(path.join(DOWNLOAD_DIGEST_FILE), digest).unwrap();
+        path
+    }
+
+    /// A release can be replaced at the same version — it happened minutes
+    /// after 0.5.0 was published — and the already-unpacked copy of the old one
+    /// is still a structurally valid bundle whose own SHA256SUMS verify. Only
+    /// the signed digest tells them apart.
+    #[test]
+    fn a_download_from_a_replaced_release_is_not_offered_for_install() {
+        let root = tempfile::tempdir().unwrap();
+        let superseded = "a".repeat(64);
+        let current = "b".repeat(64);
+        bundle(root.path(), "0.5.0", &superseded);
+
+        assert!(downloaded_release(root.path(), Some(&superseded)).is_some());
+        // The same version number, now meaning a different artifact.
+        assert!(downloaded_release(root.path(), Some(&current)).is_none());
+        assert!(downloaded_release(root.path(), None).is_none());
+    }
+
+    /// A download unpacked before digests were recorded cannot be shown to be
+    /// the offered one, so it is refetched rather than trusted.
+    #[test]
+    fn a_download_with_no_recorded_digest_is_treated_as_absent() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("0.5.0");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(path.join("swarm-package"), "#!/bin/sh\n").unwrap();
+
+        assert!(downloaded_release(root.path(), Some(&"b".repeat(64))).is_none());
     }
 }
