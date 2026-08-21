@@ -65,6 +65,9 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
           <div><span className="runtime-component-name">Updates</span><strong>Check for new Swarm releases?</strong></div>
         </header>
         <p>Swarm can look once a day for a new release and tell you when one exists. It sends nothing — no version, no identity, no counts — and fetches one small signed file.</p>
+        {status.development_build ? (
+          <p><strong>This Hive builds from a working copy.</strong> Checking would only tell you a release exists — it will never offer to install one, because replacing a build made from your checkout would discard work nothing can enumerate. Your updates come from the App and API card.</p>
+        ) : null}
         <small>Until you choose, this Hive contacts nothing.</small>
         <div className="settings-actions">
           <button className="primary-action" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, "daily"), "The preference could not be saved.")}>Check daily</button>

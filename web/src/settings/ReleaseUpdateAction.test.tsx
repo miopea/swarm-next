@@ -173,3 +173,32 @@ test("reports a manifest it could not verify rather than acting on it", async ()
 
   expect(await screen.findByText(/found a manifest it could not verify, and ignored it/)).toBeInTheDocument();
 });
+
+/**
+ * "Seems a bit like the update system is confused if I am in dev or production
+ * installs." A Hive that builds from a working copy was asked whether to check
+ * for releases with no hint that a release would never be offered to it — the
+ * question sat next to the App and API card, which is where its updates
+ * actually come from.
+ */
+test("tells a working copy what checking would and would not do for it", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({ mode: "unset", development_build: true, offer: null, upgrade_available: false }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText("Check for new Swarm releases?")).toBeInTheDocument();
+  expect(screen.getByText(/This Hive builds from a working copy/)).toBeInTheDocument();
+  expect(screen.getByText(/never offer to install one/)).toBeInTheDocument();
+  expect(screen.getByText(/Your updates come from the App and API card/)).toBeInTheDocument();
+});
+
+test("does not say that to an install running a release", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({ mode: "unset", development_build: false, offer: null, upgrade_available: false }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText("Check for new Swarm releases?")).toBeInTheDocument();
+  expect(screen.queryByText(/builds from a working copy/)).not.toBeInTheDocument();
+});
