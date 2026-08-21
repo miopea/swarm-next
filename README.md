@@ -108,13 +108,23 @@ cargo run -p swarm-cli --bin swarmctl -- cancel-drain
 
 ## Ubuntu/Debian dogfood package
 
-Build the release on Linux, extract it on the target host, and install it as
-unprivileged systemd user services:
+Install and first-run instructions live in [docs/install.md](docs/install.md).
+The short version, working from a clone:
 
 ```sh
-./packaging/linux/build-release.sh
-tar -xzf dist/swarm-0.1.0-<commit>-linux-x86_64.tar.gz
-./swarm-0.1.0-<commit>-linux-x86_64/swarm-package install ./swarm-0.1.0-<commit>-linux-x86_64
+./packaging/linux/build-development-release.sh /tmp/swarm-build
+sh /tmp/swarm-build/swarm-*/swarm-package install /tmp/swarm-build/swarm-*
+```
+
+To produce a distributable tarball instead, tag the commit first — a release
+version comes from a tag so that two releases can be compared, and
+`build-release.sh` refuses an untagged commit by design:
+
+```sh
+git tag -a v0.1.0 -m "Swarm 0.1.0"
+./packaging/linux/build-release.sh                     # writes dist/swarm-0.1.0-linux-x86_64.tar.gz
+tar -xzf dist/swarm-0.1.0-linux-x86_64.tar.gz
+./swarm-0.1.0-linux-x86_64/swarm-package install ./swarm-0.1.0-linux-x86_64
 ```
 
 The packaged UI listens on `http://127.0.0.1:8766`. Releases are staged under

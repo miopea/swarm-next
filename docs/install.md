@@ -24,6 +24,31 @@ Claude Code or Codex. Swarm does not install one, does not manage its
 credentials, and cannot start a worker without one. Check with `claude --version`
 before going further.
 
+### On WSL
+
+WSL needs systemd turned on before any of this works, and it is off by default
+on older installs. Check:
+
+```
+systemctl --user status
+```
+
+If that reports that systemd is not running, add this to `/etc/wsl.conf`:
+
+```
+[boot]
+systemd=true
+```
+
+then run `wsl --shutdown` from Windows and start the distribution again. Without
+it there is no user session, and the install will fail when it tries to start
+the services.
+
+The browser runs on Windows while Swarm runs inside the distribution.
+`http://127.0.0.1:8766` normally works from Windows unchanged, because WSL2
+forwards localhost. If it does not, `hostname -I` inside WSL gives the address
+to use instead.
+
 ### If the machine logs you out
 
 User services stop when your session ends, unless lingering is enabled:
@@ -35,15 +60,59 @@ sudo loginctl enable-linger "$USER"
 Without it, Swarm stops when you log out and starts again when you log back in.
 That is a legitimate way to run it; it is only a surprise if nobody said so.
 
-## Installing
+## Getting a release
 
-You are given a release directory — a folder containing `bin/`, `web/`,
-`systemd-user/`, `swarm-package`, and the `VERSION`, `PROTOCOL`,
-`SOURCE_REVISION` and `SHA256SUMS` files that describe it.
+Everything below installs a **release directory** — a folder containing `bin/`,
+`web/`, `systemd-user/`, `swarm-package`, and the `VERSION`, `PROTOCOL`,
+`SOURCE_REVISION` and `SHA256SUMS` files that describe it. There are two ways to
+get one.
+
+### You were given a tarball
+
+```
+tar -xzf swarm-0.1.0-linux-x86_64.tar.gz
+```
+
+That leaves a `swarm-0.1.0-linux-x86_64/` directory beside it. Skip to
+**Installing**.
+
+### You are building it yourself
+
+You need a Rust toolchain and `pnpm` as well as the commands above, and the
+build takes a few minutes because it compiles in release mode and bundles the
+browser assets.
+
+```
+git clone https://github.com/miopea/swarm-next.git swarm
+cd swarm
+./packaging/linux/build-development-release.sh /tmp/swarm-build
+```
+
+That prints nothing on success and leaves one directory under `/tmp/swarm-build`,
+named for the revision it was built from:
+
+```
+/tmp/swarm-build/swarm-0.1.0-dev-<revision>-<timestamp>-<pid>-linux-x86_64/
+```
+
+That directory is the release directory. Use it wherever the commands below say
+one.
+
+> **Building a tagged release instead.** `build-release.sh` produces a
+> distributable tarball under `dist/`, but it **refuses to run on an untagged
+> commit** — a release version has to come from a tag so that two releases can be
+> compared. Tag first (`git tag -a v0.1.0 -m "Swarm 0.1.0"`) or use the
+> development build above, which is the normal thing when working from a clone.
+
+## Installing
 
 ```
 sh ./swarm-0.1.0-linux-x86_64/swarm-package install ./swarm-0.1.0-linux-x86_64
 ```
+
+Substitute your own release directory — the built one is under `/tmp/swarm-build`
+and has a longer name. `swarm-package` lives inside it, so the path appears
+twice: once to run it, once to tell it what to install.
 
 The installer verifies the bundle's checksums, installs the release under
 `~/.local/lib/swarm/releases/`, writes the systemd units, starts the services,
