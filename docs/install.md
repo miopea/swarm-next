@@ -9,9 +9,9 @@ your home directory, runs as you, and listens only on localhost.
 Three commands, nothing to click:
 
 ```
-curl -fsSLO https://github.com/miopea/swarm-next/releases/download/v0.6.1/swarm-0.6.1-linux-x86_64.tar.gz
-tar -xzf swarm-0.6.1-linux-x86_64.tar.gz
-sh ./swarm-0.6.1-linux-x86_64/swarm-package install ./swarm-0.6.1-linux-x86_64
+curl -fsSLO https://github.com/miopea/swarm-next/releases/download/v0.6.2/swarm-0.6.2-linux-x86_64.tar.gz
+tar -xzf swarm-0.6.2-linux-x86_64.tar.gz
+sh ./swarm-0.6.2-linux-x86_64/swarm-package install ./swarm-0.6.2-linux-x86_64
 ```
 
 The path appears twice on the last line because `swarm-package` lives inside the
@@ -37,7 +37,7 @@ starts the services, and **waits for the API to answer before saying it
 worked**:
 
 ```
-Swarm 0.6.1 is healthy at http://127.0.0.1:8766/health
+Swarm 0.6.2 is healthy at http://127.0.0.1:8766/health
 
 Open http://127.0.0.1:8766 and sign in with the token you chose.
 ```
@@ -207,9 +207,9 @@ the whole story.
 The same three commands as installing, with `update` instead of `install`:
 
 ```
-curl -fsSLO https://github.com/miopea/swarm-next/releases/download/v0.6.1/swarm-0.6.1-linux-x86_64.tar.gz
-tar -xzf swarm-0.6.1-linux-x86_64.tar.gz
-sh ./swarm-0.6.1-linux-x86_64/swarm-package update ./swarm-0.6.1-linux-x86_64
+curl -fsSLO https://github.com/miopea/swarm-next/releases/download/v0.6.2/swarm-0.6.2-linux-x86_64.tar.gz
+tar -xzf swarm-0.6.2-linux-x86_64.tar.gz
+sh ./swarm-0.6.2-linux-x86_64/swarm-package update ./swarm-0.6.2-linux-x86_64
 ```
 
 You do not need to uninstall first, and it does not matter where you unpack the
