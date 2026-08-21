@@ -445,27 +445,32 @@ apply_release() {
   requested=$(tr -d '\r\n' < "$request_path")
   rm -f "$request_path"
   status_path="$state_root/release-apply.status"
+  # Stamped with the release it concerns. A status file outlives the attempt
+  # that wrote it, so one without a version cannot be told apart from a
+  # current result — which is exactly how a failure from an earlier release
+  # ended up reported against a later one.
+  requested_version=$(basename "$requested")
   case "$requested" in
     "$state_root"/downloads/*) :;;
-    *) printf 'state=refused\nreason=outside-downloads\n' > "$status_path"
+    *) printf 'state=refused\nversion=%s\nreason=outside-downloads\n' "$requested_version" > "$status_path"
        die "a release install must name a downloaded release";;
   esac
   [ -d "$requested" ] || {
-    printf 'state=refused\nreason=missing\n' > "$status_path"
+    printf 'state=refused\nversion=%s\nreason=missing\n' "$requested_version" > "$status_path"
     die "the requested release directory is not there"
   }
   [ -x "$requested/swarm-package" ] || {
-    printf 'state=refused\nreason=not-a-release\n' > "$status_path"
+    printf 'state=refused\nversion=%s\nreason=not-a-release\n' "$requested_version" > "$status_path"
     die "the requested directory is not a Swarm release"
   }
-  printf 'state=installing\n' > "$status_path"
+  printf 'state=installing\nversion=%s\n' "$requested_version" > "$status_path"
   # The bundle verifies its own SHA256SUMS on update, so integrity does not
   # depend on whoever wrote the request having been honest.
   if "$requested/swarm-package" update "$requested"; then
-    printf 'state=installed\n' > "$status_path"
+    printf 'state=installed\nversion=%s\n' "$requested_version" > "$status_path"
     rm -rf "$requested"
   else
-    printf 'state=failed\n' > "$status_path"
+    printf 'state=failed\nversion=%s\n' "$requested_version" > "$status_path"
     die "the requested release did not install"
   fi
 }

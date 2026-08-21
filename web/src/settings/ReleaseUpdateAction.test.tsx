@@ -100,6 +100,24 @@ test("promises workers stay online, and defers the engine rather than stopping t
 });
 
 /**
+ * A result from an earlier attempt must not be reported as the current one.
+ * "I did check now and it IMMEDIATELY comes back with this" — a failure
+ * recorded against 0.2.0 hours earlier, shown as though Install had just been
+ * pressed on 0.5.0.
+ */
+test("ignores an install failure recorded against a different release", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    // The API only reports apply_state when it names the offered release, so a
+    // stale one arrives as null.
+    status({ downloaded_version: "0.2.0", apply_state: null }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+
+  expect(await screen.findByText("Swarm 0.2.0 is available")).toBeInTheDocument();
+  expect(screen.queryByText(/The install did not run/)).not.toBeInTheDocument();
+});
+
+/**
  * "I am still sitting here after 60 seconds... if I refresh the page it goes
  * back to asking me to install." A silent failure that reverts to offering the
  * release is indistinguishable from nothing having happened.

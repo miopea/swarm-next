@@ -556,3 +556,33 @@ mod tests {
         assert_eq!(hex(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
     }
 }
+
+#[cfg(test)]
+mod apply_status_tests {
+    /// The rule the status file has to satisfy: a result names the release it
+    /// concerns, and one that names a different release — or names none at all,
+    /// because it predates the stamping — is not the current result.
+    fn reported(contents: &str, offered: Option<&str>) -> Option<String> {
+        let field = |name: &str| {
+            contents
+                .lines()
+                .find_map(|line| line.strip_prefix(name).map(str::to_owned))
+        };
+        let version = field("version=")?;
+        (version == offered?).then(|| field("state="))?
+    }
+
+    #[test]
+    fn only_a_status_about_the_release_in_hand_is_reported() {
+        let failed_on_020 = "state=failed\nversion=0.2.0\n";
+        assert_eq!(
+            reported(failed_on_020, Some("0.2.0")).as_deref(),
+            Some("failed")
+        );
+        // The defect: this used to report "failed" while offering 0.5.0.
+        assert_eq!(reported(failed_on_020, Some("0.5.0")), None);
+        assert_eq!(reported(failed_on_020, None), None);
+        // Written before statuses were stamped; not guessed at.
+        assert_eq!(reported("state=failed\n", Some("0.2.0")), None);
+    }
+}
