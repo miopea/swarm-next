@@ -22,6 +22,9 @@ Hive would need updating by hand. That is the correct failure rather than a
 flaw: silent key replacement is exactly the attack being refused. Rotate rarely,
 and announce it.
 
+It is stored as **Swarm release signing key** in the `BFG` vault of the personal
+1Password account (`my`), in a concealed `credential` field.
+
 Creating one, which has been done and should not be done again without meaning
 to:
 
@@ -33,6 +36,16 @@ cargo build --release -p swarm-release-tool
 It prints the public key and nothing else — the private half is never printed,
 logged, or returned. Put the public key in `packaging/release-verifying-key`,
 put the private key in 1Password, and delete the file.
+
+Verify the stored copy before deleting the original, by digest rather than by
+looking at it:
+
+```
+diff <(op read --account my "op://BFG/Swarm release signing key/credential" | tr -d '\r\n' | sha256sum) \
+     <(tr -d '\r\n' < /run/user/$(id -u)/swarm-signing.key | sha256sum)
+```
+
+A key nobody read back is a key nobody has stored.
 
 ## Building the release
 
@@ -52,9 +65,14 @@ The manifest states what is offered **now**. A release is withdrawn by ceasing
 to list it, so name every tarball that should still be on offer — this rewrites
 the document rather than appending to it.
 
+The key lives in 1Password and should exist on disk only for the length of this
+command. `/run/user/$UID` is tmpfs, so it never reaches a disk at all.
+
 ```
-op read "op://Private/Swarm release signing key/notesPlain" > /run/user/$(id -u)/swarm-signing.key
-chmod 600 /run/user/$(id -u)/swarm-signing.key
+eval "$(op-login)"
+umask 077
+op read --account my "op://BFG/Swarm release signing key/credential" \
+  > /run/user/$(id -u)/swarm-signing.key
 
 ./packaging/linux/publish-release-manifest.sh \
   /run/user/$(id -u)/swarm-signing.key \
