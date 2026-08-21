@@ -12,6 +12,8 @@ bin_root=${SWARM_BIN_ROOT:-"$home_dir/.local/bin"}
 systemctl_bin=${SWARM_SYSTEMCTL_BIN:-systemctl}
 curl_bin=${SWARM_CURL_BIN:-curl}
 health_url=${SWARM_HEALTH_URL:-http://127.0.0.1:8766/health}
+# The page a person opens, as opposed to the endpoint the installer polls.
+app_url=${health_url%/health}
 health_attempts=${SWARM_HEALTH_ATTEMPTS:-30}
 workspace_root=${SWARM_WORKSPACE_ROOT:-}
 [ -n "$workspace_root" ] || workspace_root=$(sed -n 's/^SWARM_WORKSPACE_ROOTS=//p' "$config_root/swarm.env" 2>/dev/null || true)
@@ -237,16 +239,72 @@ render_unit() {
   mv -f "$destination.tmp" "$destination"
 }
 
+# Asks the person installing to choose their sign-in token.
+#
+# Only on a first install, and only when there is a terminal to ask on. An
+# update never reaches here because the config already exists, and neither does
+# the release-apply unit, which runs detached from any terminal — so this can
+# prompt without making unattended installs hang.
+#
+# Typed input is never echoed and never printed back.
+read_chosen_token() {
+  [ -t 0 ] && [ -t 2 ] || return 1
+  printf '\nChoose a token to sign in to Swarm with.\n' >&2
+  printf 'At least 12 characters. Press Enter on its own to have one generated.\n' >&2
+  attempts=0
+  while [ "$attempts" -lt 3 ]; do
+    attempts=$((attempts + 1))
+    stty -echo 2>/dev/null || return 1
+    printf 'Token: ' >&2
+    read -r chosen || { stty echo 2>/dev/null; return 1; }
+    printf '\n' >&2
+    if [ -z "$chosen" ]; then
+      stty echo 2>/dev/null
+      printf 'Generating one for you.\n' >&2
+      return 1
+    fi
+    printf 'Again: ' >&2
+    read -r confirmation || { stty echo 2>/dev/null; return 1; }
+    stty echo 2>/dev/null
+    printf '\n' >&2
+    if [ "$chosen" != "$confirmation" ]; then
+      printf 'Those did not match.\n' >&2
+      continue
+    fi
+    # Anyone holding this can drive every worker on the machine, so a token
+    # short enough to guess is worse than the generated one it replaces.
+    if [ "${#chosen}" -lt 12 ]; then
+      printf 'Too short - at least 12 characters.\n' >&2
+      continue
+    fi
+    case "$chosen" in
+      *[!!-~]*) printf 'Use printable characters without spaces.\n' >&2; continue;;
+    esac
+    return 0
+  done
+  printf 'Generating one for you.\n' >&2
+  return 1
+}
+
 write_initial_config() {
   config_file="$config_root/swarm.env"
   [ -e "$config_file" ] && return
-  token=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+  chosen=
+  if read_chosen_token; then
+    token=$chosen
+    chosen_token=1
+  else
+    token=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+    chosen_token=
+  fi
+  chosen=
   umask 077
   {
     printf 'SWARM_API_BIND=127.0.0.1:8766\n'
     printf 'SWARM_OPERATOR_TOKEN=%s\n' "$token"
     printf 'SWARM_WORKSPACE_ROOTS=%s\n' "$workspace_root"
   } > "$config_file"
+  token=
 }
 
 install_release() {
@@ -461,6 +519,16 @@ install_or_update() {
       && wait_for_health && wait_for_host "$new_release"; then
       prune_superseded_releases
       printf 'Swarm %s is healthy at %s\n' "$version" "$health_url"
+      # The install ends at a sign-in wall. Whoever gets here needs to know
+      # what to type, and where it is if they did not choose it. The value
+      # itself is never printed: this output lands in scrollback and in logs.
+      if [ -n "${chosen_token:-}" ]; then
+        printf '\nOpen %s and sign in with the token you chose.\n' "$app_url"
+      else
+        printf '\nOpen %s and sign in. A token was generated for you; read it with:\n\n    sed -n %s %s/swarm.env\n' \
+          "$app_url" "'s/^SWARM_OPERATOR_TOKEN=//p'" "$config_root"
+      fi
+      printf '\nThat token is the only credential and it never leaves this machine.\n'
       return
     fi
     run_systemctl stop swarm.target || true

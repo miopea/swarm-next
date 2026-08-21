@@ -28,16 +28,30 @@ curl -fsSL https://api.github.com/repos/miopea/swarm-next/releases/latest \
 Every release is listed at
 **https://github.com/miopea/swarm-next/releases** if you would rather look.
 
-It verifies the bundle's checksums, installs it, writes the systemd units,
+It asks you to choose a token to sign in with — at least 12 characters, typed
+twice and never shown on screen. Press Enter on its own and one is generated
+instead.
+
+Then it verifies the bundle's checksums, installs it, writes the systemd units,
 starts the services, and **waits for the API to answer before saying it
-worked**. On success:
+worked**:
 
 ```
 Swarm 0.2.0 is healthy at http://127.0.0.1:8766/health
+
+Open http://127.0.0.1:8766 and sign in with the token you chose.
 ```
 
-Open that address. The token to sign in with is in
-`~/.config/swarm/swarm.env` — `grep SWARM_OPERATOR_TOKEN ~/.config/swarm/swarm.env`.
+If you let it generate one, that last line tells you how to read it back
+instead:
+
+```
+sed -n 's/^SWARM_OPERATOR_TOKEN=//p' ~/.config/swarm/swarm.env
+```
+
+Installing without a terminal — from a script, or the in-app updater — skips
+the question and generates a token, so nothing ever waits for input that cannot
+arrive.
 
 That is the whole installation. The rest of this page is what it put on your
 machine, what to do when it does not work, and how to update.
