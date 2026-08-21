@@ -23,6 +23,7 @@ mod orchestration;
 mod outlook;
 mod presence;
 mod presentation;
+mod private_store;
 mod provider_activity;
 mod runtime;
 mod session_history;

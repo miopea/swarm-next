@@ -8,7 +8,10 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 pub(crate) const MAX_EMAIL_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
-const MAX_EMAIL_ATTACHMENT_STORE_BYTES: u64 = 512 * 1024 * 1024;
+/// The store's share of whatever disk it lives on. A fixed ceiling here would
+/// fail the same way the private attachment store did: refusing a new file at a
+/// fraction of a large disk, and claiming space that is gone on a full one.
+const EMAIL_ATTACHMENT_DISK_PERCENT: u64 = 5;
 const MAX_EMAIL_ATTACHMENT_FILES: usize = 2_048;
 
 #[derive(Clone)]
@@ -63,10 +66,17 @@ impl EmailAttachmentStore {
         {
             return Ok(name);
         }
-        let (files, retained_bytes) = store_usage(self.root.as_ref()).await?;
-        if files >= MAX_EMAIL_ATTACHMENT_FILES
-            || retained_bytes.saturating_add(bytes.len() as u64) > MAX_EMAIL_ATTACHMENT_STORE_BYTES
-        {
+        // The oldest give way rather than the newest being turned away. A cache
+        // that refuses once full stops working the moment it is used.
+        let fits = crate::private_store::make_room_for(
+            self.root.as_ref(),
+            bytes.len() as u64,
+            MAX_EMAIL_ATTACHMENT_FILES,
+            EMAIL_ATTACHMENT_DISK_PERCENT,
+        )
+        .await
+        .map_err(|_| EmailAttachmentError::Unavailable)?;
+        if !fits {
             return Err(EmailAttachmentError::Capacity);
         }
         write_private(&path, bytes).await?;
@@ -175,30 +185,6 @@ fn hex_prefix(bytes: &[u8], length: usize) -> String {
     }
     result
 }
-
-async fn store_usage(root: &Path) -> Result<(usize, u64), EmailAttachmentError> {
-    let mut entries = tokio::fs::read_dir(root)
-        .await
-        .map_err(|_| EmailAttachmentError::Unavailable)?;
-    let mut files = 0usize;
-    let mut bytes = 0u64;
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|_| EmailAttachmentError::Unavailable)?
-    {
-        let metadata = entry
-            .metadata()
-            .await
-            .map_err(|_| EmailAttachmentError::Unavailable)?;
-        if metadata.is_file() && !entry.file_name().to_string_lossy().ends_with(".type") {
-            files = files.saturating_add(1);
-            bytes = bytes.saturating_add(metadata.len());
-        }
-    }
-    Ok((files, bytes))
-}
-
 async fn write_private(path: &Path, bytes: &[u8]) -> Result<(), EmailAttachmentError> {
     #[cfg(unix)]
     {

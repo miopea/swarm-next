@@ -17,10 +17,6 @@ pub const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 /// actually free is self-correcting: as the disk fills the allowance shrinks
 /// and eviction gives the space back.
 const ATTACHMENT_STORE_DISK_PERCENT: u64 = 5;
-/// Never smaller than the fixed allowance it replaces, and never large enough
-/// to be the reason a disk filled.
-const MIN_ATTACHMENT_STORE_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_ATTACHMENT_STORE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 /// A directory-size sanity bound, not the real limit. Bytes govern: with a
 /// per-file ceiling of 8 MiB against a 128 MiB store, a file count of 64 made
 /// the store refuse writes at 4.5% of its byte budget — which is exactly what
@@ -79,7 +75,17 @@ impl AttachmentStore {
         {
             return Ok(path);
         }
-        make_room_for(self.root.as_ref(), bytes.len() as u64).await?;
+        let fits = crate::private_store::make_room_for(
+            self.root.as_ref(),
+            bytes.len() as u64,
+            MAX_ATTACHMENT_FILES,
+            ATTACHMENT_STORE_DISK_PERCENT,
+        )
+        .await
+        .map_err(|_| AttachmentError::Unavailable)?;
+        if !fits {
+            return Err(AttachmentError::Capacity);
+        }
         write_private(&path, bytes).await?;
         Ok(path)
     }
@@ -148,117 +154,6 @@ fn hex_prefix(bytes: &[u8], length: usize) -> String {
     }
     result
 }
-
-/// How much this store may hold right now, from the free space beneath it.
-///
-/// Re-read on every write, so the answer tracks the disk rather than a number
-/// chosen once. When the filesystem cannot be questioned the floor applies,
-/// which is the allowance this replaced.
-fn store_allowance(root: &Path) -> u64 {
-    let available = nix::sys::statvfs::statvfs(root).ok().map(|stats| {
-        stats
-            .blocks_available()
-            .saturating_mul(stats.fragment_size())
-    });
-    let Some(available) = available else {
-        return MIN_ATTACHMENT_STORE_BYTES;
-    };
-    available
-        .saturating_mul(ATTACHMENT_STORE_DISK_PERCENT)
-        .saturating_div(100)
-        .clamp(MIN_ATTACHMENT_STORE_BYTES, MAX_ATTACHMENT_STORE_BYTES)
-}
-
-/// Evicts the oldest attachments until the incoming one fits.
-///
-/// A bounded private cache that refuses new writes when it is full is a cache
-/// that stops working the moment it is used — the operator hit exactly that,
-/// pasting a screenshot into a full store and being told to try again, which
-/// could never succeed. Age-based pruning does not help either: a store can
-/// fill in two days while the expiry is seven.
-///
-/// Oldest-first, because these are screenshots attached to messages that have
-/// already been sent and the newest are the ones still being discussed. Eviction
-/// can break an old image link, which the seven-day expiry already does; the
-/// difference is that this happens when the space is needed rather than on a
-/// calendar.
-async fn make_room_for(root: &Path, incoming: u64) -> Result<(), AttachmentError> {
-    let allowance = store_allowance(root);
-    let (mut files, mut retained) = store_usage(root).await?;
-    if files < MAX_ATTACHMENT_FILES && retained.saturating_add(incoming) <= allowance {
-        return Ok(());
-    }
-    let mut oldest_first = attachments_by_age(root).await?;
-    while (files >= MAX_ATTACHMENT_FILES || retained.saturating_add(incoming) > allowance)
-        && !oldest_first.is_empty()
-    {
-        let (_, path, size) = oldest_first.remove(0);
-        // A file already gone is the outcome wanted here, so its absence counts
-        // the same as removing it.
-        let _ = tokio::fs::remove_file(&path).await;
-        files = files.saturating_sub(1);
-        retained = retained.saturating_sub(size);
-    }
-    // Only a file larger than the whole allowance can still not fit, and the
-    // per-file ceiling is a fraction of the floor.
-    if retained.saturating_add(incoming) > allowance {
-        return Err(AttachmentError::Capacity);
-    }
-    Ok(())
-}
-
-/// Every stored attachment with its age and size, oldest first.
-async fn attachments_by_age(
-    root: &Path,
-) -> Result<Vec<(SystemTime, std::path::PathBuf, u64)>, AttachmentError> {
-    let mut entries = tokio::fs::read_dir(root)
-        .await
-        .map_err(|_| AttachmentError::Unavailable)?;
-    let mut found = Vec::new();
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|_| AttachmentError::Unavailable)?
-    {
-        let metadata = entry
-            .metadata()
-            .await
-            .map_err(|_| AttachmentError::Unavailable)?;
-        if metadata.is_file() {
-            found.push((
-                metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-                entry.path(),
-                metadata.len(),
-            ));
-        }
-    }
-    found.sort_by_key(|(modified, _, _)| *modified);
-    Ok(found)
-}
-
-async fn store_usage(root: &Path) -> Result<(usize, u64), AttachmentError> {
-    let mut entries = tokio::fs::read_dir(root)
-        .await
-        .map_err(|_| AttachmentError::Unavailable)?;
-    let mut files = 0usize;
-    let mut bytes = 0u64;
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|_| AttachmentError::Unavailable)?
-    {
-        let metadata = entry
-            .metadata()
-            .await
-            .map_err(|_| AttachmentError::Unavailable)?;
-        if metadata.is_file() {
-            files = files.saturating_add(1);
-            bytes = bytes.saturating_add(metadata.len());
-        }
-    }
-    Ok((files, bytes))
-}
-
 async fn prune_expired(root: &Path) -> Result<(), AttachmentError> {
     let cutoff = SystemTime::now()
         .checked_sub(MAX_ATTACHMENT_AGE)
@@ -423,12 +318,9 @@ mod tests {
                 first_saved = Some(path);
             }
         }
-        let (files, bytes) = store_usage(&root).await.unwrap();
+        let (files, bytes) = crate::private_store::usage(&root).await.unwrap();
         assert_eq!(files, MAX_ATTACHMENT_FILES);
-        assert!(
-            bytes < MIN_ATTACHMENT_STORE_BYTES / 2,
-            "full by count, not by size"
-        );
+        assert!(bytes < 64 * 1024 * 1024, "full by count, not by size");
 
         // The next paste succeeds rather than being refused.
         let arriving = [PNG, b"-the-one-the-operator-just-pasted"].concat();
@@ -437,7 +329,7 @@ mod tests {
 
         // Room came from the oldest, and the store stayed within its bound.
         assert!(!tokio::fs::try_exists(first_saved.unwrap()).await.unwrap());
-        assert!(store_usage(&root).await.unwrap().0 <= MAX_ATTACHMENT_FILES);
+        assert!(crate::private_store::usage(&root).await.unwrap().0 <= MAX_ATTACHMENT_FILES);
     }
 
     /// Pasting the same image twice never needs room: it is content-addressed.
@@ -451,7 +343,7 @@ mod tests {
         let second = store.save("image/png", PNG).await.unwrap();
 
         assert_eq!(first, second);
-        assert_eq!(store_usage(&root).await.unwrap().0, 1);
+        assert_eq!(crate::private_store::usage(&root).await.unwrap().0, 1);
     }
 
     /// "The allowance should be a % of disk space, not 128. That is nothing
@@ -459,30 +351,38 @@ mod tests {
     ///
     /// A share of what is free is also the right answer as a disk fills: the
     /// allowance shrinks with it, and eviction hands the space back.
+    /// This store is bounded by the shared rules rather than by numbers of its
+    /// own: a share of the disk beneath it, and eviction rather than refusal.
+    /// The rules themselves are proved in `private_store`; what matters here is
+    /// that this store is subject to them.
     #[tokio::test]
-    async fn the_allowance_follows_the_disk_and_never_drops_below_the_old_one() {
+    async fn the_private_store_is_bounded_by_the_shared_rules() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("attachments");
-        tokio::fs::create_dir_all(&root).await.unwrap();
+        let store = AttachmentStore::new(root.clone());
+        store.save("image/png", PNG).await.unwrap();
 
-        let allowance = store_allowance(&root);
+        let allowance = crate::private_store::store_allowance(&root, ATTACHMENT_STORE_DISK_PERCENT);
 
-        assert!(
-            allowance >= MIN_ATTACHMENT_STORE_BYTES,
-            "never worse than the fixed allowance it replaced"
-        );
-        assert!(
-            allowance <= MAX_ATTACHMENT_STORE_BYTES,
-            "never large enough to be why a disk filled"
-        );
+        // Never worse than the fixed allowance it replaced, and never a reason
+        // a disk filled.
+        assert!(allowance >= 128 * 1024 * 1024);
+        assert!(allowance <= 8 * 1024 * 1024 * 1024);
     }
 
-    /// A filesystem that cannot be questioned still gets a usable answer.
-    #[test]
-    fn an_unreadable_filesystem_falls_back_to_the_floor() {
-        assert_eq!(
-            store_allowance(Path::new("/definitely/not/a/real/mount/point")),
-            MIN_ATTACHMENT_STORE_BYTES
-        );
+    /// A store already inside its bound throws nothing away.
+    #[tokio::test]
+    async fn a_store_within_its_bound_keeps_what_it_has() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("attachments");
+        let store = AttachmentStore::new(root.clone());
+        let kept = store.save("image/png", PNG).await.unwrap();
+
+        store
+            .save("image/png", &[PNG, b"-second"].concat())
+            .await
+            .unwrap();
+
+        assert!(tokio::fs::try_exists(&kept).await.unwrap());
     }
 }

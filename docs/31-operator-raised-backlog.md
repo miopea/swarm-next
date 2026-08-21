@@ -1283,9 +1283,13 @@ the right answer as a disk fills: the allowance shrinks with it and eviction
 gives the space back, where a fixed number would keep claiming space that is no
 longer there.
 
-Not changed: the email attachment store has the same shape but is nowhere near
-its bounds — 28 files and 4.3 MB against 2,048 files and 512 MB. It should get
-the same treatment, but it is not what failed.
+The email attachment store had the same shape and was nowhere near its bounds —
+28 files and 4.3 MB against 2,048 files and 512 MB — so it had not failed yet.
+It has now been given the same treatment rather than left to fail later on
+someone else's busier inbox, and both stores share one implementation of the
+two rules instead of a copy each. Copies drifting is how a fourth attention kind
+reached one query and not the two beside it; the same lesson applies here before
+it costs anything.
 
 ### 55. Mobile header: one pill size, and the selector stops absorbing every squeeze — *fixed*
 
