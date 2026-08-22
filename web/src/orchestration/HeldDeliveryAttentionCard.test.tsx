@@ -8,6 +8,7 @@ afterEach(cleanup);
 
 function held(overrides: Partial<HeldDelivery> = {}): HeldDelivery {
   return {
+    kind: "delivery_held_open_prompt",
     subject: "queen-review",
     worker_name: null,
     reason: "Queen cannot review while her terminal has an unanswered prompt",
@@ -64,4 +65,37 @@ test("opens the worker whose terminal needs answering", () => {
   render(<HeldDeliveryAttentionCard held={[held()]} onOpenWorker={onOpenWorker} />);
   fireEvent.click(screen.getByRole("button", { name: "Open Queen" }));
   expect(onOpenWorker).toHaveBeenCalledWith("Queen");
+});
+
+/**
+ * An unconfirmed wake is a different situation from a delivery waiting its
+ * turn, and needs a different instruction. Two were sitting unseen in the
+ * operator's Hive from 2026-08-21: work assigned, never started, reading as
+ * routed, with nothing that would ever retry it.
+ */
+test("says unstarted work was never started, and what to do about it", () => {
+  render(
+    <HeldDeliveryAttentionCard
+      held={[held({ kind: "wake_uncertain", subject: "wake:t1", worker_name: "Real Truth", observations: 1 })]}
+    />,
+  );
+
+  expect(screen.getByText("Real Truth was assigned work that never started")).toBeInTheDocument();
+  expect(screen.getByText(/will not try again/)).toBeInTheDocument();
+  expect(screen.getByText(/waking it twice would brief it twice/)).toBeInTheDocument();
+  expect(screen.getByText(/Wake the worker yourself/)).toBeInTheDocument();
+  // Not described as waiting: nothing is going to deliver it.
+  expect(screen.queryByText(/waiting rather than lost/)).not.toBeInTheDocument();
+});
+
+test("counts unstarted work when several workers never started", () => {
+  render(
+    <HeldDeliveryAttentionCard
+      held={[
+        held({ kind: "wake_uncertain", subject: "wake:t1", worker_name: "Real Truth" }),
+        held({ kind: "wake_uncertain", subject: "wake:t2", worker_name: "Poppy" }),
+      ]}
+    />,
+  );
+  expect(screen.getByText("2 tasks are assigned to workers that never started them")).toBeInTheDocument();
 });

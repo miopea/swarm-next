@@ -248,6 +248,8 @@ export type CoordinatorStatus = {
   held: HeldDelivery[];
 };
 export type HeldDelivery = {
+  /** "delivery_held_open_prompt" or "wake_uncertain" — different situations. */
+  kind: string;
   subject: string;
   worker_name: string | null;
   reason: string;

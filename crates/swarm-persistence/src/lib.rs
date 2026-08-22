@@ -22,7 +22,8 @@ mod coordinator;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, CoordinatorAttention,
     CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake, ExitedWorkerOwnedWorkCandidate,
-    OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD, StaleOwnedWorkCandidate,
+    OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD, REFUSAL_WAKE_UNCERTAIN,
+    StaleOwnedWorkCandidate,
 };
 mod decisions;
 mod email;

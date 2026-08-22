@@ -455,10 +455,24 @@ impl TaskStore {
             }
             other => other,
         };
+        // Accepted from `uncertain` as well as `running`, and that is the
+        // point rather than a loosening.
+        //
+        // recover_inflight_queen_automation marks a run uncertain whenever the
+        // API restarts, which now happens on every app update. Queen's session
+        // survives that — the terminal host is a separate service — so she
+        // finishes the review she was actually given and the finish was
+        // refused because the state had moved underneath her. The run could
+        // then never be closed, and its stale fingerprint re-triggered it.
+        //
+        // Her report is the evidence the delivery landed. Nothing else Swarm
+        // can observe settles the uncertainty as well as the recipient saying
+        // what it did with the work, and the run_id is a token she only holds
+        // because it was delivered to her.
         let changed = transaction.execute(
             "UPDATE queen_automation SET state = 'completed', outcome = ?2, finished_at = ?3,
                  delivered_fingerprint = pending_fingerprint, pending_fingerprint = NULL, updated_at = ?3
-             WHERE id = 1 AND run_id = ?1 AND state = 'running'",
+             WHERE id = 1 AND run_id = ?1 AND state IN ('running', 'uncertain')",
             params![run_id, outcome.to_string(), now],
         )? == 1;
         if changed {
@@ -824,6 +838,60 @@ mod tests {
             QueenAutomationState::Uncertain
         );
         assert!(store.claim_queen_automation(12).unwrap().is_none());
+    }
+
+    /// The third trapdoor. `recover_inflight_queen_automation` marks a run
+    /// uncertain whenever the API restarts — which now happens on every app
+    /// update — while Queen's session survives it, because the terminal host is
+    /// a separate service. She finishes the review she was actually given and
+    /// the finish used to be refused, leaving the run permanently unclosable
+    /// and its stale fingerprint re-triggering it.
+    #[test]
+    fn a_run_whose_marker_went_uncertain_can_still_be_closed_by_queen() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        store.request_queen_automation_run(10).unwrap();
+        let delivery = store.claim_queen_automation(11).unwrap().unwrap();
+
+        // The API restarts underneath the run.
+        assert_eq!(store.recover_inflight_queen_automation().unwrap(), 1);
+        assert_eq!(
+            store.queen_automation_status(12).unwrap().state,
+            QueenAutomationState::Uncertain
+        );
+
+        // Queen, whose terminal never stopped, reports what she did.
+        assert!(
+            store
+                .finish_queen_automation_run(&delivery.run_id, QueenAutomationOutcome::NoAction, 13)
+                .unwrap(),
+            "Queen's own report is the evidence the delivery landed"
+        );
+        assert_eq!(
+            store.queen_automation_status(14).unwrap().state,
+            QueenAutomationState::Completed
+        );
+    }
+
+    /// A run nobody was given cannot be closed by knowing its shape. The `run_id`
+    /// is the token, and Queen only holds it because it was delivered to her.
+    #[test]
+    fn a_run_id_that_was_never_delivered_closes_nothing() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        store.request_queen_automation_run(10).unwrap();
+
+        assert!(
+            !store
+                .finish_queen_automation_run("not-a-run", QueenAutomationOutcome::NoAction, 11)
+                .unwrap()
+        );
     }
 
     #[test]

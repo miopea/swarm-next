@@ -2445,6 +2445,13 @@ pub struct CoordinatorRefusal {
 /// provider question.
 pub const REFUSAL_DELIVERY_HELD: &str = "delivery_held_open_prompt";
 
+/// A wake whose outcome could not be confirmed, and which will not replay.
+///
+/// The work is assigned and was never started, and nothing about the task says
+/// so — it reads as routed. Deliberately not retried: a worker woken twice gets
+/// its briefing twice.
+pub const REFUSAL_WAKE_UNCERTAIN: &str = "wake_uncertain";
+
 impl TaskStore {
     /// Records that the coordinator declined to act, or that it is still
     /// declining.

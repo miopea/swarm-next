@@ -24,6 +24,10 @@ export default function HeldDeliveryAttentionCard({ held, onOpenWorker }: Props)
   const oldest = held.reduce((worst, entry) =>
     entry.first_observed_at < worst.first_observed_at ? entry : worst,
   );
+  // An unconfirmed wake is not a delivery waiting its turn. The work was never
+  // started, nothing will retry it, and the task reads as routed — so it needs
+  // its own sentence and its own instruction.
+  const unstarted = held.filter((entry) => entry.kind === "wake_uncertain");
 
   return (
     <section className="queen-attention-card held-delivery-card" aria-labelledby="held-delivery-heading">
@@ -32,14 +36,20 @@ export default function HeldDeliveryAttentionCard({ held, onOpenWorker }: Props)
         <h3 id="held-delivery-heading">
           {queen
             ? "Queen cannot review until a prompt is answered"
-            : held.length === 1
+            : unstarted.length > 0 && unstarted.length === held.length
+              ? held.length === 1
+                ? `${oldest.worker_name ?? "A worker"} was assigned work that never started`
+                : `${held.length} tasks are assigned to workers that never started them`
+              : held.length === 1
               ? `${oldest.worker_name ?? "A worker"} has work waiting behind a prompt`
               : `${held.length} things are waiting behind unanswered prompts`}
         </h3>
         <p>
           {queen
             ? "Nothing reaches this queue and nothing gets routed while Queen's terminal has an open question. Answer it and the review resumes on its own."
-            : "Swarm will not type into a terminal with an open question, so this is waiting rather than lost. Answer the prompt and it delivers itself."}
+            : oldest.kind === "wake_uncertain"
+              ? "Swarm could not confirm this worker woke, so it will not try again — waking it twice would brief it twice. The work is assigned and was never started. Wake the worker yourself and it picks up from there."
+              : "Swarm will not type into a terminal with an open question, so this is waiting rather than lost. Answer the prompt and it delivers itself."}
         </p>
         <p className="held-delivery-since">
           Since {new Date(oldest.first_observed_at * 1000).toLocaleString()} · retried {oldest.observations} times

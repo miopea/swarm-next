@@ -46,6 +46,10 @@ pub(super) struct CoordinatorStatusResponse {
 /// One thing the coordinator is holding, and for how long.
 #[derive(Debug, Serialize)]
 pub(super) struct HeldDeliveryResponse {
+    /// Which kind of hold this is. The two are not the same situation: one is
+    /// work waiting for a prompt to be answered, the other is work that was
+    /// never started and will not be retried.
+    kind: String,
     subject: String,
     worker_name: Option<String>,
     reason: String,
@@ -67,6 +71,7 @@ fn held_deliveries(state: &Arc<AppState>) -> Result<Vec<HeldDeliveryResponse>, A
     Ok(refusals
         .into_iter()
         .map(|refusal| HeldDeliveryResponse {
+            kind: refusal.kind,
             subject: refusal.subject,
             worker_name: refusal.worker_name,
             reason: refusal.reason,

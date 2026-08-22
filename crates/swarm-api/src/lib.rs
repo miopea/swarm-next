@@ -96,12 +96,12 @@ use swarm_domain::{
 };
 #[cfg(test)]
 use swarm_persistence::PushSubscriptionInput;
-use swarm_persistence::REFUSAL_DELIVERY_HELD;
 use swarm_persistence::{
     CoordinatorStatus, DecisionDeliveryFailure, FederationHandoffIntentPhase,
     FederationJiraClaimPhase, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionFailure,
     QueenAutomationFailure, TaskDispatchFailure, TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
+use swarm_persistence::{REFUSAL_DELIVERY_HELD, REFUSAL_WAKE_UNCERTAIN};
 // The message-content tests build these directly; the delivery that consumes
 // them now lives in `coordination_delivery`.
 #[cfg(test)]
@@ -1173,6 +1173,20 @@ impl AppState {
                         worker_id = %action.worker_id,
                         message = %error.message,
                         "deterministic worker wake became uncertain and will not replay"
+                    );
+                    // Not replaying is right: a worker woken twice gets its
+                    // briefing twice, which is worse than one that waited. But
+                    // the task then sits looking routed and is not, with
+                    // nothing distinguishing it from work merely queued. Two
+                    // of these were sitting unseen in the operator's Hive from
+                    // 2026-08-21.
+                    let _ = store.record_coordinator_refusal(
+                        REFUSAL_WAKE_UNCERTAIN,
+                        &format!("wake:{}", action.task_id),
+                        Some(action.worker_id),
+                        None,
+                        "a wake could not be confirmed, so this work is assigned but never started",
+                        unix_timestamp(),
                     );
                     store
                         .mark_coordinator_worker_wake_uncertain(&action.action_id, unix_timestamp())
