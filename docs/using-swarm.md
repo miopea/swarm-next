@@ -121,10 +121,19 @@ App and API rebuild appears only if this Hive was pointed at a working copy.
 
 Swarm asks you once whether to check for new releases, and contacts nothing
 until you answer. A check sends no version, no identity and no counts — it
-fetches one signed file and compares it here. When a release is offered,
-downloading and installing are separate, and the card says whether installing
-stops your workers before you agree to it. `docs/install.md` covers both that
-and installing a release by hand.
+fetches one signed file and compares it here.
+
+When a release is offered, downloading and installing are separate acts, because
+one is reversible and the other is not. Installing runs on its own and **the
+page reloads itself** when the new version is healthy; your workers keep running
+throughout.
+
+Most releases change only the app, and then the worker engine simply moves with
+it and nothing restarts — Swarm decides that by fingerprinting the engine's own
+source rather than the release number. A release that genuinely changes the
+engine restarts loaded workers, so it waits until they are idle and tells you
+before anything happens. `docs/install.md` covers all of it, including
+installing a release by hand.
 
 Every update asks first, and the warning is proportional: an App and API release
 keeps your workers online and says so, while a worker engine or provider restart

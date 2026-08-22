@@ -189,17 +189,43 @@ sent**: not your version, not your Hive's identity, not how many workers you
 run. There is no account and nothing to sign in to.
 
 When a release is offered you get two separate buttons, because downloading is
-reversible and installing is not. **Download** fetches the release and checks
-it against the digest the signature covers; anything that fails is discarded
-rather than installed and rolled back. **Install** then asks to confirm, and
-tells you first whether it stops your workers — an App and API release does
-not, a release carrying a new worker engine does.
+reversible and installing is not.
 
-Swarm will not offer anything to a Hive built from a working copy. It says a
-release exists and stops there, because replacing your checkout's binary would
-discard work nothing can enumerate. Rebuild from the App and API card instead.
+**Download** fetches the release and checks it against the digest the signature
+covers. Anything that fails is discarded rather than installed and rolled back,
+and a download is tied to the digest it came from — if the release it belongs to
+is replaced, it is fetched again rather than installed under a version number
+that has moved on.
 
-If you never turn checking on, none of this happens and the command below is
+**Install** asks to confirm first, and says what it costs. Then it runs on its
+own: the card shows the install proceeding with a running count, Check now and
+Stop checking lock while it does, and **the page reloads itself** once the new
+App and API is healthy. You do not have to refresh, and you do not have to watch
+it.
+
+Your workers keep running throughout. Swarm restarts the API and leaves the
+terminal engine they are attached to alone.
+
+### Your workers and the engine
+
+Most releases change only the app. When the terminal engine is unchanged — which
+Swarm decides by fingerprinting the engine's own source, not the release number
+— the engine simply moves to the new release and nothing restarts. You are not
+asked, because there is nothing to decide.
+
+A release that genuinely changes the engine is different. That restarts loaded
+workers, and it is deferred while any worker is running: Swarm applies it once
+they are idle, or when you ask for it from the worker engine card. Either way it
+says so before you agree to anything.
+
+### A Hive built from a working copy
+
+Swarm will not offer a release to one. It says a release exists and stops there,
+because replacing a binary built from your checkout would discard work nothing
+can enumerate. Your updates come from the **App and API** card, which rebuilds
+the checkout.
+
+If you never turn checking on, none of this happens and the commands below are
 the whole story.
 
 ### Installing a release by hand
@@ -221,15 +247,16 @@ An update keeps your database, your configuration and your workers. It verifies
 the new release's health before retiring the old one, and **restores the
 previous release automatically if the new one does not answer**.
 
-Updating the API does not stop your workers. Updating the *terminal engine*
-does, so Swarm defers that while sessions are running and tells you it has:
+The engine behaves exactly as it does through the buttons, described above: it
+moves with the app when it is unchanged, and a real engine change is deferred
+while sessions are running. When it defers, the command says so:
 
 ```
 swarm-package: terminal host update deferred; 1 sessions remain
 ```
 
-Apply it when you are ready, from the runtime area in the control room or by
-running the update again once workers are asleep.
+Apply it when you are ready, from the worker engine card or by running the
+update again once workers are asleep.
 
 ## Building it yourself
 

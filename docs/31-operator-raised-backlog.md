@@ -662,8 +662,20 @@ separate consents, and item 22's lesson is encoded — the card says whether
 installing stops workers before the confirm, rather than leaving a reconcile
 timer to discover it. Procedure: `docs/cutting-a-release.md`.
 
-Not yet exercised end to end: no release has been fetched and installed through
-the button, because no tag exists yet for the manifest to point at.
+**Proven end to end 2026-08-22**, 0.6.3 to 0.6.4 on a production install: check,
+download, digest verification against the signed manifest, unpack, request,
+systemd, install, and the page reloading itself on the new version. Nothing in
+the chain is unexercised now.
+
+Six releases were needed to get there, and every defect was found by the
+operator running it rather than by a test. Worth recording, because the pattern
+is the lesson: the install unit could not write where `swarm-package` writes and
+systemd does not fail a unit for that; a release number moved the worker engine
+fingerprint so every app update asked to restart every worker; an install
+failure from an earlier release was reported against a later one; and the fix
+for that last one never reached the function, because the test written to cover
+it carried its own copy of the rule instead of calling the code. All four are
+now gates rather than fixes.
 
 ### 32. A worker can finish an email task without anyone answering the email — *partly fixed*
 
