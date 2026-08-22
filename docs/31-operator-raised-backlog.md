@@ -1,6 +1,6 @@
 # Operator-raised backlog
 
-Status: **Running capture — 2026-08-19**
+Status: **Running capture — nothing open as of 2026-08-22**
 
 Items the operator raised during live dogfooding, written down as they arrived
 rather than held in a conversation. Everything here came from using the product,
@@ -11,7 +11,15 @@ Queen-only through MCP, and a worker holds list, transition, comment, and
 decision tools. Queen should file anything here that deserves queue tracking.
 This file is the durable record until then.
 
-## Open
+## Raised and resolved
+
+Every item below is resolved. The heading said "Open" while the last of them
+was being closed, which is the failure this file exists to prevent — a backlog
+that lies about itself is read as the answer to what is left.
+
+Kept in full rather than summarised: the reasoning behind each one is why the
+same defect has not arrived twice, and several of these describe a class rather
+than an incident.
 
 ### 4. A task needs one operator instruction line — *fixed*
 
@@ -79,7 +87,7 @@ engine card while a build runs, and separates a build that has been asked for
 from one that is under way. Previously a build changed only the wording on the
 card, which reads as another resting state.
 
-### 13. Adding an image fails once, then succeeds on retry — *partly fixed*
+### 13. Adding an image fails once, then succeeds on retry — *closed, not seen again*
 
 Raised as: "image could not be added" on the first attempt, worked on the
 second. Seen shortly after a worker-engine update, so an API restart mid-upload
@@ -96,6 +104,12 @@ the set of statuses treated as transient at all, so nothing retried it either.
 The cause of this particular failure is still unproven: the reason was
 discarded by an empty `catch`. It is now shown, so the next occurrence
 identifies itself.
+
+**Closed 2026-08-22.** Not seen again since, across a day of heavy use
+including image pastes. Closed as unreproduced rather than as diagnosed — the
+two real defects found while looking are fixed and stay fixed, and the
+instrumentation stays so a recurrence arrives with its reason attached instead
+of starting this over.
 
 ### 14. Three workers claim the operator at once — *fixed*
 
@@ -1046,7 +1060,7 @@ blanket denial.
 A worker's MCP tool schema is fixed when the session connects, so Scout keeps
 the old list until it is restarted.
 
-### 48. The decision list reflows under the operator — *fixed, with a second door still open*
+### 48. The decision list reflows under the operator — *fixed*
 
 Continues task `01a016d2`. `9668d65` held scroll and focus still; the list
 itself was still moving.
@@ -1068,10 +1082,14 @@ automation, and Apiary assistance. Each appears and disappears on live state,
 and Queen's status changes on its own cycle. Any of them mounting pushes the
 entire decision list down exactly as an inserted card did.
 
-Not fixed here because the fix is a layout decision rather than a bug fix:
-either the cards move below the list, which reads oddly against the "nothing
-needs your attention" empty state, or the list gets an anchored position. That
-is the operator's call on how the page should read, not mine to take silently.
+**Second door closed 2026-08-22**, on the operator's ruling: reserve the cards'
+space. The region holds a card's height whenever there is a list to disturb and
+scrolls inside itself rather than growing, so a card mounting cannot move a
+decision under the operator's cursor.
+
+It reserves nothing when the queue is empty. There is no list below to shove,
+and blank space above "Nothing needs your attention" is the oddity the
+alternative layout was rejected for.
 
 ### 49. "Adjusting terminal layout…" covers the terminal for reasons that are not layout — *fixed*
 
