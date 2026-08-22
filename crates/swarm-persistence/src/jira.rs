@@ -615,9 +615,22 @@ impl TaskStore {
                     .collect::<Result<Vec<String>, _>>()?
             };
             if target_status_ids.is_empty() {
-                return Err(TaskStoreError::IntegrityFailure(
-                    "queued Jira transition lost its workflow mapping".into(),
-                ));
+                // Skipped, not fatal. Returning an error here aborted the whole
+                // claim batch, so a single unmapped task also stopped every
+                // other Jira transition from being delivered — the same freeze
+                // one layer down.
+                // `conflict` rather than a new state: it already means "this
+                // write could not be applied as intended", it is already
+                // surfaced, and the existing retry path is exactly what the
+                // operator needs once they have added the mapping in Settings.
+                transaction.execute(
+                    "UPDATE jira_transition_deliveries
+                     SET state = 'conflict', last_error = 'workflow_state_not_mapped',
+                         updated_at = ?2
+                     WHERE id = ?1 AND state = 'queued'",
+                    params![id, now],
+                )?;
+                continue;
             }
             let changed = transaction.execute(
                 "UPDATE jira_transition_deliveries
@@ -1082,26 +1095,18 @@ pub(super) fn queue_jira_transition(
             .query_map(params![binding_id, target.to_string()], |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()?
     };
-    if target_status_ids.is_empty() {
-        // Name the project and the state. The generic message said neither, and
-        // an operator reading it could not tell whether the mapping was broken,
-        // missing, or simply not covering the state they asked for.
-        let project_key = transaction
-            .query_row(
-                "SELECT project_key FROM jira_project_bindings WHERE id = ?1",
-                [&binding_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .unwrap_or_else(|| "This Jira project".to_owned());
-        return Err(TaskStoreError::JiraStateNotMapped {
-            project_key,
-            task_state: target,
-        });
-    }
-    if target_status_ids
-        .iter()
-        .any(|status| status == &current_status_id)
+    // A missing mapping used to end the local transition here, inside the same
+    // transaction as the local move — so one misconfigured Jira project stopped
+    // thirteen tasks moving inside Swarm. No external configuration error should
+    // be able to do that.
+    //
+    // The write is queued regardless and resolved at delivery, where a gap is
+    // visible and fixable without freezing the Hive. The operator's ruling,
+    // 2026-08-22.
+    if !target_status_ids.is_empty()
+        && target_status_ids
+            .iter()
+            .any(|status| status == &current_status_id)
     {
         return Ok(());
     }
@@ -1241,7 +1246,7 @@ fn valid_issue(issue: &JiraIssueSnapshot<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn an_unmapped_lifecycle_state_names_the_project_and_the_state() {
+    fn an_unmapped_lifecycle_state_does_not_freeze_the_task_locally() {
         // Reproduces the reported failure: a binding mapped only to the three
         // states Jira's status categories can produce cannot express blocked,
         // review, or draft, and transitioning to one of them fails. The message
@@ -1292,19 +1297,59 @@ mod tests {
             .unwrap()
             .remove(0);
 
-        let failure = store
-            .transition_task(task.id, TaskState::Blocked)
-            .unwrap_err();
+        // The local move succeeds. This used to fail with an error naming the
+        // project and the state, which was an improvement on the message
+        // before it — but it still meant one misconfigured Jira project could
+        // stop thirteen tasks moving inside Swarm. The operator ruled on
+        // 2026-08-22 that no external configuration error may do that.
+        let blocked = store.transition_task(task.id, TaskState::Blocked).unwrap();
+        assert_eq!(blocked.state, TaskState::Blocked);
 
-        let message = failure.to_string();
-        assert!(message.contains("WWD"), "must name the project: {message}");
+        // The Jira write is queued rather than dropped, so nothing is silently
+        // out of step: it fails where it can be seen and fixed.
+        let queued: i64 = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM jira_transition_deliveries
+                 WHERE task_id = ?1 AND state = 'queued'",
+                [task.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(queued, 1, "the write should be waiting, not discarded");
+
+        // And an unmapped delivery does not take the batch with it. Returning
+        // an error from the claim aborted every other queued transition too —
+        // the same freeze one layer down.
+        // available_at defaults to now, so the claim has to be made at a time
+        // the row is actually eligible for.
+        let now: i64 = store
+            .connection()
+            .unwrap()
+            .query_row("SELECT unixepoch()", [], |row| row.get(0))
+            .unwrap();
+        let claimed = store.claim_jira_transitions(now + 60).unwrap();
         assert!(
-            message.contains("blocked"),
-            "must name the state: {message}"
+            claimed.is_empty(),
+            "an unmapped transition is skipped, not dispatched"
         );
-        // A state the binding does cover still moves, so the fault is the
-        // missing mapping rather than Jira-backed transitions as a whole.
-        assert!(store.transition_task(task.id, TaskState::Active).is_ok());
+        let held: i64 = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM jira_transition_deliveries
+                 WHERE task_id = ?1 AND state = 'conflict'
+                   AND last_error = 'workflow_state_not_mapped'",
+                [task.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(held, 1, "the unmapped write should be a retryable conflict");
+
+        // And it is retryable, so fixing the mapping in Settings is the whole
+        // recovery rather than re-transitioning the task by hand.
+        assert!(store.retry_jira_transition(task.id).unwrap());
     }
 
     use super::*;
