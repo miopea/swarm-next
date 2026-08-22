@@ -131,7 +131,8 @@ const START_SURFACE_SCHEMA_VERSION: i64 = 82;
 const RELEASE_CHECK_SCHEMA_VERSION: i64 = 83;
 const COMPLETION_EXEMPTION_SCHEMA_VERSION: i64 = 84;
 const DECISION_DEADLINE_ATTENTION_SCHEMA_VERSION: i64 = 85;
-const CURRENT_SCHEMA_VERSION: i64 = DECISION_DEADLINE_ATTENTION_SCHEMA_VERSION;
+const COORDINATOR_REFUSAL_SCHEMA_VERSION: i64 = 86;
+const CURRENT_SCHEMA_VERSION: i64 = COORDINATOR_REFUSAL_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -2245,7 +2246,44 @@ fn migrate_named_schema_steps(
             DECISION_DEADLINE_ATTENTION_SCHEMA_VERSION,
         )?;
     }
+    if schema_version < COORDINATOR_REFUSAL_SCHEMA_VERSION {
+        migrate_coordinator_refusals(transaction)?;
+    }
     Ok(())
+}
+
+/// What the coordinator wanted to do and could not.
+///
+/// It records what it did and nothing else, so a view built on its actions
+/// alone is blank exactly when someone opens it. Measured: through the
+/// twenty-four hours the operator spent wondering why the Hive was idle, the
+/// coordinator took no action at all — the only evidence was one log line
+/// repeated 1503 times.
+///
+/// One row per thing refused, not one per attempt. The count and the first
+/// observation are what make it readable: "held since 01:49, 1503 checks" is a
+/// fact; 1503 rows is the journal with a stylesheet.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+fn migrate_coordinator_refusals(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS coordinator_refusals (
+             kind TEXT NOT NULL,
+             subject TEXT NOT NULL,
+             worker_id TEXT REFERENCES worker_profiles(id) ON DELETE CASCADE,
+             session_id TEXT,
+             reason TEXT NOT NULL,
+             first_observed_at INTEGER NOT NULL,
+             last_observed_at INTEGER NOT NULL,
+             observations INTEGER NOT NULL DEFAULT 1,
+             cleared_at INTEGER,
+             PRIMARY KEY (kind, subject)
+         );
+         CREATE INDEX IF NOT EXISTS coordinator_refusals_live
+             ON coordinator_refusals(cleared_at, first_observed_at);",
+    )?;
+    transaction.pragma_update(None, "user_version", COORDINATOR_REFUSAL_SCHEMA_VERSION)
 }
 
 /// Carries one operator line about how a task should be approached.
@@ -5180,6 +5218,12 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'coordinator_actions'
                    AND sql LIKE '%decision_deadline_passed_attention%')",
+        },
+        SchemaStep {
+            table: "coordinator_refusals",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
         },
     ];
 

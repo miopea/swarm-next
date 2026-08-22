@@ -2330,3 +2330,138 @@ impl TaskStore {
         Ok(changed)
     }
 }
+
+/// Something the coordinator wanted to do and could not, with how long it has
+/// been true.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoordinatorRefusal {
+    pub kind: String,
+    pub subject: String,
+    pub worker_id: Option<WorkerId>,
+    pub worker_name: Option<String>,
+    pub reason: String,
+    pub first_observed_at: i64,
+    pub last_observed_at: i64,
+    pub observations: i64,
+}
+
+/// A delivery that cannot be written because the session has an unanswered
+/// provider question.
+pub const REFUSAL_DELIVERY_HELD: &str = "delivery_held_open_prompt";
+
+impl TaskStore {
+    /// Records that the coordinator declined to act, or that it is still
+    /// declining.
+    ///
+    /// One row per subject rather than one per attempt. A stranded prompt is
+    /// retried every thirty seconds, and the useful statement is "held since
+    /// 01:49, 1503 checks" rather than 1503 rows nobody will read.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn record_coordinator_refusal(
+        &self,
+        kind: &str,
+        subject: &str,
+        worker_id: Option<WorkerId>,
+        session_id: Option<WorkerSessionId>,
+        reason: &str,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        let connection = self.connection()?;
+        connection.execute(
+            "INSERT INTO coordinator_refusals
+                 (kind, subject, worker_id, session_id, reason,
+                  first_observed_at, last_observed_at, observations, cleared_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, 1, NULL)
+             ON CONFLICT(kind, subject) DO UPDATE SET
+                 last_observed_at = excluded.last_observed_at,
+                 observations = CASE
+                     WHEN coordinator_refusals.cleared_at IS NULL
+                     THEN coordinator_refusals.observations + 1
+                     ELSE 1
+                 END,
+                 -- A refusal that had cleared and is happening again is a new
+                 -- occurrence, not a continuation of the old one.
+                 first_observed_at = CASE
+                     WHEN coordinator_refusals.cleared_at IS NULL
+                     THEN coordinator_refusals.first_observed_at
+                     ELSE excluded.first_observed_at
+                 END,
+                 reason = excluded.reason,
+                 worker_id = excluded.worker_id,
+                 session_id = excluded.session_id,
+                 cleared_at = NULL",
+            params![
+                kind,
+                subject,
+                worker_id.map(|id| id.to_string()),
+                session_id.map(|id| id.to_string()),
+                reason,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Records that whatever was blocking has stopped blocking.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn clear_coordinator_refusal(
+        &self,
+        kind: &str,
+        subject: &str,
+        now: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection.execute(
+            "UPDATE coordinator_refusals SET cleared_at = ?3
+             WHERE kind = ?1 AND subject = ?2 AND cleared_at IS NULL",
+            params![kind, subject, now],
+        )? > 0)
+    }
+
+    /// Refusals still in force, oldest first, that have been true long enough
+    /// to be worth the operator's attention.
+    ///
+    /// The grace period is what stops a prompt answered in ten seconds from
+    /// becoming an item. Nothing here is a judgment about whether the refusal
+    /// was right — refusing to type into a session with an open question is
+    /// correct, and staying silent about it for a day is not.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn standing_coordinator_refusals(
+        &self,
+        now: i64,
+        grace_seconds: i64,
+    ) -> Result<Vec<CoordinatorRefusal>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT refusal.kind, refusal.subject, refusal.worker_id, worker.name,
+                    refusal.reason, refusal.first_observed_at, refusal.last_observed_at,
+                    refusal.observations
+             FROM coordinator_refusals refusal
+             LEFT JOIN worker_profiles worker ON worker.id = refusal.worker_id
+             WHERE refusal.cleared_at IS NULL
+               AND ?1 - refusal.first_observed_at >= ?2
+             ORDER BY refusal.first_observed_at",
+        )?;
+        let rows = statement.query_map(params![now, grace_seconds], |row| {
+            Ok(CoordinatorRefusal {
+                kind: row.get(0)?,
+                subject: row.get(1)?,
+                worker_id: row
+                    .get::<_, Option<String>>(2)?
+                    .and_then(|id| WorkerId::from_str(&id).ok()),
+                worker_name: row.get(3)?,
+                reason: row.get(4)?,
+                first_observed_at: row.get(5)?,
+                last_observed_at: row.get(6)?,
+                observations: row.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+}
