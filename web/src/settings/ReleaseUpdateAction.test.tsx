@@ -242,10 +242,15 @@ test("follows an install through the API restart and says when it arrived", asyn
   fireEvent.click(await screen.findByRole("button", { name: "Install Swarm 0.6.2" }));
   fireEvent.click(screen.getByRole("button", { name: "Install 0.6.2" }));
 
-  // A short heading with elapsed time, not a paragraph: "it is worse than that
-  // because it is installing in a block of useless text".
-  expect(await screen.findByText(/Restarting Swarm/, {}, { timeout: 4000 })).toBeInTheDocument();
-  expect(screen.getByText(/The longest part/)).toBeInTheDocument();
+  // One line, not a stage commentary. The operator does not care which service
+  // is restarting; they care that it is running and the page will come back.
+  expect(await screen.findByText(/Installing Swarm 0.6.2/, {}, { timeout: 4000 })).toBeInTheDocument();
+  // Every line is about an outcome, matching the development build card the
+  // operator named as the standard.
+  expect(screen.getByText(/keeps serving this page until the new release is healthy/)).toBeInTheDocument();
+  expect(screen.getByText(/The page reloads itself once the new App and API is healthy/)).toBeInTheDocument();
+  expect(screen.queryByText(/Restarting Swarm/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Confirming the new version/)).not.toBeInTheDocument();
   expect(await screen.findByText(/This Hive is now running 0.6.2/, {}, { timeout: 4000 }))
     .toBeInTheDocument();
 }, 10000);

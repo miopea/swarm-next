@@ -23,29 +23,6 @@ function refusalReason(code: string): string {
   return code;
 }
 
-/**
- * The install has four observable stages and no progress of its own to report,
- * so they are inferred from what can be seen: whether the installer has picked
- * the request up, and whether the API is answering.
- *
- * Written as a heading rather than a sentence. The previous version was a
- * paragraph of prose with a shell command inside it — "a block of useless
- * text", which is what it was while nothing had gone wrong yet.
- */
-function installStep(reachable: boolean, applyState: ReleaseStatus["apply_state"]): string {
-  if (!reachable) return "Restarting Swarm";
-  if (applyState === "installed") return "Confirming the new version";
-  if (applyState === "installing") return "Installing";
-  return "Starting the installer";
-}
-
-function installDetail(reachable: boolean, applyState: ReleaseStatus["apply_state"]): string {
-  if (!reachable) return "The longest part. This page picks it up the moment the API answers.";
-  if (applyState === "installed") return "Waiting for the new version to report itself.";
-  if (applyState === "installing") return "Verifying the release and moving it into place. Workers keep running.";
-  return "Waiting for the installer to pick up the request.";
-}
-
 type Props = {
   busy: boolean;
   operatorToken: string;
@@ -208,13 +185,23 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
           ) : null}
           {installed && status.apply_state !== "failed" && status.apply_state !== "refused" ? (
             <>
+              {/*
+                * Shaped after the development build card, which the operator
+                * called out as the standard: "in dev mode, it says a lot and is
+                * clear". What makes it clear is that every line is about an
+                * outcome — which version, what keeps serving, what stays
+                * running — and none of it is about internal stages. This card
+                * said "Restarting Swarm" and "Confirming the new version",
+                * which is Swarm's business rather than the operator's.
+                */}
               <div className="maintenance-progress" role="status" aria-live="polite">
                 <span className="maintenance-spinner" aria-hidden="true" />
                 <div>
-                  <strong>{installStep(reachable, status.apply_state)} · {elapsed}s</strong>
-                  <span>{installDetail(reachable, status.apply_state)}</span>
+                  <strong>Installing Swarm {installing}… · {elapsed}s</strong>
+                  <span>Verified and unpacked. {status.current_version} keeps serving this page until the new release is healthy.</span>
                 </div>
               </div>
+              <small>The page reloads itself once the new App and API is healthy. Claude, Codex, and the worker engine keep running.</small>
               {elapsed >= 60 && (
                 <small className="field-error">
                   This is taking longer than it should. Check <code>systemctl --user status swarm-release-apply.path</code>.
