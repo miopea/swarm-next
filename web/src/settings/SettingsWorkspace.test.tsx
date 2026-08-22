@@ -64,7 +64,10 @@ test("shows subsystem diagnostics, previews a sanitized report, and changes the 
         resident_memory_bytes: 9_437_184,
         process_tree_resident_memory_bytes: 508_559_360,
         process_tree_process_count: 8,
-        pressure: "critical",
+        // The server judges this against the machine. The fixture used to say
+        // "critical" while the assertion below expected Normal, because the
+        // page carried its own byte thresholds and ignored this field.
+        pressure: "normal",
       },
     });
     return ok({ type: "history_diagnostics", diagnostics: { retained_bytes: 42, session_count: 3, segment_count: 1, dropped_records: 0, dropped_bytes: 0, recovered_truncated_bytes: 0, recovered_corrupt_segments: 0 } });

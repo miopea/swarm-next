@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, test, vi } from "vitest";
 
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
+import { workerTreePressure } from "./DiagnosticsWorkspace";
 
 afterEach(() => {
   cleanup();
@@ -93,4 +94,27 @@ test("answers the heading before showing the evidence for it", async () => {
   fireEvent.click(showAll);
   expect(screen.getByText("Machine memory")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Show only what needs attention" })).toBeInTheDocument();
+});
+
+/**
+ * "Compute is high because I just opened a bunch of workers, but why is memory
+ * critical?" Fifteen workers holding 7 GiB on a 31 GiB machine reporting no
+ * memory stall were reported Critical, because this page carried its own
+ * absolute thresholds — 4 GiB critical — and never looked at the machine.
+ *
+ * That rule already exists on the server, judged against the machine's size and
+ * whether it is actually stalling. The page defers to it now.
+ */
+test("a large but proportionate worker footprint is not called critical", () => {
+  const roomy = {
+    resident_memory_bytes: 40 * 1024 * 1024,
+    process_tree_resident_memory_bytes: 7 * 1024 * 1024 * 1024,
+    process_tree_process_count: 15,
+    // 7 GiB of 31 GiB, on a machine the kernel says is not stalling.
+    pressure: "normal" as const,
+  };
+  expect(workerTreePressure(roomy)).toBe("normal");
+
+  // And a genuinely strained machine still reads through.
+  expect(workerTreePressure({ ...roomy, pressure: "critical" as const })).toBe("critical");
 });

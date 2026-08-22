@@ -517,6 +517,21 @@ install_or_update() {
     host_protocol=$(cat "$host_release/PROTOCOL")
     [ "$host_protocol" = "$protocol" ] || die "protocol change requires an explicit compatibility migration"
   fi
+  # When the new release carries the same engine, move host-current onto it
+  # rather than leaving it on the release it was installed from. Nothing
+  # restarts: the running host keeps its own process, and a symlink move only
+  # decides which binary a future start uses — which is byte-for-byte the same
+  # behaviour, because the fingerprint says so.
+  #
+  # Without this the engine card reads "Installed 0.5.0" beside an 0.6.2 app
+  # and looks stale, when in fact there was nothing to do.
+  if [ -n "$host_release" ] && [ "$host_release" != "$new_release" ] \
+    && [ -f "$host_release/WORKER_ENGINE_BUILD_ID" ] && [ -f "$new_release/WORKER_ENGINE_BUILD_ID" ] \
+    && [ "$(cat "$host_release/WORKER_ENGINE_BUILD_ID")" = "$(cat "$new_release/WORKER_ENGINE_BUILD_ID")" ]; then
+    activate_host_link "$new_release"
+    host_release=$new_release
+    engine_carried_forward=1
+  fi
   [ -z "$old_release" ] || create_update_backup "$old_release" "$new_release"
   previous_release=$(release_from_link "$install_root/previous")
   [ -z "$previous_release" ] || publish_assets "$previous_release"
@@ -558,8 +573,13 @@ install_or_update() {
     rollback_release=
     update_rollback=
     prune_superseded_releases
-    printf 'Swarm API %s is healthy at %s; terminal host %s was preserved\n' \
-      "$version" "$health_url" "$(basename "$host_release")"
+    if [ -n "${engine_carried_forward:-}" ]; then
+      printf 'Swarm API %s is healthy at %s; the worker engine is unchanged and now runs from this release\n' \
+        "$version" "$health_url"
+    else
+      printf 'Swarm API %s is healthy at %s; terminal host %s was preserved\n' \
+        "$version" "$health_url" "$(basename "$host_release")"
+    fi
     return
   fi
   activate_link "$old_release"

@@ -281,12 +281,24 @@ function workerTreeLabel(resource: RuntimeResources["api"] | undefined, sessions
 // Provider runtimes are expected to be much larger than the Rust service.
 // Match the 2/4 GiB automatic-start admission bands instead of applying the
 // service's 256/512 MiB limits to Claude or Codex process trees.
-function workerTreePressure(resource: RuntimeResources["api"] | undefined): RuntimeResources["api"]["pressure"] | undefined {
+/**
+ * The verdict on the loaded worker runtimes, taken from the server rather than
+ * recomputed here.
+ *
+ * This used to carry its own thresholds — 4 GiB critical, 2 GiB advisory — and
+ * they ignored the machine entirely. On a 31 GiB machine reporting no memory
+ * stall at all, fifteen healthy workers holding 7 GiB were reported Critical.
+ * That is the same defect already fixed in `layer_pressure`, living a second
+ * time in a copy nobody updated: a byte count on its own says nothing, and six
+ * gigabytes is unremarkable on thirty-two and fatal on eight.
+ *
+ * The terminal host's process tree is the loaded worker runtimes plus the host
+ * itself, so its pressure is the verdict for this row. One implementation, on
+ * the side that can see the machine.
+ */
+export function workerTreePressure(resource: RuntimeResources["api"] | undefined): RuntimeResources["api"]["pressure"] | undefined {
   if (resource?.process_tree_resident_memory_bytes == null) return undefined;
-  const workerBytes = Math.max(0, resource.process_tree_resident_memory_bytes - (resource.resident_memory_bytes ?? 0));
-  if (workerBytes >= 4 * 1024 * 1024 * 1024) return "critical";
-  if (workerBytes >= 2 * 1024 * 1024 * 1024) return "advisory";
-  return "normal";
+  return resource.pressure;
 }
 
 function machineMemoryLabel(machine: RuntimeResources["machine"] | undefined) {

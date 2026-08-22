@@ -215,3 +215,40 @@ test("says why the install unit refused, not just that it did", async () => {
   expect(await screen.findByText(/The install did not run/)).toBeInTheDocument();
   expect(screen.getByText(/is not a Swarm release/)).toBeInTheDocument();
 });
+
+/**
+ * "It is really hard to tell if the install finished or not... It installed but
+ * just didn't refresh." The card read status once on mount, so "Installing"
+ * stayed on screen whatever happened and a finished install looked identical to
+ * a stalled one.
+ */
+test("follows an install through the API restart and says when it arrived", async () => {
+  vi.mocked(api.applyRelease).mockResolvedValue(undefined);
+  const offered = status({ downloaded_version: "0.6.2" });
+  offered.offer = { ...offered.offer!, version: "0.6.2" };
+  vi.mocked(api.fetchReleaseStatus)
+    .mockResolvedValueOnce(offered)
+    // The API goes away to install: the expected middle, not a fault.
+    .mockRejectedValueOnce(new Error("connection refused"))
+    // It comes back as the new version.
+    .mockResolvedValue(
+      status({ current_version: "0.6.2", offer: null, upgrade_available: false, downloaded_version: null }),
+    );
+
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Install Swarm 0.6.2" }));
+  fireEvent.click(screen.getByRole("button", { name: "Install 0.6.2" }));
+
+  expect(await screen.findByText(/Swarm is restarting to finish the install/, {}, { timeout: 4000 }))
+    .toBeInTheDocument();
+  expect(await screen.findByText(/This Hive is now running 0.6.2/, {}, { timeout: 4000 }))
+    .toBeInTheDocument();
+}, 10000);
+
+test("does not poll while no install is in flight", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status());
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  await waitFor(() => expect(api.fetchReleaseStatus).toHaveBeenCalledTimes(1));
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  expect(api.fetchReleaseStatus).toHaveBeenCalledTimes(1);
+}, 10000);

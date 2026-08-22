@@ -41,20 +41,36 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [installed, setInstalled] = useState(false);
+  /** The version the operator asked for, so arriving on it is recognisable. */
+  const [installing, setInstalling] = useState<string | null>(null);
+  /** Whether the API answered the last poll. Losing it is the expected middle
+   *  of an install, not a fault. */
+  const [reachable, setReachable] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
+    const read = async () => {
       try {
         const current = await fetchReleaseStatus(operatorToken);
-        if (!cancelled) setStatus(current);
+        if (cancelled) return;
+        setStatus(current);
+        setReachable(true);
       } catch {
-        // A status this card cannot read is not an error worth a banner: the
-        // card simply does not appear.
+        // Mid-install the API is restarting and cannot answer. That is the
+        // shape of success, not a failure — so it is reported as waiting and
+        // only while an install is actually in flight.
+        if (!cancelled) setReachable(false);
       }
-    })();
-    return () => { cancelled = true; };
-  }, [operatorToken]);
+    };
+    void read();
+    // An install has no progress of its own to report: the API goes away and
+    // comes back as a different version. Without polling, "Installing" stayed
+    // on screen whatever happened, and the operator could not tell a finished
+    // install from a stalled one.
+    if (!installing) return () => { cancelled = true; };
+    const timer = setInterval(() => void read(), 2000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [operatorToken, installing]);
 
   const run = useCallback(async (action: () => Promise<ReleaseStatus>, failure: string) => {
     setWorking(true);
@@ -70,6 +86,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
 
   if (!status?.available) return null;
   const disabled = busy || working;
+  const arrived = installing !== null && status.current_version === installing;
 
   if (status.mode === "unset") {
     return (
@@ -102,10 +119,14 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
       <header>
         <div>
           <span className="runtime-component-name">Updates</span>
-          <strong>{offered ? `Swarm ${status.offer?.version} is available` : status.development_build ? "This Hive builds from a working copy" : "Swarm is up to date"}</strong>
+          <strong>{arrived ? `Swarm ${status.current_version} is installed` : offered ? `Swarm ${status.offer?.version} is available` : status.development_build ? "This Hive builds from a working copy" : "Swarm is up to date"}</strong>
         </div>
         {offered && <span className="runtime-status-badge safe">Workers stay online</span>}
       </header>
+
+      {arrived && (
+        <p className="form-message" role="status">Installed. This Hive is now running {status.current_version}.</p>
+      )}
 
       {status.development_build && status.offer && (
         <p>Version {status.offer.version} has been released. Nothing is offered here, because replacing a build made from your checkout would discard work nothing can enumerate. Rebuild from the App and API card instead.</p>
@@ -126,7 +147,14 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
             </p>
           ) : null}
           {installed && status.apply_state !== "failed" && status.apply_state !== "refused" ? (
-            <p className="form-message" role="status">Installing. Swarm restarts the API on its own; this page reconnects when it answers again. If nothing changes after a minute, the install did not start — check <code>systemctl --user status swarm-release-apply.path</code>.</p>
+            <p className="form-message" role="status">
+              {!reachable
+                ? "Swarm is restarting to finish the install. This page picks it up as soon as the API answers."
+                : status.apply_state === "installing"
+                  ? "Installing. Swarm restarts the API on its own; this page updates itself when it comes back."
+                  : "Install requested. Waiting for it to start."}
+              {" "}<small>If nothing changes after a minute, it did not start — check <code>systemctl --user status swarm-release-apply.path</code>.</small>
+            </p>
           ) : ready ? (
             confirming ? (
               <div className="maintenance-confirmation" role="group" aria-label="Confirm release install">
@@ -141,7 +169,10 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
                       setConfirming(false);
                       setWorking(true);
                       void applyRelease(operatorToken)
-                        .then(() => setInstalled(true))
+                        .then(() => {
+                          setInstalled(true);
+                          setInstalling(status.offer?.version ?? null);
+                        })
                         .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "The install could not be started."))
                         .finally(() => setWorking(false));
                     }}

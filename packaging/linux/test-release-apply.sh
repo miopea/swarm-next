@@ -135,4 +135,30 @@ if sh "$SWARM_INSTALL_ROOT/current/swarm-package" apply-release >/dev/null 2>&1;
   fail "apply-release with no request succeeded"
 fi
 
+# --- the engine carries forward when it did not change ---------------------
+#
+# "I thought we were supposed to quietly move the worker engine to the installed
+# version if there were no engine updates." An unchanged engine left
+# host-current on the release it was installed from, so the card read a stale
+# version beside a newer app.
+
+make_bundle 7.0.0
+printf 'engine-same\n' > "$test_root/bundle-7.0.0/WORKER_ENGINE_BUILD_ID"
+printf 'engine-same\n' > "$SWARM_INSTALL_ROOT/current/WORKER_ENGINE_BUILD_ID"
+host_before=$(basename "$(readlink "$SWARM_INSTALL_ROOT/host-current")")
+sh "$test_root/bundle-7.0.0/swarm-package" update "$test_root/bundle-7.0.0" >/dev/null
+host_after=$(basename "$(readlink "$SWARM_INSTALL_ROOT/host-current")")
+[ "$host_after" = "7.0.0" ] || fail "an unchanged engine did not move to the new release ($host_before -> $host_after)"
+# Nothing was drained or restarted to do it.
+if grep -q 'drain' "$HOME/swarmctl.log" 2>/dev/null; then
+  fail "carrying an unchanged engine forward must not drain the terminal host"
+fi
+
+# --- and does not, when the engine really changed ---------------------------
+make_bundle 8.0.0
+printf 'engine-different\n' > "$test_root/bundle-8.0.0/WORKER_ENGINE_BUILD_ID"
+sh "$test_root/bundle-8.0.0/swarm-package" update "$test_root/bundle-8.0.0" >/dev/null
+host_changed=$(basename "$(readlink "$SWARM_INSTALL_ROOT/host-current")")
+[ "$host_changed" = "7.0.0" ] || fail "a changed engine must not be swapped under running workers ($host_changed)"
+
 printf 'release apply smoke passed\n'
