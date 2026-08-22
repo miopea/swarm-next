@@ -164,6 +164,11 @@ That token is the only credential. It is generated from `/dev/urandom` at
 install time, stored with `0600` permissions, and never leaves the machine.
 Treat it as a password: anyone with it can drive your workers.
 
+It is a **machine credential, not a login**. One Hive belongs to one person, and
+Swarm records no per-person identity — there is no "who answered this" beyond
+"the operator". If two people share a Hive they share an account in every sense
+that matters, and the history will not tell them apart. Run one Hive each.
+
 Then, in order:
 
 1. **Settings → Crew** — add a worker. It needs a name and a repository path.
@@ -172,6 +177,46 @@ Then, in order:
 
 The worker receives the task as a briefing in its own terminal. You do not have
 to type it in.
+
+## Connecting Jira and email
+
+Both are optional, and Swarm works without either. They are how work arrives
+from outside, so most people want at least one.
+
+### Jira
+
+**Settings → Integrations → Bring Jira into your Hive.** Connect with your own
+Atlassian identity — project discovery uses it, so you see exactly the projects
+you already have access to and nothing else.
+
+Then bind a project. Issues assigned to you appear as tasks within a minute,
+comments flow both ways, and closing an issue in Jira moves the linked task to
+Completed. Each bound project is a shared ticket pool that you or Queen route to
+the right repository worker.
+
+A Jira state your binding has no mapping for holds the write rather than
+guessing. Swarm tells you rather than inventing a transition.
+
+### Email
+
+**Settings → Integrations → Email.** A message becomes a task; the worker does
+the work and drafts the reply; **you review the words and send it.** Swarm never
+sends mail on your behalf without you reading it.
+
+Several messages from one person on one thread merge into a single task, and are
+answered once on the thread they wrote in most recently — not once per message.
+
+Drafting requires the task completed and its deployment recorded, which is the
+order that stops a reply going out before the change is actually available.
+
+## Reporting a problem
+
+**Settings → Diagnostics → copy report.** It is previewed before you copy it and
+contains no terminal text, task content, workspace paths, credentials or raw
+errors — so it is safe to paste into a ticket or a chat.
+
+That report plus what you were doing is enough to act on. If a service is
+involved, `journalctl --user -u swarm-api.service -n 50` adds the rest.
 
 ## Updating
 

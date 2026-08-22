@@ -396,3 +396,51 @@ function order() {
     (card) => card.getAttribute("data-decision-id"),
   );
 }
+
+/**
+ * Item 48's second door, on the operator's ruling. Three summary cards sit
+ * above the list and each appears on live state, so any of them mounting shoved
+ * every decision down by a card — between the operator reading an action and
+ * pressing it, which is the same harm the inserted-decision fix addressed.
+ */
+test("a card appearing does not move the decision list", () => {
+  const decisions = [pending, { ...pending, id: "decision-9" }];
+  const { rerender, container } = render(
+    <DecisionInbox
+      decisions={decisions}
+      tasks={[]}
+      workers={[]}
+      busy={false}
+      attentionCards={null}
+      onResolve={vi.fn()}
+    />,
+  );
+  const region = container.querySelector(".decision-attention-cards");
+  expect(region).toHaveClass("reserved");
+
+  // The same region, now holding a card. Its height is fixed, so the list
+  // below it has not moved.
+  rerender(
+    <DecisionInbox
+      decisions={decisions}
+      tasks={[]}
+      workers={[]}
+      busy={false}
+      attentionCards={<div className="queen-attention-card">Queen needs a look</div>}
+      onResolve={vi.fn()}
+    />,
+  );
+  expect(container.querySelector(".decision-attention-cards")).toHaveClass("reserved");
+  expect(screen.getByText("Queen needs a look")).toBeInTheDocument();
+});
+
+/** With nothing waiting there is nothing below to shove, and blank space above
+ *  "Nothing needs your attention" would be the oddity the other layout was
+ *  rejected for. */
+test("reserves nothing when the queue is empty", () => {
+  const { container } = render(
+    <DecisionInbox decisions={[]} tasks={[]} workers={[]} busy={false} attentionCards={null} onResolve={vi.fn()} />,
+  );
+  expect(container.querySelector(".decision-attention-cards")).not.toHaveClass("reserved");
+  expect(screen.getByText("Nothing needs your attention")).toBeInTheDocument();
+});

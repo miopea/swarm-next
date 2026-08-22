@@ -822,6 +822,13 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .decision-inbox { min-height: 0; padding: 26px; overflow-y: auto; }
 .attention-workspace { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
 .attention-workspace .decision-inbox { flex: 1; }
+/* Item 48's second door. A card mounting must not move the decision list, so
+   while there is a list the region holds one card's height and scrolls inside
+   itself. 108px is one card: 16px padding twice, plus the eyebrow, heading and
+   body lines at the sizes set below. */
+.decision-attention-cards.reserved { height: 108px; overflow-y: auto; overscroll-behavior: contain; }
+.decision-attention-cards.reserved > * { margin-bottom: 12px; }
+
 .apiary-attention-card, .queen-attention-card { display: flex; max-width: 1180px; align-items: center; justify-content: space-between; gap: 20px; margin: 0 auto 12px; padding: 16px 18px; border: 1px solid color-mix(in srgb, var(--gold) 48%, var(--line)); border-radius: 16px; background: color-mix(in srgb, var(--honey-soft) 55%, var(--panel)); box-shadow: var(--shadow-soft); }
 .apiary-attention-card h3 { margin: 1px 0 3px; font-size: 1rem; }
 .apiary-attention-card p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: .76rem; line-height: 1.45; }

@@ -122,7 +122,21 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
         </label>
       </div>
 
-      {attentionCards}
+      {/*
+        * Reserving the cards' space, per the operator's ruling on item 48's
+        * second door. Each of these appears and disappears on live state, and
+        * Queen's status changes on her own cycle, so any of them mounting
+        * shoved the list below down by a whole card — the same jump that was
+        * reported for an inserted decision, arriving through a different door.
+        *
+        * The reservation applies only while there is a list to disturb. With
+        * nothing waiting there is nothing below to shove, and holding a card's
+        * worth of blank above "Nothing needs your attention" would be the
+        * oddity the alternative layout was rejected for.
+        */}
+      <div className={visible.length > 0 ? "decision-attention-cards reserved" : "decision-attention-cards"}>
+        {attentionCards}
+      </div>
 
       {visible.length === 0 && additionalPendingCount === 0 ? (
         <div className="decision-empty">

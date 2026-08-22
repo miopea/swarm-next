@@ -29,6 +29,12 @@ test("keeps the mobile settings section rail flush with its scroll viewport", ()
   expect(stylesheet).toContain(".settings-section-nav { top: 0; margin-inline: -4px; padding: 7px; }");
 });
 
+test("holds the decision list still when an attention card appears", () => {
+  // Item 48's second door: the region takes a card's height whether or not a
+  // card is in it, so mounting one cannot shove the list.
+  expect(stylesheet).toContain(".decision-attention-cards.reserved { height: 108px; overflow-y: auto;");
+});
+
 test("keeps the worker-stopping update badge legible", () => {
   // --warn on --warn-soft measures 1.93:1 in the light theme, well under AA's
   // 4.5:1 for this badge's small uppercase text. --warn-strong is the text
