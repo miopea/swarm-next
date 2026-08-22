@@ -1,6 +1,7 @@
 # Keeping the Hive moving
 
-Status: **Scoped 2026-08-22.** Trapdoors first, then the drone surface.
+Status: **Scoped 2026-08-22.** Trapdoors first. The drone surface is parked;
+the measurement half is not.
 
 ## What prompted this
 
@@ -116,6 +117,51 @@ a prompt has been open since 01:49.
 - **Not an actor.** No presence, no state, nothing to address. The moment it can
   be talked to, it is a worker, and the fleet has one more thing negotiating
   ownership.
+
+## Measuring whether it is working
+
+Unparked 2026-08-22. The operator's ideal is a day spent on system judgment,
+design, and finalisation choices, and nothing else. Two measures, both from data
+that already exists.
+
+### Time stuck versus time moving
+
+Per task: how long it sat unable to progress, and why. Not a score — a
+diagnostic that names what to fix.
+
+This week is the argument for it. Twenty-two drafts idle one to four days and a
+ready task idle eight, none of which was visible as *stuck* rather than merely
+*open*, while the actual cause was one wedged terminal. A number that said "this
+task has been unable to move for eight days, held behind an unreplayable wake"
+would have found it in a glance.
+
+The refusal record built for the trapdoors is where the "why" comes from. The
+two measures share a source.
+
+### How often the offered actions were wrong
+
+When Queen files a decision she proposes actions. The operator can press one, or
+type something else. **Typing something else means the proposal was wrong**, and
+that is a measure of Swarm's judgment rather than its throughput — the only one
+here that gets at quality.
+
+Measured on the existing record: of sixteen resolved decisions, twelve offered
+actions and the operator chose one of them every time. Four were interview
+answers or dismissals. **The historical override rate is zero.**
+
+Two things follow. It is a real baseline, and it is currently detecting nothing,
+so this only earns its place if the rate moves.
+
+And it has a blind spot worth writing down before anyone reads it as a score: a
+zero rate can mean the options were right, or that typing costs more than
+accepting a near-enough option. It measures friction, not correctness. A rising
+rate is meaningful; a flat zero is ambiguous.
+
+### Deliberately not measured
+
+No percentage-autonomous figure. It is the closest thing to the stated ideal and
+the worst thing to build: a single number invites gaming, says nothing about
+what to fix, and would have read as healthy all week while nothing moved.
 
 ## Order
 

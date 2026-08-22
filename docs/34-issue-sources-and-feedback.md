@@ -65,32 +65,53 @@ one job — a durable queue with retry and delivery state. Every new source adds
 two more. That is identical across sources and worth unifying, and it is where
 the replicated code lives.
 
+## Settled during scoping
+
+**A held Jira write no longer freezes the task.** The local lifecycle advances,
+the Jira write is queued, and a missing mapping fails at delivery where it is
+visible — rather than aborting the local transition with it.
+
+The filed question priced this third option as "a queue and a reconciliation
+path that does not exist today". It does exist: `jira_transition_deliveries`
+already queues transitions and delivers them asynchronously. What is wrong is
+only *where the mapping is resolved* — `queue_jira_transition` looks it up at
+queue time, inside the same transaction as the local move, so an absent mapping
+takes the local transition down with it. Moving the lookup to delivery time is
+most of the work.
+
+That answers the filed question with its own evidence: one misconfigured Jira
+project stopped thirteen tasks moving inside Swarm, and no external
+configuration error should be able to do that.
+
+**A closed issue says something, on every source.** The state change alone
+leaves the person who reported it with nothing to read.
+
+**But the register follows the audience, not the machinery.** GitHub issues come
+from developers, so a technical answer is right. Jira and email reach staff and
+the public, who need to know their issue was handled without being told how.
+Half of this is already specified — the email draft tool instructs the worker to
+write "what changed, what they can do now, and no internal implementation
+detail" — so GitHub becomes the exception that permits technical language, not
+the other way round.
+
+**A GitHub comment is reviewed before it posts.** It is public, permanent, and
+attributed to the operator's own account on the project's own repository. Email
+already works this way and the habit exists; Jira posting directly is
+defensible because the audience is internal, and public comment is not the same
+act.
+
 ## Open, and worth settling before building
 
-**The state-mapping question that is already filed and unanswered.** "An
-unmapped Jira state freezes the LOCAL lifecycle too — decide whether local state
-should advance when the Jira write is held." GitHub's model is open and closed,
-nothing like a Jira workflow, so a shared mapping would be fitting two unlike
-things into one shape while the underlying rule is undecided. Answer it first.
+**Whether the state mapping itself is shared across sources.** GitHub is open
+and closed; Jira is a configurable workflow. Now that a held write no longer
+freezes anything, the pressure to unify them is lower — a shared mapping table
+would be fitting two unlike models into one shape for its own sake. Worth
+deciding deliberately rather than by momentum.
 
-**How much a closed issue says.** Corrected during this discussion: Swarm
-already transitions the linked Jira issue on every task state change, so a
-completed task does close its ticket. What it does not do is say anything — no
-comment explains what changed, the way the email path composes a reply someone
-actually reads.
-
-For internal Jira that is probably fine; the reporter is a colleague who can
-look. For a public GitHub issue from a stranger, a silent close reads as being
-ignored, which is the same discoverability failure from the reporter's side. The
-machinery is shared, the bar may not be. Decide per source rather than by
-default.
-
-**Whether GitHub is templated on Jira or on email.** Structurally it resembles
-Jira — issues, comments, states. In the way that matters it resembles email:
-there is a person waiting for an answer, and a reply is public. Email already
-requires the operator to review before sending; a Jira comment does not. Copying
-Jira posts public comments on the project's own repository with less care than
-Swarm applies to email.
+**Where the reviewed GitHub comment is reviewed.** Email replies appear in Needs
+you with the words in front of the operator. A GitHub comment could reuse that
+exactly, or sit on the task. Reusing it means one queue and one habit, which is
+the product's whole thesis, but it puts more into Needs you.
 
 ## Charm, and its one rule
 
