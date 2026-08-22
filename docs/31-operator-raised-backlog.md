@@ -959,7 +959,7 @@ Related to item 34 and probably decided with it: a user-mode updater needs
 something to compare, so "which version is newer" has to have an answer before
 "is there an update" can.
 
-### 44. The product is now called Swarm
+### 44. The product is now called Swarm — *fixed*
 
 Raised as: "At this point we can change it to just Swarm. I am going to update
 Swarm Legacy to start referring to it as that now too."
@@ -1200,7 +1200,7 @@ every pixel it asked for. Shown failing first.
   removes the case that made it necessary, so the question is now whether it is
   still wanted as an escape hatch or was only ever a workaround for the freeze.
 
-### 52. Operator rulings, 2026-08-20 — authorised, not yet built
+### 52. Operator rulings, 2026-08-20 — *all four built*
 
 Four answers given in an interview, recorded so the scope is not re-litigated.
 
@@ -1224,7 +1224,14 @@ is wrong the page is three lines. Closes item 45.
 and pill row so the selector keeps a fixed position whatever else appears.
 Closes the two items left open in 51.
 
-### 53. A worker cannot say anything to Queen
+**All four landed 2026-08-21.** The rename went through as a cutover including
+the on-disk state, the units and the MCP key; versioning is SemVer for releases
+with a dev suffix for working copies, which the release manifest now depends on;
+diagnostics leads with a verdict and collapses healthy rows; and the mobile
+selector and refresh both shipped. The heading said "not yet built" for a day
+after the last of them.
+
+### 53. A worker cannot say anything to Queen — *fixed*
 
 Raised as: "I told a worker to create a task and assign it, but it doesn't have
 that in the tool. Also, do we have a way for workers to communicate with the
