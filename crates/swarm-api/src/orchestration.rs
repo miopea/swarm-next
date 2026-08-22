@@ -36,6 +36,44 @@ pub(super) struct CoordinatorStatusResponse {
     last_action_at: Option<i64>,
     automatic_start_admission: super::runtime::CoordinatorStartAdmission,
     automatic_start_batch_limit: usize,
+    /// What the coordinator wanted to do and could not, once it has been true
+    /// long enough to be worth saying. Nothing here is a fault in the
+    /// coordinator: declining to type into a terminal with an unanswered
+    /// prompt is correct, and saying nothing about it for a day is not.
+    held: Vec<HeldDeliveryResponse>,
+}
+
+/// One thing the coordinator is holding, and for how long.
+#[derive(Debug, Serialize)]
+pub(super) struct HeldDeliveryResponse {
+    subject: String,
+    worker_name: Option<String>,
+    reason: String,
+    first_observed_at: i64,
+    observations: i64,
+}
+
+/// A stranded prompt is silent for a grace period first.
+///
+/// A prompt answered in ten seconds is the system working, and turning that
+/// into an item would teach the operator to ignore the queue. Two minutes is
+/// long enough that nobody is coming.
+const HELD_DELIVERY_GRACE_SECONDS: i64 = 120;
+
+fn held_deliveries(state: &Arc<AppState>) -> Result<Vec<HeldDeliveryResponse>, ApiError> {
+    let refusals = crate::task_store(state)?
+        .standing_coordinator_refusals(crate::unix_timestamp(), HELD_DELIVERY_GRACE_SECONDS)
+        .map_err(|error| task_store_error(&error))?;
+    Ok(refusals
+        .into_iter()
+        .map(|refusal| HeldDeliveryResponse {
+            subject: refusal.subject,
+            worker_name: refusal.worker_name,
+            reason: refusal.reason,
+            first_observed_at: refusal.first_observed_at,
+            observations: refusal.observations,
+        })
+        .collect())
 }
 
 pub(super) async fn queen_autonomy_policy(
@@ -101,6 +139,7 @@ pub(super) async fn coordinator_status(
             last_action_at: status.last_action_at,
             automatic_start_admission: state.coordinator_start_admission(),
             automatic_start_batch_limit: usize::from(AUTOMATIC_WAKE_BATCH_LIMIT),
+            held: held_deliveries(&state)?,
         }),
     )
         .into_response())

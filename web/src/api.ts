@@ -244,6 +244,15 @@ export type CoordinatorStatus = {
   last_action_at: number | null;
   automatic_start_admission: "allowed" | "deferred_advisory" | "deferred_critical" | "deferred_unavailable";
   automatic_start_batch_limit: number;
+  /** What the coordinator is holding, once it has been true long enough to say. */
+  held: HeldDelivery[];
+};
+export type HeldDelivery = {
+  subject: string;
+  worker_name: string | null;
+  reason: string;
+  first_observed_at: number;
+  observations: number;
 };
 export type ControlRoomEvent = { sequence: number; hive_id: string; kind: ControlRoomEventKind; occurred_at: number };
 export type ControlRoomEventPage = { events: ControlRoomEvent[]; next_cursor: number; reset_required: boolean };

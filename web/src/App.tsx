@@ -24,6 +24,7 @@ import {
   retryJiraTaskLink,
   fetchNotificationSettings,
   fetchQueenAutonomyPolicy,
+  fetchCoordinatorStatus,
   fetchQueenAutomationStatus,
   fetchPresence,
   fetchProviderCapabilities,
@@ -65,6 +66,7 @@ import {
   type ProviderCapabilities,
   type PresentationDeviceClass,
   type QueenAutonomyPolicy,
+  type HeldDelivery,
   type QueenAutomationStatus,
   type SessionSummary,
   type Task,
@@ -80,6 +82,7 @@ import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import UnansweredEmailAttentionCard from "./tasks/UnansweredEmailAttentionCard";
+import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
 import { foreignEngagement, workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
@@ -220,6 +223,8 @@ export function App() {
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>();
   const [queenPolicy, setQueenPolicy] = useState<QueenAutonomyPolicy>();
   const [queenAutomation, setQueenAutomation] = useState<QueenAutomationStatus>();
+  /** What the coordinator is holding behind an unanswered terminal prompt. */
+  const [heldDeliveries, setHeldDeliveries] = useState<HeldDelivery[]>([]);
   const [providers, setProviders] = useState<ProviderCapabilities>({ claude_code: true, codex: false });
   const [providerCapabilitiesUnavailable, setProviderCapabilitiesUnavailable] = useState(false);
   const [notificationState, setNotificationState] = useState<NotificationCapabilityState>("unsupported");
@@ -291,6 +296,15 @@ export function App() {
     void fetchQueenAutomationStatus(operatorToken)
       .then(setQueenAutomation)
       .catch(() => setQueenAutomation(undefined));
+    // Polled with the rest of the control room: a hold that has lasted long
+    // enough to matter is not urgent to the second, but it must not depend on
+    // the operator opening Settings to find it.
+    void fetchCoordinatorStatus(operatorToken)
+      // Defaulted rather than assumed: during an update the page can briefly
+      // be newer than the API answering it, and a missing field should not
+      // take the control room down.
+      .then((status) => setHeldDeliveries(status.held ?? []))
+      .catch(() => setHeldDeliveries([]));
   }, [operatorToken]);
 
   useEffect(() => {
@@ -1514,6 +1528,7 @@ export function App() {
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-queen")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
+                <HeldDeliveryAttentionCard held={heldDeliveries} onOpenWorker={(name) => { const worker = workers.find((candidate) => candidate.name === name); if (worker) openWorker(worker.id); }} />
               </>}
               onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }}
               onFetchActivity={() => fetchRecentTaskActivity(operatorToken)}

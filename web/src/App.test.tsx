@@ -171,6 +171,7 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
     if (url.endsWith("/apiary/jira-projects") || url.endsWith("/apiary/shared-work") || url.endsWith("/apiary/stewardships") || url.endsWith("/apiary/steward-task-audit")) return Promise.resolve(ok([]));
     if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
     if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
+    if (url.includes("/api/v1/orchestration/coordinator")) return Promise.resolve(ok({ completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0, stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0, last_action_at: null, automatic_start_admission: "allowed", automatic_start_batch_limit: 1, held: [] }));
     if (url.includes("/api/v1/providers")) return Promise.resolve(ok({ claude_code: true, codex: false }));
     if (url.includes("/api/v1/preferences/presentation/desktop")) return Promise.resolve(ok({ device_class: "desktop", color_theme: "light", terminal_keys_visible: true, configured: true }));
     if (url.includes("/api/v1/integrations/jira/task-links")) return Promise.resolve(ok([]));
@@ -709,6 +710,9 @@ test("creates a persisted task draft from the task board", async () => {
     }
     if (String(url).includes("/api/v1/orchestration/queen-policy")) {
       return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
+    }
+    if (String(url).includes("/api/v1/orchestration/coordinator")) {
+      return Promise.resolve(ok({ completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0, stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0, last_action_at: null, automatic_start_admission: "allowed", automatic_start_batch_limit: 1, held: [] }));
     }
     if (String(url).includes("/api/v1/orchestration/queen-automation")) {
       return Promise.resolve(ok({

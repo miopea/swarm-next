@@ -1428,6 +1428,102 @@ mod tests {
         );
     }
 
+    /// The grace period is what stops a prompt answered in ten seconds from
+    /// becoming an item in the operator's queue.
+    #[test]
+    fn a_refusal_is_silent_until_it_has_lasted_long_enough_to_matter() {
+        let store = TaskStore::in_memory().unwrap();
+        store
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD,
+                "queen-review",
+                None,
+                None,
+                "Queen cannot review while her terminal has an unanswered prompt",
+                1_000,
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .standing_coordinator_refusals(1_030, 120)
+                .unwrap()
+                .is_empty()
+        );
+        let standing = store.standing_coordinator_refusals(1_200, 120).unwrap();
+        assert_eq!(standing.len(), 1);
+        assert_eq!(standing[0].subject, "queen-review");
+    }
+
+    /// One row per stuck thing, not one per attempt. The measured case retried
+    /// 1503 times in twenty-four hours; that is a count, not 1503 entries.
+    #[test]
+    fn repeated_refusals_are_one_row_with_a_count() {
+        let store = TaskStore::in_memory().unwrap();
+        for at in [1_000, 1_030, 1_060] {
+            store
+                .record_coordinator_refusal(
+                    REFUSAL_DELIVERY_HELD,
+                    "queen-review",
+                    None,
+                    None,
+                    "held",
+                    at,
+                )
+                .unwrap();
+        }
+
+        let standing = store.standing_coordinator_refusals(1_200, 120).unwrap();
+        assert_eq!(standing.len(), 1);
+        assert_eq!(standing[0].observations, 3);
+        // The age is measured from when it started, not from the last check.
+        assert_eq!(standing[0].first_observed_at, 1_000);
+    }
+
+    /// Answering the prompt clears it, and nothing has to delete the row.
+    #[test]
+    fn clearing_a_refusal_takes_it_out_of_the_queue() {
+        let store = TaskStore::in_memory().unwrap();
+        store
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD,
+                "queen-review",
+                None,
+                None,
+                "held",
+                1_000,
+            )
+            .unwrap();
+        assert!(
+            store
+                .clear_coordinator_refusal(REFUSAL_DELIVERY_HELD, "queen-review", 1_100)
+                .unwrap()
+        );
+        assert!(
+            store
+                .standing_coordinator_refusals(1_400, 120)
+                .unwrap()
+                .is_empty()
+        );
+
+        // And a recurrence is a new occurrence, not a continuation of the old
+        // one — otherwise a hold that cleared last week would appear to have
+        // been standing ever since.
+        store
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD,
+                "queen-review",
+                None,
+                None,
+                "held",
+                2_000,
+            )
+            .unwrap();
+        let again = store.standing_coordinator_refusals(2_200, 120).unwrap();
+        assert_eq!(again[0].first_observed_at, 2_000);
+        assert_eq!(again[0].observations, 1);
+    }
+
     /// A deadline that has not passed is not overdue, whatever else is true.
     #[test]
     fn a_decision_inside_its_deadline_is_left_alone() {

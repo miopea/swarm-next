@@ -21,8 +21,8 @@ mod apiary;
 mod coordinator;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, CoordinatorAttention,
-    CoordinatorStatus, CoordinatorWorkerWake, ExitedWorkerOwnedWorkCandidate,
-    StaleOwnedWorkCandidate,
+    CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake, ExitedWorkerOwnedWorkCandidate,
+    OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD, StaleOwnedWorkCandidate,
 };
 mod decisions;
 mod email;
