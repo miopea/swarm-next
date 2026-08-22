@@ -6,6 +6,7 @@ import ReleaseUpdateAction from "./ReleaseUpdateAction";
 
 vi.mock("../api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api")>()),
+  fetchHealth: vi.fn(),
   fetchReleaseStatus: vi.fn(),
   setReleaseCheckMode: vi.fn(),
   checkForRelease: vi.fn(),
@@ -47,6 +48,8 @@ beforeEach(() => {
   vi.mocked(api.checkForRelease).mockReset();
   vi.mocked(api.downloadRelease).mockReset();
   vi.mocked(api.applyRelease).mockReset();
+  vi.mocked(api.fetchHealth).mockReset();
+  vi.mocked(api.fetchHealth).mockRejectedValue(new Error("not asked"));
 });
 afterEach(cleanup);
 
@@ -239,8 +242,10 @@ test("follows an install through the API restart and says when it arrived", asyn
   fireEvent.click(await screen.findByRole("button", { name: "Install Swarm 0.6.2" }));
   fireEvent.click(screen.getByRole("button", { name: "Install 0.6.2" }));
 
-  expect(await screen.findByText(/Swarm is restarting to finish the install/, {}, { timeout: 4000 }))
-    .toBeInTheDocument();
+  // A short heading with elapsed time, not a paragraph: "it is worse than that
+  // because it is installing in a block of useless text".
+  expect(await screen.findByText(/Restarting Swarm/, {}, { timeout: 4000 })).toBeInTheDocument();
+  expect(screen.getByText(/The longest part/)).toBeInTheDocument();
   expect(await screen.findByText(/This Hive is now running 0.6.2/, {}, { timeout: 4000 }))
     .toBeInTheDocument();
 }, 10000);
@@ -252,3 +257,45 @@ test("does not poll while no install is in flight", async () => {
   await new Promise((resolve) => setTimeout(resolve, 2500));
   expect(api.fetchReleaseStatus).toHaveBeenCalledTimes(1);
 }, 10000);
+
+/**
+ * "I am still waiting for it to refresh the browser too." The card could update
+ * itself while the rest of the control room kept running the old asset bundle,
+ * so the operator sat waiting for a refresh that was never coming. The
+ * development reload has always done this; a release install did not.
+ */
+test("reloads the page once the API comes back as the installed version", async () => {
+  const reload = vi.fn();
+  Object.defineProperty(window, "location", { value: { reload }, writable: true });
+  vi.mocked(api.applyRelease).mockResolvedValue(undefined);
+  const offered = status({ downloaded_version: "0.6.3" });
+  offered.offer = { ...offered.offer!, version: "0.6.3" };
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(offered);
+  vi.mocked(api.fetchHealth)
+    .mockRejectedValueOnce(new Error("restarting"))
+    .mockResolvedValue({ status: "ok", version: "0.6.3" } as never);
+
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Install Swarm 0.6.3" }));
+  fireEvent.click(screen.getByRole("button", { name: "Install 0.6.3" }));
+
+  await waitFor(() => expect(reload).toHaveBeenCalled(), { timeout: 8000 });
+}, 12000);
+
+/** An install in flight is not a moment to start another check, or to change
+ *  the preference underneath it. */
+test("locks the check controls while an install is running", async () => {
+  vi.mocked(api.applyRelease).mockResolvedValue(undefined);
+  const offered = status({ downloaded_version: "0.6.3", apply_state: "installing" });
+  offered.offer = { ...offered.offer!, version: "0.6.3" };
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(offered);
+
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByRole("button", { name: "Check now" })).not.toBeDisabled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Install Swarm 0.6.3" }));
+  fireEvent.click(screen.getByRole("button", { name: "Install 0.6.3" }));
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "Check now" })).toBeDisabled());
+  expect(screen.getByRole("button", { name: "Stop checking" })).toBeDisabled();
+}, 12000);

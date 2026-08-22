@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   applyRelease,
+  fetchHealth,
   checkForRelease,
   downloadRelease,
   fetchReleaseStatus,
@@ -20,6 +21,29 @@ function refusalReason(code: string): string {
   if (code === "missing") return "the downloaded release was no longer there";
   if (code === "not-a-release") return "the downloaded directory is not a Swarm release";
   return code;
+}
+
+/**
+ * The install has four observable stages and no progress of its own to report,
+ * so they are inferred from what can be seen: whether the installer has picked
+ * the request up, and whether the API is answering.
+ *
+ * Written as a heading rather than a sentence. The previous version was a
+ * paragraph of prose with a shell command inside it — "a block of useless
+ * text", which is what it was while nothing had gone wrong yet.
+ */
+function installStep(reachable: boolean, applyState: ReleaseStatus["apply_state"]): string {
+  if (!reachable) return "Restarting Swarm";
+  if (applyState === "installed") return "Confirming the new version";
+  if (applyState === "installing") return "Installing";
+  return "Starting the installer";
+}
+
+function installDetail(reachable: boolean, applyState: ReleaseStatus["apply_state"]): string {
+  if (!reachable) return "The longest part. This page picks it up the moment the API answers.";
+  if (applyState === "installed") return "Waiting for the new version to report itself.";
+  if (applyState === "installing") return "Verifying the release and moving it into place. Workers keep running.";
+  return "Waiting for the installer to pick up the request.";
 }
 
 type Props = {
@@ -46,6 +70,18 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
   /** Whether the API answered the last poll. Losing it is the expected middle
    *  of an install, not a fault. */
   const [reachable, setReachable] = useState(true);
+  /** When Install was pressed, so the card can show elapsed time and hold the
+   *  troubleshooting line back until waiting is actually unusual. */
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (startedAt === null) return;
+    const tick = () => setElapsed(Math.round((Date.now() - startedAt) / 1000));
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [startedAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,6 +108,29 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
     return () => { cancelled = true; clearInterval(timer); };
   }, [operatorToken, installing]);
 
+  // Reloading the page is the other half, and it was missing entirely. The
+  // browser is still running the old asset bundle after an install, so a card
+  // that updates itself still leaves the rest of the control room stale — the
+  // operator waiting for a refresh that was never going to come. The
+  // development reload already does exactly this; a release install did not.
+  useEffect(() => {
+    if (!installing || startedAt === null) return;
+    let cancelled = false;
+    const watch = async () => {
+      try {
+        const health = await fetchHealth();
+        if (cancelled) return;
+        setReachable(true);
+        if (health.version === installing) window.location.reload();
+      } catch {
+        // The API restarting is the expected middle of an install.
+        if (!cancelled) setReachable(false);
+      }
+    };
+    const timer = setInterval(() => void watch(), 2000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [installing, startedAt]);
+
   const run = useCallback(async (action: () => Promise<ReleaseStatus>, failure: string) => {
     setWorking(true);
     setError("");
@@ -85,7 +144,8 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
   }, []);
 
   if (!status?.available) return null;
-  const disabled = busy || working;
+  const installInFlight = installed && status.apply_state !== "failed" && status.apply_state !== "refused";
+  const disabled = busy || working || installInFlight;
   const arrived = installing !== null && status.current_version === installing;
 
   if (status.mode === "unset") {
@@ -147,14 +207,20 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
             </p>
           ) : null}
           {installed && status.apply_state !== "failed" && status.apply_state !== "refused" ? (
-            <p className="form-message" role="status">
-              {!reachable
-                ? "Swarm is restarting to finish the install. This page picks it up as soon as the API answers."
-                : status.apply_state === "installing"
-                  ? "Installing. Swarm restarts the API on its own; this page updates itself when it comes back."
-                  : "Install requested. Waiting for it to start."}
-              {" "}<small>If nothing changes after a minute, it did not start — check <code>systemctl --user status swarm-release-apply.path</code>.</small>
-            </p>
+            <>
+              <div className="maintenance-progress" role="status" aria-live="polite">
+                <span className="maintenance-spinner" aria-hidden="true" />
+                <div>
+                  <strong>{installStep(reachable, status.apply_state)} · {elapsed}s</strong>
+                  <span>{installDetail(reachable, status.apply_state)}</span>
+                </div>
+              </div>
+              {elapsed >= 60 && (
+                <small className="field-error">
+                  This is taking longer than it should. Check <code>systemctl --user status swarm-release-apply.path</code>.
+                </small>
+              )}
+            </>
           ) : ready ? (
             confirming ? (
               <div className="maintenance-confirmation" role="group" aria-label="Confirm release install">
@@ -172,6 +238,7 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
                         .then(() => {
                           setInstalled(true);
                           setInstalling(status.offer?.version ?? null);
+                          setStartedAt(Date.now());
                         })
                         .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "The install could not be started."))
                         .finally(() => setWorking(false));
