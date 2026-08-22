@@ -1032,6 +1032,7 @@ impl AppState {
 
     async fn run_deterministic_coordinator(&self, store: &TaskStore) {
         self.close_reviewed_work_that_shipped(store);
+        self.observe_overdue_decisions(store);
         self.observe_exited_worker_owned_work(store);
         self.observe_assigned_ready_work_not_started(store).await;
         self.observe_stale_owned_work(store).await;
@@ -1070,6 +1071,40 @@ impl AppState {
                 message = %error,
                 "deterministic coordinator could not close reviewed work"
             ),
+        }
+    }
+
+    /// Tells Queen when a decision has gone unanswered past its deadline.
+    ///
+    /// A deadline was recorded, marked "overdue" on the roster, and acted on by
+    /// nobody: the worker held indefinitely and there was no difference between
+    /// a question asked five minutes ago and one unanswered for three days. The
+    /// operator's ruling was that Queen should make it a needs-you item, and
+    /// this is what tells her there is one to make.
+    fn observe_overdue_decisions(&self, store: &TaskStore) {
+        let candidates = match store.overdue_decision_candidates(unix_timestamp()) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(message = %error, "deterministic coordinator could not inspect decision deadlines");
+                return;
+            }
+        };
+        for candidate in candidates {
+            match store.record_overdue_decision_attention(&candidate) {
+                Ok(true) => {
+                    tracing::info!(
+                        decision = %candidate.decision_id,
+                        overdue_seconds = candidate.overdue_seconds,
+                        "a decision passed the deadline its asker set"
+                    );
+                    self.control_room_notify.notify_waiters();
+                }
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    message = %error,
+                    "an overdue decision could not be recorded for Queen"
+                ),
+            }
         }
     }
 

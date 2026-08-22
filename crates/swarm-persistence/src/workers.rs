@@ -302,29 +302,7 @@ impl TaskStore {
                 params![worker_id.to_string(), autostart],
             )?;
         }
-        if let Some(workspace) = workspace {
-            let current_workspace: String = transaction.query_row(
-                "SELECT workspace FROM worker_profiles WHERE id = ?1",
-                [worker_id.to_string()],
-                |row| row.get(0),
-            )?;
-            if workspace != current_workspace {
-                if running {
-                    return Err(TaskStoreError::WorkerMustBeSleeping);
-                }
-                // A saved conversation belongs to the repository it happened in:
-                // the provider keys its history by project path, so carrying the
-                // identity across would resume the wrong thread in the wrong
-                // place. Moving a worker starts it fresh where it now lives.
-                transaction.execute(
-                    "UPDATE worker_profiles
-                     SET workspace = ?2, provider_conversation_id = NULL,
-                         provider_conversation_resume = 0
-                     WHERE id = ?1",
-                    params![worker_id.to_string(), workspace],
-                )?;
-            }
-        }
+        move_worker_repository(&transaction, worker_id, workspace, running)?;
         transaction.execute(
             "UPDATE worker_profiles SET updated_at = unixepoch() WHERE id = ?1",
             [worker_id.to_string()],
@@ -1379,6 +1357,44 @@ fn profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerProfile> 
         created_at: row.get(12)?,
         updated_at: row.get(13)?,
     })
+}
+
+/// Repoints a worker at another repository, when that is what changed.
+///
+/// Lifted out of `update_worker_profile` because that function had grown past
+/// what one should hold. The rule is unchanged.
+fn move_worker_repository(
+    transaction: &rusqlite::Transaction<'_>,
+    worker_id: WorkerId,
+    workspace: Option<&str>,
+    running: bool,
+) -> Result<(), TaskStoreError> {
+    let Some(workspace) = workspace else {
+        return Ok(());
+    };
+    let current: String = transaction.query_row(
+        "SELECT workspace FROM worker_profiles WHERE id = ?1",
+        [worker_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if workspace == current {
+        return Ok(());
+    }
+    if running {
+        return Err(TaskStoreError::WorkerMustBeSleeping);
+    }
+    // A saved conversation belongs to the repository it happened in: the
+    // provider keys its history by project path, so carrying the identity
+    // across would resume the wrong thread in the wrong place. Moving a worker
+    // starts it fresh where it now lives.
+    transaction.execute(
+        "UPDATE worker_profiles
+         SET workspace = ?2, provider_conversation_id = NULL,
+             provider_conversation_resume = 0
+         WHERE id = ?1",
+        params![worker_id.to_string(), workspace],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

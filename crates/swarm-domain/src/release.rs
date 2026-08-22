@@ -347,10 +347,13 @@ mod tests {
 
     /// A signature covers whatever it covers. Refusing malformed offers is
     /// what keeps a signed-but-nonsensical document away from the fetcher.
+    /// One way to make an offer unactionable, and what it is called.
+    type BrokenOffer = (&'static str, fn(&mut ReleaseOffer));
+
     #[test]
     fn an_offer_the_fetcher_could_not_act_on_is_refused_before_it_reaches_one() {
         let (signing_key, public) = keypair();
-        let cases: [(&str, fn(&mut ReleaseOffer)); 6] = [
+        let cases: [BrokenOffer; 6] = [
             ("plain http", |offer: &mut ReleaseOffer| {
                 offer.artifact_url = "http://releases.example/swarm.tar.gz".to_owned();
             }),

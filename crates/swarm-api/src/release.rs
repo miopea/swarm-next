@@ -56,6 +56,10 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// What the control room needs to describe the update situation.
 #[derive(Debug, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "a response shape: each flag is an independent fact the control room renders"
+)]
 pub(super) struct ReleaseStatusResponse {
     /// Whether this build can check at all: it needs a compiled verifying key
     /// and an origin. Without either the whole path is inert rather than
@@ -112,9 +116,7 @@ fn download_root(state: &AppState) -> Option<PathBuf> {
 }
 
 fn manifest_url(state: &AppState) -> Option<String> {
-    if compiled_release_verifying_key().is_none() {
-        return None;
-    }
+    compiled_release_verifying_key()?;
     state
         .release_manifest_url
         .as_ref()
@@ -130,7 +132,7 @@ pub(super) async fn status(
     authorize(&state, &headers)?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(build_status(&state).await?),
+        Json(build_status(&state)?),
     )
         .into_response())
 }
@@ -147,7 +149,7 @@ pub(super) async fn set_mode(
         .map_err(|error| crate::task_store_error(&error))?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(build_status(&state).await?),
+        Json(build_status(&state)?),
     )
         .into_response())
 }
@@ -164,7 +166,7 @@ pub(super) async fn check_now(
     check(&state).await;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(build_status(&state).await?),
+        Json(build_status(&state)?),
     )
         .into_response())
 }
@@ -179,7 +181,7 @@ pub(super) async fn download(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let status = build_status(&state).await?;
+    let status = build_status(&state)?;
     if !status.upgrade_available {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -210,7 +212,7 @@ pub(super) async fn download(
     })?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(build_status(&state).await?),
+        Json(build_status(&state)?),
     )
         .into_response())
 }
@@ -225,7 +227,7 @@ pub(super) async fn apply(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let status = build_status(&state).await?;
+    let status = build_status(&state)?;
     let request_path = state.release_apply_request_path.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::CONFLICT,
@@ -263,7 +265,7 @@ pub(super) async fn apply(
     Ok(StatusCode::ACCEPTED.into_response())
 }
 
-async fn build_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, ApiError> {
+fn build_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, ApiError> {
     let stored = crate::task_store(state)?
         .release_check_state()
         .map_err(|error| crate::task_store_error(&error))?;
@@ -396,7 +398,7 @@ async fn fetch_manifest(
     }
     let document: SignedReleaseManifest = serde_json::from_str(&body).map_err(|_| "rejected")?;
     verify_release_manifest(&document, compiled_release_verifying_key(), now)
-        .map(Clone::clone)
+        .cloned()
         .map_err(|_| "rejected")
 }
 
@@ -423,10 +425,6 @@ fn apply_field(state: &AppState, offered: Option<&str>, field: &str) -> Option<S
 /// the release it concerns or it cannot be told apart from a current one. One
 /// with no version at all was written before stamping existed and is ignored
 /// rather than guessed at.
-fn apply_state_from(contents: &str, offered: Option<&str>) -> Option<String> {
-    apply_field_from(contents, offered, "state=")
-}
-
 fn apply_field_from(contents: &str, offered: Option<&str>, wanted: &str) -> Option<String> {
     let field = |name: &str| {
         contents
@@ -636,7 +634,7 @@ mod tests {
 
 #[cfg(test)]
 mod apply_status_tests {
-    use super::apply_state_from;
+    use super::apply_field_from;
 
     /// This test previously carried its own copy of the rule and passed while
     /// the real function was untouched — the version comparison never reached
@@ -647,17 +645,24 @@ mod apply_status_tests {
     fn only_a_status_about_the_release_in_hand_is_reported() {
         let failed_on_020 = "state=failed\nversion=0.2.0\n";
         assert_eq!(
-            apply_state_from(failed_on_020, Some("0.2.0")).as_deref(),
+            apply_field_from(failed_on_020, Some("0.2.0"), "state=").as_deref(),
             Some("failed")
         );
         // The defect: this used to report "failed" while offering 0.6.0.
-        assert_eq!(apply_state_from(failed_on_020, Some("0.6.0")), None);
-        assert_eq!(apply_state_from(failed_on_020, None), None);
+        assert_eq!(
+            apply_field_from(failed_on_020, Some("0.6.0"), "state="),
+            None
+        );
+        assert_eq!(apply_field_from(failed_on_020, None, "state="), None);
         // Written before statuses were stamped; not guessed at.
-        assert_eq!(apply_state_from("state=failed\n", Some("0.2.0")), None);
+        assert_eq!(
+            apply_field_from("state=failed\n", Some("0.2.0"), "state="),
+            None
+        );
         // A current result still reads normally.
         assert_eq!(
-            apply_state_from("state=installing\nversion=0.6.0\n", Some("0.6.0")).as_deref(),
+            apply_field_from("state=installing\nversion=0.6.0\n", Some("0.6.0"), "state=")
+                .as_deref(),
             Some("installing")
         );
     }

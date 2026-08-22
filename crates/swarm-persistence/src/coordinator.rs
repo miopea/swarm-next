@@ -1,4 +1,5 @@
 use rusqlite::params;
+use std::str::FromStr;
 use swarm_domain::{ControlRoomEventKind, TaskId, WorkerId, WorkerSessionId};
 use uuid::Uuid;
 
@@ -29,13 +30,27 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
              JOIN worker_sessions session ON session.session_id = action.session_id
-             WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention')
+             WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention')
                AND action.state = 'completed'
                AND task.updated_at = action.evidence_revision
                AND session.worker_id = action.worker_id
                AND (
                    (action.kind = 'worker_filed_draft_attention'
                        AND task.state = 'draft' AND task.assigned_worker_id IS NULL)
+                   -- The decision this was raised for is named in the
+                   -- idempotency key rather than in a column, so the joins
+                   -- above are untouched: the row still hangs off the worker
+                   -- that asked and the task it concerns. It counts only while
+                   -- that decision is genuinely still waiting, so answering it
+                   -- clears the attention without anything having to delete it.
+                   OR (action.kind = 'decision_deadline_passed_attention'
+                       AND EXISTS (
+                           SELECT 1 FROM decision_requests request
+                           WHERE 'decision-deadline:' || request.id = action.idempotency_key
+                             AND request.state = 'pending'
+                             AND request.deadline IS NOT NULL
+                             AND request.deadline <= unixepoch()
+                       ))
                    OR (action.kind = 'stale_owned_work_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'active' AND session.ended_at IS NULL)
@@ -1236,6 +1251,195 @@ pub(super) fn migrate_worker_filed_draft_attention(
 
 #[cfg(test)]
 mod tests {
+    use super::{WorkerId, WorkerSessionId};
+    use crate::TaskStore;
+
+    /// A decision that has gone past its deadline, with everything the inbox
+    /// joins: a worker that has held a session, and a task to hang it off.
+    fn overdue_decision(
+        store: &TaskStore,
+        deadline_ago: i64,
+    ) -> (WorkerId, swarm_domain::DecisionRequestId) {
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Answer this", "/workspace/petal")
+            .unwrap();
+        let actions = vec!["continue".into(), "stop".into()];
+        let decision = store
+            .create_decision_request(&crate::decisions::NewDecisionRequest {
+                requesting_worker_id: worker.id,
+                task_id: Some(task.id),
+                kind: DecisionRequestKind::Input,
+                urgency: DecisionUrgency::Normal,
+                title: "Which environment?",
+                summary: "Staging or production for the first run.",
+                reason: "Both are plausible and the choice is not reversible.",
+                risk: "Deploying to the wrong one is visible to customers.",
+                evidence: "Both environments are healthy.",
+                suggested_action: "continue",
+                allowed_actions: &actions,
+                questions: &[],
+                // A deadline in the past is refused at creation, so it is set
+                // in the future and then aged below — which is also what
+                // actually happens to one.
+                deadline: Some(unix_now(store) + 3_600),
+            })
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE decision_requests SET deadline = unixepoch() - ?2 WHERE id = ?1",
+                rusqlite::params![decision.id.to_string(), deadline_ago],
+            )
+            .unwrap();
+        (worker.id, decision.id)
+    }
+
+    fn unix_now(store: &TaskStore) -> i64 {
+        store
+            .connection()
+            .unwrap()
+            .query_row("SELECT unixepoch()", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn attention_kinds(store: &TaskStore) -> Vec<String> {
+        store
+            .current_coordinator_attention()
+            .unwrap()
+            .into_iter()
+            .map(|attention| attention.kind)
+            .collect()
+    }
+
+    /// The operator's ruling: "queen should make this a needs you item." Before
+    /// this, a deadline was recorded, shown on the roster as overdue, and acted
+    /// on by nobody.
+    #[test]
+    fn a_decision_past_its_deadline_reaches_queens_inbox() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, decision_id) = overdue_decision(&store, 600);
+
+        let candidates = store.overdue_decision_candidates(unix_now(&store)).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].decision_id, decision_id.to_string());
+        assert!(candidates[0].overdue_seconds >= 600);
+
+        assert!(
+            store
+                .record_overdue_decision_attention(&candidates[0])
+                .unwrap()
+        );
+        assert!(attention_kinds(&store).contains(&"decision_deadline_passed_attention".to_owned()));
+
+        // Raising it twice for one decision would make Queen review the same
+        // fact repeatedly.
+        assert!(
+            !store
+                .record_overdue_decision_attention(&candidates[0])
+                .unwrap()
+        );
+        assert_eq!(
+            attention_kinds(&store)
+                .iter()
+                .filter(|kind| *kind == "decision_deadline_passed_attention")
+                .count(),
+            1
+        );
+    }
+
+    /// Answering it is what clears it. Nothing deletes the row.
+    #[test]
+    fn answering_the_decision_clears_the_attention() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, decision_id) = overdue_decision(&store, 600);
+        let candidates = store.overdue_decision_candidates(unix_now(&store)).unwrap();
+        store
+            .record_overdue_decision_attention(&candidates[0])
+            .unwrap();
+        assert!(attention_kinds(&store).contains(&"decision_deadline_passed_attention".to_owned()));
+
+        // Answered the way an operator answers it, not by editing the row.
+        store
+            .resolve_decision_request(decision_id, "continue", "Staging first.", "operator")
+            .unwrap();
+
+        assert!(
+            !attention_kinds(&store).contains(&"decision_deadline_passed_attention".to_owned())
+        );
+        assert!(
+            store
+                .overdue_decision_candidates(unix_now(&store))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// The inbox only counts an observation whose evidence still matches the
+    /// task it was made against, and the idempotency key stops a second row
+    /// being raised — so without re-stamping, a task that moved on would
+    /// silence an attention whose decision is still waiting.
+    #[test]
+    fn a_task_moving_on_does_not_silence_a_decision_still_waiting() {
+        let store = TaskStore::in_memory().unwrap();
+        overdue_decision(&store, 600);
+        let candidates = store.overdue_decision_candidates(unix_now(&store)).unwrap();
+        store
+            .record_overdue_decision_attention(&candidates[0])
+            .unwrap();
+
+        // The task moves on. Advanced explicitly rather than by transitioning
+        // it: updated_at is a whole-second stamp, so a real edit inside the
+        // same second as the observation leaves the revision unchanged and the
+        // test would prove nothing.
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET updated_at = updated_at + 1 WHERE id = ?1",
+                [candidates[0].task_id.to_string()],
+            )
+            .unwrap();
+        assert!(
+            !attention_kinds(&store).contains(&"decision_deadline_passed_attention".to_owned()),
+            "the observation should have gone stale with the task"
+        );
+
+        // The next pass re-stamps it rather than raising a second one.
+        let again = store.overdue_decision_candidates(unix_now(&store)).unwrap();
+        assert!(store.record_overdue_decision_attention(&again[0]).unwrap());
+        assert_eq!(
+            attention_kinds(&store)
+                .iter()
+                .filter(|kind| *kind == "decision_deadline_passed_attention")
+                .count(),
+            1
+        );
+    }
+
+    /// A deadline that has not passed is not overdue, whatever else is true.
+    #[test]
+    fn a_decision_inside_its_deadline_is_left_alone() {
+        let store = TaskStore::in_memory().unwrap();
+        overdue_decision(&store, -3_600);
+        assert!(
+            store
+                .overdue_decision_candidates(unix_now(&store))
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     /// Item 53's hazard, avoided on purpose this time. The kind CHECK and the
     /// conflict clause together turn an unadmitted kind into a write that does
@@ -1990,5 +2194,139 @@ mod tests {
                 .unwrap()
         );
         assert!(store.current_coordinator_attention().unwrap().is_empty());
+    }
+}
+
+/// A decision nobody answered by the time its asker said it needed one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OverdueDecisionCandidate {
+    pub decision_id: String,
+    pub worker_id: WorkerId,
+    pub session_id: WorkerSessionId,
+    pub task_id: TaskId,
+    pub task_revision: i64,
+    pub title: String,
+    pub overdue_seconds: i64,
+}
+
+impl TaskStore {
+    /// Decisions whose deadline has passed while they are still pending.
+    ///
+    /// The operator's ruling: "queen should make this a needs you item." Until
+    /// now a deadline was recorded, shown on the roster as "overdue", and acted
+    /// on by nobody — the worker held indefinitely and Queen was never told.
+    ///
+    /// Two limits, both deliberate rather than overlooked. A decision with no
+    /// task cannot be recorded, because a coordinator action must name one; one
+    /// of sixteen on this Hive is like that, and inventing a task to hang it
+    /// off would be worse than not raising it. A worker that has never held a
+    /// session is skipped for the same reason — the attention inbox joins one,
+    /// and a worker that has never run has not asked anything either.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn overdue_decision_candidates(
+        &self,
+        now: i64,
+    ) -> Result<Vec<OverdueDecisionCandidate>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT request.id, request.requesting_worker_id, request.task_id, request.title,
+                    task.updated_at, ?1 - request.deadline,
+                    (SELECT session.session_id FROM worker_sessions session
+                     WHERE session.worker_id = request.requesting_worker_id
+                     ORDER BY session.started_at DESC, session.session_id DESC LIMIT 1)
+             FROM decision_requests request
+             JOIN tasks task ON task.id = request.task_id
+             WHERE request.state = 'pending'
+               AND request.deadline IS NOT NULL
+               AND request.deadline <= ?1
+               AND task.removed_at IS NULL
+             ORDER BY request.deadline",
+        )?;
+        let rows = statement.query_map([now], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, Option<String>>(6)?,
+            ))
+        })?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            let (decision_id, worker_id, task_id, title, task_revision, overdue_seconds, session) =
+                row?;
+            let (Ok(worker_id), Ok(task_id)) =
+                (WorkerId::from_str(&worker_id), TaskId::from_str(&task_id))
+            else {
+                continue;
+            };
+            let Some(session_id) = session.and_then(|id| WorkerSessionId::from_str(&id).ok())
+            else {
+                continue;
+            };
+            candidates.push(OverdueDecisionCandidate {
+                decision_id,
+                worker_id,
+                session_id,
+                task_id,
+                task_revision,
+                title,
+                overdue_seconds,
+            });
+        }
+        Ok(candidates)
+    }
+
+    /// Tells Queen that a decision has gone unanswered past its deadline.
+    ///
+    /// Re-stamps rather than duplicating. The inbox only counts an observation
+    /// whose evidence still matches the task it was made against, so a task
+    /// that moved on would otherwise silence an attention whose decision is
+    /// still waiting — and the idempotency key would stop a second one being
+    /// raised. Refreshing the revision keeps one row alive for one decision.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn record_overdue_decision_attention(
+        &self,
+        candidate: &OverdueDecisionCandidate,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        // Not INSERT OR IGNORE: that suppresses a CHECK violation exactly as it
+        // suppresses a duplicate, which is how an unadmitted kind once did
+        // nothing and said nothing.
+        let changed = transaction.execute(
+            "INSERT INTO coordinator_actions
+                 (id, idempotency_key, kind, worker_id, task_id, session_id,
+                  evidence_revision, observed_age_seconds, state, reason,
+                  finished_at, updated_at)
+             VALUES (?1, ?2, 'decision_deadline_passed_attention', ?3, ?4, ?5, ?6, ?7,
+                     'completed', 'A decision passed the deadline its asker set',
+                     unixepoch(), unixepoch())
+             ON CONFLICT(idempotency_key) DO UPDATE
+                 SET evidence_revision = excluded.evidence_revision,
+                     observed_age_seconds = excluded.observed_age_seconds,
+                     updated_at = unixepoch()
+                 WHERE coordinator_actions.evidence_revision <> excluded.evidence_revision",
+            params![
+                Uuid::now_v7().to_string(),
+                format!("decision-deadline:{}", candidate.decision_id),
+                candidate.worker_id.to_string(),
+                candidate.task_id.to_string(),
+                candidate.session_id.to_string(),
+                candidate.task_revision,
+                candidate.overdue_seconds,
+            ],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
     }
 }
