@@ -1,6 +1,6 @@
 # Open product questions
 
-Status: **M0 implementation choices resolved**
+Status: **All questions answered — dogfooding set closed 2026-08-22**
 
 The primary operator accepted the recommendations below on 2026-08-10. The
 remaining questions should be answered by side-by-side dogfooding rather than
@@ -57,16 +57,44 @@ by rebuilding legacy behavior in advance.
 - Desktop and Android Chrome/Edge PWA are required dogfood surfaces. Desktop
   terminal recovery remains the first implementation gate.
 
-## Dogfooding questions
+## Answered by dogfooding
 
-3. Do durable workers remain useful alongside provider-native subagents, and
-   which work belongs to each?
-4. Are groups needed for organization, bulk action, or neither?
-5. Which coordination events are actually required beyond finding, blocker,
-   handoff, decision, and task-state change?
-6. Which verification policies catch real failures without producing noisy
-   model judgment?
-7. At which task slice does live Jira synchronization become necessary to
-   validate the accepted Apiary ownership and claim model?
-8. What side-by-side observation period and migration evidence are sufficient
-   to retire the legacy runtime?
+Answered by the primary operator on 2026-08-22, after running Swarm as the
+daily driver and installing it on a second machine. These were deliberately not
+answered in advance; each one is now answered from use rather than from
+planning.
+
+3. **Durable workers earn their place, and what they own is a repository.** A
+   worker is a long-lived identity tied to one repository, carrying context
+   across days and sessions. Provider-native subagents are within-session
+   fan-out. They are different jobs and both stay — a subagent cannot be woken
+   next week to continue what it was doing.
+
+4. **No groups.** Thirty-one workers on the roster and search plus ordering has
+   been enough. A grouping is a taxonomy to maintain and a second place for a
+   worker to be filed wrongly, and neither organisation nor bulk action has
+   been missed in practice.
+
+5. **The coordination set is complete**: finding, blocker, handoff, decision,
+   and task-state change. Nothing has been missing through heavy use. Worth
+   holding to, because adding an event type is adding a way for two agents to
+   talk to each other, which is precisely what Legacy got wrong.
+
+6. **A recorded deployment is the whole verification policy.** It is a fact in a
+   table rather than an opinion, which is why the coordinator can act on it
+   without a model call. Anything beyond it — judging whether the work did what
+   the task asked — is the noisy model judgment this question existed to avoid.
+   Not even a deterministic second check for now.
+
+7. **Live Jira synchronisation matters now.** The developers share a Jira board,
+   so two Hives will contend for the same tickets, and the accepted Apiary
+   ownership and claim model has something real to be validated against. This is
+   the one answer here that implies work rather than closing something: it says
+   the claim model is about to be exercised for the first time by people other
+   than its author.
+
+8. **Legacy is retired when every live workflow has run here first.** Jira
+   intake, email replies and deployments all running on Swarm for a period with
+   Legacy idle rather than merely available. Not a fixed window: idle-in-fact is
+   the evidence, and a duration with Legacy still quietly serving something
+   would not be.
