@@ -558,9 +558,17 @@ fn queue_run(
 /// assignment, and never again; when one came back uncertain the work sat
 /// assigned to a sleeping worker indefinitely, invisible to every detector,
 /// because they all begin from a live session that does not exist.
+/// What is worth waking Queen for.
+///
+/// Drafts are in this set. A draft is by definition un-triaged — it is work
+/// nobody has decided about yet — and Queen deciding is the whole point of her
+/// review. Leaving them out meant a board could fill with them and still read
+/// as empty: on 2026-08-23 the Hive sat idle for eight hours holding 22 drafts,
+/// the oldest five days old, because the only three actionable records had been
+/// reviewed once and nothing had changed since.
 const ACTIONABLE_TASKS: &str = "task.removed_at IS NULL
              AND (
-                 task.state IN ('blocked','review')
+                 task.state IN ('draft','blocked','review')
                  OR (task.state = 'ready' AND task.assigned_worker_id IS NULL)
                  OR (task.state = 'ready'
                      AND task.assigned_worker_id IS NOT NULL
@@ -774,6 +782,34 @@ pub(super) fn migrate_queen_delivery_session(
 mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
+
+    /// "The queen sat idle all night." She had 22 drafts in front of her, the
+    /// oldest five days old, and was woken for none of them — a draft was not
+    /// actionable, so a board full of un-triaged work read as an empty board.
+    ///
+    /// Deciding about a draft is the review. If it does not wake her, nothing
+    /// does: no one else promotes a draft, and the fingerprint gate means an
+    /// unchanged board never asks twice.
+    #[test]
+    fn a_draft_is_work_queen_has_not_decided_about_yet_so_it_wakes_her() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store
+            .create_task_with_details("Triage me", "", TaskPriority::Normal, "/workspace")
+            .unwrap();
+
+        let status = store.set_queen_automation_enabled(true, 100).unwrap();
+
+        assert_eq!(
+            status.state,
+            QueenAutomationState::Queued,
+            "a draft nobody has decided about has to reach Queen"
+        );
+        let delivery = store.claim_queen_automation(101).unwrap().unwrap();
+        assert_eq!(delivery.actionable_count, 1);
+    }
 
     #[test]
     fn opt_in_queues_changed_work_and_defers_while_operator_is_engaged() {
