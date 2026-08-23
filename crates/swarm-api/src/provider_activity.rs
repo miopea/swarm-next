@@ -167,21 +167,32 @@ pub(super) fn classify_observed_activity(
 pub(super) fn has_open_provider_input(provider: ProviderKind, snapshot: &TerminalSnapshot) -> bool {
     let mut parser = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
     parser.process(&snapshot.bytes);
-    parser
-        .screen()
-        .contents()
+    let screen = parser.screen().contents();
+    // Only the lowest prompt marker is the composer. The ones above it are the
+    // transcript — commands already submitted, echoed back with their answers.
+    //
+    // Asking whether *any* of the last twelve lines carries text after the
+    // marker made a session wedge permanently the moment a slash command
+    // finished close enough to the bottom of the screen: `❯ /login` sits in the
+    // transcript for as long as the session stays idle, and idle is exactly
+    // when a delivery is due. Measured 2026-08-23 — Queen's composer was empty
+    // and her review was refused 466 times over three and a half hours.
+    screen
         .lines()
         .rev()
         .map(str::trim)
         .take(12)
-        .any(|line| match provider {
-            ProviderKind::ClaudeCode => line
-                .strip_prefix('❯')
-                .is_some_and(|tail| !tail.trim().is_empty()),
-            ProviderKind::Codex => line
-                .strip_prefix('›')
-                .is_some_and(|tail| !tail.trim().is_empty()),
-        })
+        .find_map(|line| prompt_tail(provider, line))
+        .is_some_and(|tail| !tail.trim().is_empty())
+}
+
+/// The text after a provider's prompt marker, or `None` if this is not a prompt
+/// line at all.
+fn prompt_tail(provider: ProviderKind, line: &str) -> Option<&str> {
+    match provider {
+        ProviderKind::ClaudeCode => line.strip_prefix('❯'),
+        ProviderKind::Codex => line.strip_prefix('›'),
+    }
 }
 
 fn input_palette_is_resting(provider: ProviderKind, visible: &str) -> bool {
@@ -317,5 +328,51 @@ mod tests {
             classify_observed_activity(ProviderKind::ClaudeCode, &snapshot),
             ProviderActivity::Unknown
         );
+    }
+
+    /// The 2026-08-23 wedge, reproduced from Queen's actual screen.
+    ///
+    /// Her composer was empty. Two lines above it sat `❯ /login`, a command she
+    /// had already run, with its answer underneath. Swarm read the transcript
+    /// as unsent input and refused every delivery for three and a half hours —
+    /// 466 refusals, a review queued 24 hours, and a board with nothing active
+    /// on it.
+    #[test]
+    fn a_submitted_command_in_the_transcript_is_not_unsent_input() {
+        let snapshot = snapshot(concat!(
+            "● Remote Control disconnected — run /remote-control to start a session\r\n",
+            "❯ /login\r\n",
+            " ⎿ Login successful\r\n",
+            "────────────────────────────\r\n",
+            "❯\r\n",
+            "────────────────────────────\r\n",
+            "⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+        ));
+
+        assert_eq!(
+            classify_observed_activity(ProviderKind::ClaudeCode, &snapshot),
+            ProviderActivity::Resting
+        );
+        assert!(
+            !has_open_provider_input(ProviderKind::ClaudeCode, &snapshot),
+            "the empty composer is the lowest prompt marker; the one above it is history"
+        );
+    }
+
+    /// The protection this rule exists for still has to hold: text the operator
+    /// typed and did not send must block a write, because a later Enter would
+    /// submit theirs and Swarm's as one instruction.
+    #[test]
+    fn text_left_in_the_composer_still_blocks_a_delivery() {
+        let snapshot = snapshot(concat!(
+            "❯ /login\r\n",
+            " ⎿ Login successful\r\n",
+            "────────────────────────────\r\n",
+            "❯ /rc\r\n",
+            "────────────────────────────\r\n",
+            "⏵⏵ auto mode on (shift+tab to cycle) · ← for agents",
+        ));
+
+        assert!(has_open_provider_input(ProviderKind::ClaudeCode, &snapshot));
     }
 }
