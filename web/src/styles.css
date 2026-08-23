@@ -197,6 +197,13 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .worker-repository-field { display: grid; gap: 3px; color: var(--quiet); }
 .worker-repository-field input { min-width: 0; font: inherit; }
 .unlock-passkey { margin-top: 8px; width: 100%; }
+.tunnel-address { display: flex; align-items: center; gap: 14px; margin-top: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.tunnel-address > div { display: grid; min-width: 0; gap: 4px; }
+.tunnel-address a { overflow-wrap: anywhere; font-weight: 600; }
+.tunnel-address small { color: var(--text-muted); font-size: .72rem; }
+.tunnel-qr { flex: 0 0 auto; width: 124px; height: 124px; border-radius: 8px; overflow: hidden; }
+.tunnel-qr svg { display: block; width: 100%; height: 100%; }
+@media (max-width: 620px) { .tunnel-address { flex-direction: column; align-items: flex-start; } }
 .passkey-settings { display: grid; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .passkey-settings h4 { margin: 0; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .passkey-list { display: grid; gap: 6px; margin: 4px 0 0; padding: 0; list-style: none; }

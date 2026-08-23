@@ -14,6 +14,7 @@ import ApiarySettings from "./ApiarySettings";
 import DevelopmentReloadAction from "./DevelopmentReloadAction";
 import ReleaseUpdateAction from "./ReleaseUpdateAction";
 import OperatorAccessSettings from "./OperatorAccessSettings";
+import RemoteAccessSettings from "./RemoteAccessSettings";
 import ProviderReleaseAction from "./ProviderReleaseAction";
 import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
@@ -493,6 +494,7 @@ export default function SettingsWorkspace({ busy, workerEngineProgress, colorThe
       <LegacyMigrationSettings busy={busy} operatorToken={operatorToken} onOpenTasks={onOpenTasks} />
 
       <OperatorAccessSettings busy={busy} operatorToken={operatorToken} />
+      <RemoteAccessSettings busy={busy} operatorToken={operatorToken} />
 
       <section id="settings-backup" className="settings-card" aria-labelledby="backup-heading">
         <div><p className="eyebrow">Backup</p><h3 id="backup-heading">Carry your Hive safely</h3></div>

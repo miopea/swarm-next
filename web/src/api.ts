@@ -1715,3 +1715,28 @@ export async function fetchHealth(): Promise<Health> {
   if (!response.ok) throw new RuntimeRequestError(response.status, `Health returned ${response.status}`);
   return response.json() as Promise<Health>;
 }
+
+export type TunnelStatus = {
+  /** Whether cloudflared is installed on the Hive's machine. */
+  available: boolean;
+  running: boolean;
+  url: string | null;
+  started_at: number | null;
+  /** The address as an inline SVG QR code. The address only — never the token. */
+  qr_svg: string | null;
+};
+
+export async function readTunnel(operatorToken: string): Promise<TunnelStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/tunnel");
+  return (await response.json()) as TunnelStatus;
+}
+
+export async function startTunnel(operatorToken: string): Promise<TunnelStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/tunnel/start", { method: "POST" });
+  return (await response.json()) as TunnelStatus;
+}
+
+export async function stopTunnel(operatorToken: string): Promise<TunnelStatus> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/runtime/tunnel/stop", { method: "POST" });
+  return (await response.json()) as TunnelStatus;
+}

@@ -65,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     state = configure_jira(state, &database_path)?;
     state = configure_email(state, &database_path)?;
     state = state.with_agent_configuration(agent_config_root, mcp_url_from_env(address));
+    state = state.with_api_bind_address(address);
     recover_interrupted_deliveries(&state)?;
     state.supervise_workers().await;
     start_background_services(&state);

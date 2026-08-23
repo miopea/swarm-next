@@ -27,6 +27,7 @@ mod private_store;
 mod provider_activity;
 mod passkeys;
 mod release;
+mod tunnel;
 mod runtime;
 mod session_history;
 mod tasks;
@@ -194,6 +195,10 @@ pub struct AppState {
     /// Challenges held between a passkey start and its finish. Not persisted:
     /// a challenge that outlives a restart is one nobody is waiting on.
     passkey_challenges: Arc<passkeys::PasskeyChallenges>,
+    /// Where this Hive listens, so a tunnel knows what to point at.
+    api_bind_address: Option<std::net::SocketAddr>,
+    /// The temporary public address, when the operator has asked for one.
+    tunnel: Arc<tunnel::TunnelSupervisor>,
     release_manifest_url: Option<Arc<String>>,
     release_state_root: Option<Arc<PathBuf>>,
     release_apply_request_path: Option<Arc<PathBuf>>,
@@ -226,6 +231,8 @@ impl AppState {
             terminal_limits,
             terminal_host: None,
             operator_token: Arc::new(std::sync::RwLock::new(None)),
+            api_bind_address: None,
+            tunnel: Arc::new(tunnel::TunnelSupervisor::default()),
             attach_grants: Arc::new(AttachGrantStore::default()),
             websocket_limit: Arc::new(Semaphore::new(MAX_TERMINAL_WEBSOCKETS)),
             task_store: None,
@@ -500,6 +507,13 @@ impl AppState {
     #[must_use]
     pub fn with_release_manifest_url(mut self, url: String) -> Self {
         self.release_manifest_url = Some(Arc::new(url));
+        self
+    }
+
+    /// Tells this Hive where it listens, so it can offer to tunnel itself.
+    #[must_use]
+    pub fn with_api_bind_address(mut self, address: std::net::SocketAddr) -> Self {
+        self.api_bind_address = Some(address);
         self
     }
 
@@ -2646,6 +2660,9 @@ fn api_router(state: AppState) -> Router {
             get(release::status).put(release::set_mode),
         )
         .route("/api/v1/runtime/release/check", post(release::check_now))
+        .route("/api/v1/runtime/tunnel", get(tunnel::status))
+        .route("/api/v1/runtime/tunnel/start", post(tunnel::start))
+        .route("/api/v1/runtime/tunnel/stop", post(tunnel::stop))
         .route("/api/v1/runtime/release/download", post(release::download))
         .route("/api/v1/runtime/release/apply", post(release::apply))
         .route(
