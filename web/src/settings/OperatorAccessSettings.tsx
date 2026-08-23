@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { createBrowserSession, rotateOperatorToken } from "../api";
+import { listPasskeys, passkeysSupported, registerPasskey, removePasskey, type RegisteredPasskey } from "./passkeys";
 
 type Props = {
   busy: boolean;
@@ -27,6 +28,48 @@ export default function OperatorAccessSettings({ busy, operatorToken }: Props) {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [rotated, setRotated] = useState(false);
+  const [passkeys, setPasskeys] = useState<RegisteredPasskey[]>([]);
+  const [passkeyLabel, setPasskeyLabel] = useState("");
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [passkeyError, setPasskeyError] = useState("");
+
+  const refreshPasskeys = useCallback(async () => {
+    try {
+      setPasskeys(await listPasskeys(operatorToken));
+    } catch {
+      // A Hive that cannot list them simply shows none; this is not the place
+      // to raise an error about a feature the operator may never use.
+    }
+  }, [operatorToken]);
+
+  useEffect(() => { void refreshPasskeys(); }, [refreshPasskeys]);
+
+  async function addPasskey() {
+    setPasskeyBusy(true);
+    setPasskeyError("");
+    try {
+      await registerPasskey(operatorToken, passkeyLabel.trim() || "This device");
+      setPasskeyLabel("");
+      await refreshPasskeys();
+    } catch (caught) {
+      setPasskeyError(caught instanceof Error ? caught.message : "This passkey could not be registered.");
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
+
+  async function forgetPasskey(credentialId: string) {
+    setPasskeyBusy(true);
+    setPasskeyError("");
+    try {
+      await removePasskey(operatorToken, credentialId);
+      await refreshPasskeys();
+    } catch (caught) {
+      setPasskeyError(caught instanceof Error ? caught.message : "This passkey could not be removed.");
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
 
   const valid = draft.trim().length >= 16 && !/\s/.test(draft.trim());
 
@@ -108,6 +151,61 @@ export default function OperatorAccessSettings({ busy, operatorToken }: Props) {
         Stored with owner-only permissions in this Hive's configuration, and written there as well as
         applied now, so it survives a restart. It never leaves the machine.
       </small>
+
+      <div className="passkey-settings">
+        <h4>Passkeys</h4>
+        <p>
+          A passkey signs you in with the device you are holding, so there is nothing to copy and
+          nothing to keep in a password manager. The token above stays as the way back in if you
+          lose the device.
+        </p>
+        {!passkeysSupported() ? (
+          <p className="form-message" role="status">This browser cannot use passkeys.</p>
+        ) : (
+          <>
+            <label htmlFor="passkey-label">
+              <span>Name this device</span>
+              <input
+                id="passkey-label"
+                type="text"
+                value={passkeyLabel}
+                disabled={disabled || passkeyBusy}
+                onChange={(event) => setPasskeyLabel(event.target.value)}
+                placeholder="Work phone"
+              />
+            </label>
+            <div className="settings-actions">
+              <button type="button" className="primary-action" disabled={disabled || passkeyBusy} onClick={() => void addPasskey()}>
+                {passkeyBusy ? "Waiting for the device…" : "Add a passkey"}
+              </button>
+            </div>
+            <small>
+              Registered against the address you are at now. A passkey created here does not work at a
+              different address, which is why each one says where it belongs.
+            </small>
+          </>
+        )}
+        {passkeys.length > 0 && (
+          <ul className="passkey-list">
+            {passkeys.map((passkey) => (
+              <li key={passkey.credential_id}>
+                <span>
+                  <strong>{passkey.label}</strong>
+                  <small>
+                    {passkey.relying_party}
+                    {passkey.usable_here ? "" : " · not usable at this address"}
+                    {passkey.last_used_at ? ` · last used ${new Date(passkey.last_used_at * 1000).toLocaleDateString()}` : " · never used"}
+                  </small>
+                </span>
+                <button type="button" className="danger-link" disabled={disabled || passkeyBusy} onClick={() => void forgetPasskey(passkey.credential_id)}>
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {passkeyError && <p className="form-error" role="alert">{passkeyError}</p>}
+      </div>
     </section>
   );
 }

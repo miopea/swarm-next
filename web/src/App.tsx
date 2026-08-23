@@ -83,6 +83,7 @@ import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
 import UnansweredEmailAttentionCard from "./tasks/UnansweredEmailAttentionCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
+import { passkeysSupported, signInWithPasskey } from "./settings/passkeys";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
 import { foreignEngagement, workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
@@ -1513,6 +1514,23 @@ export function App() {
             <label htmlFor="operator-token">Operator token</label>
             <input id="operator-token" type="password" autoComplete="off" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} />
             <button disabled={busy || !tokenDraft}>Unlock Swarm</button>
+            {passkeysSupported() && (
+              <button
+                type="button"
+                className="secondary-button unlock-passkey"
+                disabled={busy}
+                onClick={() => void perform(async () => {
+                  await signInWithPasskey();
+                  const controlRoom = await loadControlRoom(BROWSER_SESSION_AUTH);
+                  terminalWorkspace.authenticate(BROWSER_SESSION_AUTH);
+                  setOperatorToken(BROWSER_SESSION_AUTH);
+                  controlRoomModel.replace(controlRoom);
+                  setActiveSessionId((current) => current ?? preferredSessionId(controlRoom.workers, controlRoom.sessions));
+                })}
+              >
+                Use a passkey
+              </button>
+            )}
           </form>
         ) : surface === "decisions" ? (
           <div className="attention-workspace">

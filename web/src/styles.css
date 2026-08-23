@@ -196,6 +196,13 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .task-project-row > a:hover, .task-project-row > a:focus-visible { background: var(--panel-soft); color: var(--text); }
 .worker-repository-field { display: grid; gap: 3px; color: var(--quiet); }
 .worker-repository-field input { min-width: 0; font: inherit; }
+.unlock-passkey { margin-top: 8px; width: 100%; }
+.passkey-settings { display: grid; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.passkey-settings h4 { margin: 0; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.passkey-list { display: grid; gap: 6px; margin: 4px 0 0; padding: 0; list-style: none; }
+.passkey-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.passkey-list li > span { display: grid; min-width: 0; gap: 2px; }
+.passkey-list small { color: var(--text-muted); font-size: .72rem; overflow-wrap: anywhere; }
 .outside-workspace-warning { display: flex !important; align-items: flex-start; gap: 8px !important; margin-top: 4px; padding: 9px; border: 1px solid var(--warn); border-radius: 9px; background: var(--warn-soft); color: var(--text) !important; }
 .outside-workspace-warning input { width: auto; margin-top: 2px; }
 .outside-workspace-warning span { display: grid; gap: 3px; }
