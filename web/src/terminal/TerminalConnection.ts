@@ -111,6 +111,15 @@ export class TerminalConnection {
   #retryAttempt = 0;
   #sequence = 0;
   #hasCanonicalState = false;
+  /**
+   * Whether this device may set the terminal's size, as the server last said.
+   *
+   * Assumed true until told otherwise so a fresh connection still sizes itself.
+   * A device that has lost the claim must stop re-asserting its own size: it
+   * cannot win, and each attempt costs a canonical snapshot that resizes the
+   * screen back.
+   */
+  #geometryOwned = true;
   #renderQueue = Promise.resolve();
   #pendingRenderBytes = 0;
   #renderGeneration = 0;
@@ -148,6 +157,11 @@ export class TerminalConnection {
 
   sendInput(text: string): void {
     this.#send({ type: "input", text });
+  }
+
+  /** Whether this device may set the terminal's size. */
+  get ownsGeometry(): boolean {
+    return this.#geometryOwned;
   }
 
   resize(rows: number, columns: number): void {
@@ -264,7 +278,7 @@ export class TerminalConnection {
       this.#fail("unsupported terminal WebSocket message");
       return;
     }
-    let message: { type?: string; running?: boolean; latest_sequence?: number; code?: string; message?: string };
+    let message: { type?: string; running?: boolean; latest_sequence?: number; geometry_owned?: boolean; code?: string; message?: string };
     try {
       message = JSON.parse(event.data) as typeof message;
     } catch {
@@ -272,6 +286,7 @@ export class TerminalConnection {
       return;
     }
     if (message.type === "state" && typeof message.running === "boolean") {
+      if (typeof message.geometry_owned === "boolean") this.#geometryOwned = message.geometry_owned;
       if (this.#hasCanonicalState) this.#confirmRenderedConnection();
       this.#processExited = !message.running;
       this.#handlers?.onRunningChange(message.running);

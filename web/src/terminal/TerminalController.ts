@@ -26,6 +26,11 @@ export interface TerminalConnectionLike {
   sendInput(text: string): void;
   resize(rows: number, columns: number): void;
   dispose(): void;
+  /**
+   * Whether this device may set the terminal's size. Optional so a test double
+   * that does not model the claim behaves as it did before — owning it.
+   */
+  readonly ownsGeometry?: boolean;
 }
 
 export type TerminalSurfaceFactory = () => TerminalSurface;
@@ -198,7 +203,22 @@ export class TerminalController {
         // sizes itself, and ResizeObserver, which reports a real viewport
         // change rather than an echo of someone else's.
         try {
-          if (!documentHasFocus()) return this.#applyRestoredFocus(restoreFocus);
+          // Two gates, for two different fights.
+          //
+          // Focus settles the one between a pop-out and the window it came
+          // from: they share a device id, so the server sees one device and
+          // applies both their resizes.
+          //
+          // Ownership settles the one between separate machines. A phone opened
+          // on a worker left running on a desktop has focus and has lost the
+          // claim, so focus alone let it re-fit, be refused, take the canonical
+          // size, and re-fit again — the terminal jumped continuously and the
+          // operator could not use it. A device that does not own the geometry
+          // accepts the size it is given; typing takes the claim, which is what
+          // moving to another device is supposed to mean.
+          if (!documentHasFocus() || this.#connection.ownsGeometry === false) {
+            return this.#applyRestoredFocus(restoreFocus);
+          }
           const fitted = await this.#surface.fit();
           this.#connection.resize(fitted.rows, fitted.columns);
         } catch {

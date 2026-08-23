@@ -56,7 +56,17 @@ enum ClientTerminalMessage {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerTerminalMessage<'a> {
-    State { running: bool, latest_sequence: u64 },
+    State {
+        running: bool,
+        latest_sequence: u64,
+        /// Whether this device may set the terminal's size.
+        ///
+        /// Without it the client could not tell a refused claim from an
+        /// accepted one, so a device that had lost the claim re-fitted, was
+        /// refused, received the canonical size, re-fitted again — and a phone
+        /// opened on a worker left running on a desktop jumped continuously.
+        geometry_owned: bool,
+    },
     Error { code: &'a str, message: String },
 }
 
@@ -142,8 +152,17 @@ pub async fn serve_terminal_socket(
 
     let output_host = terminal_host.clone();
     let output_sender = outbound_sender.clone();
+    let output_store = task_store.clone();
     let mut output = tokio::spawn(async move {
-        stream_output(output_host, session_id, after_sequence, output_sender).await;
+        stream_output(
+            output_host,
+            session_id,
+            after_sequence,
+            output_sender,
+            output_store,
+            owner_device_id,
+        )
+        .await;
     });
     let mut input = tokio::spawn(handle_input(
         socket_receiver,
@@ -241,11 +260,32 @@ async fn complete_initial_handshake(
     ))
 }
 
+/// Whether this device would be allowed to set the terminal's size.
+///
+/// True when it already owns the claim, and true when nobody owns it — an
+/// unclaimed terminal must still be sized by the one device looking at it.
+/// Reporting only strict ownership would have left a lone viewer unable to fit
+/// its own screen, which is a worse bug than the one this field exists to fix.
+fn may_set_geometry(
+    task_store: &TaskStore,
+    session_id: WorkerSessionId,
+    owner_device_id: Option<PresenceDeviceId>,
+) -> bool {
+    task_store
+        .device_owns_worker_geometry(session_id, owner_device_id)
+        .unwrap_or(false)
+        || task_store
+            .device_owns_worker_geometry(session_id, None)
+            .unwrap_or(false)
+}
+
 async fn stream_output(
     terminal_host: HostClient,
     session_id: WorkerSessionId,
     mut after_sequence: Option<u64>,
     outbound: mpsc::Sender<Message>,
+    task_store: TaskStore,
+    owner_device_id: Option<PresenceDeviceId>,
 ) {
     let mut first_read = true;
     loop {
@@ -292,6 +332,7 @@ async fn stream_output(
             &ServerTerminalMessage::State {
                 running,
                 latest_sequence: after_sequence.unwrap_or(0),
+                geometry_owned: may_set_geometry(&task_store, session_id, owner_device_id),
             },
         )
         .await
@@ -719,5 +760,39 @@ async fn send_direct_error(socket: &mut WebSocket, code: &str, message: &str) {
         message: message.into(),
     }) {
         let _ = socket.send(Message::Text(payload.into())).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use swarm_persistence::TaskStore;
+
+    /// The reported claim has to be permissive about an unowned terminal.
+    ///
+    /// Strict ownership would leave the only device looking at a fresh worker
+    /// unable to size its own screen — a worse bug than the jumping this field
+    /// exists to stop.
+    #[test]
+    fn an_unclaimed_terminal_may_still_be_sized_by_whoever_is_looking() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let phone = PresenceDeviceId::new();
+        let desktop = PresenceDeviceId::new();
+
+        assert!(
+            may_set_geometry(&store, session, Some(phone)),
+            "nobody owns it yet"
+        );
+
+        assert!(store.claim_worker_geometry(session, desktop).unwrap());
+
+        assert!(may_set_geometry(&store, session, Some(desktop)));
+        assert!(
+            !may_set_geometry(&store, session, Some(phone)),
+            "the desktop holds it, so the phone is told to accept the size it is given"
+        );
     }
 }

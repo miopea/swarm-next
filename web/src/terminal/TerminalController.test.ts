@@ -339,3 +339,47 @@ test("transport waits for a post-layout renderer fit", async () => {
   expect(connection.resize).toHaveBeenCalledWith(38, 132);
   expect(surface.onResize).toHaveBeenCalledTimes(1);
 });
+
+test("a focused device that has lost the geometry claim stops arguing", async () => {
+  // "I had the terminal open on my computer... I went away, opened it on my
+  // phone, and on my phone it's constantly jumping."
+  //
+  // The desktop holds the engagement, so the phone's claim is refused and the
+  // PTY keeps the desktop's size. The phone has focus, so focus alone let it
+  // re-fit, get refused, receive the canonical snapshot, and re-fit again.
+  // Nothing bounded that loop.
+  const surface = fakeSurface();
+  vi.mocked(surface.fit).mockResolvedValue({ rows: 60, columns: 40 });
+  const connection = { ...fakeConnection(), ownsGeometry: false };
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  vi.mocked(connection.resize).mockClear();
+  vi.mocked(surface.fit).mockClear();
+  document.hasFocus = () => true;
+
+  const snapshot = { sequence: 4, rows: 24, columns: 120, truncated: false, reason: "attached" as const, bytes: new Uint8Array() };
+  await handlers.onSnapshot(snapshot);
+
+  expect(surface.restore).toHaveBeenCalledWith(snapshot);
+  expect(surface.fit).not.toHaveBeenCalled();
+  expect(connection.resize).not.toHaveBeenCalled();
+});
+
+test("the device that owns the claim still asserts its own size", async () => {
+  const surface = fakeSurface();
+  vi.mocked(surface.fit).mockResolvedValue({ rows: 60, columns: 40 });
+  const connection = { ...fakeConnection(), ownsGeometry: true };
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
+  const handlers = vi.mocked(connection.start).mock.calls[0][0];
+  vi.mocked(connection.resize).mockClear();
+  vi.mocked(surface.fit).mockClear();
+  document.hasFocus = () => true;
+
+  await handlers.onSnapshot({ sequence: 5, rows: 24, columns: 120, truncated: false, reason: "attached" as const, bytes: new Uint8Array() });
+
+  expect(connection.resize).toHaveBeenCalledWith(60, 40);
+});
