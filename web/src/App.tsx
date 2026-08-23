@@ -96,6 +96,7 @@ import type { RuntimeUpdateSummary } from "./runtime/runtimeUpdates";
 import HiveContextIndicator from "./controlRoom/HiveContextIndicator";
 import { useControlRoomModel } from "./controlRoom/useControlRoomModel";
 import { SETTINGS_SECTIONS, clearSettingsSection, navigateToSettingsSection, readSettingsSection, type SettingsSection } from "./settings/settingsNavigation";
+import { isSurface, readSavedSurface, saveSurface, surfaceWasRequested, type Surface } from "./navigation/startSurface";
 import { PresenceController, deviceClass, presenceDeviceId, type LockDetectionState } from "./presence/PresenceController";
 import { NotificationController, type NotificationCapabilityState } from "./notifications/NotificationController";
 import TaskBoardControls, { type TaskBoardFilter, type TaskBoardSort, type TaskBoardSource } from "./tasks/TaskBoardControls";
@@ -125,12 +126,10 @@ const TaskBoard = lazy(() => import("./tasks/TaskBoard"));
 const SettingsWorkspace = lazy(() => import("./settings/SettingsWorkspace"));
 const KeeperControlRoom = lazy(() => import("./apiary/KeeperControlRoom"));
 const MemberControlRoom = lazy(() => import("./apiary/MemberControlRoom"));
-const SURFACE_STORAGE_KEY = "swarm-next.surface.v1";
 const ACTIVE_SESSION_STORAGE_KEY = "swarm-next.active-session.v1";
 const WORKER_VISIBILITY_STORAGE_KEY = "swarm-next.worker-visibility.v1";
 
 type LoadState = { kind: "loading" } | { kind: "ready"; health: Health } | { kind: "unavailable" };
-type Surface = "decisions" | "tasks" | "workers" | "apiary" | "settings";
 type WorkerVisibility = "all" | "awake";
 
 function workerName(sessionId: string): string {
@@ -264,15 +263,29 @@ export function App() {
         if (!openedAtLaunch.current) return;
         openedAtLaunch.current = false;
         if (surfaceWasRequested()) return;
-        if (chosen === "decisions" || chosen === "tasks" || chosen === "workers"
-          || chosen === "apiary" || chosen === "settings") {
-          setSurface(chosen);
-        }
+        if (isSurface(chosen)) setSurface(chosen);
       })
       .catch(() => undefined);
     presenceController.start(operatorToken, setPresence, setLockDetectionState);
     return () => presenceController.stop();
   }, [operatorToken, presenceController]);
+
+  // A tapped notification says where it wants to go. The service worker also
+  // tries to navigate the window, but in an installed PWA that is usually a
+  // no-op, and focus() alone brings the app up on whatever it was already
+  // showing — which is why opening a "needs you" notification landed on the
+  // opening screen instead of the thing that needed you.
+  useEffect(() => {
+    if (detached || !("serviceWorker" in navigator)) return undefined;
+    const onMessage = (event: MessageEvent) => {
+      const requested = (event.data as { type?: string; surface?: string } | null)?.type === "swarm-show-surface"
+        ? (event.data as { surface?: string }).surface
+        : undefined;
+      if (isSurface(requested)) setSurface(requested);
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [detached]);
 
   useEffect(() => {
     if (!operatorToken) {
@@ -1738,18 +1751,6 @@ function TerminalIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><pa
  * tab are all requests; the operator's chosen opening screen is the default
  * they fall back to.
  */
-function surfaceWasRequested(): boolean {
-  try {
-    const search = new URLSearchParams(window.location.search);
-    if (readSettingsSection() || search.has("jira") || search.has("surface")) return true;
-    return window.sessionStorage.getItem(SURFACE_STORAGE_KEY) !== null;
-  } catch {
-    return false;
-  }
-}
-
-function readSavedSurface(): Surface { try { if (readSettingsSection()) return "settings"; const linked = new URLSearchParams(window.location.search).get("surface"); if (linked === "decisions" || linked === "tasks" || linked === "workers" || linked === "apiary" || linked === "settings") return linked; const saved = window.sessionStorage.getItem(SURFACE_STORAGE_KEY); return saved === "decisions" || saved === "workers" || saved === "apiary" || saved === "settings" ? saved : "tasks"; } catch { return "tasks"; } }
-function saveSurface(surface: Surface) { try { window.sessionStorage.setItem(SURFACE_STORAGE_KEY, surface); } catch { /* Surface persistence is a non-critical convenience. */ } }
 function surfaceLabel(surface: Surface): string {
   return surface === "decisions" ? "Needs you"
     : surface === "tasks" ? "Tasks"
