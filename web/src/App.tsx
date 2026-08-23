@@ -126,6 +126,15 @@ const TaskBoard = lazy(() => import("./tasks/TaskBoard"));
 const SettingsWorkspace = lazy(() => import("./settings/SettingsWorkspace"));
 const KeeperControlRoom = lazy(() => import("./apiary/KeeperControlRoom"));
 const MemberControlRoom = lazy(() => import("./apiary/MemberControlRoom"));
+/**
+ * How often held work is re-read.
+ *
+ * A hold only becomes an item after a two-minute grace period, so it is not
+ * urgent to the second — but it must appear without a reload, and disappear
+ * without one too.
+ */
+const HELD_DELIVERY_POLL_MS = 20_000;
+
 const ACTIVE_SESSION_STORAGE_KEY = "swarm-next.active-session.v1";
 const WORKER_VISIBILITY_STORAGE_KEY = "swarm-next.worker-visibility.v1";
 
@@ -225,6 +234,8 @@ export function App() {
   const [queenAutomation, setQueenAutomation] = useState<QueenAutomationStatus>();
   /** What the coordinator is holding behind an unanswered terminal prompt. */
   const [heldDeliveries, setHeldDeliveries] = useState<HeldDelivery[]>([]);
+  /** Bumped to re-read held work immediately rather than waiting for the tick. */
+  const [heldDeliveryRefresh, setHeldDeliveryRefresh] = useState(0);
   const [providers, setProviders] = useState<ProviderCapabilities>({ claude_code: true, codex: false });
   const [providerCapabilitiesUnavailable, setProviderCapabilitiesUnavailable] = useState(false);
   const [notificationState, setNotificationState] = useState<NotificationCapabilityState>("unsupported");
@@ -310,16 +321,37 @@ export function App() {
     void fetchQueenAutomationStatus(operatorToken)
       .then(setQueenAutomation)
       .catch(() => setQueenAutomation(undefined));
-    // Polled with the rest of the control room: a hold that has lasted long
-    // enough to matter is not urgent to the second, but it must not depend on
-    // the operator opening Settings to find it.
-    void fetchCoordinatorStatus(operatorToken)
-      // Defaulted rather than assumed: during an update the page can briefly
-      // be newer than the API answering it, and a missing field should not
-      // take the control room down.
-      .then((status) => setHeldDeliveries(status.held ?? []))
-      .catch(() => setHeldDeliveries([]));
   }, [operatorToken]);
+
+  // Held work is polled, not read once at sign-in.
+  //
+  // The comment here used to say "polled with the rest of the control room"
+  // while the effect depended on the token alone, so it ran once and never
+  // again. That broke it in both directions: a hold that began after sign-in
+  // never appeared, and a hold that cleared stayed on the "Needs you" page
+  // until the page was reloaded. The operator was shown a card an hour after
+  // the thing it described had resolved, with a button that did nothing.
+  useEffect(() => {
+    if (!operatorToken) {
+      setHeldDeliveries([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const load = () => {
+      void fetchCoordinatorStatus(operatorToken)
+        // Defaulted rather than assumed: during an update the page can briefly
+        // be newer than the API answering it, and a missing field should not
+        // take the control room down.
+        .then((status) => { if (!cancelled) setHeldDeliveries(status.held ?? []); })
+        .catch(() => { if (!cancelled) setHeldDeliveries([]); });
+    };
+    load();
+    const interval = window.setInterval(load, HELD_DELIVERY_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [operatorToken, heldDeliveryRefresh]);
 
   useEffect(() => {
     if (!operatorToken) return;
@@ -547,6 +579,7 @@ export function App() {
       // The indicator keeps itself current on a timer; this is so an operator
       // who presses refresh does not wait out the next tick.
       void refreshRuntimeUpdate();
+      setHeldDeliveryRefresh((current) => current + 1);
       if (recoverTerminal && activeSessionId) {
         terminalWorkspace.resetSessionRenderer(activeSessionId);
         setTerminalRevision((current) => current + 1);
