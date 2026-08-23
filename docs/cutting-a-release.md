@@ -83,7 +83,14 @@ rm -f /run/user/$(id -u)/swarm-signing.key
 ```
 
 Then upload the tarball to the release, and publish `releases.json` at the URL
-Hives read — by default
+Hives read. Nothing in `docs/install.md` changes: `install.sh` reads the same
+manifest and takes whatever it offers, so the published install command is
+already pointing at this release the moment the manifest lands.
+
+Publishing the manifest is therefore what makes a release real. A tarball
+uploaded to GitHub but absent from the manifest is offered to nobody — not to
+running Hives, and not to fresh installs either, which is what makes withdrawing
+a release by removing it from the manifest actually work — by default
 `https://raw.githubusercontent.com/miopea/swarm-next/main/releases.json`,
 overridable per Hive with `SWARM_RELEASE_MANIFEST_URL`.
 

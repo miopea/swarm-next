@@ -6,27 +6,46 @@ your home directory, runs as you, and listens only on localhost.
 
 ## Install it
 
-Three commands, nothing to click:
+One command, and it always takes the current release:
 
 ```
-curl -fsSLO https://github.com/miopea/swarm-next/releases/download/v0.8.1/swarm-0.8.1-linux-x86_64.tar.gz
-tar -xzf swarm-0.8.1-linux-x86_64.tar.gz
-sh ./swarm-0.8.1-linux-x86_64/swarm-package install ./swarm-0.8.1-linux-x86_64
+curl -fsSL https://raw.githubusercontent.com/miopea/swarm-next/main/install.sh | sh
+```
+
+If you would rather read a script before running it — a reasonable habit, and
+this one is short:
+
+```
+curl -fsSLO https://raw.githubusercontent.com/miopea/swarm-next/main/install.sh
+less install.sh
+sh install.sh
+```
+
+There is no version to look up and no URL to keep current. The script reads the
+same signed manifest every running Hive reads to decide whether an update
+exists, so a fresh install and an upgrade can never disagree about what
+"current" means. It checks the download against the digest the manifest
+publishes and refuses to install anything that does not match.
+
+What that does and does not prove is worth saying plainly. The script and the
+manifest come from the same repository, so a first install trusts GitHub — no
+install script can do better, because there is nothing yet on the machine to
+trust instead. From then on it is properly verified: the installed binary
+carries the release verifying key **compiled in**, and checks every future
+update against a key that never travelled alongside the manifest.
+
+Every release is listed at
+**https://github.com/miopea/swarm-next/releases** if you would rather pick one
+by hand. To install an exact version:
+
+```
+curl -fsSLO https://github.com/miopea/swarm-next/releases/download/vX.Y.Z/swarm-X.Y.Z-linux-x86_64.tar.gz
+tar -xzf swarm-X.Y.Z-linux-x86_64.tar.gz
+sh ./swarm-X.Y.Z-linux-x86_64/swarm-package install ./swarm-X.Y.Z-linux-x86_64
 ```
 
 The path appears twice on the last line because `swarm-package` lives inside the
 release: once to run it, once to tell it what to install.
-
-For a later version, change the number in all three places. To always take the
-newest without looking it up:
-
-```
-curl -fsSL https://api.github.com/repos/miopea/swarm-next/releases/latest \
-  | grep -o 'https://[^"]*linux-x86_64\.tar\.gz' | head -1 | xargs curl -fsSLO
-```
-
-Every release is listed at
-**https://github.com/miopea/swarm-next/releases** if you would rather look.
 
 It asks you to choose a token to sign in with — at least 12 characters, typed
 twice and never shown on screen. Press Enter on its own and one is generated
@@ -37,7 +56,7 @@ starts the services, and **waits for the API to answer before saying it
 worked**:
 
 ```
-Swarm 0.8.1 is healthy at http://127.0.0.1:8766/health
+Swarm 0.8.2 is healthy at http://127.0.0.1:8766/health
 
 Open http://127.0.0.1:8766 and sign in with the token you chose.
 ```
@@ -275,12 +294,20 @@ the whole story.
 
 ### Installing a release by hand
 
-The same three commands as installing, with `update` instead of `install`:
+The install command upgrades an existing Hive too — it is the same script and
+the same manifest, and `swarm-package` decides whether this is a first install
+or an update:
 
 ```
-curl -fsSLO https://github.com/miopea/swarm-next/releases/download/v0.8.1/swarm-0.8.1-linux-x86_64.tar.gz
-tar -xzf swarm-0.8.1-linux-x86_64.tar.gz
-sh ./swarm-0.8.1-linux-x86_64/swarm-package update ./swarm-0.8.1-linux-x86_64
+curl -fsSL https://raw.githubusercontent.com/miopea/swarm-next/main/install.sh | sh
+```
+
+To move to an exact version rather than the current one:
+
+```
+curl -fsSLO https://github.com/miopea/swarm-next/releases/download/vX.Y.Z/swarm-X.Y.Z-linux-x86_64.tar.gz
+tar -xzf swarm-X.Y.Z-linux-x86_64.tar.gz
+sh ./swarm-X.Y.Z-linux-x86_64/swarm-package update ./swarm-X.Y.Z-linux-x86_64
 ```
 
 You do not need to uninstall first, and it does not matter where you unpack the
