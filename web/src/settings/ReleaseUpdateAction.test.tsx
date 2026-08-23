@@ -155,10 +155,10 @@ test("tells a working copy a release exists and offers it nothing", async () => 
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(status({ development_build: true, upgrade_available: false }));
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
-  expect(await screen.findByText("This Hive builds from a working copy")).toBeInTheDocument();
-  expect(screen.getByText(/Version 0.2.0 has been released/)).toBeInTheDocument();
+  expect(await screen.findByText("Swarm 0.2.0 is the current release")).toBeInTheDocument();
+  expect(screen.getByText(/Releases are never installed/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Download/ })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /Install/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Install/ })).not.toBeInTheDocument();
 });
 
 /** An origin unreachable today does not make yesterday's answer untrue. */
@@ -179,25 +179,38 @@ test("reports a manifest it could not verify rather than acting on it", async ()
 });
 
 /**
- * "Seems a bit like the update system is confused if I am in dev or production
- * installs." A Hive that builds from a working copy was asked whether to check
- * for releases with no hint that a release would never be offered to it — the
- * question sat next to the App and API card, which is where its updates
- * actually come from.
+ * "Why do I see the daily check for updates when I am in dev mode?" — a
+ * question whose answer changed nothing on that machine, since a working copy
+ * updates from the App and API card beside it.
+ *
+ * What is useful there is the comparison: "and also how it compares to the
+ * existing production build... that helps me know if we should cut a new
+ * release."
  */
-test("tells a working copy what checking would and would not do for it", async () => {
+test("shows a working copy the current release rather than asking it to check", async () => {
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
-    status({ mode: "unset", development_build: true, offer: null, upgrade_available: false }),
+    status({ mode: "daily", development_build: true, current_version: "0.7.0-dev-236069c", upgrade_available: false }),
   );
   render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
 
-  expect(await screen.findByText("Check for new Swarm releases?")).toBeInTheDocument();
-  expect(screen.getByText(/This Hive builds from a working copy/)).toBeInTheDocument();
-  expect(screen.getByText(/never offer to install one/)).toBeInTheDocument();
-  expect(screen.getByText(/Your updates come from the App and API card/)).toBeInTheDocument();
+  expect(await screen.findByText("Swarm 0.2.0 is the current release")).toBeInTheDocument();
+  expect(screen.getByText(/runs 0.7.0-dev-236069c/)).toBeInTheDocument();
+  // The question is gone; it could not lead to an action here.
+  expect(screen.queryByText("Check for new Swarm releases?")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^Install/ })).not.toBeInTheDocument();
 });
 
-test("does not say that to an install running a release", async () => {
+test("says so plainly when nothing has been released yet", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({ mode: "daily", development_build: true, offer: null, upgrade_available: false }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText("No release published yet")).toBeInTheDocument();
+});
+
+/** An install running a release still gets the question, because there the
+ *  answer decides something. */
+test("still asks an install running a release", async () => {
   vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
     status({ mode: "unset", development_build: false, offer: null, upgrade_available: false }),
   );

@@ -137,20 +137,72 @@ fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .find_map(|cookie| cookie.strip_prefix(name)?.strip_prefix('='))
 }
 
+/// Whether this request genuinely arrived over HTTPS.
+///
+/// Only the forwarded protocol answers this. It used to infer HTTPS from the
+/// host — anything that was not localhost was assumed secure — and that is
+/// exactly backwards for the way Swarm is reached from a second device: over
+/// plain HTTP at a LAN address or a machine name.
+///
+/// The cost was invisible and repeated. A `Secure` cookie is refused by the
+/// browser on an HTTP origin, so signing in appeared to work, the session
+/// cookie was silently dropped, and the next page load was back at the unlock
+/// panel. The operator hit it three times before it was diagnosed, each time
+/// reading as "something didn't come back up".
+///
+/// Swarm binds plain HTTP on localhost and the documented way to expose it is
+/// an HTTPS proxy in front, which sets this header. So the header is not a
+/// hint about the truth here — it is the whole truth.
 fn request_is_secure(headers: &HeaderMap) -> bool {
-    if headers
+    headers
         .get("x-forwarded-proto")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.eq_ignore_ascii_case("https"))
-    {
-        return true;
+}
+
+#[cfg(test)]
+mod secure_cookie_tests {
+    use super::request_is_secure;
+    use axum::http::{HeaderMap, HeaderValue, header};
+
+    fn headers(host: &str, forwarded: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_str(host).unwrap());
+        if let Some(proto) = forwarded {
+            headers.insert("x-forwarded-proto", HeaderValue::from_str(proto).unwrap());
+        }
+        headers
     }
-    headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .is_none_or(|host| {
-            !host.starts_with("localhost")
-                && !host.starts_with("127.0.0.1")
-                && !host.starts_with("[::1]")
-        })
+
+    /// The operator reaches Swarm from a second device at a LAN address or a
+    /// machine name, over plain HTTP. Marking that cookie `Secure` means the
+    /// browser refuses to store it: sign-in appears to work and the next page
+    /// load is back at the unlock panel, with nothing wrong on the server.
+    #[test]
+    fn plain_http_from_another_device_is_not_treated_as_secure() {
+        assert!(!request_is_secure(&headers("192.168.1.42:8766", None)));
+        assert!(!request_is_secure(&headers("bgs-development:8766", None)));
+        assert!(!request_is_secure(&headers("swarm.local:8766", None)));
+        // Localhost was already handled; it must stay handled.
+        assert!(!request_is_secure(&headers("127.0.0.1:8766", None)));
+        assert!(!request_is_secure(&headers("localhost:8766", None)));
+    }
+
+    /// An HTTPS proxy in front is the documented way to expose Swarm, and it
+    /// says so in the one header that actually knows.
+    #[test]
+    fn a_proxy_reporting_https_is_secure() {
+        assert!(request_is_secure(&headers(
+            "swarm.example.com",
+            Some("https")
+        )));
+        assert!(request_is_secure(&headers(
+            "swarm.example.com",
+            Some("HTTPS")
+        )));
+        assert!(!request_is_secure(&headers(
+            "swarm.example.com",
+            Some("http")
+        )));
+    }
 }

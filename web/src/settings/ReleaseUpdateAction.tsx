@@ -125,6 +125,46 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
   const disabled = busy || working || installInFlight;
   const arrived = installing !== null && status.current_version === installing;
 
+  // A working copy updates from the App and API card, so asking it whether to
+  // check for releases is a question whose answer changes nothing here. What
+  // is useful is the comparison: what is published, against what this Hive is
+  // running, so the operator can see whether a release is worth cutting.
+  if (status.development_build) {
+    return (
+      <article className="runtime-subsystem-card runtime-subsystem-safe release-update-action" aria-label="Released version">
+        <header>
+          <div>
+            <span className="runtime-component-name">Released</span>
+            <strong>{status.offer ? `Swarm ${status.offer.version} is the current release` : "No release published yet"}</strong>
+          </div>
+        </header>
+        <p>
+          This Hive builds from a working copy and runs {status.current_version}. Releases are never installed
+          here — replacing a build made from your checkout would discard work nothing can enumerate.
+        </p>
+        {status.mode === "unset" ? (
+          <>
+            <small>Comparing needs one signed file fetched from the release origin. Nothing is sent — no version, no identity, no counts.</small>
+            <div className="settings-actions">
+              <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, "daily"), "The preference could not be saved.")}>Show the current release</button>
+              <button className="secondary-button" disabled={disabled} onClick={() => void run(() => setReleaseCheckMode(operatorToken, "off"), "The preference could not be saved.")}>Don’t check</button>
+            </div>
+          </>
+        ) : (
+          <footer className="release-check-footer">
+            <small>
+              {status.last_outcome === "unreachable" ? "The last check could not reach the origin." : status.last_checked_at ? `Checked ${new Date(status.last_checked_at * 1000).toLocaleString()}.` : "Not checked yet."}
+            </small>
+            <span className="settings-actions">
+              <button className="secondary-button" disabled={disabled} onClick={() => void run(() => checkForRelease(operatorToken), "The check could not be completed.")}>{working ? "Checking…" : "Check now"}</button>
+            </span>
+          </footer>
+        )}
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </article>
+    );
+  }
+
   if (status.mode === "unset") {
     return (
       <article className="runtime-subsystem-card runtime-subsystem-safe release-update-action" aria-label="Release updates">
