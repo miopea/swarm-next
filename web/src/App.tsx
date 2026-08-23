@@ -180,8 +180,10 @@ export function App() {
   // Settings navigates from the rail like every other surface, so the rail has
   // to know which section is current. The hash stays the source of truth, since
   // a link into a section has to keep working.
+  /** What the operator typed into the settings filter. */
+  const [settingsQuery, setSettingsQuery] = useState("");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(
-    () => readSettingsSection() ?? "settings-crew",
+    () => readSettingsSection() ?? "settings-hive",
   );
   // Polled rather than derived from the board, because the board is one surface
   // and a finished task with nobody answered belongs in Needs you regardless of
@@ -1145,15 +1147,15 @@ export function App() {
     name: link.project_name,
     url: jiraProjectUrl(link),
   }])).values()].sort((left, right) => left.name.localeCompare(right.name)), [jiraTaskLinks]);
-  const openSettings = (section: SettingsSection = "settings-crew") => {
+  const openSettings = (section: SettingsSection = "settings-hive") => {
     navigateToSettingsSection(section);
     setSettingsSection(section);
     setSurface("settings");
   };
-  const openApiarySettings = () => openSettings("settings-apiary");
+  const openApiarySettings = () => openSettings("settings-connections");
   const openQueenForAttention = () => {
     const queen = workers.find((worker) => worker.role === "queen");
-    if (!queen) return openSettings("settings-queen");
+    if (!queen) return openSettings("settings-workers");
     if (queen.active_session_id) return openWorker(queen.active_session_id);
     void startExistingWorker(queen);
   };
@@ -1163,7 +1165,7 @@ export function App() {
     { id: "new-task", label: "Create task", detail: "Plan work for a worker", group: "Go to", run: () => { setTaskComposeRequest((current) => current + 1); setSurface("tasks"); } },
     { id: "workers", label: "Workers", detail: `${workers.filter((worker) => worker.running).length} running`, group: "Go to", run: () => setSurface("workers") },
     ...(federated ? [{ id: "apiary", label: "Apiary", detail: pendingAssistCount ? `${pendingAssistCount} help offer${pendingAssistCount === 1 ? "" : "s"}` : keeper ? "Keeper overview" : "Membership overview", group: "Go to" as const, run: () => setSurface("apiary") }] : []),
-    { id: "add-worker", label: "Add worker", detail: "Configure a repository worker", group: "Go to", run: () => openSettings("settings-crew") },
+    { id: "add-worker", label: "Add worker", detail: "Configure a repository worker", group: "Go to", run: () => openSettings("settings-workers") },
     { id: "settings", label: "Settings", detail: "Preferences and diagnostics", group: "Go to", run: () => openSettings() },
     // Reachable rather than resident. Locking Swarm while leaving the machine
     // unlocked is a rare thing to want, and it was taking a permanent place in
@@ -1256,7 +1258,7 @@ export function App() {
               className="icon-button brand-diagnostics"
               aria-label="Open diagnostics"
               title="Browser, API, database, terminal, provider and integration health"
-              onClick={() => openSettings("settings-diagnostics")}
+              onClick={() => openSettings("settings-maintenance")}
             ><DiagnosticsIcon /></button>
           ) : null}
         </div>}
@@ -1284,6 +1286,21 @@ export function App() {
                 content, so it read as a different kind of screen. */}
             {surface === "settings" && (
               <div className="rail-context">
+                <div className="rail-settings-search">
+                  <label className="sr-only" htmlFor="settings-search">Find a setting</label>
+                  <input
+                    id="settings-search"
+                    type="search"
+                    placeholder="Find a setting…"
+                    autoComplete="off"
+                    value={settingsQuery}
+                    onChange={(event) => setSettingsQuery(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === "Escape" && settingsQuery) { event.stopPropagation(); setSettingsQuery(""); } }}
+                  />
+                  {settingsQuery ? (
+                    <button type="button" className="worker-search-clear" aria-label="Clear settings search" onClick={() => setSettingsQuery("")}>×</button>
+                  ) : null}
+                </div>
                 <nav className="rail-settings-sections" aria-label="Settings sections">
                   {SETTINGS_SECTIONS.map(([id, label]) => (
                     <button
@@ -1291,7 +1308,7 @@ export function App() {
                       type="button"
                       className={settingsSection === id ? "selected" : ""}
                       aria-current={settingsSection === id ? "location" : undefined}
-                      onClick={() => openSettings(id)}
+                      onClick={() => { setSettingsQuery(""); openSettings(id); }}
                     >{label}</button>
                   ))}
                 </nav>
@@ -1381,7 +1398,7 @@ export function App() {
 
             {surface === "workers" && (
               <div className="start-worker-disclosure">
-                <button type="button" onClick={() => openSettings("settings-crew")}>Manage workers</button>
+                <button type="button" onClick={() => openSettings("settings-workers")}>Manage workers</button>
               </div>
             )}
           </>
@@ -1415,7 +1432,7 @@ export function App() {
                   disabled={busy}
                 >{update.actionLabel}</button>
               ) : null}
-              <button type="button" className="runtime-update-settings" onClick={() => openSettings("settings-runtime")}>
+              <button type="button" className="runtime-update-settings" onClick={() => openSettings("settings-updates")}>
                 Details
               </button>
             </div>
@@ -1512,7 +1529,7 @@ export function App() {
               <div className="mobile-worker-dialog-list">
                 {mobileVisibleWorkers.length === 0 && mobileVisibleOrphanSessions.length === 0 ? (
                   workers.length === 0 && orphanSessions.length === 0 ? (
-                    <div className="mobile-worker-empty"><strong>No workers configured yet</strong><span>Add a repository worker in Settings, then return here to wake her.</span><button type="button" onClick={() => { setShowMobileWorkers(false); openSettings("settings-crew"); }}>Manage workers</button></div>
+                    <div className="mobile-worker-empty"><strong>No workers configured yet</strong><span>Add a repository worker in Settings, then return here to wake her.</span><button type="button" onClick={() => { setShowMobileWorkers(false); openSettings("settings-workers"); }}>Manage workers</button></div>
                   ) : (
                     <div className="mobile-worker-empty"><strong>All {workers.length} workers are sleeping</strong><span>Show the full roster to wake one.</span><button type="button" onClick={() => changeWorkerVisibility("all")}>Show all workers</button></div>
                   )
@@ -1552,7 +1569,7 @@ export function App() {
                   </button>
                 ))}
               </div>
-              <button className="secondary-button mobile-manage-workers" type="button" onClick={() => { setShowMobileWorkers(false); openSettings("settings-crew"); }}>Manage workers</button>
+              <button className="secondary-button mobile-manage-workers" type="button" onClick={() => { setShowMobileWorkers(false); openSettings("settings-workers"); }}>Manage workers</button>
             </section>
           </div>
         ) : null}
@@ -1619,7 +1636,7 @@ export function App() {
               additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + (awaitingReply.length > 0 ? 1 : 0)}
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
-                <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-queen")} onRetry={resumeQueenReview} />
+                <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <HeldDeliveryAttentionCard held={heldDeliveries} onOpenWorker={(name) => { const worker = workers.find((candidate) => candidate.name === name); if (worker) openWorker(worker.id); }} />
               </>}
@@ -1649,6 +1666,8 @@ export function App() {
         ) : surface === "settings" ? (
           <Suspense fallback={<WorkspaceLoading label="Settings" />}>
             <SettingsWorkspace
+              section={settingsSection}
+              query={settingsQuery}
               busy={busy}
               workerEngineProgress={workerEngineProgress}
               colorTheme={colorTheme}
@@ -1695,7 +1714,7 @@ export function App() {
         ) : activeSession ? (
           <TerminalLoadBoundary key={`${operatorToken}:${activeSession.session_id}:${terminalRevision}`}>
             <Suspense fallback={<div className="terminal-empty">Preparing terminal…</div>}>
-              <TerminalView operatorToken={operatorToken} session={activeSession} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} onRedraw={() => void refreshControlRoom(true)} queenAutomation={activeWorker?.role === "queen" ? queenAutomation : undefined} queenAutonomy={activeWorker?.role === "queen" ? queenPolicy?.[presence?.mode ?? "at_hive"] : undefined} onOpenQueenSettings={activeWorker?.role === "queen" ? () => openSettings("settings-queen") : undefined} onConnectionStateChange={setTerminalConnection} />
+              <TerminalView operatorToken={operatorToken} session={activeSession} busy={busy} canStop={activeWorker?.role !== "queen"} mobileKeysVisible={mobileKeysVisible} onMobileKeysVisibleChange={changeMobileKeysVisibility} onRedraw={() => void refreshControlRoom(true)} queenAutomation={activeWorker?.role === "queen" ? queenAutomation : undefined} queenAutonomy={activeWorker?.role === "queen" ? queenPolicy?.[presence?.mode ?? "at_hive"] : undefined} onOpenQueenSettings={activeWorker?.role === "queen" ? () => openSettings("settings-workers") : undefined} onConnectionStateChange={setTerminalConnection} />
             </Suspense>
           </TerminalLoadBoundary>
         ) : (

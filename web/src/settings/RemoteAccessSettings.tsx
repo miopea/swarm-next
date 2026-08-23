@@ -47,7 +47,7 @@ export default function RemoteAccessSettings({ busy, operatorToken }: Props) {
   const running = status?.running === true;
 
   return (
-    <section className="settings-card remote-access-settings" aria-labelledby="remote-access-heading">
+    <section id="settings-remote" className="settings-card remote-access-settings" aria-labelledby="remote-access-heading">
       <h3 id="remote-access-heading">Open on my phone</h3>
       <p>
         Publishes this Hive at a temporary web address so you can scan it and carry on from another

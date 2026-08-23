@@ -188,15 +188,15 @@ test("gives a Keeper a first-class Apiary control-room surface", async () => {
   expect(screen.getByText("Registration, not live presence")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Manage Apiary" }));
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-  expect(window.location.hash).toBe("#settings-apiary");
-  expect(within(await screen.findByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Apiary" })).toHaveAttribute("aria-current", "location");
+  expect(window.location.hash).toBe("#settings-connections");
+  expect(within(await screen.findByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Connections" })).toHaveAttribute("aria-current", "location");
 
   cleanup();
   window.sessionStorage.clear();
   render(<App />);
   expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
-  expect(within(await screen.findByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Apiary" })).toHaveAttribute("aria-current", "location");
-  expect(window.location.hash).toBe("#settings-apiary");
+  expect(within(await screen.findByRole("navigation", { name: "Settings sections" })).getByRole("button", { name: "Connections" })).toHaveAttribute("aria-current", "location");
+  expect(window.location.hash).toBe("#settings-connections");
 });
 
 test("gives a Member Hive a first-class Apiary membership surface", async () => {

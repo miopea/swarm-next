@@ -79,7 +79,7 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
   const canManageConfiguration = configuration?.managed_by !== "environment";
   const showConfigurationForm = !unavailable && configuration !== undefined && !connected && canManageConfiguration && (!configured || editingConfiguration);
   return (
-    <section className="settings-card integration-settings email-settings" aria-labelledby="email-integration-heading">
+    <section id="settings-email" className="settings-card integration-settings email-settings" aria-labelledby="email-integration-heading">
       <div><p className="eyebrow">Email intake</p><h3 id="email-integration-heading">Turn reported issues into finished work</h3></div>
       <p>Link one Microsoft Outlook account. Choose messages from Inbox on the task board; Swarm preserves the readable message, images, attachments, and original thread.</p>
       <div className="integration-status" role="status">
