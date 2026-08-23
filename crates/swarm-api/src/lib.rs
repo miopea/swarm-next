@@ -1490,19 +1490,34 @@ impl AppState {
                 return;
             }
         };
-        let settled = coordination_delivery::submit_to_each_terminal_at_once(
+        // One message per terminal, not one per outcome. Outcomes arrive in
+        // bursts and are all addressed to the same reader, so writing them
+        // separately made the recipient read its queue once per outcome.
+        let settled = coordination_delivery::submit_grouped_per_terminal(
             store,
             client,
             outcomes,
-            |outcome| {
+            |outcome| outcome.session_id,
+            |group| {
                 (
-                    outcome.session_id,
-                    task_outcome_message(outcome),
-                    delivery_marker(outcome.task_id),
+                    task_outcome_message(group),
+                    // Any id in the message will do; the marker only has to be
+                    // findable on screen to confirm the write landed.
+                    group
+                        .first()
+                        .map(|outcome| delivery_marker(outcome.task_id))
+                        .unwrap_or_default(),
                 )
             },
         )
         .await;
+        // Every outcome in a group shares the group's result, because they
+        // shared the write.
+        let settled = settled.into_iter().flat_map(|(group, submission)| {
+            group
+                .into_iter()
+                .map(move |outcome| (outcome, coordination_delivery::clone_submission(&submission)))
+        });
         for (outcome, submission) in settled {
             let result = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
@@ -7687,7 +7702,7 @@ mod tests {
             target_state: TaskState::Review,
             note: "Shipped\rand verified".into(),
         };
-        let message = task_outcome_message(&outcome);
+        let message = task_outcome_message(std::slice::from_ref(&outcome));
         assert_eq!(message.last(), Some(&b'\r'));
         assert!(!message[..message.len() - 1].contains(&b'\n'));
         assert!(!message.contains(&0x1b));

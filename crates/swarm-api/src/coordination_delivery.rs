@@ -194,6 +194,64 @@ pub(super) async fn submit_to_each_terminal_at_once<D>(
     join_all(groups).await.into_iter().flatten().collect()
 }
 
+/// Copies one write's outcome for each delivery that shared it.
+///
+/// `IpcError` is not `Clone`, and the alternative — reporting only the first
+/// delivery in a group and quietly failing the rest — is how a task outcome
+/// would be lost. Every delivery gets the result its write actually had.
+pub(super) fn clone_submission(
+    submission: &Result<TerminalSubmission, swarm_terminal::IpcError>,
+) -> Result<TerminalSubmission, swarm_terminal::IpcError> {
+    match submission {
+        Ok(TerminalSubmission::Acknowledged) => Ok(TerminalSubmission::Acknowledged),
+        Ok(TerminalSubmission::Deferred(reason)) => Ok(TerminalSubmission::Deferred(*reason)),
+        Ok(TerminalSubmission::Rejected { code, message }) => Ok(TerminalSubmission::Rejected {
+            code: code.clone(),
+            message: message.clone(),
+        }),
+        Ok(TerminalSubmission::Uncertain) => Ok(TerminalSubmission::Uncertain),
+        // The message is preserved; the variant is flattened to an I/O error,
+        // because IpcError is not Clone and every caller treats a transport
+        // failure as uncertain regardless of which kind it was.
+        Err(error) => Err(swarm_terminal::IpcError::Io(std::io::Error::other(
+            error.to_string(),
+        ))),
+    }
+}
+
+/// Writes one message per terminal, covering everything that terminal is owed.
+///
+/// The per-delivery variant above writes each message separately and is right
+/// where each carries its own answer — a decision, a briefing. Outcomes are not
+/// like that: they arrive in bursts, they are all addressed to the same reader,
+/// and a provider queues whatever lands while it is working. Six of them meant
+/// the recipient read the queue six times.
+///
+/// Every delivery in a group shares the group's result, because they shared the
+/// write. Nothing is reported delivered that was not.
+pub(super) async fn submit_grouped_per_terminal<D>(
+    store: &TaskStore,
+    client: &HostClient,
+    deliveries: Vec<D>,
+    session_of: impl Fn(&D) -> WorkerSessionId,
+    describe: impl Fn(&[D]) -> (Vec<u8>, Vec<u8>),
+) -> Vec<(Vec<D>, Result<TerminalSubmission, swarm_terminal::IpcError>)> {
+    let describe = &describe;
+    let session_of = &session_of;
+    let groups = group_by_terminal(deliveries, session_of)
+        .into_iter()
+        .map(|group| async move {
+            let Some(session_id) = group.first().map(session_of) else {
+                return (group, Ok(TerminalSubmission::Acknowledged));
+            };
+            let (bytes, marker) = describe(&group);
+            let submission =
+                submit_coordination_message(store, client, session_id, bytes, &marker).await;
+            (group, submission)
+        });
+    join_all(groups).await
+}
+
 /// Gathers deliveries into one group per terminal, keeping each terminal's own
 /// messages in the order they were claimed.
 ///
@@ -786,11 +844,11 @@ pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Ve
 const HANDOFF_EXCERPT_BYTES: usize = 480;
 
 /// Trims to a whole character within the budget, and says it was trimmed.
-fn handoff_excerpt(note: &str) -> String {
-    if note.len() <= HANDOFF_EXCERPT_BYTES {
+fn handoff_excerpt_within(note: &str, budget: usize) -> String {
+    if note.len() <= budget {
         return note.to_owned();
     }
-    let mut end = HANDOFF_EXCERPT_BYTES;
+    let mut end = budget;
     while end > 0 && !note.is_char_boundary(end) {
         end -= 1;
     }
@@ -802,19 +860,55 @@ fn handoff_excerpt(note: &str) -> String {
     format!("{}… (full handoff in task history)", note[..cut].trim_end())
 }
 
-pub(super) fn task_outcome_message(outcome: &TaskOutcomeDispatch) -> Vec<u8> {
+/// One message for everything a terminal is owed right now.
+///
+/// Outcomes arrive in bursts — several workers finishing near each other — and
+/// each one used to be written separately. A provider queues what arrives while
+/// it is working, so the recipient read the same queue N times and spent
+/// context on N preambles. The operator watching Queen: "It is almost like she
+/// is getting too many prompts before the previous one is done."
+///
+/// One line, always: these are typed into a prompt, and a newline would submit
+/// half a message.
+pub(super) fn task_outcome_message(outcomes: &[TaskOutcomeDispatch]) -> Vec<u8> {
+    let Some((first, rest)) = outcomes.split_first() else {
+        return Vec::new();
+    };
+    if rest.is_empty() {
+        return format!(
+            "[Swarm worker outcome] {} Use swarm_list_tasks and task history for authoritative context.\r",
+            one_outcome(first, HANDOFF_EXCERPT_BYTES),
+        )
+        .into_bytes();
+    }
+    // The excerpt budget is per message, not per outcome, so a burst of six
+    // does not paste six times as much as one did.
+    let budget = (HANDOFF_EXCERPT_BYTES / outcomes.len()).max(120);
+    let reported = outcomes
+        .iter()
+        .enumerate()
+        .map(|(index, outcome)| format!("{}) {}", index + 1, one_outcome(outcome, budget)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "[Swarm worker outcome] {} tasks reported. {reported} Use swarm_list_tasks and task history for authoritative context.\r",
+        outcomes.len(),
+    )
+    .into_bytes()
+}
+
+fn one_outcome(outcome: &TaskOutcomeDispatch, budget: usize) -> String {
     let reporter = terminal_safe_text(&outcome.reporting_worker_name);
     let title = terminal_safe_text(&outcome.title);
     let note = if outcome.note.is_empty() {
         "No additional handoff note.".into()
     } else {
-        terminal_safe_text(&handoff_excerpt(&outcome.note))
+        terminal_safe_text(&handoff_excerpt_within(&outcome.note, budget))
     };
     format!(
-        "[Swarm worker outcome] {} moved task {} \"{}\" to {}. Handoff: {} Use swarm_list_tasks and task history for authoritative context.\r",
+        "{} moved task {} \"{}\" to {}. Handoff: {}",
         reporter, outcome.task_id, title, outcome.target_state, note,
     )
-    .into_bytes()
 }
 fn terminal_safe_text(value: &str) -> String {
     value
@@ -1178,7 +1272,7 @@ mod tests {
         let note = format!("First sentence. {}", "padding words ".repeat(400));
         assert!(note.len() > 4_000);
 
-        let excerpt = handoff_excerpt(&note);
+        let excerpt = handoff_excerpt_within(&note, HANDOFF_EXCERPT_BYTES);
 
         assert!(excerpt.len() < 600, "{} bytes", excerpt.len());
         assert!(excerpt.starts_with("First sentence."));
@@ -1190,7 +1284,7 @@ mod tests {
     #[test]
     fn a_short_handoff_is_left_exactly_as_written() {
         let note = "Fixed, deployed, verified against production.";
-        assert_eq!(handoff_excerpt(note), note);
+        assert_eq!(handoff_excerpt_within(note, HANDOFF_EXCERPT_BYTES), note);
     }
 
     /// Trimming by bytes through a multi-byte character would produce invalid
@@ -1198,8 +1292,81 @@ mod tests {
     #[test]
     fn trimming_lands_on_a_character_boundary() {
         let note = "→".repeat(400);
-        let excerpt = handoff_excerpt(&note);
+        let excerpt = handoff_excerpt_within(&note, HANDOFF_EXCERPT_BYTES);
         assert!(excerpt.starts_with('→'));
         assert!(excerpt.ends_with("… (full handoff in task history)"));
+    }
+
+    fn outcome(task: &str, reporter: &str, note: &str) -> TaskOutcomeDispatch {
+        TaskOutcomeDispatch {
+            id: format!("delivery-{task}"),
+            task_id: task.parse().unwrap_or_else(|_| swarm_domain::TaskId::new()),
+            reporting_worker_id: swarm_domain::WorkerId::new(),
+            reporting_worker_name: reporter.to_owned(),
+            recipient_worker_id: swarm_domain::WorkerId::new(),
+            session_id: WorkerSessionId::new(),
+            title: format!("Task {task}"),
+            target_state: swarm_domain::TaskState::Review,
+            note: note.to_owned(),
+        }
+    }
+
+    /// "It is almost like she is getting too many prompts before the previous
+    /// one is done."
+    ///
+    /// A provider queues what arrives while it is working, so six outcomes
+    /// written separately meant the recipient read its queue six times and
+    /// spent context on six preambles. One write, one read.
+    #[test]
+    fn a_burst_of_outcomes_becomes_one_message() {
+        let burst = [
+            outcome("a", "Architecture", "docs-spell finally passes"),
+            outcome("b", "RCG Hub", "the deploy gate named the wrong slot"),
+            outcome("c", "Sculpt Studio", "the countdown is audible"),
+        ];
+
+        let message = String::from_utf8(task_outcome_message(&burst)).unwrap();
+
+        assert!(message.starts_with("[Swarm worker outcome] 3 tasks reported."));
+        for reporter in ["Architecture", "RCG Hub", "Sculpt Studio"] {
+            assert!(message.contains(reporter), "{reporter} missing from {message}");
+        }
+        // Typed into a prompt: a newline would submit half of it.
+        assert_eq!(message.matches('\n').count(), 0);
+        assert!(message.ends_with("authoritative context.\r"));
+    }
+
+    /// A burst must not paste N times as much as one outcome did. The excerpt
+    /// budget is per message, so the whole point of capping it survives.
+    #[test]
+    fn a_burst_costs_about_what_one_outcome_costs() {
+        let long = "x".repeat(4_000);
+        let one = task_outcome_message(&[outcome("a", "Architecture", &long)]).len();
+        let six = task_outcome_message(&[
+            outcome("a", "Architecture", &long),
+            outcome("b", "RCG Hub", &long),
+            outcome("c", "Sculpt Studio", &long),
+            outcome("d", "Platform", &long),
+            outcome("e", "Admin", &long),
+            outcome("f", "Nexus", &long),
+        ])
+        .len();
+
+        assert!(
+            six < one * 3,
+            "six outcomes took {six} bytes against {one} for one"
+        );
+    }
+
+    /// One outcome reads exactly as it did; a burst is the new shape, not a new
+    /// shape for everything.
+    #[test]
+    fn a_single_outcome_is_unchanged() {
+        let message =
+            String::from_utf8(task_outcome_message(&[outcome("a", "Architecture", "fixed")]))
+                .unwrap();
+
+        assert!(message.starts_with("[Swarm worker outcome] Architecture moved task "));
+        assert!(!message.contains("tasks reported"));
     }
 }
