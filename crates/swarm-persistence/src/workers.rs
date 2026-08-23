@@ -2262,4 +2262,51 @@ mod tests {
         assert!(store.claim_worker_geometry(session, phone).unwrap());
         assert!(!store.claim_worker_geometry(session, desktop).unwrap());
     }
+
+    /// "I left this in desktop. Went to mobile and it just kept refreshing."
+    ///
+    /// Opening a socket used to take the geometry from whoever held it, so a
+    /// second viewer stole the size simply by looking, the first took it back
+    /// on its next resize, and the two oscillated. Connecting says only that
+    /// someone is looking; intent arrives separately.
+    #[test]
+    fn merely_looking_at_a_worker_does_not_take_its_terminal_size() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Swarm",
+                ProviderKind::ClaudeCode,
+                "/workspace/swarm",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let desktop = PresenceDeviceId::new();
+        let phone = PresenceDeviceId::new();
+
+        // The desktop opens it first and sizes it.
+        assert!(
+            store
+                .claim_unowned_worker_geometry(session, desktop)
+                .unwrap()
+        );
+
+        // The phone opens the same worker. This is what a socket connect does
+        // now, and it must not move the authority.
+        assert!(
+            !store.claim_unowned_worker_geometry(session, phone).unwrap(),
+            "opening a worker someone else is sizing must not take it"
+        );
+        assert!(
+            store
+                .device_owns_worker_geometry(session, Some(desktop))
+                .unwrap()
+        );
+
+        // A deliberate resize is still a claim, which is what lets the person
+        // actually looking at it repair a size left by another device.
+        assert!(store.claim_worker_geometry(session, phone).unwrap());
+    }
 }

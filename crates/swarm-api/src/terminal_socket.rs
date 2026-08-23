@@ -101,7 +101,16 @@ pub async fn serve_terminal_socket(
             let _ = writer.await;
             return;
         };
-        match task_store.claim_worker_geometry(session_id, owner_device_id) {
+        // Connecting is not a claim. This took the geometry from whoever held
+        // it on every socket open, so opening a worker already visible on
+        // another device stole its size — the desktop's next resize took it
+        // back, and the operator watched a phone refresh itself repeatedly:
+        // "I left this in desktop. Went to mobile and it just kept refreshing."
+        //
+        // Intent arrives in the resume and resize messages, which already
+        // distinguish an explicit claim from an incidental one. Opening a
+        // socket says only that someone is looking.
+        match task_store.claim_unowned_worker_geometry(session_id, owner_device_id) {
             Ok(true) => {
                 if !forward_host_request(
                     &terminal_host,
