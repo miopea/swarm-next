@@ -1080,8 +1080,15 @@ export function App() {
       && pendingQueenDecisionCount === 0
       ? 1
       : 0;
+  // Held work is one card however many deliveries are behind it, the same way
+  // unanswered email is.
+  //
+  // It was in the queue and in neither count, so "Needs you" read 0 with a card
+  // plainly on the page. A badge that disagrees with the page teaches the
+  // operator to stop believing the badge, which is the one thing it has to do.
+  const heldDeliveryAttentionCount = heldDeliveries.length > 0 ? 1 : 0;
   const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
-    + (awaitingReply.length > 0 ? 1 : 0);
+    + heldDeliveryAttentionCount + (awaitingReply.length > 0 ? 1 : 0);
   const orphanSessions = useMemo(
     () => sessions.filter((session) => session.running && !workers.some((worker) => worker.active_session_id === session.session_id)),
     [sessions, workers],
@@ -1633,7 +1640,7 @@ export function App() {
               busy={busy}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + (awaitingReply.length > 0 ? 1 : 0)}
+              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + (awaitingReply.length > 0 ? 1 : 0)}
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />

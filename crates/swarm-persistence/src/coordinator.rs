@@ -1450,9 +1450,85 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        // Still being refused, as a real hold is — every retry re-observes it.
+        store
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD,
+                "queen-review",
+                None,
+                None,
+                "Queen cannot review while her terminal has an unanswered prompt",
+                1_190,
+            )
+            .unwrap();
         let standing = store.standing_coordinator_refusals(1_200, 120).unwrap();
         assert_eq!(standing.len(), 1);
         assert_eq!(standing[0].subject, "queen-review");
+    }
+
+    /// The operator's report: "I see this, but it isn't true."
+    ///
+    /// Two task briefs had been refused four times and once, half an hour
+    /// earlier, and had not been retried since — the dispatches had moved on
+    /// without ever succeeding, so nothing cleared them. The queue was still
+    /// announcing them as work waiting at a prompt, with a retry count frozen
+    /// where it had stopped.
+    ///
+    /// Success is not the only way a hold ends. Held work is retried every few
+    /// seconds, so what is genuinely held is re-observed constantly; anything
+    /// not seen for minutes has ended, whatever ended it.
+    #[test]
+    fn a_refusal_nobody_is_retrying_any_more_is_not_still_standing() {
+        let store = TaskStore::in_memory().unwrap();
+        store
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD,
+                "task-brief:abandoned",
+                None,
+                None,
+                "a briefing is waiting",
+                1_000,
+            )
+            .unwrap();
+
+        // Still being retried: still standing.
+        assert_eq!(
+            store.standing_coordinator_refusals(1_150, 120).unwrap().len(),
+            1
+        );
+
+        // Nothing has touched it since. It is not waiting on anything now.
+        let stale = 1_000 + TaskStore::STALE_REFUSAL_SECONDS + 1;
+        assert!(
+            store
+                .standing_coordinator_refusals(stale, 120)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// A hold that is still happening keeps being reported, however long it has
+    /// lasted. The window is about whether anyone is still retrying, not about
+    /// how patient the operator should be.
+    #[test]
+    fn a_hold_that_is_still_being_retried_keeps_standing_however_old() {
+        let store = TaskStore::in_memory().unwrap();
+        for minute in 0..30 {
+            store
+                .record_coordinator_refusal(
+                    REFUSAL_DELIVERY_HELD,
+                    "queen-review",
+                    None,
+                    None,
+                    "Queen's review is waiting",
+                    1_000 + minute * 60,
+                )
+                .unwrap();
+        }
+
+        let standing = store.standing_coordinator_refusals(1_000 + 29 * 60, 120).unwrap();
+        assert_eq!(standing.len(), 1);
+        assert_eq!(standing[0].observations, 30);
     }
 
     /// One row per stuck thing, not one per attempt. The measured case retried
@@ -1519,9 +1595,13 @@ mod tests {
                 2_000,
             )
             .unwrap();
+        // Recurring, so still being observed when the queue is read.
+        store
+            .record_coordinator_refusal(REFUSAL_DELIVERY_HELD, "queen-review", None, None, "held", 2_190)
+            .unwrap();
         let again = store.standing_coordinator_refusals(2_200, 120).unwrap();
         assert_eq!(again[0].first_observed_at, 2_000);
-        assert_eq!(again[0].observations, 1);
+        assert_eq!(again[0].observations, 2);
     }
 
     /// A deadline that has not passed is not overdue, whatever else is true.
@@ -2545,6 +2625,23 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns a persistence error.
+    /// A refusal stops standing when the coordinator stops re-observing it.
+    ///
+    /// Success clears a refusal, but success is not the only way one ends: a
+    /// dispatch can be cancelled, the task can move, the worker can be taken
+    /// away. None of those clear anything, and the query filtered on
+    /// `cleared_at` alone — so a hold that stopped being retried half an hour
+    /// ago was still reported as waiting, with a retry count frozen at 4.
+    ///
+    /// Held work is retried every few seconds, so anything genuinely held is
+    /// re-observed constantly. Not having been seen for this long means it is
+    /// not held now, whatever ended it.
+    pub const STALE_REFUSAL_SECONDS: i64 = 180;
+
+    /// The refusals the coordinator is still making, for the operator's queue.
+    ///
+    /// # Errors
+    /// Returns an error when the refusal ledger cannot be read.
     pub fn standing_coordinator_refusals(
         &self,
         now: i64,
@@ -2559,9 +2656,10 @@ impl TaskStore {
              LEFT JOIN worker_profiles worker ON worker.id = refusal.worker_id
              WHERE refusal.cleared_at IS NULL
                AND ?1 - refusal.first_observed_at >= ?2
+               AND ?1 - refusal.last_observed_at <= ?3
              ORDER BY refusal.first_observed_at",
         )?;
-        let rows = statement.query_map(params![now, grace_seconds], |row| {
+        let rows = statement.query_map(params![now, grace_seconds, Self::STALE_REFUSAL_SECONDS], |row| {
             Ok(CoordinatorRefusal {
                 kind: row.get(0)?,
                 subject: row.get(1)?,

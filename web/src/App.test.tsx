@@ -1008,3 +1008,46 @@ test("stops showing held work once the coordinator is holding none", async () =>
   await waitFor(() => expect(screen.queryByText(/Queen cannot review/)).not.toBeInTheDocument());
   vi.useRealTimers();
 });
+
+/**
+ * "It says (0) needs you items when that is on the page."
+ *
+ * Held work was rendered into the attention queue and counted by neither the
+ * rail badge nor the tab, so the page showed a card above a badge reading zero.
+ * A badge that disagrees with the page teaches the operator to stop believing
+ * the badge, which is the only thing it has to do.
+ */
+test("counts held work in the Needs you badge", async () => {
+  const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/health") return Promise.resolve(ok({ status: "ok", version: "0.1.0" }));
+    if (url === "/api/v1/auth/session") return Promise.resolve(ok({}));
+    if (url.endsWith("/integrations/email/awaiting-reply")) return Promise.resolve(ok([]));
+    if (url === "/api/v1/hive") return Promise.resolve(ok({
+      operator: { id: "operator-1", display_name: "Bea" },
+      hive: { id: "hive-1", name: "Meadow Hive", operator_id: "operator-1", apiary_id: null },
+    }));
+    if (url === "/api/v1/terminal/sessions") return Promise.resolve(ok({ type: "sessions", sessions: [] }));
+    if (["/api/v1/workers", "/api/v1/workspaces", "/api/v1/tasks", "/api/v1/decisions"].includes(url)) return Promise.resolve(ok([]));
+    if (url === "/api/v1/integrations/jira/bindings") return Promise.resolve(ok([]));
+    if (url === "/api/v1/apiary/join-links") return Promise.resolve(ok([]));
+    if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    if (url.includes("/api/v1/orchestration/queen-policy")) return Promise.resolve(ok({ at_hive: "coordinate", away: "coordinate", night_watch: "local_execution" }));
+    if (url.includes("/api/v1/orchestration/coordinator")) return Promise.resolve(ok({
+      completed_actions: 0, queen_calls_avoided: 0, uncertain_actions: 0, queued_actions: 0,
+      stale_attention_actions: 0, worker_exit_attention_actions: 0, unstarted_attention_actions: 0,
+      last_action_at: null, automatic_start_admission: "allowed", automatic_start_batch_limit: 1,
+      held: [{ kind: "delivery_held_open_prompt", subject: "task-brief:t1", worker_name: "Claude Shared Config", reason: "a briefing is waiting", first_observed_at: 1_787_402_241, observations: 4 }],
+    }));
+    if (url.includes("/api/v1/providers")) return Promise.resolve(ok({ claude_code: true, codex: false }));
+    if (url.includes("/api/v1/preferences/presentation/desktop")) return Promise.resolve(ok({ device_class: "desktop", color_theme: "light", terminal_keys_visible: true, configured: true }));
+    if (url.includes("/api/v1/integrations/jira/task-links")) return Promise.resolve(ok([]));
+    if (url.includes("/api/v1/preferences/start-surface")) return Promise.resolve(ok({ start_surface: "decisions" }));
+    return Promise.resolve(ok({ policy: "important_only", subscription_count: 0 }));
+  });
+  vi.stubGlobal("fetch", fetch);
+  render(<App />);
+
+  expect(await screen.findByText(/has work waiting behind a prompt/)).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("button", { name: /^Needs you/ })).toHaveTextContent("1"));
+});
