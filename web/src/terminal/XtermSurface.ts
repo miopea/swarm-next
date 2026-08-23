@@ -20,9 +20,19 @@ export class XtermSurface implements TerminalSurface {
   readonly #themeObserver: MutationObserver | undefined;
   readonly #terminalResizeSubscription: Disposable;
   readonly #resizeListeners = new Map<
-    (size: { rows: number; columns: number }) => void,
+    (size: { rows: number; columns: number; origin: "viewport" | "restore" }) => void,
     { rows: number; columns: number }
   >();
+  /**
+   * Where the next published size came from.
+   *
+   * Restoring a canonical snapshot resizes the terminal, which publishes a size
+   * exactly as a real viewport change does. Told apart, one of them is the
+   * operator changing their own window and the other is this renderer echoing a
+   * size that arrived from another device — and only the first should ask to
+   * take authority over the PTY.
+   */
+  #geometryPublicationOrigin: "viewport" | "restore" = "viewport";
   #resizeObserver: ResizeObserver | undefined;
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
   #redrawFrame: number | undefined;
@@ -135,6 +145,8 @@ export class XtermSurface implements TerminalSurface {
       this.#element.setAttribute("aria-busy", "true");
     }
     this.#terminal.reset();
+    // Everything this resize publishes is an echo of a size decided elsewhere.
+    this.#geometryPublicationOrigin = "restore";
     this.#terminal.resize(snapshot.columns, snapshot.rows);
     // The cover comes down when the bytes are on screen, not when someone
     // later re-fits. It used to be removed only by `fit`, and the controller
@@ -149,7 +161,9 @@ export class XtermSurface implements TerminalSurface {
     return this.#terminal.onData(listener);
   }
 
-  onResize(listener: (size: { rows: number; columns: number }) => void): Disposable {
+  onResize(
+    listener: (size: { rows: number; columns: number; origin: "viewport" | "restore" }) => void,
+  ): Disposable {
     this.#resizeListeners.set(listener, { rows: this.#terminal.rows, columns: this.#terminal.cols });
     return {
       dispose: () => this.#resizeListeners.delete(listener),
@@ -414,11 +428,13 @@ export class XtermSurface implements TerminalSurface {
       if (this.#disposed) return;
       const size = { rows: this.#terminal.rows, columns: this.#terminal.cols };
       const forced = this.#geometryPublicationForced;
+      const origin = this.#geometryPublicationOrigin;
       this.#geometryPublicationForced = false;
+      this.#geometryPublicationOrigin = "viewport";
       for (const [listener, previous] of this.#resizeListeners) {
         if (!forced && previous.rows === size.rows && previous.columns === size.columns) continue;
         this.#resizeListeners.set(listener, size);
-        listener(size);
+        listener({ ...size, origin });
       }
     });
   }

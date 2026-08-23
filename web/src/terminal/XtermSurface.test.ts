@@ -506,7 +506,7 @@ test("resize events publish the settled renderer geometry and coalesce stale eve
   xterm.resizeListener?.({ rows: 41, cols: 154 });
   await Promise.resolve();
   expect(listener).toHaveBeenCalledOnce();
-  expect(listener).toHaveBeenCalledWith({ rows: 41, columns: 154 });
+  expect(listener).toHaveBeenCalledWith({ rows: 41, columns: 154, origin: "viewport" });
 });
 
 /**
@@ -596,7 +596,7 @@ test("repaints unchanged geometry after a settled viewport change", async () => 
   await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_FOR_TEST_MS + 16);
 
   expect(xterm.resize).not.toHaveBeenCalled();
-  expect(listener).toHaveBeenCalledWith({ rows: 24, columns: 80 });
+  expect(listener).toHaveBeenCalledWith({ rows: 24, columns: 80, origin: "viewport" });
   expect(xterm.clearTextureAtlas).toHaveBeenCalledOnce();
   expect(xterm.refresh).toHaveBeenCalledWith(0, 23);
   await vi.advanceTimersByTimeAsync(350);

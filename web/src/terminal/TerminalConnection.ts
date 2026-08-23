@@ -164,18 +164,28 @@ export class TerminalConnection {
     return this.#geometryOwned;
   }
 
-  resize(rows: number, columns: number): void {
+  /**
+   * @param intent `"operator"` when a person changed this viewport — resizing
+   * the window, selecting the worker, pressing refresh. `"echo"` when the
+   * renderer is re-fitting to a size that arrived from somewhere else.
+   *
+   * Only an operator's own change asks to take authority over the PTY. An echo
+   * asking to claim is what made two devices trade a terminal's size: measured
+   * on 2026-08-23, 31 of 31 requests in one 68-second window asked to take
+   * authority, four of them succeeded in taking it from the other device, and
+   * nine were refused — including the operator's own attempts to take over,
+   * which is why taking over needed several tries.
+   */
+  resize(rows: number, columns: number, intent: "operator" | "echo" = "operator"): void {
     if (rows <= 0 || columns <= 0) return;
     this.#size = { rows, columns };
     this.#send({
       type: "resize",
       rows,
       columns,
-      // A viewport change in the window the operator is acting in is an
-      // explicit operator action, just like selecting or refreshing the worker.
       // Focus rather than visibility, because a pop-out and the window it came
       // from are both visible at once and would each claim the same PTY.
-      claim_geometry: document.hasFocus(),
+      claim_geometry: intent === "operator" && document.hasFocus(),
     });
   }
 

@@ -125,7 +125,7 @@ test("view detach does not dispose, reopen, or reconnect a terminal", async () =
 
   expect(surface.open).toHaveBeenCalledTimes(1);
   expect(surface.fit).toHaveBeenCalledTimes(1);
-  expect(connection.resize).toHaveBeenCalledWith(24, 80);
+  expect(connection.resize).toHaveBeenCalledWith(24, 80, "echo");
   expect(surface.dispose).not.toHaveBeenCalled();
   expect(connection.start).toHaveBeenCalledTimes(1);
   expect(connection.dispose).not.toHaveBeenCalled();
@@ -167,13 +167,13 @@ test("reattaching a started terminal refits after its new container layout", asy
 
   controller.attach(firstMount);
   await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
-  expect(connection.resize).toHaveBeenLastCalledWith(24, 80);
+  expect(connection.resize).toHaveBeenLastCalledWith(24, 80, "echo");
 
   controller.detach();
   controller.attach(secondMount);
 
   await vi.waitFor(() => expect(surface.fit).toHaveBeenCalledTimes(2));
-  await vi.waitFor(() => expect(connection.resize).toHaveBeenLastCalledWith(38, 132));
+  await vi.waitFor(() => expect(connection.resize).toHaveBeenLastCalledWith(38, 132, "echo"));
   expect(connection.start).toHaveBeenCalledTimes(1);
   expect(connection.dispose).not.toHaveBeenCalled();
   expect(secondMount.children).toHaveLength(1);
@@ -264,7 +264,7 @@ test("canonical snapshots reset the renderer through its controller", async () =
 
   expect(surface.restore).toHaveBeenCalledWith(snapshot);
   expect(surface.fit).toHaveBeenCalledTimes(2);
-  expect(connection.resize).toHaveBeenLastCalledWith(38, 132);
+  expect(connection.resize).toHaveBeenLastCalledWith(38, 132, "echo");
   expect(surface.write).not.toHaveBeenCalled();
 });
 
@@ -336,7 +336,7 @@ test("transport waits for a post-layout renderer fit", async () => {
 
   resolveFit?.({ rows: 38, columns: 132 });
   await vi.waitFor(() => expect(connection.start).toHaveBeenCalledTimes(1));
-  expect(connection.resize).toHaveBeenCalledWith(38, 132);
+  expect(connection.resize).toHaveBeenCalledWith(38, 132, "echo");
   expect(surface.onResize).toHaveBeenCalledTimes(1);
 });
 
@@ -381,5 +381,5 @@ test("the device that owns the claim still asserts its own size", async () => {
 
   await handlers.onSnapshot({ sequence: 5, rows: 24, columns: 120, truncated: false, reason: "attached" as const, bytes: new Uint8Array() });
 
-  expect(connection.resize).toHaveBeenCalledWith(60, 40);
+  expect(connection.resize).toHaveBeenCalledWith(60, 40, "echo");
 });

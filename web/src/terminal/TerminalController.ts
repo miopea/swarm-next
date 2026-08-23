@@ -15,7 +15,9 @@ export interface TerminalSurface {
   write(bytes: Uint8Array): Promise<void>;
   restore(snapshot: TerminalSnapshot): Promise<void>;
   onData(listener: (text: string) => void): Disposable;
-  onResize(listener: (size: { rows: number; columns: number }) => void): Disposable;
+  onResize(
+    listener: (size: { rows: number; columns: number; origin: "viewport" | "restore" }) => void,
+  ): Disposable;
   onScroll(listener: (atBottom: boolean) => void): Disposable;
   scrollToBottom(): void;
   dispose(): void;
@@ -24,7 +26,7 @@ export interface TerminalSurface {
 export interface TerminalConnectionLike {
   start(handlers: TerminalConnectionHandlers): void;
   sendInput(text: string): void;
-  resize(rows: number, columns: number): void;
+  resize(rows: number, columns: number, intent?: "operator" | "echo"): void;
   dispose(): void;
   /**
    * Whether this device may set the terminal's size. Optional so a test double
@@ -160,7 +162,7 @@ export class TerminalController {
 
   #refitWhenAttached(): void {
     if (this.#refitPromise) return;
-    const refitPromise = this.#refitAttachedSurface();
+    const refitPromise = this.#refitAttachedSurface("echo");
     this.#refitPromise = refitPromise;
     void refitPromise
       // A started terminal already owns a valid PTY size. Reattachment can race
@@ -173,16 +175,17 @@ export class TerminalController {
       });
   }
 
-  async #refitAttachedSurface(): Promise<void> {
+  async #refitAttachedSurface(intent: "operator" | "echo" = "operator"): Promise<void> {
     const { rows, columns } = await this.#surface.fit();
     if (this.#disposed || !this.#started || !this.#host.parentElement) return;
-    this.#connection.resize(rows, columns);
+    this.#connection.resize(rows, columns, intent);
   }
 
   async #fitAndStart(): Promise<void> {
     const { rows, columns } = await this.#surface.fit();
     if (this.#disposed || this.#started || !this.#host.parentElement) return;
-    this.#connection.resize(rows, columns);
+    // Connecting is not a claim; the resume frame carries that intent.
+    this.#connection.resize(rows, columns, "echo");
     this.#connection.start({
       onOutput: (bytes) => this.#surface.write(bytes),
       onSnapshot: async (snapshot) => {
@@ -220,7 +223,7 @@ export class TerminalController {
             return this.#applyRestoredFocus(restoreFocus);
           }
           const fitted = await this.#surface.fit();
-          this.#connection.resize(fitted.rows, fitted.columns);
+          this.#connection.resize(fitted.rows, fitted.columns, "echo");
         } catch {
           // Responsive PWA transitions can briefly leave the mounted surface
           // without measurable font metrics. The canonical snapshot is already
@@ -234,8 +237,8 @@ export class TerminalController {
       },
     });
     this.#surfaceSubscriptions.push(
-      this.#surface.onResize(({ rows: nextRows, columns: nextColumns }) =>
-        this.#connection.resize(nextRows, nextColumns),
+      this.#surface.onResize(({ rows: nextRows, columns: nextColumns, origin }) =>
+        this.#connection.resize(nextRows, nextColumns, origin === "restore" ? "echo" : "operator"),
       ),
     );
     this.#started = true;

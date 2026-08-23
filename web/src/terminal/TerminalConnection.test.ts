@@ -178,6 +178,42 @@ test("only the focused window claims the geometry of a shared terminal", async (
   });
 });
 
+/**
+ * Measured on the operator's Hive over 68 seconds: 31 size requests, 2 devices,
+ * 4 handovers, 9 refused — and 31 of 31 asking to take authority.
+ *
+ * Every automatic re-fit was claiming the PTY, so two devices took it from each
+ * other, and the operator's own attempts to take over were among the nine
+ * refusals. That is why taking over needed several clicks.
+ *
+ * A focused window re-fitting to a size that arrived from somewhere else is not
+ * a person changing their viewport, and must not ask for authority.
+ */
+test("only a person changing their own viewport asks to take the terminal", async () => {
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  document.hasFocus = () => true;
+
+  connection.resize(38, 154, "echo");
+  expect(JSON.parse(sockets[0].sent.at(-1) ?? "null")).toEqual({
+    type: "resize",
+    rows: 38,
+    columns: 154,
+    claim_geometry: false,
+  });
+
+  // The same focused window, resized by the person sitting at it.
+  connection.resize(38, 154, "operator");
+  expect(JSON.parse(sockets[0].sent.at(-1) ?? "null")).toEqual({
+    type: "resize",
+    rows: 38,
+    columns: 154,
+    claim_geometry: true,
+  });
+});
+
 test("uses the trusted browser cookie for terminal attach grants", async () => {
   const { connection, fetch, handlers, sockets } = harness([1], 3_000, BROWSER_SESSION_AUTH);
   connection.start(handlers);
