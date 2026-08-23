@@ -2771,6 +2771,10 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/tasks/{task_id}/restore", post(tasks::restore_task))
         .route(
+            "/api/v1/tasks/{task_id}/completion-exemption",
+            post(tasks::approve_completion_exemption),
+        )
+        .route(
             "/api/v1/tasks/{task_id}/state",
             patch(tasks::transition_task),
         )

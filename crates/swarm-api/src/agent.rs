@@ -230,6 +230,7 @@ impl ServerHandler for AgentMcp {
                 list_workers_tool(),
                 list_coordination_attention_tool(),
                 assign_task_tool(),
+                approve_no_deployment_tool(),
                 list_apiary_hives_tool(),
                 list_apiary_tasks_tool(),
                 create_apiary_task_tool(),
@@ -279,6 +280,7 @@ impl ServerHandler for AgentMcp {
                 .list_visible_tasks(self.principal)
                 .and_then(|tasks| structured(json!({ "tasks": tasks }))),
             "swarm_read_task_history" => self.read_task_history(arguments),
+            "swarm_approve_no_deployment" => self.approve_no_deployment(arguments),
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
@@ -556,6 +558,20 @@ impl AgentMcp {
                 "The current unattended Queen run is not authorized for that action. Ask the operator for a decision or finish the run as needs_operator.".into(),
             )))
         }
+    }
+
+    fn approve_no_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<ApproveNoDeploymentInput>(arguments)?;
+        let task_id =
+            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let evidence = self
+            .tasks
+            .approve_completion_exemption(self.principal, task_id)?;
+        structured(json!({
+            "task_id": input.task_id,
+            "evidence": format!("{evidence:?}"),
+            "completable": true,
+        }))
     }
 
     fn read_task_history(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -944,6 +960,12 @@ struct CommentJiraTaskInput {
 }
 
 #[derive(Deserialize)]
+struct ApproveNoDeploymentInput {
+    task_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ReadTaskHistoryInput {
     task_id: String,
     #[serde(default)]
@@ -1059,6 +1081,20 @@ fn list_tasks_tool() -> Tool {
         "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
+    )
+}
+
+fn approve_no_deployment_tool() -> Tool {
+    tool(
+        "swarm_approve_no_deployment",
+        "Queen only: agree that a task genuinely had nothing to deploy, so it can be completed. A worker records the claim with swarm_record_no_deployment and cannot approve its own; read the handoff first, and reject by leaving it in review with a note instead.",
+        &json!({
+            "type": "object",
+            "properties": { "task_id": { "type": "string" } },
+            "required": ["task_id"],
+            "additionalProperties": false
+        }),
+        false,
     )
 }
 
@@ -1512,6 +1548,9 @@ mod tests {
     /// Tools Queen holds and a worker must never see. Recording work is not on
     /// this list: a worker files drafts, and only Queen routes them.
     const QUEEN_ONLY_TOOLS: &[&str] = &[
+        // A worker records that its work had nothing to deploy; it must never
+        // be able to approve its own claim.
+        "swarm_approve_no_deployment",
         "swarm_preview_jira_project",
         "swarm_sync_jira_project",
         "swarm_refresh_jira_project",

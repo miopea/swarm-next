@@ -2046,6 +2046,49 @@ impl TaskService {
         Ok(self.store.list_task_activity(task_id, limit)?)
     }
 
+    /// Approves a worker's claim that a task had nothing to deploy.
+    ///
+    /// The completion gate exists so nothing is recorded as done without
+    /// evidence, and for shipping work the deployment is that evidence. Work
+    /// that ships nothing — documentation, an investigation, a duplicate,
+    /// a "verified, not applicable" finding — has none, so a worker claims an
+    /// exemption and somebody else agrees to it. The store has enforced that
+    /// from the start; nothing above it could ever say yes, so non-shipping
+    /// work could be finished and never completed.
+    ///
+    /// Queen approves. A worker cannot approve its own claim, which is the
+    /// whole point of a second pair of eyes; the operator can, so a wedged
+    /// Queen cannot strand finished work.
+    ///
+    /// # Errors
+    /// Denies a worker caller, denies a task the caller cannot see, and
+    /// propagates persistence failures.
+    pub fn approve_completion_exemption(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<swarm_persistence::CompletionEvidence, ApplicationError> {
+        if principal.role != WorkerRole::Queen {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        let visible = self
+            .list_visible_tasks(principal)?
+            .into_iter()
+            .any(|task| task.id == task_id);
+        if !visible {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        Ok(self
+            .store
+            .approve_completion_exemption(
+                task_id,
+                "queen",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(0)),
+            )?)
+    }
+
     /// Lists the local roster for Queen coordination.
     ///
     /// # Errors
@@ -3066,6 +3109,68 @@ mod tests {
             AgentPrincipal { worker_id: worker.id, role: WorkerRole::Worker, active_session_id: Some(session) },
             other.id,
             50,
+        );
+
+        assert!(matches!(denied, Err(ApplicationError::NotAuthorized)));
+    }
+
+    /// The dead end Queen hit: a worker records that a task had nothing to
+    /// deploy, the store waits for an approval, and nothing above the store
+    /// could ever give one. Three finished tasks sat in review with no legal
+    /// path to completed.
+    #[test]
+    fn queen_can_approve_work_that_had_nothing_to_deploy() {
+        let (service, queen, worker) = setup();
+        let session = WorkerSessionId::new();
+        service.store.bind_worker_session(worker.id, session).unwrap();
+        let task = service
+            .store
+            .create_task_with_details("Correct a standard", "", TaskPriority::Normal, "/workspace/petal")
+            .unwrap();
+        service.store.assign_task(task.id, session).unwrap();
+        service
+            .store
+            .claim_completion_exemption(task.id, "Documentation only; nothing ships.", Some(worker.id), 1_000)
+            .unwrap();
+
+        service
+            .approve_completion_exemption(AgentPrincipal::from(&queen), task.id)
+            .unwrap();
+
+        // The gate is satisfied, so the work can finally be recorded as done.
+        service.store.transition_task(task.id, TaskState::Ready).unwrap();
+        service.store.transition_task(task.id, TaskState::Active).unwrap();
+        service.store.transition_task(task.id, TaskState::Review).unwrap();
+        service
+            .transition_task(
+                AgentPrincipal::from(&queen),
+                task.id,
+                TaskState::Completed,
+                "Approved: nothing to deploy.",
+            )
+            .unwrap();
+    }
+
+    /// The second pair of eyes is the whole point. A worker approving its own
+    /// claim would make the gate a formality.
+    #[test]
+    fn a_worker_cannot_approve_its_own_no_deployment_claim() {
+        let (service, _queen, worker) = setup();
+        let session = WorkerSessionId::new();
+        service.store.bind_worker_session(worker.id, session).unwrap();
+        let task = service
+            .store
+            .create_task_with_details("Spike", "", TaskPriority::Normal, "/workspace/petal")
+            .unwrap();
+        service.store.assign_task(task.id, session).unwrap();
+        service
+            .store
+            .claim_completion_exemption(task.id, "Investigation only.", Some(worker.id), 1_000)
+            .unwrap();
+
+        let denied = service.approve_completion_exemption(
+            AgentPrincipal { worker_id: worker.id, role: WorkerRole::Worker, active_session_id: Some(session) },
+            task.id,
         );
 
         assert!(matches!(denied, Err(ApplicationError::NotAuthorized)));

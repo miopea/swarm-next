@@ -189,6 +189,24 @@ pub(super) async fn restore_task(
     Ok(Json(task).into_response())
 }
 
+/// The operator agreeing that a task had nothing to deploy.
+///
+/// Queen approves these ordinarily. This exists so a Queen who is wedged, or
+/// wrong, cannot leave finished work with no legal path to completed — which is
+/// the state three tasks were in when this was written.
+pub(super) async fn approve_completion_exemption(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let evidence = crate::task_store(&state)?
+        .approve_completion_exemption(parse_task_id(&task_id)?, "operator", crate::unix_timestamp())
+        .map_err(|error| crate::task_store_error(&error))?;
+    state.control_room_notify.notify_waiters();
+    Ok(Json(serde_json::json!({ "evidence": format!("{evidence:?}") })).into_response())
+}
+
 pub(super) async fn transition_task(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
