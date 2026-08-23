@@ -1110,14 +1110,43 @@ pub(super) fn queue_jira_transition(
     {
         return Ok(());
     }
-    let active: i64 = transaction.query_row(
+    // A Jira write that has not landed yet must not stop the task moving here.
+    //
+    // This used to refuse the local transition outright while any delivery was
+    // in flight, so a single Jira write stuck retrying froze that task inside
+    // Swarm — the same shape as the mapping gap above, arriving one step later.
+    // The operator's ruling, 2026-08-23: the local task moves and the Jira
+    // write queues behind it.
+    //
+    // A queued write is superseded rather than joined, because Jira should end
+    // at the task's newest state and not walk through every intermediate one. A
+    // write already dispatching cannot be recalled, so the new state queues
+    // behind it and lands after.
+    let superseded = transaction.execute(
+        "UPDATE jira_transition_deliveries SET target_task_state = ?2, updated_at = unixepoch()
+         WHERE task_id = ?1 AND state = 'queued'",
+        params![task_id.to_string(), target.to_string()],
+    )?;
+    if superseded > 0 {
+        return Ok(());
+    }
+    // A delivery already dispatching cannot be superseded and cannot be joined:
+    // a unique index allows one active write per task, so inserting beside it
+    // would fail the constraint and take the local transition down with it —
+    // the freeze this is meant to remove, arriving as a database error instead.
+    //
+    // The local move proceeds and this state is not queued. Jira is then behind
+    // by one transition until the task moves again, which is a visible gap
+    // rather than a stopped Hive. Narrow: it needs a transition to land in the
+    // moment another is mid-flight.
+    let dispatching: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM jira_transition_deliveries
-         WHERE task_id = ?1 AND state <> 'delivered'",
+         WHERE task_id = ?1 AND state = 'dispatching'",
         [task_id.to_string()],
         |row| row.get(0),
     )?;
-    if active > 0 {
-        return Err(TaskStoreError::JiraTransitionPending);
+    if dispatching > 0 {
+        return Ok(());
     }
     let pending: i64 = transaction.query_row(
         "SELECT COUNT(*) FROM jira_transition_deliveries
@@ -1126,7 +1155,11 @@ pub(super) fn queue_jira_transition(
         |row| row.get(0),
     )?;
     if pending >= MAX_PENDING_TRANSITIONS {
-        return Err(TaskStoreError::JiraTransitionQueueFull);
+        // Still not a reason to stop the Hive. The queue being full is a Swarm
+        // problem, not a statement about this task, and refusing the local move
+        // would hand an internal backlog the power to freeze internal work.
+        // Jira falls behind and the backlog is visible in the queue itself.
+        return Ok(());
     }
     transaction.execute(
         "INSERT INTO jira_transition_deliveries (id, task_id, target_task_state, state)
@@ -1245,6 +1278,86 @@ fn valid_issue(issue: &JiraIssueSnapshot<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// The operator's ruling, 2026-08-23: when a Jira write is held, the local
+    /// task still moves.
+    ///
+    /// A pending write used to refuse the next local transition outright, so a
+    /// single Jira write stuck retrying froze that task inside Swarm — the same
+    /// freeze as a missing mapping, one step later.
+    #[test]
+    fn a_pending_jira_write_does_not_freeze_the_next_local_transition() {
+        let store = TaskStore::in_memory().unwrap();
+        let binding = store
+            .upsert_jira_project_binding(&JiraProjectBindingInput {
+                project_id: "10009",
+                project_key: "WWD",
+                project_name: "WS: Website Development",
+                scope: JiraProjectScope::Hive,
+                apiary_id: None,
+            })
+            .unwrap();
+        store
+            .replace_jira_status_mappings(
+                binding.id,
+                &[JiraStatusMapping {
+                    jira_status_id: "10040".into(),
+                    jira_status_name: "To Do".into(),
+                    task_state: TaskState::Ready,
+                }],
+            )
+            .unwrap();
+        let linked = store
+            .sync_jira_issues(
+                binding.id,
+                &[JiraIssueSnapshot {
+                    issue_id: "20009",
+                    issue_key: "WWD-1",
+                    summary: "Contribution new D/CW",
+                    description: "",
+                    status_id: "10040",
+                    status_name: "To Do",
+                    assignee_account_id: None,
+                    assignee_name: None,
+                    remote_updated_at: "2026-08-18T12:00:00.000+0000",
+                }],
+            )
+            .unwrap()
+            .remove(0);
+        let task = linked.id;
+
+        // First move queues a Jira write.
+        store.transition_task(task, TaskState::Blocked).unwrap();
+        let queued: i64 = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM jira_transition_deliveries WHERE task_id = ?1 AND state = 'queued'",
+                [task.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(queued, 1);
+
+        // Second move, while that write is still queued, must not be refused.
+        store.transition_task(task, TaskState::Active).unwrap();
+        assert_eq!(store.get_task(task).unwrap().state, TaskState::Active);
+
+        // And Jira is told where the task ended up, not every step it took.
+        let (count, target): (i64, String) = store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*), MAX(target_task_state) FROM jira_transition_deliveries
+                 WHERE task_id = ?1 AND state = 'queued'",
+                [task.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "the queued write is superseded, not joined");
+        assert_eq!(target, "active");
+    }
+
     #[test]
     fn an_unmapped_lifecycle_state_does_not_freeze_the_task_locally() {
         // Reproduces the reported failure: a binding mapped only to the three
