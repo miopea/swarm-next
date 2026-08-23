@@ -874,6 +874,11 @@ export function App() {
     await perform(async () => {
       await claimWorker(operatorToken, workerId, presenceDeviceId());
       await refreshControlRoom(false);
+      // Taking the worker moves the geometry claim here, but the terminal keeps
+      // whatever size the device you took it from set until something re-fits.
+      // Without this, "Work here" appeared to do nothing on a phone.
+      const session = workers.find((worker) => worker.id === workerId)?.active_session_id;
+      if (session) terminalWorkspace.redrawSession(session);
     }, "Taking this worker…");
   }
 

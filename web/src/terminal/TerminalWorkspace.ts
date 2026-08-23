@@ -32,6 +32,17 @@ export class TerminalWorkspace {
     return controller;
   }
 
+  /**
+   * Refit a live terminal to this device's viewport.
+   *
+   * Used after taking a worker: the claim moves the geometry to this device,
+   * but nothing on screen changes until something re-fits, so "Work here" left
+   * the terminal at the size the device you took it from had set.
+   */
+  redrawSession(sessionId: string): void {
+    void this.#controllers.get(sessionId)?.redraw();
+  }
+
   focusSession(sessionId: string, input: boolean): void {
     const controller = this.#controllers.get(sessionId);
     if (controller) controller.requestFocus(input);
