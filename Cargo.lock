@@ -2900,7 +2900,7 @@ dependencies = [
 
 [[package]]
 name = "swarm-api"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "axum",
  "base64ct",
@@ -2934,7 +2934,7 @@ dependencies = [
 
 [[package]]
 name = "swarm-application"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "swarm-domain",
  "swarm-persistence",
@@ -2943,7 +2943,7 @@ dependencies = [
 
 [[package]]
 name = "swarm-cli"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "rusqlite",
  "serde",
@@ -2959,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "swarm-domain"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "base64ct",
  "ed25519-dalek",
@@ -2970,7 +2970,7 @@ dependencies = [
 
 [[package]]
 name = "swarm-persistence"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "base64ct",
  "ed25519-dalek",
@@ -2989,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "swarm-release-tool"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "base64ct",
  "ed25519-dalek",
@@ -3000,7 +3000,7 @@ dependencies = [
 
 [[package]]
 name = "swarm-terminal"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "nix",
  "portable-pty",
@@ -3016,7 +3016,7 @@ dependencies = [
 
 [[package]]
 name = "swarm-terminal-host"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "nix",
  "reqwest",
