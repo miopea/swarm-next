@@ -17,6 +17,37 @@ export function clipboardImage(clipboard: DataTransfer): File | undefined {
 }
 
 /**
+ * What a drop or paste carried, told apart so the operator can be told why.
+ *
+ * A file that is not a supported image used to be indistinguishable from no
+ * file at all: both did nothing, silently. "Seems that copy and paste doesn't
+ * work for .gif either" is what that looks like from the outside — and it is
+ * also what it looks like when the clipboard never held a file in the first
+ * place, which is what a browser gives you when you copy an image out of a web
+ * page rather than a file out of a file manager.
+ */
+export type TransferredImage =
+  | { kind: "image"; file: File }
+  | { kind: "unsupported"; description: string }
+  | { kind: "none" };
+
+export function transferredImage(transfer: DataTransfer): TransferredImage {
+  const image = clipboardImage(transfer);
+  if (image) return { kind: "image", file: image };
+  const files = [...transfer.items].filter((item) => item.kind === "file");
+  if (files.length === 0) return { kind: "none" };
+  const types = [...new Set(files.map((item) => item.type || "an unknown type"))];
+  return { kind: "unsupported", description: types.join(", ") };
+}
+
+/** The formats a terminal accepts, for saying so. */
+export function supportedImageSummary(): string {
+  return [...SUPPORTED_TERMINAL_IMAGE_TYPES]
+    .map((type) => type.replace("image/", "").toUpperCase())
+    .join(", ");
+}
+
+/**
  * Uploads one image and returns the path to paste.
  *
  * Retried through the same transient-failure path as the rest of the runtime:

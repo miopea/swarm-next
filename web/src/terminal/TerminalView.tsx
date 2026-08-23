@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 
 import { MobileTerminalComposer } from "./MobileTerminalComposer";
 import { TerminalConnection, type TerminalConnectionState } from "./TerminalConnection";
 import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
-import { clipboardImage, terminalAttachmentPaste, terminalTextPaste, uploadTerminalImage } from "./TerminalAttachments";
+import { supportedImageSummary, terminalAttachmentPaste, terminalTextPaste, transferredImage, uploadTerminalImage } from "./TerminalAttachments";
 import type { QueenAutonomyLevel, QueenAutomationStatus } from "../api";
 import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
 import { queenAutomationCompactLabel, queenAutomationStateDetail, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
@@ -41,6 +41,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   // Why it failed, not just that it did. "Image could not be added" on its own
   // left an operator with nothing to act on and nothing to report.
   const [attachmentError, setAttachmentError] = useState<string>();
+  const [dropActive, setDropActive] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   // Held in a ref so a new callback identity cannot detach and reattach the
   // terminal: connection lifetime must not follow a React prop.
@@ -70,15 +71,38 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   }
 
   async function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
-    const image = clipboardImage(event.clipboardData);
+    const transferred = transferredImage(event.clipboardData);
     event.preventDefault();
     event.stopPropagation();
-    if (!image) {
-      const text = event.clipboardData.getData("text/plain");
-      if (text) controller.sendInput(terminalTextPaste(text));
-      return;
+    if (transferred.kind === "image") return addImage(transferred.file);
+    if (transferred.kind === "unsupported") {
+      return refuseImage(transferred.description);
     }
-    await addImage(image);
+    const text = event.clipboardData.getData("text/plain");
+    if (text) controller.sendInput(terminalTextPaste(text));
+  }
+
+  /**
+   * Dropping a file onto the terminal.
+   *
+   * This did not exist. Drag-and-drop was never wired to the terminal for any
+   * format, so "it won't work" was true of PNGs too — the operator had only
+   * ever pasted those, so the gap read as a GIF problem.
+   */
+  async function handleDrop(event: DragEvent<HTMLDivElement>) {
+    if (![...event.dataTransfer.items].some((item) => item.kind === "file")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDropActive(false);
+    const transferred = transferredImage(event.dataTransfer);
+    if (transferred.kind === "image") return addImage(transferred.file);
+    if (transferred.kind === "unsupported") refuseImage(transferred.description);
+  }
+
+  /** Says why, rather than doing nothing and looking broken. */
+  function refuseImage(description: string) {
+    setAttachmentError(`${description} is not an image this terminal can add. Supported: ${supportedImageSummary()}.`);
+    setAttachmentState("error");
   }
 
   async function addImage(image: File) {
@@ -116,6 +140,18 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
         if (event.key === "Enter") dismissAttachmentNotice();
       }}
       onPasteCapture={(event) => void handlePaste(event)}
+      onDragOver={(event) => {
+        if (![...event.dataTransfer.items].some((item) => item.kind === "file")) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setDropActive(true);
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDropActive(false);
+      }}
+      onDrop={(event) => void handleDrop(event)}
+      data-drop-active={dropActive || undefined}
     >
       <div className={`terminal-toolbar${quiet ? " terminal-toolbar-quiet" : ""}`}>
         <div className="terminal-connection-summary">

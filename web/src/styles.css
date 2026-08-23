@@ -197,6 +197,7 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .worker-repository-field { display: grid; gap: 3px; color: var(--quiet); }
 .worker-repository-field input { min-width: 0; font: inherit; }
 .unlock-passkey { margin-top: 8px; width: 100%; }
+.terminal-panel[data-drop-active] { outline: 2px dashed var(--gold); outline-offset: -6px; }
 .rail-settings-search { position: relative; margin: 0 0 8px; }
 .rail-settings-search input { width: 100%; min-height: 34px; padding: 6px 28px 6px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--text); font-size: .8rem; }
 .settings-filter-summary { margin: 0 0 4px; color: var(--muted); font-size: .78rem; }
