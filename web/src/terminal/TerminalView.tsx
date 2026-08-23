@@ -75,6 +75,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     event.preventDefault();
     event.stopPropagation();
     if (transferred.kind === "image") return addImage(transferred.file);
+    if (transferred.kind === "too-large") return refuseSize(transferred.description);
     if (transferred.kind === "unsupported") {
       return refuseImage(transferred.description);
     }
@@ -96,7 +97,20 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
     setDropActive(false);
     const transferred = transferredImage(event.dataTransfer);
     if (transferred.kind === "image") return addImage(transferred.file);
+    if (transferred.kind === "too-large") return refuseSize(transferred.description);
     if (transferred.kind === "unsupported") refuseImage(transferred.description);
+  }
+
+  /**
+   * Says what was too big and what the limit is.
+   *
+   * The server enforces this with a transport body limit, which rejects the
+   * upload before any code that could explain it — so an oversized image
+   * produced a bare transport failure, or nothing legible at all.
+   */
+  function refuseSize(description: string) {
+    setAttachmentError(`${description}. Shrink it, or send a still instead.`);
+    setAttachmentState("error");
   }
 
   /** Says why, rather than doing nothing and looking broken. */

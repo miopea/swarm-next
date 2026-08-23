@@ -176,3 +176,28 @@ test("a drag is recognised from items when types is unhelpful", () => {
 
   expect(dragCarriesFiles(legacy)).toBe(true);
 });
+
+/**
+ * "The gif is nearly 16 megs. Do we have a limit?" We do — 8 MiB — and the
+ * server enforces it with a transport body limit, which rejects the upload
+ * before any code that could explain it. The operator got silence.
+ */
+test("an image over the limit is refused with its size and the limit", () => {
+  const big = new File([new Uint8Array(1)], "party.gif", { type: "image/gif" });
+  Object.defineProperty(big, "size", { value: 16 * 1024 * 1024 });
+  const dropped = { types: ["Files"], files: [big], items: [] } as unknown as DataTransfer;
+
+  const result = transferredImage(dropped);
+
+  expect(result.kind).toBe("too-large");
+  expect(result.kind === "too-large" && result.description).toContain("16.0 MB");
+  expect(result.kind === "too-large" && result.description).toContain("8.0 MB");
+});
+
+test("an image inside the limit is still accepted", () => {
+  const fine = new File([new Uint8Array(1)], "party.gif", { type: "image/gif" });
+  Object.defineProperty(fine, "size", { value: 4 * 1024 * 1024 });
+  const dropped = { types: ["Files"], files: [fine], items: [] } as unknown as DataTransfer;
+
+  expect(transferredImage(dropped).kind).toBe("image");
+});

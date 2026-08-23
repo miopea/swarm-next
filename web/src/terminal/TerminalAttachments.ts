@@ -26,9 +26,26 @@ export function clipboardImage(clipboard: DataTransfer): File | undefined {
  * place, which is what a browser gives you when you copy an image out of a web
  * page rather than a file out of a file manager.
  */
+/**
+ * The largest image a terminal will take, matching MAX_ATTACHMENT_BYTES in
+ * crates/swarm-api/src/attachments.rs.
+ *
+ * Checked here as well as there because the server enforces it with a transport
+ * body limit, which rejects the upload before any code that could explain why.
+ * The operator dropped a 16 MB GIF and got silence.
+ */
+export const MAX_TERMINAL_IMAGE_BYTES = 8 * 1024 * 1024;
+
+/** Human sizes, for saying what was too big and by how much. */
+export function describeBytes(bytes: number): string {
+  const mib = bytes / (1024 * 1024);
+  return mib >= 1 ? `${mib.toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
 export type TransferredImage =
   | { kind: "image"; file: File }
   | { kind: "unsupported"; description: string }
+  | { kind: "too-large"; description: string }
   | { kind: "none" };
 
 /**
@@ -74,10 +91,24 @@ export function transferredImage(transfer: DataTransfer): TransferredImage {
     const type = imageTypeOf(file);
     // A file whose type the browser did not fill in still has a name. Re-typing
     // it here is safe: the server checks the magic bytes and rejects a mislabel.
-    if (type) return { kind: "image", file: type === file.type ? file : new File([file], file.name, { type }) };
+    if (!type) continue;
+    if (file.size > MAX_TERMINAL_IMAGE_BYTES) {
+      return {
+        kind: "too-large",
+        description: `${file.name} is ${describeBytes(file.size)}; the limit is ${describeBytes(MAX_TERMINAL_IMAGE_BYTES)}`,
+      };
+    }
+    return { kind: "image", file: type === file.type ? file : new File([file], file.name, { type }) };
   }
   const image = clipboardImage(transfer);
-  if (image) return { kind: "image", file: image };
+  if (image) {
+    return image.size > MAX_TERMINAL_IMAGE_BYTES
+      ? {
+          kind: "too-large",
+          description: `that image is ${describeBytes(image.size)}; the limit is ${describeBytes(MAX_TERMINAL_IMAGE_BYTES)}`,
+        }
+      : { kind: "image", file: image };
+  }
 
   const described = Array.from(transfer.files ?? []).map((file) => file.type || file.name);
   if (described.length > 0) {
