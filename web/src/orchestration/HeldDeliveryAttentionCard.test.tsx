@@ -27,7 +27,7 @@ test("names Queen's stalled review as the reason nothing is moving", () => {
   render(<HeldDeliveryAttentionCard held={[held()]} />);
 
   expect(screen.getByText("Queen cannot review until a prompt is answered")).toBeInTheDocument();
-  expect(screen.getByText(/Nothing reaches this queue and nothing gets routed/)).toBeInTheDocument();
+  expect(screen.getByText(/Nothing gets routed while Queen's terminal has an open question/)).toBeInTheDocument();
   // The count is the evidence that this is stuck rather than merely slow.
   expect(screen.getByText(/retried 1503 times/)).toBeInTheDocument();
 });
@@ -36,7 +36,7 @@ test("says a worker's work is waiting rather than lost", () => {
   render(<HeldDeliveryAttentionCard held={[held({ subject: "task-brief:t1", worker_name: "Poppy", observations: 20 })]} />);
 
   expect(screen.getByText("Poppy has work waiting behind a prompt")).toBeInTheDocument();
-  expect(screen.getByText(/waiting rather than lost/)).toBeInTheDocument();
+  expect(screen.getByText(/Swarm will not type into a terminal with an open question/)).toBeInTheDocument();
 });
 
 test("counts them when several are held", () => {
@@ -82,8 +82,8 @@ test("says unstarted work was never started, and what to do about it", () => {
 
   expect(screen.getByText("Real Truth was assigned work that never started")).toBeInTheDocument();
   expect(screen.getByText(/will not try again/)).toBeInTheDocument();
-  expect(screen.getByText(/waking it twice would brief it twice/)).toBeInTheDocument();
-  expect(screen.getByText(/Wake the worker yourself/)).toBeInTheDocument();
+  expect(screen.getByText(/waking it twice briefs it twice/)).toBeInTheDocument();
+  expect(screen.getByText(/Wake it yourself and it picks up from there/)).toBeInTheDocument();
   // Not described as waiting: nothing is going to deliver it.
   expect(screen.queryByText(/waiting rather than lost/)).not.toBeInTheDocument();
 });
@@ -117,7 +117,7 @@ test("tells the operator to clear the line, not to answer a question", () => {
   );
 
   expect(screen.getByText("Queen cannot review until her prompt is cleared")).toBeInTheDocument();
-  expect(screen.getByText(/typed but never sent/)).toBeInTheDocument();
+  expect(screen.getByText(/holds unsent text/)).toBeInTheDocument();
   expect(screen.queryByText(/Answer it and the review resumes/)).not.toBeInTheDocument();
 });
 

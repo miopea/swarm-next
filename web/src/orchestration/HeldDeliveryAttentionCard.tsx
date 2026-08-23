@@ -57,13 +57,13 @@ export default function HeldDeliveryAttentionCard({ held, onOpenWorker }: Props)
         <p>
           {queen
             ? queenUnsent
-              ? "Queen's prompt holds text that was typed but never sent, so Swarm will not add to it — sending two instructions on one Enter is worse than waiting. Nothing reaches this queue while it stands. Clear the line and the review resumes on its own."
-              : "Nothing reaches this queue and nothing gets routed while Queen's terminal has an open question. Answer it and the review resumes on its own."
+              ? "Her prompt holds unsent text, and Swarm will not add to it. Clear the line and the review resumes on its own."
+              : "Nothing gets routed while Queen's terminal has an open question. Answer it and the review resumes on its own."
             : unsent
-              ? "This terminal's prompt holds text that was typed but never sent. Swarm will not append to it, because a later Enter would submit both at once. Clear the line and this delivers itself."
+              ? "This prompt holds unsent text, and Swarm will not add to it. Clear the line and this delivers itself."
               : oldest.kind === "wake_uncertain"
-              ? "Swarm could not confirm this worker woke, so it will not try again — waking it twice would brief it twice. The work is assigned and was never started. Wake the worker yourself and it picks up from there."
-              : "Swarm will not type into a terminal with an open question, so this is waiting rather than lost. Answer the prompt and it delivers itself."}
+              ? "Swarm could not confirm this worker woke and will not try again, because waking it twice briefs it twice. Wake it yourself and it picks up from there."
+              : "Swarm will not type into a terminal with an open question. Answer the prompt and it delivers itself."}
         </p>
         <p className="held-delivery-since">
           Since {new Date(oldest.first_observed_at * 1000).toLocaleString()} · retried {oldest.observations} times

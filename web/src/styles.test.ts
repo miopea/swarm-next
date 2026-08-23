@@ -32,7 +32,12 @@ test("keeps the mobile settings section rail flush with its scroll viewport", ()
 test("holds the decision list still when an attention card appears", () => {
   // Item 48's second door: the region takes a card's height whether or not a
   // card is in it, so mounting one cannot shove the list.
-  expect(stylesheet).toContain(".decision-attention-cards.reserved { height: 108px; overflow-y: auto;");
+  //
+  // Reserved rather than capped. A fixed height also clipped any card whose
+  // text ran longer than one card's worth, and the operator was shown a held
+  // card missing its last line behind an inch of scrollbar.
+  expect(stylesheet).toContain(".decision-attention-cards.reserved { min-height: 108px; }");
+  expect(stylesheet).not.toContain(".decision-attention-cards.reserved { height:");
 });
 
 test("keeps the worker-stopping update badge legible", () => {
