@@ -173,8 +173,28 @@ pub(super) async fn delete_session() -> Response {
 /// carries no `Origin` from somewhere else. A drive-by from another site fails
 /// the second test even though it passes the first, and a proxied request fails
 /// the first because the forwarded host is not loopback.
+/// Headers that only something in front of Swarm sets.
+///
+/// Any one of them means the request was relayed, so its Host claims nothing
+/// about where it came from. Listed exhaustively rather than checking the two
+/// that a tunnel happens to send today: this is the check that decides whether
+/// to skip authentication entirely, and Swarm now ships a feature whose whole
+/// job is to put a proxy in front of it.
+const RELAYED_REQUEST_HEADERS: [&str; 7] = [
+    "x-forwarded-proto",
+    "x-forwarded-host",
+    "x-forwarded-for",
+    "x-real-ip",
+    "forwarded",
+    "cf-connecting-ip",
+    "cf-ray",
+];
+
 fn is_trusted_loopback(headers: &HeaderMap) -> bool {
-    if headers.get("x-forwarded-proto").is_some() || headers.get("x-forwarded-host").is_some() {
+    if RELAYED_REQUEST_HEADERS
+        .iter()
+        .any(|name| headers.get(*name).is_some())
+    {
         return false;
     }
     let Some(host) = headers
@@ -477,5 +497,30 @@ mod loopback_tests {
             "host",
             "swarm2.bfgsolutions.net"
         )])));
+    }
+
+    /// Every header that says "something relayed this" disqualifies the Host,
+    /// not only the two a Cloudflare tunnel happens to send today.
+    ///
+    /// This is the check that skips authentication altogether, and Swarm now
+    /// offers to start a tunnel in front of itself. A relay that rewrote Host
+    /// to the loopback address it dials — which cloudflared can be told to do —
+    /// would otherwise publish an unauthenticated control room.
+    #[test]
+    fn any_marker_of_a_relayed_request_disqualifies_the_host() {
+        for (name, value) in [
+            ("x-forwarded-for", "203.0.113.7"),
+            ("x-real-ip", "203.0.113.7"),
+            ("forwarded", "for=203.0.113.7;proto=https"),
+            ("cf-connecting-ip", "203.0.113.7"),
+            ("cf-ray", "8f2c1a0b0e3d4c1a-LHR"),
+        ] {
+            assert!(
+                !is_trusted_loopback(&headers(&[("host", "127.0.0.1:8766"), (name, value)])),
+                "{name} should disqualify a loopback Host"
+            );
+        }
+        // Still trusted with nothing in front of it.
+        assert!(is_trusted_loopback(&headers(&[("host", "127.0.0.1:8766")])));
     }
 }
