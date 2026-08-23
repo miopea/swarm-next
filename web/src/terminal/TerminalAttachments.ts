@@ -31,6 +31,22 @@ export type TransferredImage =
   | { kind: "unsupported"; description: string }
   | { kind: "none" };
 
+/**
+ * Whether a drag is carrying files, judged during the drag itself.
+ *
+ * `dataTransfer.types` is the only part of a transfer a browser exposes while a
+ * drag is still in progress; item data is withheld until the drop, and
+ * `items[].type` is routinely empty until then. Deciding with `items` meant the
+ * dragover handler sometimes declined to call preventDefault — and preventing
+ * the default is precisely what makes an element a drop target. The element was
+ * not one, so the browser opened the file itself and the drop handler was never
+ * reached at all.
+ */
+export function dragCarriesFiles(transfer: DataTransfer): boolean {
+  if (Array.from(transfer.types ?? []).includes("Files")) return true;
+  return Array.from(transfer.items ?? []).some((item) => item.kind === "file");
+}
+
 /** Extensions to fall back on when a transfer carries no media type. */
 const IMAGE_EXTENSIONS = new Map([
   ["png", "image/png"],

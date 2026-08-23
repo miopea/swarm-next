@@ -5,7 +5,7 @@ import { TerminalConnection, type TerminalConnectionState } from "./TerminalConn
 import type { TerminalController } from "./TerminalController";
 import { terminalWorkspace } from "./TerminalWorkspace";
 import { XtermSurface } from "./XtermSurface";
-import { supportedImageSummary, terminalAttachmentPaste, terminalTextPaste, transferredImage, uploadTerminalImage } from "./TerminalAttachments";
+import { dragCarriesFiles, supportedImageSummary, terminalAttachmentPaste, terminalTextPaste, transferredImage, uploadTerminalImage } from "./TerminalAttachments";
 import type { QueenAutonomyLevel, QueenAutomationStatus } from "../api";
 import { queenAutonomyDetail, queenAutonomyLabel } from "../orchestration/queenAutonomyPresentation";
 import { queenAutomationCompactLabel, queenAutomationStateDetail, queenAutomationStateTone } from "../orchestration/queenAutomationPresentation";
@@ -90,7 +90,7 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
    * ever pasted those, so the gap read as a GIF problem.
    */
   async function handleDrop(event: DragEvent<HTMLDivElement>) {
-    if (![...event.dataTransfer.items].some((item) => item.kind === "file")) return;
+    if (!dragCarriesFiles(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     setDropActive(false);
@@ -141,7 +141,8 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
       }}
       onPasteCapture={(event) => void handlePaste(event)}
       onDragOver={(event) => {
-        if (![...event.dataTransfer.items].some((item) => item.kind === "file")) return;
+        if (!dragCarriesFiles(event.dataTransfer)) return;
+        // Preventing the default is what makes this a drop target at all.
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
         setDropActive(true);

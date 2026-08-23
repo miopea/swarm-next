@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-import { clipboardImage, supportedImageSummary, terminalAttachmentPaste, terminalTextPaste, transferredImage, uploadTerminalImage } from "./TerminalAttachments";
+import { clipboardImage, dragCarriesFiles, supportedImageSummary, terminalAttachmentPaste, terminalTextPaste, transferredImage, uploadTerminalImage } from "./TerminalAttachments";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -144,4 +144,35 @@ test("a dropped file that is not an image is still refused by name", () => {
   } as unknown as DataTransfer;
 
   expect(transferredImage(dropped)).toEqual({ kind: "unsupported", description: "video/mp4" });
+});
+
+/**
+ * The second miss on this feature, and the one that actually stopped it.
+ *
+ * A browser withholds item data while a drag is in progress — only `types` is
+ * readable — so judging by `items` meant dragover sometimes declined to call
+ * preventDefault. Preventing the default is what makes an element a drop
+ * target, so the element was not one, the browser opened the file itself, and
+ * the drop handler never ran.
+ */
+test("a drag carrying files is recognised from types alone", () => {
+  const midDrag = { types: ["Files"], items: [] } as unknown as DataTransfer;
+
+  expect(dragCarriesFiles(midDrag)).toBe(true);
+});
+
+test("a drag carrying only text is not a drop target", () => {
+  const text = { types: ["text/plain"], items: [] } as unknown as DataTransfer;
+
+  expect(dragCarriesFiles(text)).toBe(false);
+});
+
+/** Still recognised where the browser does populate items during the drag. */
+test("a drag is recognised from items when types is unhelpful", () => {
+  const legacy = {
+    types: [],
+    items: [{ kind: "file", type: "" }],
+  } as unknown as DataTransfer;
+
+  expect(dragCarriesFiles(legacy)).toBe(true);
 });
