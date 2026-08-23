@@ -1679,6 +1679,21 @@ export async function releaseWorkerEngagement(
   );
 }
 
+/**
+ * Replaces the operator token everywhere at once.
+ *
+ * Every browser session dies with it, including the one making the call, so the
+ * caller must sign in again with the new value immediately or lock itself out
+ * of its own rotation.
+ */
+export async function rotateOperatorToken(operatorToken: string, token: string): Promise<void> {
+  await authenticatedFetch(operatorToken, "/api/v1/auth/token", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+}
+
 export async function createBrowserSession(operatorToken: string): Promise<void> {
   await authenticatedFetch(operatorToken, "/api/v1/auth/session", { method: "POST" });
 }
