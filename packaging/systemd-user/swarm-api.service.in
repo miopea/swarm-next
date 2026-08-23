@@ -14,6 +14,7 @@ Environment=SWARM_WEB_ROOT=@INSTALL_ROOT@/current/web
 Environment=SWARM_ASSET_ROOT=@INSTALL_ROOT@/assets
 Environment=SWARM_DATABASE_PATH=@STATE_ROOT@/swarm.sqlite3
 Environment=SWARM_MAINTENANCE_REQUEST_PATH=@STATE_ROOT@/worker-engine-maintenance.request
+Environment=SWARM_OPERATOR_CONFIG_PATH=@CONFIG_ROOT@/swarm.env
 ExecStart=@INSTALL_ROOT@/current/bin/swarm-api
 Restart=on-failure
 RestartSec=2s
@@ -22,6 +23,9 @@ PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=@STATE_ROOT@
+# The operator rotates their token in Settings, which rewrites this file so the
+# new value is also what systemd loads on the next start.
+ReadWritePaths=@CONFIG_ROOT@
 ReadWritePaths=%h/.claude
 ReadWritePaths=%h/.claude.json
 UMask=0077

@@ -143,7 +143,11 @@ const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 pub struct AppState {
     terminal_limits: JournalLimits,
     terminal_host: Option<HostClient>,
-    operator_token: Option<Arc<str>>,
+    /// Rotatable at runtime, so the operator can change it in Settings rather
+    /// than editing a file and restarting a service. Swapped under a lock and
+    /// written back to the config file, which is the same value systemd loads
+    /// on the next start.
+    operator_token: Arc<std::sync::RwLock<Option<Arc<str>>>>,
     attach_grants: Arc<AttachGrantStore>,
     websocket_limit: Arc<Semaphore>,
     task_store: Option<TaskStore>,
@@ -168,6 +172,9 @@ pub struct AppState {
     development_reload_request_path: Option<Arc<PathBuf>>,
     development_reload_status_path: Option<Arc<PathBuf>>,
     development_checkout_path: Option<Arc<PathBuf>>,
+    /// Where this Hive's configuration lives, so the operator token can be
+    /// rotated in place rather than by editing a file and restarting.
+    operator_config_path: Option<Arc<PathBuf>>,
     release_manifest_url: Option<Arc<String>>,
     release_state_root: Option<Arc<PathBuf>>,
     release_apply_request_path: Option<Arc<PathBuf>>,
@@ -199,7 +206,7 @@ impl AppState {
         Self {
             terminal_limits,
             terminal_host: None,
-            operator_token: None,
+            operator_token: Arc::new(std::sync::RwLock::new(None)),
             attach_grants: Arc::new(AttachGrantStore::default()),
             websocket_limit: Arc::new(Semaphore::new(MAX_TERMINAL_WEBSOCKETS)),
             task_store: None,
@@ -228,6 +235,7 @@ impl AppState {
             development_reload_request_path: None,
             development_reload_status_path: None,
             development_checkout_path: None,
+            operator_config_path: None,
             release_manifest_url: None,
             release_state_root: None,
             release_apply_request_path: None,
@@ -458,6 +466,13 @@ impl AppState {
     pub fn with_release_paths(mut self, state_root: PathBuf, apply_request: PathBuf) -> Self {
         self.release_state_root = Some(Arc::new(state_root));
         self.release_apply_request_path = Some(Arc::new(apply_request));
+        self
+    }
+
+    /// Where the operator token is persisted, so Settings can rotate it.
+    #[must_use]
+    pub fn with_operator_config_path(mut self, path: PathBuf) -> Self {
+        self.operator_config_path = Some(Arc::new(path));
         self
     }
 
@@ -832,7 +847,7 @@ impl AppState {
         operator_token: impl Into<Arc<str>>,
     ) -> Self {
         self.terminal_host = Some(terminal_host);
-        self.operator_token = Some(operator_token.into());
+        self.operator_token = Arc::new(std::sync::RwLock::new(Some(operator_token.into())));
         self
     }
 
@@ -2280,6 +2295,7 @@ fn api_router(state: AppState) -> Router {
                 .post(auth::create_session)
                 .delete(auth::delete_session),
         )
+        .route("/api/v1/auth/token", axum::routing::put(auth::rotate_token))
         .route("/api/v1/hive", get(local_hive).put(rename_local_hive))
         .route(
             "/api/v1/apiary",
@@ -2900,6 +2916,37 @@ async fn health() -> Json<HealthResponse> {
 /// about whether anything happens lives with the check itself.
 pub async fn poll_for_release(state: Arc<AppState>) {
     release::poll(&state).await;
+}
+
+impl AppState {
+    /// The operator token in force right now.
+    ///
+    /// Read through a lock because Settings can rotate it, and a request that
+    /// arrives mid-rotation must see one value or the other rather than a
+    /// half-written one.
+    pub(crate) fn operator_config_path(&self) -> Option<Arc<PathBuf>> {
+        self.operator_config_path.clone()
+    }
+
+    pub(crate) fn operator_token(&self) -> Option<Arc<str>> {
+        self.operator_token.read().ok()?.clone()
+    }
+
+    /// Replaces the operator token for every future request.
+    ///
+    /// Every browser session dies with it, because the session cookie is
+    /// derived from the token. That is the point of rotating rather than a
+    /// side effect.
+    pub(crate) fn replace_operator_token(&self, token: &str) -> bool {
+        let Ok(mut current) = self.operator_token.write() else {
+            return false;
+        };
+        if current.is_none() {
+            return false;
+        }
+        *current = Some(Arc::from(token));
+        true
+    }
 }
 
 fn build_version() -> &'static str {

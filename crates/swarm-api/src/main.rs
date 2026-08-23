@@ -38,6 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_email_attachment_store(email_attachment_root_from_database(&database_path))
         .with_legacy_database_path(legacy_database_path_from_env())
         .with_maintenance_request_path(maintenance_request_path_from_env(&database_path))
+        .with_operator_config_path(operator_config_path())
         .with_release_paths(
             release_state_root(&database_path),
             release_apply_request_path(&database_path),
@@ -391,6 +392,30 @@ fn email_configuration_path(database_path: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("secrets")
         .join("email-oauth-config.json")
+}
+
+/// Where swarm.env lives. Beside the config the unit already loads, derived
+/// the same way the installer places it.
+fn operator_config_path() -> PathBuf {
+    env::var_os("SWARM_OPERATOR_CONFIG_PATH").map_or_else(
+        || {
+            // The unit sets this explicitly. This is only for a Hive started
+            // by hand, where the conventional location is the best guess
+            // available and a wrong guess simply means rotation is refused
+            // rather than something being written to the wrong file.
+            dirs_config_dir().map_or_else(
+                || PathBuf::from("swarm.env"),
+                |config| config.join("swarm/swarm.env"),
+            )
+        },
+        PathBuf::from,
+    )
+}
+
+fn dirs_config_dir() -> Option<PathBuf> {
+    env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
 }
 
 fn release_state_root(database_path: &std::path::Path) -> PathBuf {
