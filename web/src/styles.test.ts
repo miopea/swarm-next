@@ -29,15 +29,14 @@ test("keeps the mobile settings section rail flush with its scroll viewport", ()
   expect(stylesheet).toContain(".settings-section-nav { top: 0; margin-inline: -4px; padding: 7px; }");
 });
 
-test("holds the decision list still when an attention card appears", () => {
-  // Item 48's second door: the region takes a card's height whether or not a
-  // card is in it, so mounting one cannot shove the list.
-  //
-  // Reserved rather than capped. A fixed height also clipped any card whose
-  // text ran longer than one card's worth, and the operator was shown a held
-  // card missing its last line behind an inch of scrollbar.
-  expect(stylesheet).toContain(".decision-attention-cards.reserved { min-height: 108px; }");
-  expect(stylesheet).not.toContain(".decision-attention-cards.reserved { height:");
+test("gives the attention region no height of its own when it is empty", () => {
+  // Item 48's second door reserved a card's height whether or not a card was in
+  // it, so mounting one could not shove the list. That left a permanent blank
+  // band above the queue on every card-free day, which is most of them, and the
+  // operator asked for it to go. An appearing card shifts the list again; that
+  // is the trade, made deliberately.
+  expect(stylesheet).toContain(".decision-attention-cards:empty { display: none; }");
+  expect(stylesheet).not.toContain(".decision-attention-cards.reserved { min-height");
 });
 
 test("keeps the worker-stopping update badge legible", () => {
