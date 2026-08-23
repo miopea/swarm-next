@@ -31,7 +31,7 @@ pub(super) async fn create_session(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let cookie = browser_session_set_cookie(&state, &headers)?;
+    let cookie = browser_session_cookie(&state, &headers)?;
     Ok((
         [
             (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
@@ -252,7 +252,7 @@ pub(super) fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), Api
     Ok(())
 }
 
-fn browser_session_set_cookie(
+pub(super) fn browser_session_cookie(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<HeaderValue, ApiError> {

@@ -25,6 +25,7 @@ mod presence;
 mod presentation;
 mod private_store;
 mod provider_activity;
+mod passkeys;
 mod release;
 mod runtime;
 mod session_history;
@@ -175,6 +176,9 @@ pub struct AppState {
     /// Where this Hive's configuration lives, so the operator token can be
     /// rotated in place rather than by editing a file and restarting.
     operator_config_path: Option<Arc<PathBuf>>,
+    /// Challenges held between a passkey start and its finish. Not persisted:
+    /// a challenge that outlives a restart is one nobody is waiting on.
+    passkey_challenges: Arc<passkeys::PasskeyChallenges>,
     release_manifest_url: Option<Arc<String>>,
     release_state_root: Option<Arc<PathBuf>>,
     release_apply_request_path: Option<Arc<PathBuf>>,
@@ -236,6 +240,7 @@ impl AppState {
             development_reload_status_path: None,
             development_checkout_path: None,
             operator_config_path: None,
+            passkey_challenges: Arc::default(),
             release_manifest_url: None,
             release_state_root: None,
             release_apply_request_path: None,
@@ -2296,6 +2301,30 @@ fn api_router(state: AppState) -> Router {
                 .delete(auth::delete_session),
         )
         .route("/api/v1/auth/token", axum::routing::put(auth::rotate_token))
+        .route(
+            "/api/v1/auth/passkeys",
+            get(passkeys::list_passkeys),
+        )
+        .route(
+            "/api/v1/auth/passkeys/{credential_id}",
+            axum::routing::delete(passkeys::remove_passkey),
+        )
+        .route(
+            "/api/v1/auth/passkeys/register/start",
+            post(passkeys::register_start),
+        )
+        .route(
+            "/api/v1/auth/passkeys/register/finish",
+            post(passkeys::register_finish),
+        )
+        .route(
+            "/api/v1/auth/passkeys/authenticate/start",
+            post(passkeys::authenticate_start),
+        )
+        .route(
+            "/api/v1/auth/passkeys/authenticate/finish",
+            post(passkeys::authenticate_finish),
+        )
         .route("/api/v1/hive", get(local_hive).put(rename_local_hive))
         .route(
             "/api/v1/apiary",

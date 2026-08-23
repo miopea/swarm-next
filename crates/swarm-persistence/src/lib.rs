@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 mod apiary;
 mod coordinator;
+pub use passkeys::RegisteredPasskey;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, CoordinatorAttention,
     CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake, ExitedWorkerOwnedWorkCandidate,
@@ -75,6 +76,7 @@ pub use migration::{
     LegacyWorkerMigrationReceipt, LegacyWorkerMigrationRollback, LegacyWorkerPreview,
     LegacyWorkerRecord,
 };
+mod passkeys;
 mod presence;
 pub use decisions::{DecisionDeliveryFailure, DecisionDispatch, NewDecisionRequest};
 pub use email::{
@@ -133,7 +135,8 @@ const RELEASE_CHECK_SCHEMA_VERSION: i64 = 83;
 const COMPLETION_EXEMPTION_SCHEMA_VERSION: i64 = 84;
 const DECISION_DEADLINE_ATTENTION_SCHEMA_VERSION: i64 = 85;
 const COORDINATOR_REFUSAL_SCHEMA_VERSION: i64 = 86;
-const CURRENT_SCHEMA_VERSION: i64 = COORDINATOR_REFUSAL_SCHEMA_VERSION;
+const OPERATOR_PASSKEY_SCHEMA_VERSION: i64 = 87;
+const CURRENT_SCHEMA_VERSION: i64 = OPERATOR_PASSKEY_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -2250,7 +2253,40 @@ fn migrate_named_schema_steps(
     if schema_version < COORDINATOR_REFUSAL_SCHEMA_VERSION {
         migrate_coordinator_refusals(transaction)?;
     }
+    if schema_version < OPERATOR_PASSKEY_SCHEMA_VERSION {
+        migrate_operator_passkeys(transaction)?;
+    }
     Ok(())
+}
+
+/// Passkeys registered for signing in to this Hive.
+///
+/// A credential is bound to one relying-party ID — the domain it was registered
+/// at — so the domain is stored beside it. This Hive answers on localhost and on
+/// a public host, and a passkey for one is not usable at the other; keeping the
+/// domain means the wrong ones are never offered rather than failing at the
+/// browser.
+///
+/// The label is the operator's, so a credential can be recognised before it is
+/// removed. A passkey that cannot be told apart from another is one that cannot
+/// safely be revoked.
+///
+/// # Errors
+/// Returns an error when the step cannot be applied.
+fn migrate_operator_passkeys(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS operator_passkeys (
+             credential_id TEXT PRIMARY KEY,
+             relying_party TEXT NOT NULL,
+             label TEXT NOT NULL,
+             credential TEXT NOT NULL,
+             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+             last_used_at INTEGER
+         );
+         CREATE INDEX IF NOT EXISTS operator_passkeys_by_party
+             ON operator_passkeys(relying_party, created_at);",
+    )?;
+    transaction.pragma_update(None, "user_version", OPERATOR_PASSKEY_SCHEMA_VERSION)
 }
 
 /// What the coordinator wanted to do and could not.
@@ -5222,6 +5258,12 @@ mod tests {
         },
         SchemaStep {
             table: "coordinator_refusals",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "operator_passkeys",
             artifact: "",
             undo_sql: "",
             probe_sql: "",
