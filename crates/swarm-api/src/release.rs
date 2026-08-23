@@ -87,6 +87,15 @@ pub(super) struct ReleaseStatusResponse {
     /// moment of consent; the consequence is a deferred engine update, not an
     /// immediate stop.
     carries_new_worker_engine: bool,
+    /// How many commits this working copy is ahead of the released tag.
+    ///
+    /// The version strings alone say nothing: a working copy and the release it
+    /// came from both read 0.7.0, so the card could not answer the only
+    /// question being asked of it — is there enough here to cut a release.
+    ///
+    /// `None` when it cannot be counted rather than 0, because "the tag is not
+    /// in this checkout" and "nothing has changed" are different answers.
+    commits_ahead_of_release: Option<u32>,
     /// The verified, unpacked release waiting to be installed, if any.
     downloaded_version: Option<String>,
     /// Why the install unit refused, when it did: `outside-downloads`,
@@ -292,6 +301,10 @@ fn build_status(state: &Arc<AppState>) -> Result<ReleaseStatusResponse, ApiError
             .as_ref()
             .is_some_and(|offer| offer.worker_engine_build_id != worker_engine_build_id()),
         upgrade_available,
+        commits_ahead_of_release: commits_ahead_of_release(
+            state,
+            offer.as_ref().map(|offer| offer.version.as_str()),
+        ),
         apply_state: apply_state(state, offer.as_ref().map(|offer| offer.version.as_str())),
         apply_reason: apply_field(
             state,
@@ -400,6 +413,25 @@ async fn fetch_manifest(
     verify_release_manifest(&document, compiled_release_verifying_key(), now)
         .cloned()
         .map_err(|_| "rejected")
+}
+
+/// How far this working copy has moved past the released tag.
+///
+/// Counted against the tag rather than a recorded revision, because the tag is
+/// what the release was cut from and it is already in the checkout that cut it.
+/// A Hive that is not building from a working copy has nothing to count.
+///
+/// `None` when it cannot be counted rather than 0: "the tag is not in this
+/// checkout" and "nothing has changed since it" are different answers, and
+/// showing the second when the first is true would be a lie about whether
+/// there is anything to release.
+fn commits_ahead_of_release(state: &AppState, released: Option<&str>) -> Option<u32> {
+    let checkout = state.development_checkout_path.as_ref()?;
+    let released = released?;
+    let range = format!("v{released}..HEAD");
+    crate::runtime::git_output(checkout, &["rev-list", "--count", &range])?
+        .parse()
+        .ok()
 }
 
 /// What the install unit last wrote about itself.

@@ -35,6 +35,7 @@ function status(overrides: Partial<ReleaseStatus> = {}): ReleaseStatus {
     },
     upgrade_available: true,
     carries_new_worker_engine: false,
+    commits_ahead_of_release: null,
     downloaded_version: null,
     apply_state: null,
     apply_reason: null,
@@ -317,3 +318,35 @@ test("locks the check controls while an install is running", async () => {
   await waitFor(() => expect(screen.getByRole("button", { name: "Check now" })).toBeDisabled());
   expect(screen.getByRole("button", { name: "Stop checking" })).toBeDisabled();
 }, 12000);
+
+/**
+ * "This should tell me how many dev builds we are ahead of release. That is the
+ * useful information." Both version strings read 0.7.0, so the card could not
+ * answer the only question being asked of it.
+ */
+test("says how far the working copy has moved past the release", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({ mode: "daily", development_build: true, commits_ahead_of_release: 5, upgrade_available: false }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText(/5 commits ahead of 0.2.0/)).toBeInTheDocument();
+});
+
+test("says so when there is nothing to release", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({ mode: "daily", development_build: true, commits_ahead_of_release: 0, upgrade_available: false }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText(/level with the release/)).toBeInTheDocument();
+});
+
+/** Uncountable is not zero: a tag missing from the checkout must not read as
+ *  "nothing has changed". */
+test("does not claim parity when the distance cannot be counted", async () => {
+  vi.mocked(api.fetchReleaseStatus).mockResolvedValue(
+    status({ mode: "daily", development_build: true, commits_ahead_of_release: null, upgrade_available: false }),
+  );
+  render(<ReleaseUpdateAction busy={false} operatorToken="token" />);
+  expect(await screen.findByText(/builds from a working copy and runs/)).toBeInTheDocument();
+  expect(screen.queryByText(/level with the release/)).not.toBeInTheDocument();
+});

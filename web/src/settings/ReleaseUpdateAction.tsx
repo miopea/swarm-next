@@ -139,8 +139,13 @@ export default function ReleaseUpdateAction({ busy, operatorToken }: Props) {
           </div>
         </header>
         <p>
-          This Hive builds from a working copy and runs {status.current_version}. Releases are never installed
-          here — replacing a build made from your checkout would discard work nothing can enumerate.
+          {status.commits_ahead_of_release === null
+            ? `This Hive builds from a working copy and runs ${status.current_version}.`
+            : status.commits_ahead_of_release === 0
+              ? `This working copy is level with the release. Nothing has landed since ${status.offer?.version} was cut.`
+              : `This working copy is ${status.commits_ahead_of_release} commit${status.commits_ahead_of_release === 1 ? "" : "s"} ahead of ${status.offer?.version}.`}
+          {" "}Releases are never installed here — replacing a build made from your checkout would discard work
+          nothing can enumerate.
         </p>
         {status.mode === "unset" ? (
           <>

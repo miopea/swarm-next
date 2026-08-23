@@ -311,6 +311,8 @@ export type ReleaseStatus = {
    * the engine is swapped later, when sessions are idle.
    */
   carries_new_worker_engine: boolean;
+  /** Commits this working copy is ahead of the released tag; null when uncountable. */
+  commits_ahead_of_release: number | null;
   downloaded_version: string | null;
   /** What the install unit last reported, so a failure is visible. */
   apply_state: "installing" | "installed" | "failed" | "refused" | null;
