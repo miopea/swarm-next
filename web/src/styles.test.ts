@@ -294,3 +294,14 @@ test("a detached window on a phone is the whole width", () => {
   expect(stylesheet).toContain(".app-shell.detached-surface { grid-template-columns: minmax(0, 1fr); }");
   expect(stylesheet).toContain(".control-rail.detached-rail { display: none; }");
 });
+
+/**
+ * The held-work card has no bee, so it cannot inherit the three-column grid its
+ * siblings use. Without its own track list the text was laid into the 44px icon
+ * column and wrapped one word per line, which is what the operator saw on the
+ * "Needs you" page.
+ */
+test("gives the held-work card a track list matching its two children", () => {
+  expect(stylesheet).toContain(".held-delivery-card { grid-template-columns: minmax(0, 1fr) auto; }");
+  expect(stylesheet).toContain(".held-delivery-card { grid-template-columns: minmax(0, 1fr); }");
+});

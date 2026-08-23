@@ -137,3 +137,19 @@ test("says the same for a worker that is not Queen", () => {
   expect(screen.getByText("Sculpt Studio has an unsent line at its prompt")).toBeInTheDocument();
   expect(screen.getByText(/Clear the line and this delivers itself/)).toBeInTheDocument();
 });
+
+/**
+ * The card is laid out by the shared three-column attention grid: bee, content,
+ * actions. This one has no bee. If it ever grows or loses a top-level child
+ * without the stylesheet following, the text lands in the wrong track and wraps
+ * one word per line — which is exactly how it shipped.
+ */
+test("renders the two top-level children its grid is sized for", () => {
+  const { container } = render(
+    <HeldDeliveryAttentionCard held={[held()]} onOpenWorker={vi.fn()} />,
+  );
+
+  const card = container.querySelector(".held-delivery-card");
+  expect(card).not.toBeNull();
+  expect(card?.children).toHaveLength(2);
+});

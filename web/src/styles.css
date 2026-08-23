@@ -846,6 +846,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .queen-attention-card h3 { margin: 1px 0 3px; font-size: 1rem; }
 .queen-attention-card p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: .76rem; line-height: 1.45; }
 .queen-attention-actions { display: flex; gap: 8px; }
+/* Two children, so two columns. The shared card is a three-column grid — bee,
+   content, actions — and this one carries no bee, so its text was laid into the
+   44px icon track and wrapped one word per line. */
+.held-delivery-card { grid-template-columns: minmax(0, 1fr) auto; }
 .attention-tabs { display: flex; max-width: 1180px; margin: 0 auto 22px; gap: 5px; padding: 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-soft); }
 .attention-tabs button { min-height: 36px; padding: 6px 14px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; }
 .attention-tabs button[aria-selected="true"] { color: var(--text); background: var(--panel); box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 8%, transparent); }
@@ -1838,6 +1842,7 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
   .apiary-attention-card, .queen-attention-card { align-items: stretch; flex-direction: column; gap: 11px; padding: 14px; }
   .apiary-attention-card button { width: 100%; min-height: 44px; }
   .queen-attention-card { display: grid; grid-template-columns: 38px minmax(0, 1fr); }
+  .held-delivery-card { grid-template-columns: minmax(0, 1fr); }
   .queen-attention-bee { width: 36px; height: 36px; }
   .queen-attention-bee svg { width: 34px; height: 34px; }
   .queen-attention-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; }
