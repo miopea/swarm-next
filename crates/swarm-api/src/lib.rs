@@ -2647,6 +2647,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/notifications/subscriptions/{device_id}/test",
             post(notifications::test_notification),
         )
+        .route(
+            "/api/v1/notifications/click-trace",
+            post(notifications::record_click_trace),
+        )
         .route("/api/v1/control-room/events", get(control_room::events))
         .route("/api/v1/runtime/limits", get(runtime::limits))
         .route("/api/v1/runtime/resources", get(runtime::resources))

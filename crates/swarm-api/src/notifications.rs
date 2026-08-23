@@ -480,3 +480,41 @@ mod tests {
         assert!(payload.len() <= MAX_PUSH_PAYLOAD_BYTES);
     }
 }
+
+/// What the service worker did when a notification was tapped.
+///
+/// Notification clicks happen in the service worker, where nothing is visible:
+/// no console anyone reads, no page to inspect, and the failure the operator
+/// reports is "nothing happens", which is indistinguishable from the handler
+/// never running. This is how that becomes observable rather than guessed at —
+/// the same reason the terminal size ledger exists.
+#[derive(Debug, serde::Deserialize)]
+pub(super) struct NotificationClickTrace {
+    /// How many same-origin windows the worker could see.
+    windows: u32,
+    /// How many of those reported themselves visible.
+    visible: u32,
+    /// What it decided to do: "focus", "open", or "none".
+    action: String,
+    /// The surface the notification asked for.
+    surface: String,
+    /// Whatever went wrong, if anything.
+    detail: Option<String>,
+}
+
+pub(super) async fn record_click_trace(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(trace): Json<NotificationClickTrace>,
+) -> Result<StatusCode, ApiError> {
+    authorize(&state, &headers)?;
+    tracing::info!(
+        windows = trace.windows,
+        visible = trace.visible,
+        action = %trace.action,
+        surface = %trace.surface,
+        detail = trace.detail.as_deref().unwrap_or(""),
+        "notification click"
+    );
+    Ok(StatusCode::NO_CONTENT)
+}

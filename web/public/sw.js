@@ -24,27 +24,69 @@ self.addEventListener("push", (event) => {
   }));
 });
 
+/**
+ * Reports what this handler decided, because nothing here is observable.
+ *
+ * A notification click runs in the service worker: no console anyone reads, no
+ * page to inspect, and the failure the operator reports is "nothing happens",
+ * which looks exactly like the handler never running.
+ */
+async function trace(windows, visible, action, surface, detail) {
+  try {
+    await fetch("/api/v1/notifications/click-trace", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ windows, visible, action, surface, detail: detail || null }),
+    });
+  } catch {
+    // Tracing must never be the reason a notification fails to open anything.
+  }
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const target = new URL(event.notification.data?.url || "/?surface=decisions", self.location.origin).href;
   const surface = new URL(target).searchParams.get("surface") || "decisions";
   event.waitUntil((async () => {
-    const windows = await clients.matchAll({ type: "window", includeUncontrolled: true });
-    const client = windows.find((candidate) => candidate.visibilityState === "visible") || windows[0];
-    if (!client) return clients.openWindow(target);
-    // Tell the page where to go before trying to navigate it. In an installed
-    // PWA client.navigate() is frequently a no-op — the window is not
-    // controlled, or the origin already matches — and the only visible effect
-    // was focus(): the app came up on whatever surface it was already showing,
-    // which read as "the notification takes me to my default page".
-    client.postMessage({ type: "swarm-show-surface", surface });
-    if ("navigate" in client) {
+    let windows = [];
+    try {
+      windows = await clients.matchAll({ type: "window", includeUncontrolled: true });
+    } catch (error) {
+      await trace(0, 0, "none", surface, String(error));
+    }
+    const visible = windows.filter((candidate) => candidate.visibilityState === "visible");
+    const client = visible[0] || windows[0];
+
+    if (client) {
+      client.postMessage({ type: "swarm-show-surface", surface });
       try {
-        await client.navigate(target);
-      } catch {
-        // Already handled by the message above.
+        // Focus first, while the click's activation is still fresh. Awaiting
+        // navigate() before this spent it, and focus() then did nothing at all
+        // — which is why the app stopped coming forward when the previous
+        // version of this handler shipped.
+        await client.focus();
+        if ("navigate" in client) {
+          try {
+            await client.navigate(target);
+          } catch {
+            // The page was told where to go by the message above.
+          }
+        }
+        await trace(windows.length, visible.length, "focus", surface);
+        return;
+      } catch (error) {
+        // A window that cannot be focused is no better than no window.
+        await trace(windows.length, visible.length, "open", surface, String(error));
       }
     }
-    return client.focus();
+
+    try {
+      await clients.openWindow(target);
+      if (client) return;
+      await trace(windows.length, visible.length, "open", surface);
+    } catch (error) {
+      await trace(windows.length, visible.length, "none", surface, String(error));
+    }
   })());
 });
