@@ -717,3 +717,60 @@ test("scrolls by a real row height rather than one guessed from the mount", asyn
   surface.dispose();
   element.remove();
 });
+
+/**
+ * Measured on the operator's Hive: one device, no second viewer, 200 size
+ * requests in 16 seconds alternating 65x151 / 67x151 in a clean ABABAB. The
+ * terminal visibly jumped.
+ *
+ * The observer-driven path applied whatever a single measurement said, and
+ * applying it resized the DOM, which woke the observer again. `fit()` has
+ * always required a proposal to hold still across frames before applying it;
+ * this path had no such check and so could not tell a settled size from one
+ * half of a flip.
+ */
+test("stops resizing when the new size would undo the last one", async () => {
+  vi.useFakeTimers();
+  let notify: (() => void) | undefined;
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) { notify = callback; }
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const surface = new XtermSurface();
+  // Connected on purpose: the observer-driven fit refuses to run on a detached
+  // element, so a bare createElement made this test pass without the guard.
+  const host = document.createElement("div");
+  document.body.append(host);
+  surface.open(host);
+  if (xterm.terminal) {
+    xterm.terminal.rows = 65;
+    xterm.terminal.cols = 151;
+  }
+
+  // The container measures two rows taller, then two rows shorter, then taller
+  // again — the loop, exactly as recorded.
+  const sizes = [
+    { rows: 67, cols: 151 },
+    { rows: 65, cols: 151 },
+    { rows: 67, cols: 151 },
+    { rows: 65, cols: 151 },
+  ];
+  let applied = 0;
+  xterm.propose.mockReset().mockImplementation(() => sizes[Math.min(applied, sizes.length - 1)]);
+  const resize = vi.spyOn(xterm.terminal!, "resize" as never);
+
+  for (const _ of sizes) {
+    notify?.();
+    await vi.advanceTimersByTimeAsync(200);
+    applied += 1;
+  }
+
+  // The first change is real and applied. Bouncing back is not.
+  expect(resize.mock.calls.length).toBeLessThanOrEqual(2);
+  host.remove();
+  vi.useRealTimers();
+});

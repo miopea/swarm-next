@@ -8,6 +8,14 @@ import type { Disposable, TerminalSurface } from "./TerminalController";
 const MAX_FIT_FRAMES = 60;
 const STABLE_FIT_FRAMES = 2;
 const RESIZE_SETTLE_MS = 120;
+/**
+ * How recently a size has to have been left for returning to it to look like a
+ * flip rather than a decision.
+ *
+ * Comfortably longer than the observer's settle delay, and far shorter than a
+ * person changing their mind about a window.
+ */
+const OSCILLATION_WINDOW_MS = 1_000;
 const REDRAW_RETRY_MS = 350;
 const TOUCH_DRAG_THRESHOLD_PX = 4;
 const FALLBACK_CELL_HEIGHT_PX = 17;
@@ -33,6 +41,8 @@ export class XtermSurface implements TerminalSurface {
    * take authority over the PTY.
    */
   #geometryPublicationOrigin: "viewport" | "restore" = "viewport";
+  /** The last two sizes this renderer applied, newest first, and when. */
+  #appliedSizes: { rows: number; columns: number; at: number }[] = [];
   #resizeObserver: ResizeObserver | undefined;
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
   #redrawFrame: number | undefined;
@@ -359,7 +369,20 @@ export class XtermSurface implements TerminalSurface {
     const usable = usableDimensions(dimensions);
     if (!usable) return;
     const changed = usable.rows !== this.#terminal.rows || usable.columns !== this.#terminal.cols;
+    if (changed && this.#wouldOscillate(usable)) {
+      // Applying this would put the terminal back where it was one change ago,
+      // and resizing is what woke this observer in the first place.
+      //
+      // Measured on the operator's Hive: 200 requests in 16 seconds on one
+      // device with no second viewer, alternating 65x151 / 67x151 in a clean
+      // ABABAB — the terminal visibly jumping. `fit()` has always required a
+      // proposal to hold still across frames before applying it; this path,
+      // which is the one the observer drives, applied a single measurement and
+      // so could not tell a settled size from one half of a flip.
+      return;
+    }
     if (changed) {
+      this.#rememberApplied(usable);
       this.#terminal.resize(usable.columns, usable.rows);
     } else {
       // A different device can leave the shared PTY at stale dimensions while
@@ -371,6 +394,24 @@ export class XtermSurface implements TerminalSurface {
     // A stable row/column count does not mean Chromium's backing canvas is
     // healthy. Explicitly repaint after responsive layout and PWA resumes.
     this.#scheduleRedraw();
+  }
+
+  /**
+   * Whether applying this size would undo the previous change.
+   *
+   * Bounded in time on purpose. A genuine return to an earlier size — the
+   * operator dragging a window back — must still work; what must not is
+   * bouncing between two sizes faster than anyone could have asked for.
+   */
+  #wouldOscillate(next: { rows: number; columns: number }): boolean {
+    const previous = this.#appliedSizes[1];
+    if (!previous) return false;
+    if (Date.now() - previous.at > OSCILLATION_WINDOW_MS) return false;
+    return previous.rows === next.rows && previous.columns === next.columns;
+  }
+
+  #rememberApplied(size: { rows: number; columns: number }): void {
+    this.#appliedSizes = [{ ...size, at: Date.now() }, ...this.#appliedSizes].slice(0, 2);
   }
 
   #refreshViewport(): void {
