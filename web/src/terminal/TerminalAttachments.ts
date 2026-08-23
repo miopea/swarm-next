@@ -31,12 +31,45 @@ export type TransferredImage =
   | { kind: "unsupported"; description: string }
   | { kind: "none" };
 
+/** Extensions to fall back on when a transfer carries no media type. */
+const IMAGE_EXTENSIONS = new Map([
+  ["png", "image/png"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["webp", "image/webp"],
+  ["gif", "image/gif"],
+]);
+
+/** The media type of a dropped file, from its own type or from its name. */
+function imageTypeOf(file: File): string | undefined {
+  if (SUPPORTED_TERMINAL_IMAGE_TYPES.has(file.type)) return file.type;
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  return extension ? IMAGE_EXTENSIONS.get(extension) : undefined;
+}
+
 export function transferredImage(transfer: DataTransfer): TransferredImage {
+  // `files` first, because this is the only source a drop can be relied on to
+  // populate. Reading `items` alone worked for paste and silently found nothing
+  // on drop — the drop target appeared, the file was accepted, and nothing
+  // happened, which is exactly what a missing feature looks like.
+  // Defensive: a text paste carries no files, and not every source populates
+  // the field at all. Throwing here would take the text paste down with it.
+  for (const file of Array.from(transfer.files ?? [])) {
+    const type = imageTypeOf(file);
+    // A file whose type the browser did not fill in still has a name. Re-typing
+    // it here is safe: the server checks the magic bytes and rejects a mislabel.
+    if (type) return { kind: "image", file: type === file.type ? file : new File([file], file.name, { type }) };
+  }
   const image = clipboardImage(transfer);
   if (image) return { kind: "image", file: image };
-  const files = [...transfer.items].filter((item) => item.kind === "file");
-  if (files.length === 0) return { kind: "none" };
-  const types = [...new Set(files.map((item) => item.type || "an unknown type"))];
+
+  const described = Array.from(transfer.files ?? []).map((file) => file.type || file.name);
+  if (described.length > 0) {
+    return { kind: "unsupported", description: [...new Set(described)].join(", ") };
+  }
+  const items = Array.from(transfer.items ?? []).filter((item) => item.kind === "file");
+  if (items.length === 0) return { kind: "none" };
+  const types = [...new Set(items.map((item) => item.type || "an unknown type"))];
   return { kind: "unsupported", description: types.join(", ") };
 }
 

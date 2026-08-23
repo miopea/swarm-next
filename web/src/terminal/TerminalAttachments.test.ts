@@ -55,9 +55,24 @@ test("carries an image through the API restarting underneath it", () => {
  * not a supported image did exactly what an empty clipboard did, which is
  * nothing at all.
  */
-function transfer(items: { kind: string; type: string }[]): DataTransfer {
+/**
+ * A drop and a paste do not fill the same fields. A paste populates `items`; a
+ * drop is only reliable through `files`, and some sources leave `type` empty.
+ * The fixture models both so a change cannot pass by satisfying one of them.
+ */
+function transfer(
+  items: { kind: string; type: string; name?: string }[],
+  options: { asDrop?: boolean } = {},
+): DataTransfer {
+  const asFiles = items
+    .filter((item) => item.kind === "file")
+    .map((item) => new File([""], item.name ?? "f", { type: item.type }));
   return {
-    items: items.map((item) => ({ ...item, getAsFile: () => new File([""], "f", { type: item.type }) })),
+    files: options.asDrop === false ? [] : asFiles,
+    items: items.map((item) => ({
+      ...item,
+      getAsFile: () => new File([""], item.name ?? "f", { type: item.type }),
+    })),
   } as unknown as DataTransfer;
 }
 
@@ -87,4 +102,46 @@ test("a clipboard carrying no file at all is not an unsupported file", () => {
 test("names the formats it does accept, so the message can say", () => {
   expect(supportedImageSummary()).toContain("GIF");
   expect(supportedImageSummary()).toContain("PNG");
+});
+
+/**
+ * The operator, after drop was wired: "I tried to drag and drop a gif over and
+ * it shows like I can now but it never comes in."
+ *
+ * The drop target appeared, the file was accepted, and nothing happened.
+ * `transferredImage` read only `items`, which a drop is not obliged to fill.
+ */
+test("a dropped GIF is found through files, not only items", () => {
+  const dropped = {
+    files: [new File([""], "party.gif", { type: "image/gif" })],
+    items: [],
+  } as unknown as DataTransfer;
+
+  expect(transferredImage(dropped).kind).toBe("image");
+});
+
+/**
+ * Some sources hand over a file with no media type at all. The name is then the
+ * only evidence, and re-typing from it is safe because the server checks the
+ * magic bytes and rejects a mislabel.
+ */
+test("a dropped file with no media type is typed from its name", () => {
+  const dropped = {
+    files: [new File([""], "party.gif", { type: "" })],
+    items: [],
+  } as unknown as DataTransfer;
+
+  const result = transferredImage(dropped);
+
+  expect(result.kind).toBe("image");
+  expect(result.kind === "image" && result.file.type).toBe("image/gif");
+});
+
+test("a dropped file that is not an image is still refused by name", () => {
+  const dropped = {
+    files: [new File([""], "clip.mp4", { type: "video/mp4" })],
+    items: [],
+  } as unknown as DataTransfer;
+
+  expect(transferredImage(dropped)).toEqual({ kind: "unsupported", description: "video/mp4" });
 });
