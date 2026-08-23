@@ -575,6 +575,19 @@ async fn handle_resize(
     } else {
         task_store.claim_unowned_worker_geometry(session_id, owner_device_id)
     };
+    // Recorded before the outcome is acted on, granted or refused. Two devices
+    // trading a terminal's size has been diagnosed three times from screenshots
+    // and code reading; this is so the fourth time is measured.
+    if let Ok(granted) = owns_geometry {
+        let _ = task_store.record_geometry_request(
+            session_id,
+            Some(owner_device_id),
+            (requested_size.rows, requested_size.columns),
+            claim_geometry,
+            granted,
+            unix_timestamp(),
+        );
+    }
     let Ok(owns_geometry) = owns_geometry else {
         let _ = send_control(
             outbound,

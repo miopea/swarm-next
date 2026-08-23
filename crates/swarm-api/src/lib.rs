@@ -2924,6 +2924,10 @@ fn api_router(state: AppState) -> Router {
             get(terminal_control::write_audit),
         )
         .route(
+            "/api/v1/terminal/sessions/{session_id}/geometry-contention",
+            get(terminal_control::geometry_contention),
+        )
+        .route(
             "/api/v1/terminal/sessions/{session_id}",
             delete(terminal_control::stop),
         )

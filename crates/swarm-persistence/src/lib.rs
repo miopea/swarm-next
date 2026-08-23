@@ -19,14 +19,13 @@ use uuid::Uuid;
 
 mod apiary;
 mod coordinator;
-pub use passkeys::RegisteredPasskey;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, CoordinatorAttention,
     CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake, ExitedWorkerOwnedWorkCandidate,
     OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD, REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
-    REFUSAL_WAKE_UNCERTAIN,
-    StaleOwnedWorkCandidate,
+    REFUSAL_WAKE_UNCERTAIN, StaleOwnedWorkCandidate,
 };
+pub use passkeys::RegisteredPasskey;
 mod decisions;
 mod email;
 mod events;
@@ -106,7 +105,7 @@ pub use decisions::{HeldForAnswer, INTERVIEW_ANSWERED_ACTION, OPERATOR_ANSWER_HE
 use events::insert_control_room_event;
 #[cfg(test)]
 use events::{MAX_CONTROL_ROOM_EVENT_PAGE, MAX_CONTROL_ROOM_EVENTS};
-pub use workers::ActiveWorkerSession;
+pub use workers::{ActiveWorkerSession, GeometryContention};
 pub(crate) const MAX_TASK_TITLE_BYTES: usize = 240;
 pub(crate) const MAX_TASK_DESCRIPTION_BYTES: usize = 10_000;
 const MAX_PUBLIC_IDENTITY_NAME_BYTES: usize = 120;
@@ -137,7 +136,8 @@ const COMPLETION_EXEMPTION_SCHEMA_VERSION: i64 = 84;
 const DECISION_DEADLINE_ATTENTION_SCHEMA_VERSION: i64 = 85;
 const COORDINATOR_REFUSAL_SCHEMA_VERSION: i64 = 86;
 const OPERATOR_PASSKEY_SCHEMA_VERSION: i64 = 87;
-const CURRENT_SCHEMA_VERSION: i64 = OPERATOR_PASSKEY_SCHEMA_VERSION;
+const TERMINAL_GEOMETRY_LEDGER_SCHEMA_VERSION: i64 = 88;
+const CURRENT_SCHEMA_VERSION: i64 = TERMINAL_GEOMETRY_LEDGER_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -2257,6 +2257,46 @@ fn migrate_named_schema_steps(
     if schema_version < OPERATOR_PASSKEY_SCHEMA_VERSION {
         migrate_operator_passkeys(transaction)?;
     }
+    if schema_version < TERMINAL_GEOMETRY_LEDGER_SCHEMA_VERSION {
+        migrate_terminal_geometry_ledger(transaction)?;
+    }
+    Ok(())
+}
+
+/// Every request to set a terminal's size, and what came of it.
+///
+/// Two devices trading a terminal's size back and forth has now been reported
+/// three times and diagnosed three times from screenshots and code reading. Two
+/// of those diagnoses were wrong, and the third could not be told apart from
+/// the legitimate case it broke. Nothing recorded who asked for which size,
+/// whether they claimed it, or whether they were granted it, so every attempt
+/// was inference.
+///
+/// Deliberately records refused requests too: a fight is visible precisely in
+/// the requests that were turned down and repeated.
+fn migrate_terminal_geometry_ledger(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS terminal_geometry_events (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             session_id TEXT NOT NULL,
+             device_id TEXT,
+             rows INTEGER NOT NULL,
+             columns INTEGER NOT NULL,
+             claimed INTEGER NOT NULL,
+             granted INTEGER NOT NULL,
+             owner_before TEXT,
+             at INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS terminal_geometry_events_by_session
+             ON terminal_geometry_events(session_id, at);",
+    )?;
+    transaction.pragma_update(
+        None,
+        "user_version",
+        TERMINAL_GEOMETRY_LEDGER_SCHEMA_VERSION,
+    )?;
     Ok(())
 }
 
@@ -5265,6 +5305,12 @@ mod tests {
         },
         SchemaStep {
             table: "operator_passkeys",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "terminal_geometry_events",
             artifact: "",
             undo_sql: "",
             probe_sql: "",

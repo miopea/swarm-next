@@ -54,6 +54,22 @@ pub struct ActiveWorkerSession {
 const MAX_WORKER_NAME_BYTES: usize = 80;
 const MAX_WORKER_DESCRIPTION_BYTES: usize = 2_000;
 
+/// How many size requests are kept per terminal. Enough to see a fight and its
+/// shape; not enough for a fight to grow the database.
+const GEOMETRY_EVENTS_KEPT_PER_SESSION: i64 = 200;
+
+/// What the ledger says about one terminal over a window.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GeometryContention {
+    pub requests: usize,
+    pub devices: usize,
+    /// Granted claims that moved the size to a device that did not hold it.
+    /// One is a handover. Repeated ones are a fight.
+    pub handovers: usize,
+    pub refused: usize,
+    pub distinct_sizes: usize,
+}
+
 impl TaskStore {
     /// Returns the singleton Queen profile, creating it on first start.
     ///
@@ -820,6 +836,132 @@ impl TaskStore {
                 |row| row.get(0),
             )
             .map_err(TaskStoreError::from)
+    }
+
+    /// Records one request to set a terminal's size, granted or not.
+    ///
+    /// # Errors
+    /// Returns an error when the ledger cannot be written.
+    pub fn record_geometry_request(
+        &self,
+        session_id: WorkerSessionId,
+        device_id: Option<PresenceDeviceId>,
+        size: (u16, u16),
+        claimed: bool,
+        granted: bool,
+        now: i64,
+    ) -> Result<(), TaskStoreError> {
+        let connection = self.connection()?;
+        let owner_before: Option<String> = connection
+            .query_row(
+                "SELECT geometry_owner_device_id FROM worker_sessions
+                 WHERE session_id = ?1 AND ended_at IS NULL",
+                [session_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        connection.execute(
+            "INSERT INTO terminal_geometry_events
+             (session_id, device_id, rows, columns, claimed, granted, owner_before, at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                session_id.to_string(),
+                device_id.map(|device| device.to_string()),
+                i64::from(size.0),
+                i64::from(size.1),
+                i64::from(claimed),
+                i64::from(granted),
+                owner_before,
+                now
+            ],
+        )?;
+        // Bounded on write. A quiet terminal writes one of these an hour; a
+        // fight writes several a second, and it is the fight that must not grow
+        // the database without limit.
+        connection.execute(
+            "DELETE FROM terminal_geometry_events
+             WHERE session_id = ?1 AND id NOT IN (
+                 SELECT id FROM terminal_geometry_events
+                 WHERE session_id = ?1 ORDER BY id DESC LIMIT ?2
+             )",
+            params![session_id.to_string(), GEOMETRY_EVENTS_KEPT_PER_SESSION],
+        )?;
+        Ok(())
+    }
+
+    /// How much the terminal's size has been argued over recently.
+    ///
+    /// # Errors
+    /// Returns an error when the ledger cannot be read.
+    pub fn geometry_contention(
+        &self,
+        session_id: WorkerSessionId,
+        since: i64,
+    ) -> Result<GeometryContention, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT device_id, rows, columns, claimed, granted, owner_before, at
+             FROM terminal_geometry_events
+             WHERE session_id = ?1 AND at >= ?2
+             ORDER BY id",
+        )?;
+        let rows = statement
+            .query_map(params![session_id.to_string(), since], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)? != 0,
+                    row.get::<_, i64>(4)? != 0,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut devices = std::collections::BTreeSet::new();
+        let mut handovers = 0;
+        let mut refused = 0;
+        let mut sizes = std::collections::BTreeSet::new();
+        for (device, rows_count, columns, _claimed, granted, _owner_before, _) in &rows {
+            if let Some(device) = device {
+                devices.insert(device.clone());
+            }
+            if !granted {
+                refused += 1;
+            }
+            sizes.insert((*rows_count, *columns));
+        }
+
+        // A handover is the size passing to a device that was not the last one
+        // granted it. Read from the sequence rather than from the owner
+        // recorded beside each row: that owner is read after the claim has
+        // already been applied, so it never differs from the claimant and
+        // counted nothing.
+        //
+        // Repeated grants to the same device are ordinary resizing — dragging a
+        // window edge must not read as a fight.
+        let mut holder: Option<&String> = None;
+        for (device, .., granted, _, _) in &rows {
+            if !*granted {
+                continue;
+            }
+            let Some(device) = device.as_ref() else {
+                continue;
+            };
+            if holder.is_some_and(|held| held != device) {
+                handovers += 1;
+            }
+            holder = Some(device);
+        }
+        Ok(GeometryContention {
+            requests: rows.len(),
+            devices: devices.len(),
+            handovers,
+            refused,
+            distinct_sizes: sizes.len(),
+        })
     }
 
     /// Claims geometry authority for a live session when no device owns it yet,
@@ -1997,6 +2139,97 @@ mod tests {
             .unwrap();
         assert!(!store.worker_accepts_injection(first.id, 103).unwrap());
         assert!(!store.worker_accepts_injection(second.id, 103).unwrap());
+    }
+
+    /// The measurement the operator asked for: "You need a way to measure the
+    /// terminal fight so this isn't guesswork."
+    ///
+    /// A fight and a legitimate handover look identical in a screenshot. They
+    /// do not look identical here: one device taking the size once is a
+    /// handover, and two devices taking it from each other repeatedly is the
+    /// thing being reported.
+    #[test]
+    fn the_ledger_tells_a_handover_apart_from_a_fight() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Clover", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        let desktop = PresenceDeviceId::new();
+        let phone = PresenceDeviceId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        // The desktop is looking at it, then the phone takes it. Once.
+        store
+            .claim_unowned_worker_geometry(session, desktop)
+            .unwrap();
+        store
+            .record_geometry_request(session, Some(desktop), (50, 150), false, true, 1_000)
+            .unwrap();
+        let granted = store.claim_worker_geometry(session, phone).unwrap();
+        store
+            .record_geometry_request(session, Some(phone), (60, 40), true, granted, 1_001)
+            .unwrap();
+
+        let handover = store.geometry_contention(session, 0).unwrap();
+        assert_eq!(handover.handovers, 1, "taking it once is a handover");
+        assert_eq!(handover.devices, 2);
+
+        // Now they argue: each takes it back from the other, repeatedly.
+        for round in 0..6 {
+            let (device, size) = if round % 2 == 0 {
+                (desktop, (50, 150))
+            } else {
+                (phone, (60, 40))
+            };
+            let granted = store.claim_worker_geometry(session, device).unwrap();
+            store
+                .record_geometry_request(session, Some(device), size, true, granted, 1_010 + round)
+                .unwrap();
+        }
+
+        let fight = store.geometry_contention(session, 1_010).unwrap();
+        assert_eq!(fight.devices, 2);
+        assert_eq!(fight.distinct_sizes, 2, "two sizes, alternating");
+        assert!(
+            fight.handovers >= 5,
+            "a fight is repeated handovers, not one: {fight:?}"
+        );
+    }
+
+    /// One device resizing its own terminal is not contention, however often it
+    /// does it — otherwise dragging a window edge would read as a fight.
+    #[test]
+    fn one_device_resizing_repeatedly_is_not_contention() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Clover", ProviderKind::ClaudeCode, "/workspace", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        let desktop = PresenceDeviceId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        for step in 0..10 {
+            let granted = store.claim_worker_geometry(session, desktop).unwrap();
+            store
+                .record_geometry_request(
+                    session,
+                    Some(desktop),
+                    (40 + u16::try_from(step).unwrap(), 120),
+                    true,
+                    granted,
+                    2_000 + step,
+                )
+                .unwrap();
+        }
+
+        let measured = store.geometry_contention(session, 0).unwrap();
+        assert_eq!(measured.devices, 1);
+        assert_eq!(
+            measured.handovers, 0,
+            "one device resizing its own terminal moves it to nobody"
+        );
+        assert_eq!(measured.requests, 10);
     }
 
     #[test]

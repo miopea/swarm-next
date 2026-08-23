@@ -4,7 +4,7 @@ use axum::{
     Json,
     extract::{Path, Query, State},
     http::HeaderMap,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use swarm_domain::ProviderConversationId;
@@ -155,4 +155,41 @@ pub(super) async fn stop(
     }
     record_session_event(&state)?;
     Ok(response)
+}
+
+/// What the geometry ledger says about one terminal over a window.
+///
+/// A diagnostic, not a control-room feature. It exists because two devices
+/// trading a terminal's size was diagnosed three times from screenshots and
+/// code reading, two of those diagnoses were wrong, and nothing recorded who
+/// asked for which size or whether they were granted it.
+#[derive(serde::Deserialize)]
+pub(super) struct GeometryContentionQuery {
+    /// How far back to look, in seconds. Defaults to five minutes.
+    seconds: Option<i64>,
+}
+
+pub(super) async fn geometry_contention(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(session_id): Path<String>,
+    Query(query): Query<GeometryContentionQuery>,
+) -> Result<Response, ApiError> {
+    crate::authorize(&state, &headers)?;
+    let session_id = parse_session_id(&session_id)?;
+    let since = crate::unix_timestamp() - query.seconds.unwrap_or(300).clamp(1, 86_400);
+    let measured = crate::task_store(&state)?
+        .geometry_contention(session_id, since)
+        .map_err(|error| crate::task_store_error(&error))?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({
+            "requests": measured.requests,
+            "devices": measured.devices,
+            "handovers": measured.handovers,
+            "refused": measured.refused,
+            "distinct_sizes": measured.distinct_sizes,
+        })),
+    )
+        .into_response())
 }
