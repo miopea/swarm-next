@@ -23,7 +23,8 @@ pub use passkeys::RegisteredPasskey;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, CoordinatorAttention,
     CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake, ExitedWorkerOwnedWorkCandidate,
-    OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD, REFUSAL_WAKE_UNCERTAIN,
+    OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD, REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+    REFUSAL_WAKE_UNCERTAIN,
     StaleOwnedWorkCandidate,
 };
 mod decisions;

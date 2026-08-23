@@ -28,6 +28,12 @@ export default function HeldDeliveryAttentionCard({ held, onOpenWorker }: Props)
   // started, nothing will retry it, and the task reads as routed — so it needs
   // its own sentence and its own instruction.
   const unstarted = held.filter((entry) => entry.kind === "wake_uncertain");
+  // Not a question anybody has to answer. The prompt holds text that was typed
+  // and never sent, and Swarm will not append to it because a later Enter would
+  // submit two unrelated instructions as one. Telling the operator to answer a
+  // prompt sends them looking for something that is not there.
+  const unsent = oldest.kind === "delivery_held_unsent_text";
+  const queenUnsent = queen?.kind === "delivery_held_unsent_text";
 
   return (
     <section className="queen-attention-card held-delivery-card" aria-labelledby="held-delivery-heading">
@@ -35,19 +41,27 @@ export default function HeldDeliveryAttentionCard({ held, onOpenWorker }: Props)
         <p className="eyebrow">Waiting on a terminal</p>
         <h3 id="held-delivery-heading">
           {queen
-            ? "Queen cannot review until a prompt is answered"
+            ? queenUnsent
+              ? "Queen cannot review until her prompt is cleared"
+              : "Queen cannot review until a prompt is answered"
             : unstarted.length > 0 && unstarted.length === held.length
               ? held.length === 1
                 ? `${oldest.worker_name ?? "A worker"} was assigned work that never started`
                 : `${held.length} tasks are assigned to workers that never started them`
               : held.length === 1
-              ? `${oldest.worker_name ?? "A worker"} has work waiting behind a prompt`
-              : `${held.length} things are waiting behind unanswered prompts`}
+              ? unsent
+                ? `${oldest.worker_name ?? "A worker"} has an unsent line at its prompt`
+                : `${oldest.worker_name ?? "A worker"} has work waiting behind a prompt`
+              : `${held.length} things are waiting at worker prompts`}
         </h3>
         <p>
           {queen
-            ? "Nothing reaches this queue and nothing gets routed while Queen's terminal has an open question. Answer it and the review resumes on its own."
-            : oldest.kind === "wake_uncertain"
+            ? queenUnsent
+              ? "Queen's prompt holds text that was typed but never sent, so Swarm will not add to it — sending two instructions on one Enter is worse than waiting. Nothing reaches this queue while it stands. Clear the line and the review resumes on its own."
+              : "Nothing reaches this queue and nothing gets routed while Queen's terminal has an open question. Answer it and the review resumes on its own."
+            : unsent
+              ? "This terminal's prompt holds text that was typed but never sent. Swarm will not append to it, because a later Enter would submit both at once. Clear the line and this delivers itself."
+              : oldest.kind === "wake_uncertain"
               ? "Swarm could not confirm this worker woke, so it will not try again — waking it twice would brief it twice. The work is assigned and was never started. Wake the worker yourself and it picks up from there."
               : "Swarm will not type into a terminal with an open question, so this is waiting rather than lost. Answer the prompt and it delivers itself."}
         </p>

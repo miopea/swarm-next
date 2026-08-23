@@ -3,7 +3,7 @@ use std::str::FromStr;
 use rusqlite::{OptionalExtension, params};
 use swarm_domain::{
     ControlRoomEventKind, PresenceMode, QueenActionClass, QueenAutomationOutcome,
-    QueenAutomationState, QueenAutomationStatus, QueenAutomationTrigger, WorkerSessionId,
+    QueenAutomationState, QueenAutomationStatus, QueenAutomationTrigger, WorkerId, WorkerSessionId,
 };
 use uuid::Uuid;
 
@@ -24,6 +24,10 @@ const RUN_TIMEOUT_SECONDS: i64 = 60 * 60;
 pub struct QueenAutomationDelivery {
     pub run_id: String,
     pub session_id: WorkerSessionId,
+    /// Queen herself. Carried so that a refusal recorded against this delivery
+    /// can name the worker the operator has to go and look at — a held item
+    /// with no worker on it renders as a sentence with nothing to open.
+    pub worker_id: WorkerId,
     pub trigger: QueenAutomationTrigger,
     pub actionable_count: usize,
     pub presence: PresenceMode,
@@ -223,7 +227,7 @@ impl TaskStore {
         expire_stale_run(&transaction, now)?;
         resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
         let candidate = transaction.query_row(
-            "SELECT automation.run_id, session.session_id, automation.trigger, automation.actionable_count
+            "SELECT automation.run_id, session.session_id, automation.trigger, automation.actionable_count, queen.id
              FROM queen_automation automation
              JOIN worker_profiles queen ON queen.role = 'queen'
              JOIN worker_sessions session ON session.worker_id = queen.id AND session.ended_at IS NULL
@@ -232,9 +236,9 @@ impl TaskStore {
                AND NOT EXISTS (SELECT 1 FROM local_federation_steward_takeover_leases lease WHERE lease.state = 'active' AND lease.expires_at > ?2)
              ORDER BY session.started_at DESC LIMIT 1",
             params![MAX_AUTOMATION_ATTEMPTS, now],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?)),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, String>(4)?)),
         ).optional()?;
-        let Some((run_id, session_id, trigger, count)) = candidate else {
+        let Some((run_id, session_id, trigger, count, queen_id)) = candidate else {
             transaction.commit()?;
             return Ok(None);
         };
@@ -256,6 +260,9 @@ impl TaskStore {
             run_id,
             session_id: session_id.parse().map_err(|_| {
                 TaskStoreError::IntegrityFailure("invalid Queen automation session".into())
+            })?,
+            worker_id: queen_id.parse().map_err(|_| {
+                TaskStoreError::IntegrityFailure("invalid Queen worker id".into())
             })?,
             trigger: QueenAutomationTrigger::from_str(&trigger).map_err(|()| {
                 TaskStoreError::IntegrityFailure("invalid Queen automation trigger".into())

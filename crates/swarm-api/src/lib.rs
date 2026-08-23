@@ -102,7 +102,22 @@ use swarm_persistence::{
     FederationJiraClaimPhase, JiraIssueSnapshot, JiraProjectBindingInput, JiraTransitionFailure,
     QueenAutomationFailure, TaskDispatchFailure, TaskOutcomeFailure, TaskStore, TaskStoreError,
 };
-use swarm_persistence::{REFUSAL_DELIVERY_HELD, REFUSAL_WAKE_UNCERTAIN};
+use swarm_persistence::{
+    REFUSAL_DELIVERY_HELD, REFUSAL_DELIVERY_HELD_UNSENT_TEXT, REFUSAL_WAKE_UNCERTAIN,
+};
+
+/// Clears both ways a delivery can be held, for one subject.
+///
+/// A delivery held first because the provider was busy and then because the
+/// prompt held unsent text leaves a row under each kind, and success only ever
+/// resolves one of them. Nothing else clears these — `standing_coordinator_refusals`
+/// filters on `cleared_at` alone, with no staleness window — so a row missed
+/// here is an attention card the operator can never make go away.
+fn clear_held_delivery_refusals(store: &swarm_persistence::TaskStore, subject: &str) {
+    for kind in [REFUSAL_DELIVERY_HELD, REFUSAL_DELIVERY_HELD_UNSENT_TEXT] {
+        let _ = store.clear_coordinator_refusal(kind, subject, unix_timestamp());
+    }
+}
 // The message-content tests build these directly; the delivery that consumes
 // them now lives in `coordination_delivery`.
 #[cfg(test)]
@@ -1332,21 +1347,17 @@ impl AppState {
         for (delivery, submission) in settled {
             let outcome = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
-                    let _ = store.clear_coordinator_refusal(
-                        REFUSAL_DELIVERY_HELD,
-                        &format!("decision:{}", delivery.decision_id),
-                        unix_timestamp(),
-                    );
+                    clear_held_delivery_refusals(store, &format!("decision:{}", delivery.decision_id));
                     store.complete_decision_delivery(delivery.decision_id, unix_timestamp())
                 }
-                Ok(TerminalSubmission::Deferred) => {
-                    tracing::info!(decision_id = %delivery.decision_id, worker_id = %delivery.worker_id, "decision delivery is held behind an open provider question");
+                Ok(TerminalSubmission::Deferred(reason)) => {
+                    tracing::info!(decision_id = %delivery.decision_id, worker_id = %delivery.worker_id, ?reason, "decision delivery is held at this worker's prompt");
                     let _ = store.record_coordinator_refusal(
-                        REFUSAL_DELIVERY_HELD,
+                        reason.refusal_kind(),
                         &format!("decision:{}", delivery.decision_id),
                         Some(delivery.worker_id),
                         None,
-                        "an answer is waiting behind an unanswered prompt in this worker's terminal",
+                        &reason.describe("An answer"),
                         unix_timestamp(),
                     );
                     store.defer_decision_delivery(delivery.decision_id, unix_timestamp())
@@ -1409,21 +1420,17 @@ impl AppState {
         for (delivery, submission) in settled {
             let outcome = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
-                    let _ = store.clear_coordinator_refusal(
-                        REFUSAL_DELIVERY_HELD,
-                        &format!("task-brief:{}", delivery.task_id),
-                        unix_timestamp(),
-                    );
+                    clear_held_delivery_refusals(store, &format!("task-brief:{}", delivery.task_id));
                     store.complete_task_dispatch(&delivery.assignment_id, unix_timestamp())
                 }
-                Ok(TerminalSubmission::Deferred) => {
-                    tracing::info!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, "task briefing is held behind an open provider question");
+                Ok(TerminalSubmission::Deferred(reason)) => {
+                    tracing::info!(task_id = %delivery.task_id, worker_id = %delivery.worker_id, ?reason, "task briefing is held at this worker's prompt");
                     let _ = store.record_coordinator_refusal(
-                        REFUSAL_DELIVERY_HELD,
+                        reason.refusal_kind(),
                         &format!("task-brief:{}", delivery.task_id),
                         Some(delivery.worker_id),
                         None,
-                        "a briefing is waiting behind an unanswered prompt in this worker's terminal",
+                        &reason.describe("A briefing"),
                         unix_timestamp(),
                     );
                     store.defer_task_dispatch(&delivery.assignment_id, unix_timestamp())
@@ -1485,16 +1492,17 @@ impl AppState {
         for (outcome, submission) in settled {
             let result = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
+                    clear_held_delivery_refusals(store, &format!("task-outcome:{}", outcome.task_id));
                     store.complete_task_outcome(&outcome.id, unix_timestamp())
                 }
-                Ok(TerminalSubmission::Deferred) => {
-                    tracing::info!(task_id = %outcome.task_id, reporter_id = %outcome.reporting_worker_id, recipient_id = %outcome.recipient_worker_id, "task outcome is held behind an open provider question");
+                Ok(TerminalSubmission::Deferred(reason)) => {
+                    tracing::info!(task_id = %outcome.task_id, reporter_id = %outcome.reporting_worker_id, recipient_id = %outcome.recipient_worker_id, ?reason, "task outcome is held at this worker's prompt");
                     let _ = store.record_coordinator_refusal(
-                        REFUSAL_DELIVERY_HELD,
+                        reason.refusal_kind(),
                         &format!("task-outcome:{}", outcome.task_id),
                         Some(outcome.recipient_worker_id),
                         None,
-                        "an outcome report is waiting behind an unanswered prompt in this worker's terminal",
+                        &reason.describe("An outcome report"),
                         unix_timestamp(),
                     );
                     store.defer_task_outcome(&outcome.id, unix_timestamp())
@@ -1532,6 +1540,36 @@ impl AppState {
             }
         }
     }
+    /// Defers a claimed Queen run whose terminal is not at a fresh resting prompt.
+    ///
+    /// The one that stopped the whole Hive for twelve hours. Queen reviews
+    /// nothing while this holds, so nothing reaches Needs you and nothing gets
+    /// routed — which is why the refusal is recorded rather than only logged.
+    fn hold_queen_automation_until_resting(
+        &self,
+        store: &TaskStore,
+        delivery: &swarm_persistence::QueenAutomationDelivery,
+    ) {
+        tracing::info!(run_id = %delivery.run_id, "Queen automation is waiting for a fresh resting prompt");
+        let _ = store.record_coordinator_refusal(
+            REFUSAL_DELIVERY_HELD,
+            "queen-review",
+            Some(delivery.worker_id),
+            Some(delivery.session_id),
+            &coordination_delivery::DeferralReason::ProviderBusy.describe("Queen's review"),
+            unix_timestamp(),
+        );
+        match store.defer_queen_automation_delivery(&delivery.run_id, unix_timestamp()) {
+            Ok(true) => self.control_room_notify.notify_waiters(),
+            Ok(false) => {
+                tracing::warn!(run_id = %delivery.run_id, "Queen automation readiness claim was no longer active");
+            }
+            Err(error) => {
+                tracing::warn!(run_id = %delivery.run_id, message = %error, "Queen automation readiness deferral could not be persisted");
+            }
+        }
+    }
+
     async fn deliver_queen_automation(&self, store: &TaskStore, client: &HostClient) {
         let delivery = match store.claim_queen_automation(unix_timestamp()) {
             Ok(Some(delivery)) => delivery,
@@ -1556,27 +1594,7 @@ impl AppState {
         if provider_activity::observe_session(self, delivery.session_id, provider).await
             != Some(ProviderActivity::Resting)
         {
-            tracing::info!(run_id = %delivery.run_id, "Queen automation is waiting for a fresh resting prompt");
-            // The one that stopped the whole Hive for twelve hours. Queen
-            // reviews nothing while this holds, so nothing reaches Needs you
-            // and nothing gets routed.
-            let _ = store.record_coordinator_refusal(
-                REFUSAL_DELIVERY_HELD,
-                "queen-review",
-                None,
-                Some(delivery.session_id),
-                "Queen cannot review while her terminal has an unanswered prompt",
-                unix_timestamp(),
-            );
-            match store.defer_queen_automation_delivery(&delivery.run_id, unix_timestamp()) {
-                Ok(true) => self.control_room_notify.notify_waiters(),
-                Ok(false) => {
-                    tracing::warn!(run_id = %delivery.run_id, "Queen automation readiness claim was no longer active");
-                }
-                Err(error) => {
-                    tracing::warn!(run_id = %delivery.run_id, message = %error, "Queen automation readiness deferral could not be persisted");
-                }
-            }
+            self.hold_queen_automation_until_resting(store, &delivery);
             return;
         }
         let result = match submit_coordination_message(
@@ -1589,16 +1607,17 @@ impl AppState {
         .await
         {
             Ok(TerminalSubmission::Acknowledged) => {
+                clear_held_delivery_refusals(store, "queen-review");
                 store.complete_queen_automation_delivery(&delivery.run_id, unix_timestamp())
             }
-            Ok(TerminalSubmission::Deferred) => {
-                tracing::info!(run_id = %delivery.run_id, "Queen automation is held behind an open provider question");
+            Ok(TerminalSubmission::Deferred(reason)) => {
+                tracing::info!(run_id = %delivery.run_id, ?reason, "Queen automation is held at Queen's prompt");
                 let _ = store.record_coordinator_refusal(
-                    REFUSAL_DELIVERY_HELD,
+                    reason.refusal_kind(),
                     "queen-review",
-                    None,
+                    Some(delivery.worker_id),
                     Some(delivery.session_id),
-                    "Queen cannot review while her terminal has an unanswered prompt",
+                    &reason.describe("Queen's review"),
                     unix_timestamp(),
                 );
                 store.defer_queen_automation_delivery(&delivery.run_id, unix_timestamp())

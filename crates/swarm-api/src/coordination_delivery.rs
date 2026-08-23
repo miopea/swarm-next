@@ -26,10 +26,49 @@ use crate::{
     AppState, HostClient, TerminalWriteProvenance, provider_activity, task_store, unix_timestamp,
 };
 
+/// Why a write was not attempted. Both mean "not now", and they mean it for
+/// opposite reasons: one wants the operator to answer something, the other
+/// wants them to clear something they typed and never sent. Reporting both as
+/// "an unanswered prompt" sent the operator looking for a question that was not
+/// there while the board sat still for hours.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeferralReason {
+    /// The provider is working, or is genuinely asking the operator something.
+    ProviderBusy,
+    /// The provider is resting, but its prompt already holds text nobody sent.
+    /// Appending to it would merge two unrelated instructions into one Enter.
+    PromptHoldsUnsentText,
+}
+
+impl DeferralReason {
+    /// The refusal kind this deferral is recorded under.
+    ///
+    /// The control room branches on the kind rather than reading the prose, so
+    /// the two situations can be told apart without matching on a sentence.
+    pub(super) fn refusal_kind(self) -> &'static str {
+        match self {
+            Self::ProviderBusy => swarm_persistence::REFUSAL_DELIVERY_HELD,
+            Self::PromptHoldsUnsentText => swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
+        }
+    }
+
+    /// Written to the operator, so it names the remedy rather than the state.
+    pub(super) fn describe(self, subject: &str) -> String {
+        match self {
+            Self::ProviderBusy => {
+                format!("{subject} is waiting for an unanswered prompt in this terminal")
+            }
+            Self::PromptHoldsUnsentText => format!(
+                "{subject} is waiting because this terminal's prompt holds text that was typed but never sent — clear the line to release it"
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum TerminalSubmission {
     Acknowledged,
-    Deferred,
+    Deferred(DeferralReason),
     Rejected { code: String, message: String },
     Uncertain,
 }
@@ -243,10 +282,15 @@ async fn delivery_baseline(
                 ..
             } => {
                 let activity = provider_activity::classify_observed_activity(provider, &snapshot);
-                if activity != ProviderActivity::Resting
-                    || provider_activity::has_open_provider_input(provider, &snapshot)
-                {
-                    return Ok(Baseline::Refused(TerminalSubmission::Deferred));
+                if activity != ProviderActivity::Resting {
+                    return Ok(Baseline::Refused(TerminalSubmission::Deferred(
+                        DeferralReason::ProviderBusy,
+                    )));
+                }
+                if provider_activity::has_open_provider_input(provider, &snapshot) {
+                    return Ok(Baseline::Refused(TerminalSubmission::Deferred(
+                        DeferralReason::PromptHoldsUnsentText,
+                    )));
                 }
                 Baseline::Ready {
                     sequence: snapshot.sequence,
@@ -1066,5 +1110,30 @@ mod tests {
         // The clock restarts from the reset, so the earlier time no longer counts.
         assert!(!stability.observe(start + Duration::from_millis(900), required));
         assert!(stability.observe(start + Duration::from_millis(1_700), required));
+    }
+
+    /// The 2026-08-23 wedge: Queen's prompt held an unsent `/rc`, the operator
+    /// was told to answer a question, and there was no question. Both halves
+    /// have to differ — the kind the control room branches on, and the sentence
+    /// the operator reads — or one of them silently reintroduces the bug.
+    #[test]
+    fn the_two_reasons_a_delivery_is_held_do_not_read_the_same() {
+        let busy = DeferralReason::ProviderBusy;
+        let unsent = DeferralReason::PromptHoldsUnsentText;
+
+        assert_ne!(busy.refusal_kind(), unsent.refusal_kind());
+        assert_eq!(busy.refusal_kind(), swarm_persistence::REFUSAL_DELIVERY_HELD);
+        assert_eq!(
+            unsent.refusal_kind(),
+            swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT
+        );
+
+        let busy_text = busy.describe("Queen's review");
+        let unsent_text = unsent.describe("Queen's review");
+        assert_ne!(busy_text, unsent_text);
+        assert!(busy_text.contains("unanswered prompt"), "{busy_text}");
+        // The remedy, not the state: there is nothing here to answer.
+        assert!(unsent_text.contains("clear the line"), "{unsent_text}");
+        assert!(!unsent_text.contains("unanswered"), "{unsent_text}");
     }
 }

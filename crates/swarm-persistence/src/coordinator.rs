@@ -2445,6 +2445,16 @@ pub struct CoordinatorRefusal {
 /// provider question.
 pub const REFUSAL_DELIVERY_HELD: &str = "delivery_held_open_prompt";
 
+/// A delivery that cannot be written because the prompt already holds text
+/// that was typed and never sent.
+///
+/// Separate from [`REFUSAL_DELIVERY_HELD`] because the remedy is the opposite
+/// one. There is no question to answer — the operator has to clear a line they
+/// left behind. Told to answer a prompt that is not there, they open the
+/// terminal, see nothing to do, and close it again, which is what happened for
+/// three hours on 2026-08-23 while the board sat at zero active tasks.
+pub const REFUSAL_DELIVERY_HELD_UNSENT_TEXT: &str = "delivery_held_unsent_text";
+
 /// A wake whose outcome could not be confirmed, and which will not replay.
 ///
 /// The work is assigned and was never started, and nothing about the task says

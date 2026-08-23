@@ -49,7 +49,7 @@ test("counts them when several are held", () => {
       onOpenWorker={vi.fn()}
     />,
   );
-  expect(screen.getByText("2 things are waiting behind unanswered prompts")).toBeInTheDocument();
+  expect(screen.getByText("2 things are waiting at worker prompts")).toBeInTheDocument();
   // The oldest is the one worth naming, not whichever arrived last.
   expect(screen.getByRole("button", { name: "Open Daisy" })).toBeInTheDocument();
 });
@@ -98,4 +98,42 @@ test("counts unstarted work when several workers never started", () => {
     />,
   );
   expect(screen.getByText("2 tasks are assigned to workers that never started them")).toBeInTheDocument();
+});
+
+/**
+ * The 2026-08-23 wedge. Queen's prompt held an unsent `/rc` left behind by a
+ * Remote Control reconnect. The card told the operator to answer a prompt, they
+ * opened Queen, found no question, and the board sat at zero active tasks for
+ * three hours while the review was refused 388 times.
+ *
+ * Telling someone to answer a question that does not exist is worse than saying
+ * nothing: it spends the one look they were going to give it.
+ */
+test("tells the operator to clear the line, not to answer a question", () => {
+  render(
+    <HeldDeliveryAttentionCard
+      held={[held({ kind: "delivery_held_unsent_text", observations: 388 })]}
+    />,
+  );
+
+  expect(screen.getByText("Queen cannot review until her prompt is cleared")).toBeInTheDocument();
+  expect(screen.getByText(/typed but never sent/)).toBeInTheDocument();
+  expect(screen.queryByText(/Answer it and the review resumes/)).not.toBeInTheDocument();
+});
+
+test("says the same for a worker that is not Queen", () => {
+  render(
+    <HeldDeliveryAttentionCard
+      held={[
+        held({
+          kind: "delivery_held_unsent_text",
+          subject: "task-brief:019ff",
+          worker_name: "Sculpt Studio",
+        }),
+      ]}
+    />,
+  );
+
+  expect(screen.getByText("Sculpt Studio has an unsent line at its prompt")).toBeInTheDocument();
+  expect(screen.getByText(/Clear the line and this delivers itself/)).toBeInTheDocument();
 });
