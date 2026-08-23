@@ -261,9 +261,9 @@ impl TaskStore {
             session_id: session_id.parse().map_err(|_| {
                 TaskStoreError::IntegrityFailure("invalid Queen automation session".into())
             })?,
-            worker_id: queen_id.parse().map_err(|_| {
-                TaskStoreError::IntegrityFailure("invalid Queen worker id".into())
-            })?,
+            worker_id: queen_id
+                .parse()
+                .map_err(|_| TaskStoreError::IntegrityFailure("invalid Queen worker id".into()))?,
             trigger: QueenAutomationTrigger::from_str(&trigger).map_err(|()| {
                 TaskStoreError::IntegrityFailure("invalid Queen automation trigger".into())
             })?,

@@ -1493,7 +1493,10 @@ mod tests {
 
         // Still being retried: still standing.
         assert_eq!(
-            store.standing_coordinator_refusals(1_150, 120).unwrap().len(),
+            store
+                .standing_coordinator_refusals(1_150, 120)
+                .unwrap()
+                .len(),
             1
         );
 
@@ -1526,7 +1529,9 @@ mod tests {
                 .unwrap();
         }
 
-        let standing = store.standing_coordinator_refusals(1_000 + 29 * 60, 120).unwrap();
+        let standing = store
+            .standing_coordinator_refusals(1_000 + 29 * 60, 120)
+            .unwrap();
         assert_eq!(standing.len(), 1);
         assert_eq!(standing[0].observations, 30);
     }
@@ -1597,7 +1602,14 @@ mod tests {
             .unwrap();
         // Recurring, so still being observed when the queue is read.
         store
-            .record_coordinator_refusal(REFUSAL_DELIVERY_HELD, "queen-review", None, None, "held", 2_190)
+            .record_coordinator_refusal(
+                REFUSAL_DELIVERY_HELD,
+                "queen-review",
+                None,
+                None,
+                "held",
+                2_190,
+            )
             .unwrap();
         let again = store.standing_coordinator_refusals(2_200, 120).unwrap();
         assert_eq!(again[0].first_observed_at, 2_000);
@@ -2659,20 +2671,23 @@ impl TaskStore {
                AND ?1 - refusal.last_observed_at <= ?3
              ORDER BY refusal.first_observed_at",
         )?;
-        let rows = statement.query_map(params![now, grace_seconds, Self::STALE_REFUSAL_SECONDS], |row| {
-            Ok(CoordinatorRefusal {
-                kind: row.get(0)?,
-                subject: row.get(1)?,
-                worker_id: row
-                    .get::<_, Option<String>>(2)?
-                    .and_then(|id| WorkerId::from_str(&id).ok()),
-                worker_name: row.get(3)?,
-                reason: row.get(4)?,
-                first_observed_at: row.get(5)?,
-                last_observed_at: row.get(6)?,
-                observations: row.get(7)?,
-            })
-        })?;
+        let rows = statement.query_map(
+            params![now, grace_seconds, Self::STALE_REFUSAL_SECONDS],
+            |row| {
+                Ok(CoordinatorRefusal {
+                    kind: row.get(0)?,
+                    subject: row.get(1)?,
+                    worker_id: row
+                        .get::<_, Option<String>>(2)?
+                        .and_then(|id| WorkerId::from_str(&id).ok()),
+                    worker_name: row.get(3)?,
+                    reason: row.get(4)?,
+                    first_observed_at: row.get(5)?,
+                    last_observed_at: row.get(6)?,
+                    observations: row.get(7)?,
+                })
+            },
+        )?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 }
