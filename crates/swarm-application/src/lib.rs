@@ -1926,7 +1926,39 @@ impl TaskService {
     /// Propagates lifecycle and persistence failures.
     pub fn remove_operator_task(&self, task_id: TaskId) -> Result<(), ApplicationError> {
         self.store
-            .remove_task_as(task_id, &TaskActivityActor::operator())
+            .remove_task_as(task_id, &TaskActivityActor::operator(), "")
+            .map_err(Into::into)
+    }
+
+    /// Retires a task Queen has been told should not exist any more.
+    ///
+    /// Soft-delete, per the operator's ruling: the row keeps its history and
+    /// leaves the live board, rather than becoming a sixth lifecycle state that
+    /// every query, filter and summary has to learn.
+    ///
+    /// This existed for the operator and not for Queen, so an operator ruling
+    /// of "retire these four" could only be carried out by moving them to
+    /// Blocked with a note saying they were retired — a lie on the board, since
+    /// Blocked means work waiting on something and the next reader will try to
+    /// unblock it. Worse, drafts are now part of Queen's review set, so a
+    /// retired-but-undeletable task would be re-triaged on every future review,
+    /// forever.
+    ///
+    /// # Errors
+    /// Denies a worker caller, and propagates lifecycle and persistence
+    /// failures — including the refusal to retire Active or Review work, which
+    /// must be moved out of flight first.
+    pub fn retire_task(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+        reason: &str,
+    ) -> Result<(), ApplicationError> {
+        if principal.role != WorkerRole::Queen {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        self.store
+            .remove_task_as(task_id, &TaskActivityActor::worker(principal.worker_id), reason)
             .map_err(Into::into)
     }
 
@@ -3174,5 +3206,61 @@ mod tests {
         );
 
         assert!(matches!(denied, Err(ApplicationError::NotAuthorized)));
+    }
+
+    /// The operator ruled "retire all four" and Queen had no way to carry it
+    /// out, so four tasks went to Blocked with notes saying they were retired.
+    /// Blocked means work waiting on something, so the board was lying and the
+    /// next reader would try to unblock them.
+    #[test]
+    fn queen_can_retire_work_that_should_not_exist_and_the_reason_survives() {
+        let (service, queen, _worker) = setup();
+        let task = service
+            .store
+            .create_task_with_details("Measures the legacy swarm", "", TaskPriority::Normal, "/workspace/petal")
+            .unwrap();
+
+        service
+            .retire_task(
+                AgentPrincipal::from(&queen),
+                task.id,
+                "Operator ruling: the system it measures is gone.",
+            )
+            .unwrap();
+
+        // Off the live board.
+        assert!(!service.list_tasks().unwrap().iter().any(|open| open.id == task.id));
+
+        // And the reason is what a later reader finds, not a bare "removed".
+        let history = service.store.list_task_activity(task.id, 50).unwrap();
+        assert!(
+            history
+                .events
+                .iter()
+                .any(|event| event.note.contains("the system it measures is gone")),
+            "the reason for retiring must survive on the task"
+        );
+    }
+
+    /// Retiring is a routing judgement. A worker deciding its own work should
+    /// not exist is exactly the call Queen is there to make.
+    #[test]
+    fn a_worker_cannot_retire_a_task() {
+        let (service, _queen, worker) = setup();
+        let session = WorkerSessionId::new();
+        service.store.bind_worker_session(worker.id, session).unwrap();
+        let task = service
+            .store
+            .create_task_with_details("Still wanted", "", TaskPriority::Normal, "/workspace/petal")
+            .unwrap();
+
+        let denied = service.retire_task(
+            AgentPrincipal { worker_id: worker.id, role: WorkerRole::Worker, active_session_id: Some(session) },
+            task.id,
+            "I would rather not",
+        );
+
+        assert!(matches!(denied, Err(ApplicationError::NotAuthorized)));
+        assert!(service.list_tasks().unwrap().iter().any(|open| open.id == task.id));
     }
 }

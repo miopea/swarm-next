@@ -231,6 +231,7 @@ impl ServerHandler for AgentMcp {
                 list_coordination_attention_tool(),
                 assign_task_tool(),
                 approve_no_deployment_tool(),
+                retire_task_tool(),
                 list_apiary_hives_tool(),
                 list_apiary_tasks_tool(),
                 create_apiary_task_tool(),
@@ -281,6 +282,7 @@ impl ServerHandler for AgentMcp {
                 .and_then(|tasks| structured(json!({ "tasks": tasks }))),
             "swarm_read_task_history" => self.read_task_history(arguments),
             "swarm_approve_no_deployment" => self.approve_no_deployment(arguments),
+            "swarm_retire_task" => self.retire_task(arguments),
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
@@ -558,6 +560,15 @@ impl AgentMcp {
                 "The current unattended Queen run is not authorized for that action. Ask the operator for a decision or finish the run as needs_operator.".into(),
             )))
         }
+    }
+
+    fn retire_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<RetireTaskInput>(arguments)?;
+        let task_id =
+            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        self.tasks
+            .retire_task(self.principal, task_id, &input.reason)?;
+        structured(json!({ "task_id": input.task_id, "retired": true }))
     }
 
     fn approve_no_deployment(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -960,6 +971,13 @@ struct CommentJiraTaskInput {
 }
 
 #[derive(Deserialize)]
+struct RetireTaskInput {
+    task_id: String,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ApproveNoDeploymentInput {
     task_id: String,
 }
@@ -1081,6 +1099,27 @@ fn list_tasks_tool() -> Tool {
         "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
+    )
+}
+
+fn retire_task_tool() -> Tool {
+    tool(
+        "swarm_retire_task",
+        "Queen only: retire work that should not exist any more — superseded, duplicated, or ruled out by the operator. The task leaves the board and keeps its history; the reason is recorded and is what a later reader sees. Not for work that is merely waiting: that is Blocked. Active or Review work must be moved out of flight first.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string" },
+                "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Why this should no longer exist. Recorded on the task."
+                }
+            },
+            "required": ["task_id", "reason"],
+            "additionalProperties": false
+        }),
+        false,
     )
 }
 
@@ -1551,6 +1590,8 @@ mod tests {
         // A worker records that its work had nothing to deploy; it must never
         // be able to approve its own claim.
         "swarm_approve_no_deployment",
+        // Retiring work is a routing judgement, which is Queen's.
+        "swarm_retire_task",
         "swarm_preview_jira_project",
         "swarm_sync_jira_project",
         "swarm_refresh_jira_project",

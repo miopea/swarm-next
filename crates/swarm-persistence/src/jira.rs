@@ -1608,7 +1608,7 @@ mod tests {
             .remove(0);
 
         store
-            .remove_task_as(task.id, &TaskActivityActor::operator())
+            .remove_task_as(task.id, &TaskActivityActor::operator(), "")
             .unwrap();
 
         assert!(store.list_removed_local_tasks().unwrap().is_empty());

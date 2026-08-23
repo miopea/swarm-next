@@ -1256,6 +1256,7 @@ impl TaskStore {
         &self,
         id: TaskId,
         actor: &TaskActivityActor,
+        reason: &str,
     ) -> Result<(), TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -1290,10 +1291,24 @@ impl TaskStore {
                  updated_at = unixepoch() WHERE id = ?1 AND removed_at IS NULL",
             [id.to_string()],
         )?;
+        // The reason is the record. A retired task that does not say why it was
+        // retired is the same dead end as one mislabelled Blocked: the next
+        // reader has to guess whether it can come back.
+        let reason = reason.trim();
+        let note = if reason.is_empty() {
+            "Removed from this Hive".to_owned()
+        } else {
+            format!("Removed from this Hive: {reason}")
+        };
         transaction.execute(
             "INSERT INTO task_activity (task_id, kind, note, actor_kind, actor_id)
-             VALUES (?1, 'removed', 'Removed from this Hive', ?2, ?3)",
-            params![id.to_string(), actor.kind.to_string(), actor.id.as_deref()],
+             VALUES (?1, 'removed', ?2, ?3, ?4)",
+            params![
+                id.to_string(),
+                note,
+                actor.kind.to_string(),
+                actor.id.as_deref()
+            ],
         )?;
         insert_control_room_event(&transaction, ControlRoomEventKind::TasksChanged)?;
         transaction.commit()?;
@@ -3625,7 +3640,7 @@ mod tests {
             .create_task("Duplicate Inbox report", "/workspace")
             .unwrap();
         store
-            .remove_task_as(removable.id, &TaskActivityActor::operator())
+            .remove_task_as(removable.id, &TaskActivityActor::operator(), "")
             .unwrap();
 
         assert!(store.list_tasks().unwrap().is_empty());
@@ -3647,7 +3662,7 @@ mod tests {
         store.transition_task(active.id, TaskState::Ready).unwrap();
         store.transition_task(active.id, TaskState::Active).unwrap();
         assert!(matches!(
-            store.remove_task_as(active.id, &TaskActivityActor::operator()),
+            store.remove_task_as(active.id, &TaskActivityActor::operator(), ""),
             Err(TaskStoreError::ActiveTaskCannotBeRemoved)
         ));
         assert_eq!(store.get_task(active.id).unwrap().state, TaskState::Active);
@@ -3659,7 +3674,7 @@ mod tests {
         let first = store.create_task("First", "/workspace").unwrap();
         let restored = store.create_task("Restore me", "/workspace").unwrap();
         store
-            .remove_task_as(restored.id, &TaskActivityActor::operator())
+            .remove_task_as(restored.id, &TaskActivityActor::operator(), "")
             .unwrap();
 
         assert_eq!(store.list_removed_local_tasks().unwrap()[0].id, restored.id);
