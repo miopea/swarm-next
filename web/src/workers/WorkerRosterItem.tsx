@@ -11,12 +11,20 @@ type Props = {
   detail: string;
   workSummary?: string;
   busy: boolean;
+  /**
+   * Why this worker's controls are inert, when they are.
+   *
+   * A development rebuild disables the whole control room for as long as the
+   * build runs, which is minutes. Greying out every worker with no reason
+   * attached to any of them reads as the roster having broken.
+   */
+  busyReason?: string;
   onOpen: () => void;
   onStart: () => void;
   onStop: () => void;
 };
 
-export default function WorkerRosterItem({ worker, selected, detail, workSummary, busy, onOpen, onStart, onStop }: Props) {
+export default function WorkerRosterItem({ worker, selected, detail, workSummary, busy, busyReason, onOpen, onStart, onStop }: Props) {
   const [menuPoint, setMenuPoint] = useState<MenuPoint>();
   const [, refreshAttention] = useState(0);
   const primaryAction = worker.running ? onOpen : onStart;
@@ -27,6 +35,9 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
   // held worker by coincidence — it stopped producing output because it
   // stopped — and measures the wrong thing.
   const held = heldForAnswer(worker);
+  const pausedTitle = busy
+    ? `${busyReason ?? "Swarm is working"} — worker controls pause until it finishes. ${worker.name} keeps running.`
+    : undefined;
   const silence = held ?? workerSilence(worker);
 
   useEffect(() => {
@@ -58,6 +69,7 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
         aria-current={selected ? "page" : undefined}
         onClick={primaryAction}
         disabled={busy}
+        title={pausedTitle}
       >
         <span className="worker-avatar"><BeeMascot role={worker.role === "queen" ? "queen" : "worker"} expression={attention.expression} /></span>
         <span className="worker-copy">
@@ -79,6 +91,7 @@ export default function WorkerRosterItem({ worker, selected, detail, workSummary
         aria-label={`Actions for ${worker.name}`}
         aria-haspopup="menu"
         aria-expanded={Boolean(menuPoint)}
+        title={pausedTitle}
         onClick={(event) => {
           const point = pointFromElement(event.currentTarget);
           setMenuPoint((current) => current ? undefined : point);

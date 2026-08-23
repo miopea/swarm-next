@@ -129,8 +129,8 @@ function appUpdate(development: DevelopmentRuntime | undefined): RuntimeUpdateSu
       kind: "building",
       label: "Updating App and API",
       detail: revision
-        ? `Building and checking revision ${revision}. Workers keep running.`
-        : "Building and checking the development update. Workers keep running.",
+        ? `Building and checking revision ${revision}. Workers keep running and Swarm stays usable; the page reloads itself when it is ready.`
+        : "Building and checking the development update. Workers keep running and Swarm stays usable; the page reloads itself when it is ready.",
       busy: true,
     };
   }

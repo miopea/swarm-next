@@ -974,35 +974,58 @@ export function App() {
   async function reloadDevelopmentBuild() {
     if (!operatorToken || loadState.kind !== "ready") return;
     const previousVersion = loadState.health.version;
-    await perform(async () => {
-      await requestRuntimeHandoff(() => requestDevelopmentReload(operatorToken));
-      setBusyLabel("Building and checking the development update…");
-      for (let attempt = 0; attempt < 600; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
-        let next;
-        let development;
-        try {
-          [next, development] = await Promise.all([
-            fetchHealth(),
-            fetchDevelopmentRuntime(operatorToken),
-          ]);
-        } catch (error) {
-          if (error instanceof RuntimeRequestError && ![502, 503, 504].includes(error.status)) {
-            throw error;
-          }
-          // The API is expected to disappear briefly only after the build succeeds.
-          continue;
-        }
-        if (next.version !== previousVersion) {
-          window.location.reload();
+    // Only asking for the build is a blocking operation.
+    //
+    // Waiting for it used to be one too, and a build takes minutes: the whole
+    // control room sat disabled the entire time, every worker greyed out, with
+    // the reason in small text in a corner. Nothing about a rebuild requires
+    // that. The API keeps serving the old binary until the new one is ready, so
+    // opening a terminal, waking a worker and stopping one all work normally
+    // throughout. The only unavailable moment is the restart at the end, which
+    // is seconds long and already recovers on its own.
+    await perform(
+      async () => requestRuntimeHandoff(() => requestDevelopmentReload(operatorToken)),
+      "Starting development build…",
+    );
+    void watchDevelopmentBuild(previousVersion);
+  }
+
+  /**
+   * Follows a running build to its end without holding the control room still.
+   *
+   * Progress is already reported by the runtime indicator, which polls on its
+   * own; this exists to reload the page the moment the new version answers, and
+   * to surface a compile failure rather than leaving the indicator spinning.
+   */
+  async function watchDevelopmentBuild(previousVersion: string) {
+    if (!operatorToken) return;
+    for (let attempt = 0; attempt < 600; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+      let next;
+      let development;
+      try {
+        [next, development] = await Promise.all([
+          fetchHealth(),
+          fetchDevelopmentRuntime(operatorToken),
+        ]);
+      } catch (error) {
+        if (error instanceof RuntimeRequestError && ![502, 503, 504].includes(error.status)) {
+          setOperationError(error instanceof Error ? error.message : "The development build could not be followed");
           return;
         }
-        if (development.state === "failed") {
-          throw new Error("The development working copy did not compile. The current release is still running; check the development reload service log for the build error.");
-        }
+        // The API is expected to disappear briefly only after the build succeeds.
+        continue;
       }
-      throw new Error("The development build did not become healthy within 20 minutes");
-    }, "Starting development build…");
+      if (next.version !== previousVersion) {
+        window.location.reload();
+        return;
+      }
+      if (development.state === "failed") {
+        setOperationError("The development working copy did not compile. The current release is still running; check the development reload service log for the build error.");
+        return;
+      }
+    }
+    setOperationError("The development build did not become healthy within 20 minutes");
   }
 
   function releaseEngagementWhenSwitching(
@@ -1332,6 +1355,7 @@ export function App() {
                         detail={worker.runtime_error ?? task?.title ?? (worker.role === "queen" ? "Always-active command terminal" : worker.running ? `${repositoryName(worker.workspace)} · Ready for work` : `${repositoryName(worker.workspace)} · Sleeping`)}
                         workSummary={work?.summary}
                         busy={busy}
+                        busyReason={busyLabel}
                         onOpen={() => sessionId && openWorker(sessionId)}
                         onStart={() => void startExistingWorker(worker)}
                         onStop={() => sessionId && void stopSession(sessionId)}
