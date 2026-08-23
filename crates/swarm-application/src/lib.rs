@@ -2017,6 +2017,35 @@ impl TaskService {
             }))
     }
 
+    /// Reads one task's history, including the notes workers wrote on it.
+    ///
+    /// Queen's job is to accept or reject finished work, and the outcome
+    /// notification only carries an excerpt of the handoff — it has to, because
+    /// pasting whole handoffs put 128 KB through her terminal in a day. The
+    /// excerpt points at task history, and until now nothing let her read it,
+    /// so she was asked to judge work on evidence she could not see.
+    ///
+    /// Visibility follows the same rule as the task list: Queen sees any task,
+    /// a worker sees only one assigned to its own live session.
+    ///
+    /// # Errors
+    /// Denies a task the caller cannot see, and propagates persistence failures.
+    pub fn read_task_history(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+        limit: usize,
+    ) -> Result<swarm_domain::TaskActivityPage, ApplicationError> {
+        let visible = self
+            .list_visible_tasks(principal)?
+            .into_iter()
+            .any(|task| task.id == task_id);
+        if !visible {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        Ok(self.store.list_task_activity(task_id, limit)?)
+    }
+
     /// Lists the local roster for Queen coordination.
     ///
     /// # Errors
@@ -2980,5 +3009,65 @@ mod tests {
                 .iter()
                 .all(|item| item.kind != "worker_filed_draft_attention")
         );
+    }
+
+    /// Queen's job is to accept or reject finished work. The outcome
+    /// notification carries only an excerpt of a handoff — it has to — and
+    /// until this existed the excerpt pointed at task history nothing could
+    /// read. She was asked to judge work on evidence she could not see.
+    #[test]
+    fn queen_can_read_the_whole_handoff_the_excerpt_pointed_at() {
+        let (service, queen, worker) = setup();
+        let session = WorkerSessionId::new();
+        service.store.bind_worker_session(worker.id, session).unwrap();
+        let task = service
+            .store
+            .create_task_with_details("Fix the gate", "", TaskPriority::Normal, "/workspace/petal")
+            .unwrap();
+        service.store.assign_task(task.id, session).unwrap();
+        service.store.transition_task(task.id, TaskState::Ready).unwrap();
+        service.store.transition_task(task.id, TaskState::Active).unwrap();
+
+        // The kind of report that does not survive an excerpt.
+        let handoff = format!("TWO INCIDENTS WERE MERGED INTO ONE TICKET. {}", "detail ".repeat(500));
+        service
+            .transition_task(
+                AgentPrincipal { worker_id: worker.id, role: WorkerRole::Worker, active_session_id: Some(session) },
+                task.id,
+                TaskState::Review,
+                &handoff,
+            )
+            .unwrap();
+
+        let page = service
+            .read_task_history(AgentPrincipal::from(&queen), task.id, 50)
+            .unwrap();
+
+        let notes = page.events.iter().map(|event| event.note.as_str()).collect::<Vec<_>>();
+        assert!(
+            notes.iter().any(|note| *note == handoff),
+            "the complete handoff must be readable, not an excerpt of it"
+        );
+    }
+
+    /// A worker sees its own assignment and nothing else, the same rule the
+    /// task list already enforces. Reading history must not be a way around it.
+    #[test]
+    fn a_worker_cannot_read_the_history_of_a_task_that_is_not_its_own() {
+        let (service, _queen, worker) = setup();
+        let session = WorkerSessionId::new();
+        service.store.bind_worker_session(worker.id, session).unwrap();
+        let other = service
+            .store
+            .create_task_with_details("Not yours", "", TaskPriority::Normal, "/workspace/other")
+            .unwrap();
+
+        let denied = service.read_task_history(
+            AgentPrincipal { worker_id: worker.id, role: WorkerRole::Worker, active_session_id: Some(session) },
+            other.id,
+            50,
+        );
+
+        assert!(matches!(denied, Err(ApplicationError::NotAuthorized)));
     }
 }

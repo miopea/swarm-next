@@ -857,7 +857,17 @@ fn handoff_excerpt_within(note: &str, budget: usize) -> String {
     let cut = note[..end]
         .rfind(['.', '\n'])
         .map_or(end, |index| index + 1);
-    format!("{}… (full handoff in task history)", note[..cut].trim_end())
+    // Says how much it dropped and names the tool that returns it.
+    //
+    // "(full handoff in task history)" pointed at something Queen had no
+    // instrument to read, and gave no hint whether one line or forty was
+    // missing — so a report whose whole point was "this ticket describes the
+    // wrong incident" could be summarised as routine completion.
+    let dropped = note.chars().count().saturating_sub(note[..cut].chars().count());
+    format!(
+        "{}… (+{dropped} more characters — call swarm_read_task_history for the whole handoff)",
+        note[..cut].trim_end()
+    )
 }
 
 /// One message for everything a terminal is owed right now.
@@ -1274,9 +1284,12 @@ mod tests {
 
         let excerpt = handoff_excerpt_within(&note, HANDOFF_EXCERPT_BYTES);
 
-        assert!(excerpt.len() < 600, "{} bytes", excerpt.len());
+        assert!(excerpt.len() < 700, "{} bytes", excerpt.len());
         assert!(excerpt.starts_with("First sentence."));
-        assert!(excerpt.ends_with("… (full handoff in task history)"));
+        // How much was lost, and how to get it — a pointer nobody can follow is
+        // what made Queen unable to review long handoffs at all.
+        assert!(excerpt.contains("more characters"), "{excerpt}");
+        assert!(excerpt.contains("swarm_read_task_history"), "{excerpt}");
     }
 
     /// A short handoff is the whole handoff. Adding "…" to something complete
@@ -1294,7 +1307,7 @@ mod tests {
         let note = "→".repeat(400);
         let excerpt = handoff_excerpt_within(&note, HANDOFF_EXCERPT_BYTES);
         assert!(excerpt.starts_with('→'));
-        assert!(excerpt.ends_with("… (full handoff in task history)"));
+        assert!(excerpt.contains("swarm_read_task_history"));
     }
 
     fn outcome(task: &str, reporter: &str, note: &str) -> TaskOutcomeDispatch {

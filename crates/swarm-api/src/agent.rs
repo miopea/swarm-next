@@ -214,6 +214,7 @@ impl ServerHandler for AgentMcp {
     ) -> Result<ListToolsResult, ErrorData> {
         let mut tools = vec![
             list_tasks_tool(),
+            read_task_history_tool(),
             transition_task_tool(),
             list_jira_comments_tool(),
             comment_jira_task_tool(),
@@ -277,6 +278,7 @@ impl ServerHandler for AgentMcp {
                 .tasks
                 .list_visible_tasks(self.principal)
                 .and_then(|tasks| structured(json!({ "tasks": tasks }))),
+            "swarm_read_task_history" => self.read_task_history(arguments),
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
@@ -554,6 +556,25 @@ impl AgentMcp {
                 "The current unattended Queen run is not authorized for that action. Ask the operator for a decision or finish the run as needs_operator.".into(),
             )))
         }
+    }
+
+    fn read_task_history(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<ReadTaskHistoryInput>(arguments)?;
+        let task_id =
+            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let page = self.tasks.read_task_history(
+            self.principal,
+            task_id,
+            input.limit.unwrap_or(50).clamp(1, 200),
+        )?;
+        structured(json!({
+            "task_id": input.task_id,
+            "events": page.events,
+            // Says so rather than letting a caller mistake a bounded read for
+            // the whole history, which is the same failure this tool exists to
+            // fix one level up.
+            "truncated": page.truncated,
+        }))
     }
 
     async fn transition_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -923,6 +944,14 @@ struct CommentJiraTaskInput {
 }
 
 #[derive(Deserialize)]
+struct ReadTaskHistoryInput {
+    task_id: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TransitionTaskInput {
     task_id: String,
     state: TaskState,
@@ -1029,6 +1058,28 @@ fn list_tasks_tool() -> Tool {
         "swarm_list_tasks",
         "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        true,
+    )
+}
+
+fn read_task_history_tool() -> Tool {
+    tool(
+        "swarm_read_task_history",
+        "Read one task's full history: every state change and the complete note written with it, including a worker's handoff. Outcome notifications carry only an excerpt of a handoff, so this is where the whole report is. Use it before accepting or rejecting finished work.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string" },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "How many entries to return, newest last. Defaults to 50."
+                }
+            },
+            "required": ["task_id"],
+            "additionalProperties": false
+        }),
         true,
     )
 }
@@ -1636,6 +1687,10 @@ mod tests {
             worker_names,
             [
                 "swarm_list_tasks",
+                // Reading a task's history is how a handoff is read in full. A
+                // worker gets it for its own assignment; the visibility rule is
+                // the same one the task list uses.
+                "swarm_read_task_history",
                 "swarm_transition_task",
                 "swarm_list_jira_comments",
                 "swarm_comment_jira_task",
