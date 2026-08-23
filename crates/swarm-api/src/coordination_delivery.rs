@@ -773,13 +773,42 @@ pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Ve
     )
     .into_bytes()
 }
+/// How much of a handoff note is pasted into the recipient's terminal.
+///
+/// Enough to know whether this needs attention now; not the whole report. The
+/// note is durable in task history and the message already says to read it
+/// there, so pasting all of it copies the non-authoritative version of
+/// something it is simultaneously telling the reader to go and fetch.
+///
+/// Measured on 2026-08-23: 46 outcomes averaging 2,850 bytes put 128 KB through
+/// Queen's terminal in a day, nine of them inside one hour. Notes are capped at
+/// 4,000 bytes on the way in and workers write to the cap.
+const HANDOFF_EXCERPT_BYTES: usize = 480;
+
+/// Trims to a whole character within the budget, and says it was trimmed.
+fn handoff_excerpt(note: &str) -> String {
+    if note.len() <= HANDOFF_EXCERPT_BYTES {
+        return note.to_owned();
+    }
+    let mut end = HANDOFF_EXCERPT_BYTES;
+    while end > 0 && !note.is_char_boundary(end) {
+        end -= 1;
+    }
+    // Prefer the last sentence or line break, so the excerpt ends somewhere a
+    // reader would have paused anyway rather than mid-word.
+    let cut = note[..end]
+        .rfind(['.', '\n'])
+        .map_or(end, |index| index + 1);
+    format!("{}… (full handoff in task history)", note[..cut].trim_end())
+}
+
 pub(super) fn task_outcome_message(outcome: &TaskOutcomeDispatch) -> Vec<u8> {
     let reporter = terminal_safe_text(&outcome.reporting_worker_name);
     let title = terminal_safe_text(&outcome.title);
     let note = if outcome.note.is_empty() {
         "No additional handoff note.".into()
     } else {
-        terminal_safe_text(&outcome.note)
+        terminal_safe_text(&handoff_excerpt(&outcome.note))
     };
     format!(
         "[Swarm worker outcome] {} moved task {} \"{}\" to {}. Handoff: {} Use swarm_list_tasks and task history for authoritative context.\r",
@@ -1135,5 +1164,42 @@ mod tests {
         // The remedy, not the state: there is nothing here to answer.
         assert!(unsent_text.contains("clear the line"), "{unsent_text}");
         assert!(!unsent_text.contains("unanswered"), "{unsent_text}");
+    }
+
+    /// The operator, watching Queen: "Are these huge dumps going to cause the
+    /// queen to never finish anything?"
+    ///
+    /// A worker's handoff is capped at 4,000 bytes on the way in and workers
+    /// write to the cap. Pasting the whole thing put 128 KB through Queen's
+    /// terminal in one day, in the same message that tells her to read task
+    /// history for the authoritative version.
+    #[test]
+    fn a_handoff_reaches_the_terminal_as_an_excerpt_not_a_report() {
+        let note = format!("First sentence. {}", "padding words ".repeat(400));
+        assert!(note.len() > 4_000);
+
+        let excerpt = handoff_excerpt(&note);
+
+        assert!(excerpt.len() < 600, "{} bytes", excerpt.len());
+        assert!(excerpt.starts_with("First sentence."));
+        assert!(excerpt.ends_with("… (full handoff in task history)"));
+    }
+
+    /// A short handoff is the whole handoff. Adding "…" to something complete
+    /// would tell the reader to go and fetch what they already have.
+    #[test]
+    fn a_short_handoff_is_left_exactly_as_written() {
+        let note = "Fixed, deployed, verified against production.";
+        assert_eq!(handoff_excerpt(note), note);
+    }
+
+    /// Trimming by bytes through a multi-byte character would produce invalid
+    /// UTF-8 and panic on the slice.
+    #[test]
+    fn trimming_lands_on_a_character_boundary() {
+        let note = "→".repeat(400);
+        let excerpt = handoff_excerpt(&note);
+        assert!(excerpt.starts_with('→'));
+        assert!(excerpt.ends_with("… (full handoff in task history)"));
     }
 }
