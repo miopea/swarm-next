@@ -56,7 +56,7 @@ starts the services, and **waits for the API to answer before saying it
 worked**:
 
 ```
-Swarm 0.8.2 is healthy at http://127.0.0.1:8766/health
+Swarm 0.8.3 is healthy at http://127.0.0.1:8766/health
 
 Open http://127.0.0.1:8766 and sign in with the token you chose.
 ```
