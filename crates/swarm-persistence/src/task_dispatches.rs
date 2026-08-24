@@ -174,6 +174,10 @@ impl TaskStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Atomically claims a bounded batch of current assignments whose worker is quiet.
+    ///
+    /// # Errors
+    /// Returns a persistence or data-integrity error.
     pub fn claim_task_dispatches(&self, now: i64) -> Result<Vec<TaskDispatch>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
