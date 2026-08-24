@@ -1727,6 +1727,10 @@ export type TunnelStatus = {
   /** Whether cloudflared is installed on the Hive's machine. */
   available: boolean;
   running: boolean;
+  /** Whether the address has actually answered yet. Until it has, there is no QR. */
+  serving: boolean;
+  /** Why the last attempt gave up, when it did. */
+  error: string | null;
   url: string | null;
   started_at: number | null;
   /** The address as an inline SVG QR code. The address only — never the token. */

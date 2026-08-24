@@ -12,7 +12,7 @@ function reply(body: unknown) {
 
 test("says what is missing when cloudflared is not installed", async () => {
   vi.stubGlobal("fetch", vi.fn(async () =>
-    reply({ available: false, running: false, url: null, started_at: null, qr_svg: null })));
+    reply({ available: false, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null })));
 
   render(<RemoteAccessSettings busy={false} operatorToken="secret" />);
 
@@ -29,8 +29,8 @@ test("says what is missing when cloudflared is not installed", async () => {
 test("shows the address with a QR and says the address will not last", async () => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) =>
     reply(String(url).includes("/start")
-      ? { available: true, running: true, url: "https://neat-lion.trycloudflare.com", started_at: 1787452543, qr_svg: "<svg role='img'></svg>" }
-      : { available: true, running: false, url: null, started_at: null, qr_svg: null })));
+      ? { available: true, running: true, serving: true, error: null, url: "https://neat-lion.trycloudflare.com", started_at: 1787452543, qr_svg: "<svg role='img'></svg>" }
+      : { available: true, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null })));
 
   render(<RemoteAccessSettings busy={false} operatorToken="secret" />);
   fireEvent.click(await screen.findByRole("button", { name: "Open on my phone" }));
@@ -44,7 +44,7 @@ test("shows the address with a QR and says the address will not last", async () 
 
 test("never puts the operator token in the shared address", async () => {
   vi.stubGlobal("fetch", vi.fn(async () =>
-    reply({ available: true, running: true, url: "https://neat-lion.trycloudflare.com", started_at: 1, qr_svg: null })));
+    reply({ available: true, running: true, serving: true, error: null, url: "https://neat-lion.trycloudflare.com", started_at: 1, qr_svg: null })));
 
   const { container } = render(<RemoteAccessSettings busy={false} operatorToken="super-secret-token" />);
 
@@ -55,11 +55,66 @@ test("never puts the operator token in the shared address", async () => {
 test("surfaces a failure to open the address instead of looking stuck", async () => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     if (String(url).includes("/start")) throw new Error("cloudflared did not report an address");
-    return reply({ available: true, running: false, url: null, started_at: null, qr_svg: null });
+    return reply({ available: true, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null });
   }));
 
   render(<RemoteAccessSettings busy={false} operatorToken="secret" />);
   fireEvent.click(await screen.findByRole("button", { name: "Open on my phone" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent("cloudflared did not report an address");
+});
+
+test("a tunnel that never served tells the operator why, rather than a bare status code", async () => {
+  // The operator saw "Runtime request returned 502" and nothing else. 502 is in
+  // this app's transient set — it means "the runtime is being replaced", is
+  // retried as infrastructure noise, and its detail is deliberately not worth
+  // showing. A tunnel that never started serving is the opposite: the API
+  // answered fine and the reason is the only thing worth reading.
+  const reason = "The address was created but never started serving within 45 seconds — Cloudflare answered 404 Not Found for it without routing to this machine. Nothing was published; try again.";
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/runtime/tunnel/start")) {
+      return new Response(JSON.stringify({ code: "cloudflared_not_reachable", message: reason }), {
+        status: 409,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return reply({ available: true, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null });
+  }));
+
+  render(<RemoteAccessSettings operatorToken="operator-token" busy={false} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Open on my phone" }));
+
+  const alert = await screen.findByRole("alert");
+  await waitFor(() => expect(alert).toHaveTextContent(/never started serving/));
+  expect(alert).toHaveTextContent(/without routing to this machine/);
+});
+
+test("an address that never served is reported, and no QR is offered until it does", async () => {
+  // The operator was handed a QR for an address that served nothing, twice.
+  // Measured 2026-08-24: cloudflared can be healthy, registered and in DNS
+  // while Cloudflare's edge still routes nothing to it.
+  const statuses = [
+    { available: true, running: true, serving: false, error: null, url: "https://x.trycloudflare.com", started_at: 1, qr_svg: "<svg/>" },
+    { available: true, running: false, serving: false, error: "The address was created but never started serving within 45 seconds.", url: null, started_at: null, qr_svg: null },
+  ];
+  let read = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/runtime/tunnel/start")) return reply(statuses[0]);
+    return reply(statuses[Math.min(read++, statuses.length - 1)]);
+  }));
+
+  const { rerender } = render(<RemoteAccessSettings operatorToken="operator-token" busy={false} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Open on my phone" }));
+
+  // While it is being checked: said plainly, and no code to scan.
+  await waitFor(() => expect(screen.getByText(/Checking the address is reachable/)).toBeInTheDocument());
+  expect(document.querySelector(".tunnel-qr")).toBeNull();
+
+  // Once it has given up, the operator is told why.
+  read = 1;
+  rerender(<RemoteAccessSettings operatorToken="operator-token" busy={true} />);
+  rerender(<RemoteAccessSettings operatorToken="operator-token" busy={false} />);
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/never started serving/));
 });

@@ -42,7 +42,8 @@ const REACHABLE_TIMEOUT_SECONDS: u64 = 45;
 
 #[derive(Debug, Default)]
 pub(super) struct TunnelSupervisor {
-    inner: Mutex<Option<RunningTunnel>>,
+    inner: Arc<Mutex<Option<RunningTunnel>>>,
+    failure: Arc<Mutex<LastFailure>>,
 }
 
 #[derive(Debug)]
@@ -50,13 +51,30 @@ struct RunningTunnel {
     child: Child,
     url: String,
     started_at: i64,
+    /// Whether the address has been seen to serve yet.
+    ///
+    /// Verified in the background rather than inside the start request. It used
+    /// to block for up to 45 seconds while holding this supervisor's lock, so
+    /// every status poll queued behind it and the operator watched a spinner
+    /// with no idea what was happening. Nothing that waits on a third party
+    /// belongs inside a request the browser is holding open.
+    serving: bool,
 }
+
+/// Why the last attempt to publish an address gave up, kept until the next one.
+#[derive(Debug, Default)]
+struct LastFailure(Option<String>);
 
 #[derive(Debug, Serialize)]
 pub(super) struct TunnelView {
     /// Whether `cloudflared` is installed at all.
     available: bool,
     running: bool,
+    /// True once the address has actually answered. The QR is withheld until
+    /// then, because an address that does not serve is a code to nowhere.
+    serving: bool,
+    /// Why the last attempt gave up, when it did.
+    error: Option<String>,
     url: Option<String>,
     started_at: Option<i64>,
     /// A QR of the address, as an inline SVG. The address only — a token in a
@@ -119,17 +137,25 @@ impl TunnelSupervisor {
         {
             *guard = None;
         }
+        let failure = self.failure.lock().await.0.clone();
         match guard.as_ref() {
             Some(tunnel) => TunnelView {
                 available: true,
                 running: true,
+                serving: tunnel.serving,
+                error: None,
                 url: Some(tunnel.url.clone()),
                 started_at: Some(tunnel.started_at),
-                qr_svg: qr_svg(&tunnel.url),
+                // Withheld until the address answers. A QR for something that
+                // does not serve is worse than no QR: it is scanned, it fails,
+                // and the address looks like the thing that is broken.
+                qr_svg: tunnel.serving.then(|| qr_svg(&tunnel.url)).flatten(),
             },
             None => TunnelView {
                 available: cloudflared_available(),
                 running: false,
+                serving: false,
+                error: failure,
                 url: None,
                 started_at: None,
                 qr_svg: None,
@@ -143,10 +169,13 @@ impl TunnelSupervisor {
             if matches!(tunnel.child.try_wait(), Ok(None)) {
                 let url = tunnel.url.clone();
                 let started_at = tunnel.started_at;
+                let serving = tunnel.serving;
                 return Ok(TunnelView {
                     available: true,
                     running: true,
-                    qr_svg: qr_svg(&url),
+                    serving,
+                    error: None,
+                    qr_svg: serving.then(|| qr_svg(&url)).flatten(),
                     url: Some(url),
                     started_at: Some(started_at),
                 });
@@ -206,38 +235,76 @@ impl TunnelSupervisor {
         else {
             let _ = child.kill().await;
             return Err(ApiError::new(
-                StatusCode::BAD_GATEWAY,
+                StatusCode::CONFLICT,
                 "cloudflared_no_address",
                 "cloudflared did not report an address; check that this machine can reach Cloudflare",
             ));
         };
-        // Do not hand over a QR code for an address that does not serve yet.
-        //
-        // This is the half that would have caught the shipped bug from the
-        // outside: with the pipe closed, cloudflared died at one second and the
-        // address never resolved, and nothing checked. Now the address has to
-        // answer before it is shown.
-        if let Err(reason) = wait_until_serving(&url, &mut child).await {
-            let _ = child.kill().await;
-            return Err(ApiError::new(
-                StatusCode::BAD_GATEWAY,
-                "cloudflared_not_reachable",
-                reason,
-            ));
-        }
         let started_at = unix_timestamp();
         *guard = Some(RunningTunnel {
             child,
             url: url.clone(),
             started_at,
+            serving: false,
         });
+        self.failure.lock().await.0 = None;
+        drop(guard);
+
+        // Whether the address actually serves is settled in the background.
+        //
+        // It used to be settled inside this request: up to 45 seconds holding
+        // the browser open AND this supervisor's lock, so every status poll
+        // queued behind it. The operator got a spinner and then a bare status
+        // code. Nothing that waits on a third party belongs inside a request
+        // somebody is holding open.
+        //
+        // Until it answers, `running` is true and `serving` is false, and the
+        // QR is withheld. A code for an address that does not serve is worse
+        // than no code: it gets scanned, it fails, and the address looks like
+        // the thing that is broken.
+        self.verify_in_background(url.clone());
+
         Ok(TunnelView {
             available: true,
             running: true,
-            qr_svg: qr_svg(&url),
+            serving: false,
+            error: None,
+            qr_svg: None,
             url: Some(url),
             started_at: Some(started_at),
         })
+    }
+
+    /// Settles whether the address serves, without holding anything open.
+    ///
+    /// Kills the tunnel and records the reason if it never does, so the next
+    /// status read tells the operator what happened rather than leaving a card
+    /// for an address that goes nowhere.
+    fn verify_in_background(&self, url: String) {
+        let inner = Arc::clone(&self.inner);
+        let failure = Arc::clone(&self.failure);
+        tokio::spawn(async move {
+            let outcome = verify_serving(&url).await;
+            let mut guard = inner.lock().await;
+            // Only if it is still the same tunnel: the operator may have
+            // stopped it and started another while this was waiting.
+            if guard.as_ref().is_none_or(|tunnel| tunnel.url != url) {
+                return;
+            }
+            match outcome {
+                Ok(()) => {
+                    if let Some(tunnel) = guard.as_mut() {
+                        tunnel.serving = true;
+                    }
+                }
+                Err(reason) => {
+                    if let Some(mut tunnel) = guard.take() {
+                        let _ = tunnel.child.kill().await;
+                    }
+                    failure.lock().await.0 = Some(reason);
+                }
+            }
+        });
     }
 
     async fn stop(&self) -> TunnelView {
@@ -245,9 +312,12 @@ impl TunnelSupervisor {
         if let Some(mut tunnel) = guard.take() {
             let _ = tunnel.child.kill().await;
         }
+        self.failure.lock().await.0 = None;
         TunnelView {
             available: cloudflared_available(),
             running: false,
+            serving: false,
+            error: None,
             url: None,
             started_at: None,
             qr_svg: None,
@@ -262,7 +332,7 @@ impl TunnelSupervisor {
 /// particular route exists. A 404 from Cloudflare's own edge is NOT an answer —
 /// that is what an unrouted quick tunnel returns, and telling the two apart is
 /// the entire point of this check.
-async fn wait_until_serving(url: &str, child: &mut Child) -> Result<(), String> {
+async fn verify_serving(url: &str) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()
@@ -271,13 +341,6 @@ async fn wait_until_serving(url: &str, child: &mut Child) -> Result<(), String> 
         tokio::time::Instant::now() + std::time::Duration::from_secs(REACHABLE_TIMEOUT_SECONDS);
     let mut last = String::from("it never answered");
     while tokio::time::Instant::now() < deadline {
-        // A dead child is decisive; there is nothing left to wait for.
-        if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
-            return Err(
-                "cloudflared exited before its address started serving. Check that this machine can reach Cloudflare."
-                    .to_owned(),
-            );
-        }
         match client.get(url).send().await {
             Ok(response) => {
                 let status = response.status();

@@ -60,7 +60,21 @@ export default function RemoteAccessSettings({ busy, operatorToken }: Props) {
         </p>
       ) : null}
 
-      {running && status?.url ? (
+      {/* The address exists but has not answered yet. Saying so beats a spinner:
+          cloudflared's own banner warns it "may take some time to be reachable",
+          and an operator watching nothing happen assumes it has hung. */}
+      {running && status?.serving === false ? (
+        <p className="form-message" role="status">
+          Checking the address is reachable before showing it. Cloudflare can take a
+          few seconds to start serving a new address.
+        </p>
+      ) : null}
+
+      {status?.error && !running ? (
+        <p className="form-error" role="alert">{status.error}</p>
+      ) : null}
+
+      {running && status?.serving && status?.url ? (
         <>
           <div className="tunnel-address">
             {status.qr_svg ? (
