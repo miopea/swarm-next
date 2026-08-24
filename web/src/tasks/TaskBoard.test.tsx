@@ -196,6 +196,23 @@ test("lets the operator recover removed local work without mixing in Jira work",
   await waitFor(() => expect(screen.queryByText(removed.title)).not.toBeInTheDocument());
 });
 
+test("a retired task reads as retired, not as work still waiting on something", async () => {
+  // Four tasks were retired by putting them in Blocked, because there was no
+  // way to retire one. The recovery list then labelled them with that state
+  // alone — "Blocked · removed" — which is the same lie on the archive that
+  // Blocked was on the board: the next reader tries to unblock them.
+  const removed = { ...task, id: "removed-3", title: "Superseded finding", state: "blocked" as const, removed_at: 2 };
+  vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/tasks/removed")) return Promise.resolve(ok([removed]));
+    return Promise.resolve(ok([]));
+  }));
+  renderBoard({ tasks: [], onRestore: vi.fn() });
+
+  fireEvent.click(await screen.findByText("Removed local work"));
+  expect(screen.getByText(/Retired from Blocked/)).toBeInTheDocument();
+});
+
 test("keeps removed work recoverable when restoration fails", async () => {
   const removed = { ...task, id: "removed-2", title: "Try recovery again", removed_at: 2 };
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => Promise.resolve(ok(

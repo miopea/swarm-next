@@ -623,7 +623,7 @@ export default function TaskBoard({
         <p>Recover a task removed from this Hive. Jira work stays under Jira and never appears here.</p>
         <div className="removed-task-list">
           {removedTasks.map((task) => <article key={task.id}>
-            <span><strong>{task.title}</strong><small>{stateLabels[task.state]} · removed {new Date(task.updated_at * 1000).toLocaleString()}</small></span>
+            <span><strong>{task.title}</strong><small>Retired from {stateLabels[task.state]} · {new Date(task.updated_at * 1000).toLocaleString()}</small></span>
             <button
               type="button"
               className="secondary-button"
