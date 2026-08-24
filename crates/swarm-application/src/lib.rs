@@ -3036,7 +3036,7 @@ mod tests {
             )
             .unwrap();
 
-        let waiting = service.store().current_coordinator_attention().unwrap();
+        let waiting = service.store().current_coordinator_attention(0).unwrap();
         let notice = waiting
             .iter()
             .find(|item| item.kind == "worker_filed_draft_attention")
@@ -3055,7 +3055,7 @@ mod tests {
         assert!(
             service
                 .store()
-                .current_coordinator_attention()
+                .current_coordinator_attention(0)
                 .unwrap()
                 .iter()
                 .all(|item| item.kind != "worker_filed_draft_attention"),
@@ -3079,7 +3079,7 @@ mod tests {
         assert!(
             service
                 .store()
-                .current_coordinator_attention()
+                .current_coordinator_attention(0)
                 .unwrap()
                 .iter()
                 .all(|item| item.kind != "worker_filed_draft_attention")

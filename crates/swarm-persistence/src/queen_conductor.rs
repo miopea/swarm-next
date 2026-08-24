@@ -1433,7 +1433,7 @@ mod tests {
         store
             .transition_task_with_note(task.id, TaskState::Review, "Ready")
             .unwrap();
-        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        assert!(store.current_coordinator_attention(0).unwrap().is_empty());
         let status = store.queen_automation_status(1_002).unwrap();
         assert_eq!(status.actionable_count, 1);
     }
@@ -1485,7 +1485,7 @@ mod tests {
         assert_eq!(status.state, QueenAutomationState::Queued);
 
         store.transition_task(task.id, TaskState::Active).unwrap();
-        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        assert!(store.current_coordinator_attention(0).unwrap().is_empty());
         assert_eq!(
             store.queen_automation_status(403).unwrap().actionable_count,
             0
@@ -1547,7 +1547,7 @@ mod tests {
         store
             .bind_worker_session(worker.id, WorkerSessionId::new())
             .unwrap();
-        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        assert!(store.current_coordinator_attention(0).unwrap().is_empty());
         assert_eq!(
             store.queen_automation_status(702).unwrap().actionable_count,
             0

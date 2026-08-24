@@ -310,7 +310,7 @@ impl ServerHandler for AgentMcp {
                 if self.principal.role == WorkerRole::Queen {
                     self.tasks
                         .store()
-                        .current_coordinator_attention()
+                        .current_coordinator_attention(crate::unix_timestamp())
                         .map_err(ApplicationError::Store)
                         .and_then(|attention| {
                             structured(json!({

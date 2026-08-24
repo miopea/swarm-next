@@ -140,6 +140,19 @@ pub struct CoordinatorAttention {
     pub task_title: String,
     pub reason: String,
     pub observed_at: i64,
+    /// How long this has been standing, computed when the row is read.
+    ///
+    /// It used to be `observed_age_seconds`, written once at observation and
+    /// returned verbatim ever after, so it read like a live age and was not
+    /// one. Measured 2026-08-23: three records reported 301, 303 and 310
+    /// seconds while the conditions were 176 to 178 minutes old — understated
+    /// by a factor of thirty — and one value moved DOWNWARD between two calls,
+    /// so it was inconsistent as well as stale.
+    ///
+    /// The harm landed. Queen read 303s, concluded the briefs were five
+    /// minutes old and therefore not yet evidence of a stall, and wrote that
+    /// recommendation into a live operator decision record. At the real age she
+    /// would have restarted the worker.
     pub age_seconds: i64,
 }
 
@@ -761,16 +774,27 @@ impl TaskStore {
     /// Returns a persistence or identity-integrity error.
     pub fn current_coordinator_attention(
         &self,
+        now: i64,
     ) -> Result<Vec<CoordinatorAttention>, TaskStoreError> {
         let connection = self.connection()?;
+        // Derived here rather than read from the row it was written on. A
+        // cached age is indistinguishable from a live one in the payload, and
+        // every conclusion drawn from it inherits the error silently.
+        //
+        // The sum of both halves, not just the time since. The condition was
+        // already `observed_age_seconds` old when it was first noticed — a
+        // detector with a grace period never fires at zero — so reporting only
+        // the elapsed time would understate it by that grace on every read.
+        // What Queen needs is how long the situation has been true.
         let mut statement = connection.prepare(&format!(
             "SELECT action.id, action.kind, worker.id, worker.name, task.id, task.title,
-                        action.reason, action.finished_at, action.observed_age_seconds
+                        action.reason, action.finished_at,
+                        action.observed_age_seconds + MAX(0, ?1 - action.finished_at)
                  {LIVE_ATTENTION_SOURCE}
                  ORDER BY action.finished_at DESC, action.id DESC LIMIT 32"
         ))?;
         statement
-            .query_map([], |row| {
+            .query_map([now], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -1452,7 +1476,7 @@ mod tests {
 
     fn attention_kinds(store: &TaskStore) -> Vec<String> {
         store
-            .current_coordinator_attention()
+            .current_coordinator_attention(0)
             .unwrap()
             .into_iter()
             .map(|attention| attention.kind)
@@ -2189,7 +2213,7 @@ mod tests {
                 .record_assigned_ready_work_not_started_attention(&candidate, 402, 300)
                 .unwrap()
         );
-        let attention = store.current_coordinator_attention().unwrap();
+        let attention = store.current_coordinator_attention(0).unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(
             attention[0].kind,
@@ -2206,7 +2230,7 @@ mod tests {
         );
 
         store.transition_task(task.id, TaskState::Active).unwrap();
-        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        assert!(store.current_coordinator_attention(0).unwrap().is_empty());
     }
 
     #[test]
@@ -2379,7 +2403,7 @@ mod tests {
                 .record_stale_owned_work_attention(&candidate, 1_000, 600)
                 .unwrap()
         );
-        let attention = store.current_coordinator_attention().unwrap();
+        let attention = store.current_coordinator_attention(0).unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(
             attention[0].kind, "owned_work_never_briefed_attention",
@@ -2411,7 +2435,7 @@ mod tests {
         // And the attention clears itself once the brief lands, rather than
         // needing to be dismissed by hand.
         assert!(
-            store.current_coordinator_attention().unwrap().is_empty(),
+            store.current_coordinator_attention(0).unwrap().is_empty(),
             "a delivered brief answers the question the attention was asking"
         );
     }
@@ -2492,6 +2516,77 @@ mod tests {
         );
     }
 
+    /// The age has to advance with the clock, and a single call cannot tell.
+    ///
+    /// It was written once at observation and returned verbatim ever after, so
+    /// it read like a live age and was not one. Measured 2026-08-23: 303s
+    /// reported for a condition 176 minutes old, and one value moved DOWNWARD
+    /// between two calls. Queen read it, concluded the briefs were five minutes
+    /// old and so not yet evidence of a stall, and wrote that into a live
+    /// operator decision record.
+    ///
+    /// Two calls with a real gap between them, which is the only shape that
+    /// catches it — that is why it survived.
+    #[test]
+    fn attention_age_advances_with_the_clock_and_never_goes_backwards() {
+        let store = TaskStore::in_memory().unwrap();
+        let (_, _, _task) = active_owned_work(&store, "Clover", 100);
+        let candidate = store
+            .stale_owned_work_candidates(1_000, 600)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(
+            store
+                .record_stale_owned_work_attention(&candidate, 1_000, 600)
+                .unwrap()
+        );
+
+        let first = store.current_coordinator_attention(1_000).unwrap();
+        assert_eq!(first.len(), 1);
+        let action_id = first[0].action_id.clone();
+        // Not zero at the moment of observation: the work had already been
+        // unchanged for fifteen minutes when the detector fired, and reporting
+        // only the time SINCE would throw that away on every read.
+        assert_eq!(
+            first[0].age_seconds, 900,
+            "the first read must carry the age the condition already had"
+        );
+
+        // Half an hour later, on the same unchanged record.
+        let elapsed = 1_800;
+        let second = store.current_coordinator_attention(1_000 + elapsed).unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].action_id, action_id, "the same record");
+        assert_eq!(
+            second[0].age_seconds - first[0].age_seconds,
+            elapsed,
+            "age must advance by the wall clock, not sit at its observation value"
+        );
+        assert_eq!(
+            second[0].observed_at, first[0].observed_at,
+            "and observed_at must not move, so the two can be reconciled"
+        );
+
+        // Never backwards, which is the anomaly actually observed.
+        let mut previous = 0;
+        for step in [0, 60, 900, 5_000, 10_579] {
+            let age = store.current_coordinator_attention(1_000 + step).unwrap()[0].age_seconds;
+            assert!(
+                age >= previous,
+                "age went backwards: {previous} then {age} at +{step}"
+            );
+            previous = age;
+        }
+        // The reported case: 176 minutes elapsed since the observation. It must
+        // read in hours, not the 303 seconds Queen was given.
+        assert_eq!(previous, 900 + 10_579);
+        assert!(
+            previous > 60 * 60 * 2,
+            "at over two hours old it must not read as minutes: {previous}"
+        );
+    }
+
     #[test]
     fn stale_attention_is_revision_bound_visible_and_idempotent() {
         let store = TaskStore::in_memory().unwrap();
@@ -2512,7 +2607,7 @@ mod tests {
                 .record_stale_owned_work_attention(&candidate, 1_001, 600)
                 .unwrap()
         );
-        let attention = store.current_coordinator_attention().unwrap();
+        let attention = store.current_coordinator_attention(0).unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(attention[0].worker_name, "Clover");
         assert_eq!(attention[0].task_title, "Keep the release moving");
@@ -2525,7 +2620,7 @@ mod tests {
         store
             .transition_task_with_note(task, TaskState::Review, "Ready for review")
             .unwrap();
-        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        assert!(store.current_coordinator_attention(0).unwrap().is_empty());
     }
 
     #[test]
@@ -2551,7 +2646,7 @@ mod tests {
                 .record_stale_owned_work_attention(&candidate, 1_000, 600)
                 .unwrap()
         );
-        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        assert!(store.current_coordinator_attention(0).unwrap().is_empty());
     }
 
     #[test]
@@ -2595,7 +2690,7 @@ mod tests {
                 .unwrap()
         );
 
-        let attention = store.current_coordinator_attention().unwrap();
+        let attention = store.current_coordinator_attention(0).unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(attention[0].kind, "owned_work_worker_exited_attention");
         assert_eq!(attention[0].worker_name, "Poppy");
@@ -2607,7 +2702,7 @@ mod tests {
 
         let replacement = WorkerSessionId::new();
         store.bind_worker_session(worker, replacement).unwrap();
-        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        assert!(store.current_coordinator_attention(0).unwrap().is_empty());
 
         assert!(store.release_worker_session(replacement).unwrap());
         let replacement_candidate = store
@@ -2621,7 +2716,7 @@ mod tests {
                 .record_exited_worker_owned_work_attention(&replacement_candidate, i64::MAX / 2, 0,)
                 .unwrap()
         );
-        let attention = store.current_coordinator_attention().unwrap();
+        let attention = store.current_coordinator_attention(0).unwrap();
         assert_eq!(attention.len(), 1);
         assert_ne!(attention[0].action_id, first_action_id);
     }
@@ -2658,7 +2753,7 @@ mod tests {
                 .record_exited_worker_owned_work_attention(&candidate, 700, 300)
                 .unwrap()
         );
-        assert!(store.current_coordinator_attention().unwrap().is_empty());
+        assert!(store.current_coordinator_attention(0).unwrap().is_empty());
     }
 }
 

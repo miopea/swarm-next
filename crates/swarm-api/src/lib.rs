@@ -10766,7 +10766,7 @@ mod tests {
 
         state.observe_exited_worker_owned_work_after(&store, 0);
 
-        let attention = store.current_coordinator_attention().unwrap();
+        let attention = store.current_coordinator_attention(unix_timestamp()).unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(attention[0].worker_id, worker.id);
         assert_eq!(attention[0].task_id, task.id);
@@ -10813,7 +10813,7 @@ mod tests {
 
         state.observe_assigned_ready_work_not_started(&store).await;
 
-        let attention = store.current_coordinator_attention().unwrap();
+        let attention = store.current_coordinator_attention(unix_timestamp()).unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(attention[0].worker_id, worker.id);
         assert_eq!(attention[0].task_id, task.id);
