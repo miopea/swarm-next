@@ -30,6 +30,20 @@ export default function RemoteAccessSettings({ busy, operatorToken }: Props) {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  // Keep asking while the address is being checked.
+  //
+  // Moving the reachability check off the request took the 45-second block out
+  // of the browser, and left the card with no reason to look again — so it sat
+  // on "Checking the address is reachable" for good, whether the address came
+  // up or the tunnel was stopped for never serving. An asynchronous answer
+  // nobody reads is not an answer.
+  const awaitingAddress = status?.running === true && status.serving === false;
+  useEffect(() => {
+    if (!awaitingAddress) return undefined;
+    const timer = window.setInterval(() => { void refresh(); }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [awaitingAddress, refresh]);
+
   async function run(action: (token: string) => Promise<TunnelStatus>, failure: string) {
     setWorking(true);
     setError("");

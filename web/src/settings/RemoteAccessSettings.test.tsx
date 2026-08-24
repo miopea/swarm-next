@@ -118,3 +118,20 @@ test("an address that never served is reported, and no QR is offered until it do
   rerender(<RemoteAccessSettings operatorToken="operator-token" busy={false} />);
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/never started serving/));
 });
+
+test("the card keeps looking while the address is being checked, and reports the outcome itself", async () => {
+  // Moving the check off the request left the card with no reason to look
+  // again, so it sat on "Checking the address is reachable" for good. The
+  // operator saw a permanent spinner for an answer that had already arrived.
+  const checking = { available: true, running: true, serving: false, error: null, url: "https://x.trycloudflare.com", started_at: 1, qr_svg: null };
+  const gaveUp = { available: true, running: false, serving: false, error: "The address was created but never started serving within 45 seconds.", url: null, started_at: null, qr_svg: null };
+  let reads = 0;
+  vi.stubGlobal("fetch", vi.fn(async () => reply(reads++ < 2 ? checking : gaveUp)));
+
+  render(<RemoteAccessSettings operatorToken="operator-token" busy={false} />);
+  expect(await screen.findByText(/Checking the address is reachable/)).toBeInTheDocument();
+
+  // Without the poll this never changes, however long anyone waits. The card
+  // has to go and look for itself.
+  expect(await screen.findByRole("alert", {}, { timeout: 9_000 })).toHaveTextContent(/never started serving/);
+}, 12_000);
