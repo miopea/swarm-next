@@ -32,10 +32,18 @@ pub(super) async fn discover_local_legacy_migration(
         )
     })?;
     if !path.is_file() {
+        // Name the path. "No local Legacy Hive was found on this machine" is
+        // true and useless: it does not say where Swarm looked, so a Legacy
+        // database sitting somewhere else is indistinguishable from no Legacy
+        // database at all. That cost the operator twenty minutes on 2026-08-24
+        // with 99 MB of Legacy on the same disk.
         return Err(ApiError::new(
             StatusCode::NOT_FOUND,
             "legacy_hive_not_found",
-            "No local Legacy Hive was found on this machine",
+            format!(
+                "No local Legacy Hive at {}. If it is somewhere else, set SWARM_LEGACY_DATABASE_PATH to its swarm.db and restart.",
+                path.display()
+            ),
         ));
     }
     let path = path.clone();

@@ -266,16 +266,39 @@ fn database_path_from_env() -> PathBuf {
     )
 }
 
+/// Where a Legacy Hive keeps its database, newest convention first.
+///
+/// Legacy moved to `.swarm-legacy` at the rename cutover and this default never
+/// followed it, so discovery pointed at a directory that does not exist on any
+/// machine that has been through the rename. Reported 2026-08-24: the operator's
+/// own Hive, 99 MB of Legacy sitting in `.swarm-legacy` while Swarm looked in
+/// `.swarm` and said only that nothing was found.
+///
+/// Both are tried because an installation that predates the rename still keeps
+/// its database at the old path, and only a file that actually exists is
+/// chosen — this never silently prefers one live database over another.
+const LEGACY_DATABASE_PATHS: &[&str] = &[".swarm-legacy", ".swarm"];
+
 fn legacy_database_path_from_env() -> PathBuf {
-    env::var_os("SWARM_LEGACY_DATABASE_PATH").map_or_else(
-        || {
-            env::var_os("HOME").map_or_else(
-                || PathBuf::from(".swarm").join("swarm.db"),
-                |home| PathBuf::from(home).join(".swarm").join("swarm.db"),
-            )
-        },
-        PathBuf::from,
-    )
+    if let Some(configured) = env::var_os("SWARM_LEGACY_DATABASE_PATH") {
+        return PathBuf::from(configured);
+    }
+    let home = env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from);
+    legacy_database_path_in(&home)
+}
+
+fn legacy_database_path_in(home: &std::path::Path) -> PathBuf {
+    let mut first = None;
+    for directory in LEGACY_DATABASE_PATHS {
+        let candidate = home.join(directory).join("swarm.db");
+        if candidate.is_file() {
+            return candidate;
+        }
+        first.get_or_insert(candidate);
+    }
+    // Nothing found. Report the current convention, so the message a reader
+    // gets names the place Legacy would be today rather than a historical one.
+    first.unwrap_or_else(|| home.join(".swarm-legacy").join("swarm.db"))
 }
 
 fn agent_config_root_from_env(database_path: &std::path::Path) -> PathBuf {
@@ -504,6 +527,42 @@ mod tests {
         assert_eq!(
             scout_workspace_from_roots(&[PathBuf::from("/home/operator/projects")]),
             PathBuf::from("/home/operator/projects")
+        );
+    }
+
+    /// Legacy moved to `.swarm-legacy` at the rename cutover; this default did
+    /// not follow it. Reported 2026-08-24 with 99 MB of Legacy on the same disk
+    /// and Swarm reporting only that nothing was found.
+    #[test]
+    fn legacy_is_found_at_the_current_location_and_still_at_the_old_one() {
+        let home = tempfile::tempdir().unwrap();
+        let renamed = home.path().join(".swarm-legacy");
+        let original = home.path().join(".swarm");
+
+        // Nothing installed: the path reported is the one Legacy would be at
+        // today, so the message names somewhere worth looking.
+        assert_eq!(
+            legacy_database_path_in(home.path()),
+            renamed.join("swarm.db"),
+            "with nothing installed it must name the current convention"
+        );
+
+        // An installation that predates the rename is still found.
+        std::fs::create_dir_all(&original).unwrap();
+        std::fs::write(original.join("swarm.db"), b"legacy").unwrap();
+        assert_eq!(
+            legacy_database_path_in(home.path()),
+            original.join("swarm.db"),
+            "a Hive that predates the rename keeps its database at the old path"
+        );
+
+        // And once renamed, that one wins — it is the live one.
+        std::fs::create_dir_all(&renamed).unwrap();
+        std::fs::write(renamed.join("swarm.db"), b"legacy").unwrap();
+        assert_eq!(
+            legacy_database_path_in(home.path()),
+            renamed.join("swarm.db"),
+            "the current location outranks the historical one"
         );
     }
 
