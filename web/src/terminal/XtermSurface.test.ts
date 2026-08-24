@@ -774,3 +774,55 @@ test("stops resizing when the new size would undo the last one", async () => {
   host.remove();
   vi.useRealTimers();
 });
+
+/**
+ * The operator's screen recording, read back against the geometry ledger:
+ * 200 size requests in one minute, 102 size changes, cycling FOUR sizes —
+ * 24x46, 26x46, 30x46, 32x46 — on a build that already carried the first
+ * version of this guard.
+ *
+ * That guard compared only against the size from one change ago, so it damps a
+ * two-cycle and is blind to anything longer. This is the case it missed.
+ */
+test("stops a cycle longer than two sizes", async () => {
+  vi.useFakeTimers();
+  let notify: (() => void) | undefined;
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) { notify = callback; }
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  const surface = new XtermSurface();
+  const host = document.createElement("div");
+  document.body.append(host);
+  surface.open(host);
+  if (xterm.terminal) {
+    xterm.terminal.rows = 24;
+    xterm.terminal.cols = 46;
+  }
+
+  // The four-cycle exactly as recorded, run round twice.
+  const cycle = [
+    { rows: 26, cols: 46 },
+    { rows: 30, cols: 46 },
+    { rows: 32, cols: 46 },
+    { rows: 24, cols: 46 },
+  ];
+  let step = 0;
+  xterm.propose.mockReset().mockImplementation(() => cycle[step % cycle.length]);
+  const resize = vi.spyOn(xterm.terminal!, "resize" as never);
+
+  for (let round = 0; round < 8; round += 1) {
+    notify?.();
+    await vi.advanceTimersByTimeAsync(200);
+    step += 1;
+  }
+
+  // The first pass through unseen sizes is legitimate; going round again is not.
+  expect(resize.mock.calls.length).toBeLessThanOrEqual(4);
+  host.remove();
+  vi.useRealTimers();
+});

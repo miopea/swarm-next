@@ -16,6 +16,14 @@ const RESIZE_SETTLE_MS = 120;
  * person changing their mind about a window.
  */
 const OSCILLATION_WINDOW_MS = 1_000;
+/**
+ * How many recent sizes to remember when deciding whether a change is a cycle.
+ *
+ * Has to exceed the longest cycle worth damping. Four was observed in the wild;
+ * eight leaves room without letting a legitimate resize get stuck behind
+ * ancient history, which the time window bounds anyway.
+ */
+const REMEMBERED_SIZES = 8;
 const REDRAW_RETRY_MS = 350;
 const TOUCH_DRAG_THRESHOLD_PX = 4;
 const FALLBACK_CELL_HEIGHT_PX = 17;
@@ -41,7 +49,7 @@ export class XtermSurface implements TerminalSurface {
    * take authority over the PTY.
    */
   #geometryPublicationOrigin: "viewport" | "restore" = "viewport";
-  /** The last two sizes this renderer applied, newest first, and when. */
+  /** The sizes this renderer recently applied, newest first, and when. */
   #appliedSizes: { rows: number; columns: number; at: number }[] = [];
   #resizeObserver: ResizeObserver | undefined;
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -397,21 +405,32 @@ export class XtermSurface implements TerminalSurface {
   }
 
   /**
-   * Whether applying this size would undo the previous change.
+   * Whether applying this size would return to one this renderer just left.
+   *
+   * Remembers several sizes, not one. The first version of this compared only
+   * against the size from one change ago, which damps a two-cycle and is blind
+   * to anything longer — and the operator's recording showed a FOUR-cycle:
+   * 24x46, 26x46, 30x46, 32x46, two hundred requests and a hundred and two
+   * size changes inside one minute, on a build that already had that guard.
    *
    * Bounded in time on purpose. A genuine return to an earlier size — the
-   * operator dragging a window back — must still work; what must not is
-   * bouncing between two sizes faster than anyone could have asked for.
+   * operator dragging a window back — must still work; what must not is cycling
+   * through sizes faster than anyone could have asked for.
    */
   #wouldOscillate(next: { rows: number; columns: number }): boolean {
-    const previous = this.#appliedSizes[1];
-    if (!previous) return false;
-    if (Date.now() - previous.at > OSCILLATION_WINDOW_MS) return false;
-    return previous.rows === next.rows && previous.columns === next.columns;
+    const since = Date.now() - OSCILLATION_WINDOW_MS;
+    // Skips the current size: proposing it is not a change, and the caller has
+    // already established that this one is.
+    return this.#appliedSizes
+      .slice(1)
+      .some((seen) => seen.at >= since && seen.rows === next.rows && seen.columns === next.columns);
   }
 
   #rememberApplied(size: { rows: number; columns: number }): void {
-    this.#appliedSizes = [{ ...size, at: Date.now() }, ...this.#appliedSizes].slice(0, 2);
+    this.#appliedSizes = [{ ...size, at: Date.now() }, ...this.#appliedSizes].slice(
+      0,
+      REMEMBERED_SIZES,
+    );
   }
 
   #refreshViewport(): void {
