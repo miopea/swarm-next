@@ -41,6 +41,16 @@ export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTas
   const [receipt, setReceipt] = useState<LegacyMigrationReceipt>();
   const [workerReceipt, setWorkerReceipt] = useState<LegacyWorkerMigrationReceipt>();
   const [working, setWorking] = useState(false);
+  /**
+   * Why the last confirmation failed, shown INSIDE the dialog.
+   *
+   * The card's own message renders behind the modal backdrop, so a refused
+   * import set an explanation the operator could not see and left the dialog
+   * open. Reported as "clicked confirm, nothing happened, stayed on the confirm
+   * screen" — which is exactly what a reported failure looks like when it is
+   * reported underneath the thing covering the screen.
+   */
+  const [confirmFailure, setConfirmFailure] = useState<string>();
   const [confirmImport, setConfirmImport] = useState(false);
   const [confirmRollback, setConfirmRollback] = useState(false);
   const [confirmWorkerImport, setConfirmWorkerImport] = useState(false);
@@ -184,10 +194,13 @@ export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTas
       } catch {
         setMessage(`${nextReceipt.imported_worker_ids.length} sleeping worker${nextReceipt.imported_worker_ids.length === 1 ? " was" : "s were"} added. Reopen this package before importing tasks so worker matches are current.`);
       }
-    } catch {
-      setMessage(replaceExistingConversations
-        ? "The worker migration was not applied. Put every selected matching worker to sleep, refresh the preview, and try again. No conversation was changed."
-        : "The worker import was not applied. Refresh the preview before trying again.");
+    } catch (cause) {
+      const said = cause instanceof Error && cause.message ? ` ${cause.message}` : "";
+      const failure = replaceExistingConversations
+        ? `The worker migration was not applied. Put every selected matching worker to sleep, refresh the preview, and try again. No conversation was changed.${said}`
+        : `The worker import was not applied. Refresh the preview before trying again.${said}`;
+      setConfirmFailure(failure);
+      setMessage(failure);
     } finally {
       setWorking(false);
     }
@@ -219,8 +232,11 @@ export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTas
       setReceipt(nextReceipt);
       setConfirmImport(false);
       setMessage(`${nextReceipt.imported_task_ids.length} task${nextReceipt.imported_task_ids.length === 1 ? "" : "s"} staged for review. No workers were started.`);
-    } catch {
-      setMessage("The import was not applied. Refresh the preview before trying again.");
+    } catch (cause) {
+      const said = cause instanceof Error && cause.message ? ` ${cause.message}` : "";
+      const failure = `The import was not applied. Refresh the preview before trying again.${said}`;
+      setConfirmFailure(failure);
+      setMessage(failure);
     } finally {
       setWorking(false);
     }
@@ -338,7 +354,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTas
             />
             <span><strong>Replace conversations on matching workers</strong><small>Optional. Use this when the roster already exists but Legacy has the conversations you want. Selected matching workers must be sleeping; Swarm preserves the current conversation so an untouched migration can be undone.</small></span>
           </label>
-          <button type="button" className="primary-action" disabled={disabled || selectedWorkers.size === 0} onClick={() => setConfirmWorkerImport(true)}>Continue to worker import confirmation</button>
+          <button type="button" className="primary-action" disabled={disabled || selectedWorkers.size === 0} onClick={() => { setConfirmFailure(undefined); setConfirmWorkerImport(true); }}>Continue to worker import confirmation</button>
         </div>
       )}
 
@@ -405,7 +421,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTas
               </label>
             ))}
           </div>
-          <button type="button" className="primary-action" disabled={disabled || selected.size === 0} onClick={() => setConfirmImport(true)}>Continue to task import confirmation</button>
+          <button type="button" className="primary-action" disabled={disabled || selected.size === 0} onClick={() => { setConfirmFailure(undefined); setConfirmImport(true); }}>Continue to task import confirmation</button>
         </>
       )}
 
@@ -449,6 +465,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTas
           title={`Import ${selectedWorkers.size} worker${selectedWorkers.size === 1 ? "" : "s"}?`}
           detail={`Swarm will add the selected roster entries${replaceExistingConversations ? " and replace selected matching conversations" : ""}. Workers remain sleeping; no Claude or Codex process starts. ${resumeLegacyConversations ? "Eligible workers resume their exact Legacy conversation on first wake." : "Workers start fresh."}`}
           confirmLabel={working ? "Importing workers…" : `Import ${selectedWorkers.size} worker${selectedWorkers.size === 1 ? "" : "s"}`}
+          failure={confirmFailure}
           disabled={disabled}
           onCancel={() => setConfirmWorkerImport(false)}
           onConfirm={() => void importSelectedWorkers()}
@@ -459,6 +476,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTas
           title={`Import ${selected.size} task${selected.size === 1 ? "" : "s"}?`}
           detail="This is the step that changes Swarm. The selected work will appear as Drafts on the task board. No worker starts, and Legacy remains unchanged."
           confirmLabel={working ? "Importing tasks…" : `Import ${selected.size} task${selected.size === 1 ? "" : "s"}`}
+          failure={confirmFailure}
           disabled={disabled}
           onCancel={() => setConfirmImport(false)}
           onConfirm={() => void importSelected()}
@@ -492,10 +510,11 @@ export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTas
   );
 }
 
-function MigrationConfirmationDialog({ title, detail, confirmLabel, disabled, danger = false, onCancel, onConfirm }: {
+function MigrationConfirmationDialog({ title, detail, confirmLabel, failure, disabled, danger = false, onCancel, onConfirm }: {
   title: string;
   detail: string;
   confirmLabel: string;
+  failure?: string;
   disabled: boolean;
   danger?: boolean;
   onCancel: () => void;
@@ -508,6 +527,11 @@ function MigrationConfirmationDialog({ title, detail, confirmLabel, disabled, da
         <p className="eyebrow">Final confirmation</p>
         <h3>{title}</h3>
         <p>{detail}</p>
+        {failure ? <p className="form-error" role="alert">{failure}</p> : null}
+        {/* In the dialog, because the card's own message renders behind this
+            backdrop. A refusal reported back there looks exactly like the
+            button doing nothing. */}
+
         <div className="settings-actions">
           <button type="button" className="secondary-button" disabled={disabled} onClick={onCancel}>Go back</button>
           <button type="button" className={danger ? "danger-button" : "primary-action"} disabled={disabled} onClick={onConfirm}>{confirmLabel}</button>

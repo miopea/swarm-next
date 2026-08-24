@@ -339,3 +339,52 @@ function ok(body: unknown, status = 200) {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+test("a refused import explains itself in the dialog, instead of looking like a dead button", async () => {
+  // Reported: "confirm clicked and did nothing and stayed on the confirm
+  // screen". It did do something — it failed — and said so on the card BEHIND
+  // the modal backdrop, where nothing could be read. Reported twice, on an
+  // overwrite and on a clean install, and undiagnosable both times.
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/tasks") || url.endsWith("/workers")) return ok([]);
+    if (url.endsWith("/local")) return ok({
+      format: "swarm-next-migration",
+      version: 1,
+      source: { installation_id: "legacy", exported_at: 1, snapshot_digest: "source" },
+      tasks: [],
+      workers: [],
+    });
+    if (url.endsWith("/workers/preview")) return ok({ bundle_digest: "digest", source_installation_id: "legacy", selectable: 0, skipped: 0, invalid: 0, records: [] });
+    if (url.endsWith("/tasks/preview")) return ok({
+      bundle_digest: "digest",
+      source_installation_id: "legacy",
+      selectable: 1,
+      skipped: 0,
+      invalid: 0,
+      records: [
+        { source_id: "open", title: "Carry this forward", source_status: "assigned", target_state: "ready", priority: "normal", disposition: "ready", selectable: true, warnings: [] },
+      ],
+    });
+    if (url.endsWith("/tasks/commit")) {
+      return new Response(
+        JSON.stringify({ code: "legacy_busy", message: "Stop the Legacy Hive first: it is still writing to its database." }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`unexpected ${url}`);
+  }));
+
+  render(<LegacyMigrationSettings busy={false} operatorToken="token" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find my Legacy Hive" }));
+  expect(await screen.findByText("Carry this forward")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Continue to task import confirmation" }));
+  fireEvent.click(screen.getByRole("button", { name: "Import 1 task" }));
+
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent(/The import was not applied/);
+  // The reason the server gave, carried through rather than discarded.
+  expect(alert).toHaveTextContent(/still writing to its database/);
+  // Still on the dialog, which is right — but it now explains itself.
+  expect(screen.getByRole("dialog")).toContainElement(alert);
+});
