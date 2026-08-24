@@ -2,7 +2,20 @@ import { useCallback, useEffect, useState } from "react";
 
 import { readTunnel, startTunnel, stopTunnel, type TunnelStatus } from "../api";
 
-type Props = { busy: boolean; operatorToken: string };
+type Props = {
+  busy: boolean;
+  operatorToken: string;
+  /**
+   * Owned by the app, not by this card.
+   *
+   * The rail warns about the same tunnel and can stop it, so two components
+   * held their own copy of one fact: stopping from the rail left this card
+   * still showing a live address until the page was reloaded. One source of
+   * truth, written through by whichever one acts.
+   */
+  status?: TunnelStatus;
+  onStatusChange?: (status: TunnelStatus) => void;
+};
 
 /**
  * A temporary public address, for getting this Hive onto a phone.
@@ -14,10 +27,17 @@ type Props = { busy: boolean; operatorToken: string };
  * cookie is per-origin. Saying so here is cheaper than the operator finding out
  * by re-registering a passkey that stopped working overnight.
  */
-export default function RemoteAccessSettings({ busy, operatorToken }: Props) {
-  const [status, setStatus] = useState<TunnelStatus>();
+export default function RemoteAccessSettings({ busy, operatorToken, status: sharedStatus, onStatusChange }: Props) {
+  const [ownStatus, setOwnStatus] = useState<TunnelStatus>();
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  // The app's copy wins when there is one; the local copy keeps this card
+  // usable on its own, which is what the tests render.
+  const status = sharedStatus ?? ownStatus;
+  const setStatus = useCallback((next: TunnelStatus) => {
+    setOwnStatus(next);
+    onStatusChange?.(next);
+  }, [onStatusChange]);
 
   const refresh = useCallback(async () => {
     try {
@@ -26,7 +46,7 @@ export default function RemoteAccessSettings({ busy, operatorToken }: Props) {
       // A Hive that cannot answer shows the card as unavailable rather than
       // raising an error about a feature the operator may never use.
     }
-  }, [operatorToken]);
+  }, [operatorToken, setStatus]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 

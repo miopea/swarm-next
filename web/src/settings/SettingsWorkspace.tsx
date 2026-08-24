@@ -17,6 +17,7 @@ import DevelopmentReloadAction from "./DevelopmentReloadAction";
 import ReleaseUpdateAction from "./ReleaseUpdateAction";
 import OperatorAccessSettings from "./OperatorAccessSettings";
 import RemoteAccessSettings from "./RemoteAccessSettings";
+import type { TunnelStatus } from "../api";
 import ProviderReleaseAction from "./ProviderReleaseAction";
 import { useDevelopmentRuntime } from "./useDevelopmentRuntime";
 import DiagnosticsWorkspace from "./DiagnosticsWorkspace";
@@ -40,6 +41,9 @@ type Props = {
   hiveIdentity: HiveIdentity | undefined;
   liveFeedState: LiveFeedState;
   operatorToken: string;
+  /** The app owns tunnel state; the rail and this card must agree on it. */
+  publicAddress?: TunnelStatus;
+  onPublicAddressChange?: (status: TunnelStatus) => void;
   presence: OperatorPresence | undefined;
   providers: ProviderCapabilities;
   providerCapabilitiesUnavailable?: boolean;
@@ -77,7 +81,7 @@ type Props = {
   onHiveIdentityChange: (identity: HiveIdentity) => void;
 };
 
-export default function SettingsWorkspace({ section, query = "", busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, presence, startSurface, onStartSurfaceChange, onLock, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
+export default function SettingsWorkspace({ section, query = "", busy, workerEngineProgress, colorTheme, feedbackRevision, health, hiveIdentity, liveFeedState, operatorToken, publicAddress, onPublicAddressChange, presence, startSurface, onStartSurfaceChange, onLock, providers, providerCapabilitiesUnavailable = false, lockDetectionState, notificationSettings, queenPolicy, pendingQueenDecisionCount = 0, notificationState, recentEvents, sessions, workers, workspaces, onThemeChange, onPresenceChange, onEnableLockDetection, onNotificationPolicyChange, onQueenPolicyChange, onOpenQueenDecisions, onOpenTasks, onEnableNotifications, onDisableNotifications, onTestNotification, onCreateWorker, onUpdateWorker, onRemoveWorker, onReorderWorkers, onRestartProviders, onUpdateWorkerEngine, onReloadDevelopment, onHiveIdentityChange }: Props) {
   const mobile = deviceClass() === "mobile";
   const [terminalHostStatus, setTerminalHostStatus] = useState<TerminalHostStatus>();
   const [terminalHostLoaded, setTerminalHostLoaded] = useState(false);
@@ -509,7 +513,7 @@ export default function SettingsWorkspace({ section, query = "", busy, workerEng
     <OperatorAccessSettings busy={busy} operatorToken={operatorToken} />
       )}
       {shows("settings-remote") && (
-    <RemoteAccessSettings busy={busy} operatorToken={operatorToken} />
+    <RemoteAccessSettings busy={busy} operatorToken={operatorToken} status={publicAddress} onStatusChange={onPublicAddressChange} />
       )}
 
       {shows("settings-backup") && (

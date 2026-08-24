@@ -135,3 +135,19 @@ test("the card keeps looking while the address is being checked, and reports the
   // has to go and look for itself.
   expect(await screen.findByRole("alert", {}, { timeout: 9_000 })).toHaveTextContent(/never started serving/);
 }, 12_000);
+
+test("shows what the app knows, so stopping from the rail is not a stale card", async () => {
+  // The rail warns about the same tunnel and can stop it. Two components each
+  // holding their own copy meant stopping from the rail left this card showing
+  // a live address until the page was reloaded.
+  vi.stubGlobal("fetch", vi.fn(async () => reply({ available: true, running: true, serving: true, error: null, url: "https://stale.trycloudflare.com", started_at: 1, qr_svg: null })));
+  const live = { available: true, running: true, serving: true, error: null, url: "https://live.trycloudflare.com", started_at: 1, qr_svg: null };
+  const { rerender } = render(<RemoteAccessSettings operatorToken="operator-token" busy={false} status={live} />);
+  expect(await screen.findByText("https://live.trycloudflare.com")).toBeInTheDocument();
+
+  // The app says it stopped. The card must agree without being asked twice.
+  const stoppedNow = { available: true, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null };
+  rerender(<RemoteAccessSettings operatorToken="operator-token" busy={false} status={stoppedNow} />);
+  expect(screen.queryByText("https://live.trycloudflare.com")).toBeNull();
+  expect(screen.getByRole("button", { name: "Open on my phone" })).toBeInTheDocument();
+});

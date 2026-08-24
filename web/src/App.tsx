@@ -1726,6 +1726,8 @@ export function App() {
               liveFeedState={liveFeedState}
               health={loadState.kind === "ready" ? loadState.health : undefined}
               operatorToken={operatorToken}
+              publicAddress={publicAddress}
+              onPublicAddressChange={setPublicAddress}
               recentEvents={recentEvents}
               presence={presence}
               lockDetectionState={lockDetectionState}
