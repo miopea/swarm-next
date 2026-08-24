@@ -76,6 +76,7 @@ export type {
 export {
   addJiraComment,
   beginJiraAuthorization,
+  connectJiraWithApiToken,
   createJiraBinding,
   disconnectJira,
   fetchJiraBindingIssues,

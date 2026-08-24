@@ -27,11 +27,25 @@ pub(crate) enum JiraReadinessProbe {
     NotConfigured,
     Configured {
         client: Box<Client>,
-        base_url: Url,
-        email: Arc<str>,
-        api_token: Arc<str>,
+        /// Swappable while the process runs.
+        ///
+        /// These used to be read from the environment at start and fixed for
+        /// the life of the process, so a fresh Hive could not connect Jira at
+        /// all without editing a systemd unit and restarting — which is not
+        /// something an operator can do from the settings page they are
+        /// looking at. Reported 2026-08-24 from a first install: "she should
+        /// be able to run through the auth flow herself with her creds."
+        credentials: Arc<tokio::sync::RwLock<Option<JiraCredentials>>>,
     },
     OAuth(JiraOAuthClient),
+}
+
+/// What one Atlassian account needs to reach its site.
+#[derive(Clone, Debug)]
+pub(crate) struct JiraCredentials {
+    pub(crate) base_url: Url,
+    pub(crate) email: Arc<str>,
+    pub(crate) api_token: Arc<str>,
 }
 
 #[derive(Clone)]
@@ -53,6 +67,10 @@ enum JiraAuthorization {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct JiraReadiness {
     pub configured: bool,
+    /// Whether this host will take an Atlassian API token typed into Settings.
+    /// False when it is wired to an OAuth app at start, where the consent flow
+    /// is the way in.
+    pub accepts_api_token: bool,
     pub connection: JiraConnectionState,
     pub account_name: Option<String>,
 }
@@ -284,7 +302,11 @@ impl JiraReadinessProbe {
 
     pub(crate) async fn browser_base_url(&self) -> Option<Url> {
         match self {
-            Self::Configured { base_url, .. } => Some(base_url.clone()),
+            Self::Configured { credentials, .. } => credentials
+                .read()
+                .await
+                .as_ref()
+                .map(|held| held.base_url.clone()),
             Self::OAuth(client) => client.site_url().await,
             Self::NotConfigured => None,
         }
@@ -307,22 +329,51 @@ impl JiraReadinessProbe {
                 "SWARM_JIRA_BASE_URL must use HTTPS and must not contain credentials".to_owned(),
             );
         }
+        Self::runtime(Some(JiraCredentials {
+            base_url,
+            email: email.into(),
+            api_token: api_token.into(),
+        }))
+    }
+
+    /// A probe whose credentials can be set later, from the settings page.
+    ///
+    /// Installed even with nothing configured, so a fresh Hive has somewhere to
+    /// put an Atlassian API token without editing a unit file and restarting.
+    pub(crate) fn runtime(credentials: Option<JiraCredentials>) -> Result<Self, String> {
         let client = Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
             .map_err(|error| format!("Jira HTTP client could not start: {error}"))?;
         Ok(Self::Configured {
             client: Box::new(client),
-            base_url,
-            email: email.into(),
-            api_token: api_token.into(),
+            credentials: Arc::new(tokio::sync::RwLock::new(credentials)),
         })
+    }
+
+    /// Replaces the stored account, or clears it. Takes effect on the next
+    /// request; nothing restarts.
+    pub(crate) async fn set_credentials(&self, next: Option<JiraCredentials>) -> bool {
+        match self {
+            Self::Configured { credentials, .. } => {
+                *credentials.write().await = next;
+                true
+            }
+            Self::NotConfigured | Self::OAuth(_) => false,
+        }
+    }
+
+    /// Whether this host takes an API token from the settings page, as opposed
+    /// to being wired to an Atlassian OAuth app at start.
+    pub(crate) const fn accepts_api_token(&self) -> bool {
+        matches!(self, Self::Configured { .. })
     }
 
     pub(crate) async fn readiness(&self) -> JiraReadiness {
         if matches!(self, Self::NotConfigured) {
             return JiraReadiness {
                 configured: false,
+                accepts_api_token: self.accepts_api_token(),
                 connection: JiraConnectionState::NotConnected,
                 account_name: None,
             };
@@ -332,6 +383,7 @@ impl JiraReadinessProbe {
             Err(JiraAdapterError::NotConfigured) => {
                 return JiraReadiness {
                     configured: true,
+                    accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::NotConnected,
                     account_name: None,
                 };
@@ -339,6 +391,7 @@ impl JiraReadinessProbe {
             Err(JiraAdapterError::CredentialsInvalid) => {
                 return JiraReadiness {
                     configured: true,
+                    accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::CredentialsInvalid,
                     account_name: None,
                 };
@@ -346,15 +399,16 @@ impl JiraReadinessProbe {
             Err(JiraAdapterError::PermissionDenied) => {
                 return JiraReadiness {
                     configured: true,
+                    accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::PermissionDenied,
                     account_name: None,
                 };
             }
-            Err(_) => return unavailable(),
+            Err(_) => return unavailable(self.accepts_api_token()),
         };
         let Ok(mut project_probe_url) = endpoint(&access.base_url, "/rest/api/3/project/search")
         else {
-            return unavailable();
+            return unavailable(self.accepts_api_token());
         };
         project_probe_url
             .query_pairs_mut()
@@ -366,12 +420,13 @@ impl JiraReadinessProbe {
                 .send()
                 .await;
         let Ok(project_response) = project_response else {
-            return unavailable();
+            return unavailable(self.accepts_api_token());
         };
         match project_response.status() {
             StatusCode::UNAUTHORIZED => {
                 return JiraReadiness {
                     configured: true,
+                    accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::CredentialsInvalid,
                     account_name: None,
                 };
@@ -379,12 +434,13 @@ impl JiraReadinessProbe {
             StatusCode::FORBIDDEN => {
                 return JiraReadiness {
                     configured: true,
+                    accepts_api_token: self.accepts_api_token(),
                     connection: JiraConnectionState::PermissionDenied,
                     account_name: None,
                 };
             }
             status if status.is_success() => {}
-            _ => return unavailable(),
+            _ => return unavailable(self.accepts_api_token()),
         }
 
         // Project discovery is the capability Swarm requires. Profile access is
@@ -396,6 +452,7 @@ impl JiraReadinessProbe {
             .filter(|name| !name.trim().is_empty());
         JiraReadiness {
             configured: true,
+            accepts_api_token: self.accepts_api_token(),
             connection: JiraConnectionState::Ready,
             account_name,
         }
@@ -979,18 +1036,19 @@ impl JiraReadinessProbe {
             Self::NotConfigured => Err(JiraAdapterError::NotConfigured),
             Self::Configured {
                 client,
-                base_url,
-                email,
-                api_token,
-                ..
-            } => Ok(JiraAccess {
-                client: client.as_ref().clone(),
-                base_url: base_url.clone(),
-                authorization: JiraAuthorization::Basic {
-                    email: email.clone(),
-                    api_token: api_token.clone(),
-                },
-            }),
+                credentials,
+            } => {
+                let held = credentials.read().await;
+                let held = held.as_ref().ok_or(JiraAdapterError::NotConfigured)?;
+                Ok(JiraAccess {
+                    client: client.as_ref().clone(),
+                    base_url: held.base_url.clone(),
+                    authorization: JiraAuthorization::Basic {
+                        email: held.email.clone(),
+                        api_token: held.api_token.clone(),
+                    },
+                })
+            }
             Self::OAuth(oauth) => {
                 let access = oauth.access().await.map_err(oauth_error)?;
                 Ok(JiraAccess {
@@ -1289,9 +1347,116 @@ fn jira_document_text(value: &serde_json::Value) -> String {
     normalized[..boundary].trim_end().to_owned()
 }
 
-fn unavailable() -> JiraReadiness {
+/// Validates what an operator typed, without contacting anything.
+///
+/// The same transport rule the environment path enforces: HTTPS, or a loopback
+/// host for a local test, and never credentials smuggled into the URL.
+pub(crate) fn parse_credentials(
+    base_url: &str,
+    email: &str,
+    api_token: &str,
+) -> Result<JiraCredentials, String> {
+    let base_url = Url::parse(base_url)
+        .map_err(|_| "That Jira site is not a valid URL. It looks like https://yourcompany.atlassian.net".to_owned())?;
+    let permitted_transport = base_url.scheme() == "https"
+        || (base_url.scheme() == "http"
+            && base_url
+                .host_str()
+                .is_some_and(|host| matches!(host, "127.0.0.1" | "::1" | "localhost")));
+    if !permitted_transport {
+        return Err("The Jira site must use https.".to_owned());
+    }
+    if base_url.username() != "" || base_url.password().is_some() {
+        return Err("The Jira site must not contain a username or password.".to_owned());
+    }
+    Ok(JiraCredentials {
+        base_url,
+        email: email.into(),
+        api_token: api_token.into(),
+    })
+}
+
+/// The Atlassian account this host uses, kept on the host and nowhere else.
+///
+/// Stored beside the OAuth token, with the same private permissions, so an
+/// operator who typed a token into Settings still has it after a restart.
+#[derive(serde::Deserialize, serde::Serialize)]
+pub(crate) struct StoredJiraCredentials {
+    pub(crate) base_url: String,
+    pub(crate) email: String,
+    pub(crate) api_token: String,
+}
+
+/// Reads the account a previous session stored, if any.
+pub(crate) fn read_stored_credentials(path: &std::path::Path) -> Option<JiraCredentials> {
+    let bytes = std::fs::read(path).ok()?;
+    let stored: StoredJiraCredentials = serde_json::from_slice(&bytes).ok()?;
+    Some(JiraCredentials {
+        base_url: Url::parse(&stored.base_url).ok()?,
+        email: stored.email.into(),
+        api_token: stored.api_token.into(),
+    })
+}
+
+/// Writes the account privately, or removes it. The token never goes anywhere
+/// else — not into the database, not into a log, not back out of the API.
+pub(crate) fn write_stored_credentials(
+    path: &std::path::Path,
+    credentials: Option<&JiraCredentials>,
+) -> Result<(), String> {
+    let Some(credentials) = credentials else {
+        match std::fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(format!("the Jira account could not be cleared: {error}")),
+        }
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("the Jira account could not be saved: {error}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    let stored = StoredJiraCredentials {
+        base_url: credentials.base_url.to_string(),
+        email: credentials.email.to_string(),
+        api_token: credentials.api_token.to_string(),
+    };
+    let bytes = serde_json::to_vec(&stored)
+        .map_err(|error| format!("the Jira account could not be prepared: {error}"))?;
+    let temporary = path.with_extension("json.tmp");
+    write_private_bytes(&temporary, &bytes)?;
+    std::fs::rename(&temporary, path)
+        .map_err(|error| format!("the Jira account could not be saved: {error}"))
+}
+
+#[cfg(unix)]
+fn write_private_bytes(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| format!("the Jira account could not be saved: {error}"))?;
+    file.write_all(bytes)
+        .map_err(|error| format!("the Jira account could not be saved: {error}"))
+}
+
+#[cfg(not(unix))]
+fn write_private_bytes(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    std::fs::write(path, bytes)
+        .map_err(|error| format!("the Jira account could not be saved: {error}"))
+}
+
+fn unavailable(accepts_api_token: bool) -> JiraReadiness {
     JiraReadiness {
         configured: true,
+        accepts_api_token,
         connection: JiraConnectionState::NetworkUnavailable,
         account_name: None,
     }

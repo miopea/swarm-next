@@ -204,6 +204,7 @@ pub struct AppState {
     release_apply_request_path: Option<Arc<PathBuf>>,
     maintenance_timeout: Duration,
     jira_readiness: jira::JiraReadinessProbe,
+    jira_credentials_path: Option<Arc<PathBuf>>,
     outlook: Arc<RwLock<outlook::OutlookProbe>>,
     email_oauth_configuration: Arc<RwLock<Option<EmailOAuthConfigurationState>>>,
     email_oauth_config_path: Option<Arc<PathBuf>>,
@@ -268,6 +269,7 @@ impl AppState {
             release_apply_request_path: None,
             maintenance_timeout: Duration::from_secs(45),
             jira_readiness: jira::JiraReadinessProbe::default(),
+            jira_credentials_path: None,
             outlook: Arc::new(RwLock::new(outlook::OutlookProbe::default())),
             email_oauth_configuration: Arc::new(RwLock::new(None)),
             email_oauth_config_path: None,
@@ -287,6 +289,21 @@ impl AppState {
         api_token: impl Into<Arc<str>>,
     ) -> Result<Self, String> {
         self.jira_readiness = jira::JiraReadinessProbe::configured(base_url, email, api_token)?;
+        Ok(self)
+    }
+
+    /// Lets this host be given an Atlassian account from the settings page.
+    ///
+    /// Installed whether or not anything is configured yet, because the point
+    /// is that a fresh Hive has somewhere to put a token. The path is where
+    /// that account is kept between restarts.
+    ///
+    /// # Errors
+    /// Returns an error when the HTTP client cannot be built.
+    pub fn with_jira_credentials_path(mut self, path: PathBuf) -> Result<Self, String> {
+        let stored = jira::read_stored_credentials(&path);
+        self.jira_readiness = jira::JiraReadinessProbe::runtime(stored)?;
+        self.jira_credentials_path = Some(Arc::new(path));
         Ok(self)
     }
 
@@ -2828,6 +2845,10 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/providers", get(provider_activity::capabilities))
         .route("/api/v1/integrations/jira/readiness", get(jira_readiness))
         .route(
+            "/api/v1/integrations/jira/credentials",
+            post(set_jira_credentials),
+        )
+        .route(
             "/api/v1/integrations/jira/auth/start",
             post(jira_auth_start),
         )
@@ -4576,6 +4597,86 @@ async fn join_apiary(
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(context)).into_response())
 }
 
+#[derive(Deserialize)]
+struct JiraCredentialsInput {
+    base_url: String,
+    email: String,
+    api_token: String,
+}
+
+/// Accepts the Atlassian account an operator typed, and connects with it.
+///
+/// The token is verified before it is kept: a token that does not work is
+/// rejected with the reason rather than saved and left to fail later on a
+/// screen that says connected.
+async fn set_jira_credentials(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(input): Json<JiraCredentialsInput>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let path = state.jira_credentials_path.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "jira_credentials_not_accepted",
+            "This host is wired to an Atlassian app at start, so it connects through the consent flow rather than a token.",
+        )
+    })?;
+    let email = input.email.trim();
+    let api_token = input.api_token.trim();
+    if email.is_empty() || api_token.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "jira_credentials_incomplete",
+            "An Atlassian email and API token are both required.",
+        ));
+    }
+    let credentials = jira::parse_credentials(input.base_url.trim(), email, api_token)
+        .map_err(|message| {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "jira_credentials_invalid",
+                message,
+            )
+        })?;
+    // Try it before keeping it.
+    let candidate = jira::JiraReadinessProbe::runtime(Some(credentials.clone()))
+        .map_err(|message| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "jira_credentials_invalid",
+                message,
+            )
+        })?;
+    let readiness = candidate.readiness().await;
+    if readiness.connection != swarm_domain::JiraConnectionState::Ready {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "jira_credentials_rejected",
+            match readiness.connection {
+                swarm_domain::JiraConnectionState::CredentialsInvalid => "Atlassian rejected that email and token. Check the token was copied whole and belongs to that account.",
+                swarm_domain::JiraConnectionState::PermissionDenied => "That account reached Jira but is not permitted to read it.",
+                swarm_domain::JiraConnectionState::NetworkUnavailable => "That Jira site could not be reached from this host.",
+                _ => "That account could not be connected.",
+            },
+        ));
+    }
+    jira::write_stored_credentials(path.as_ref(), Some(&credentials)).map_err(|message| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "jira_credentials_not_saved",
+            message,
+        )
+    })?;
+    state.jira_readiness.set_credentials(Some(credentials)).await;
+    state.control_room_notify.notify_waiters();
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(state.jira_readiness.readiness().await),
+    )
+        .into_response())
+}
+
 async fn jira_readiness(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -4649,6 +4750,21 @@ async fn jira_disconnect(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    // A host connected by API token forgets the token; one connected through
+    // an Atlassian app revokes with Atlassian. Disconnect has to mean the same
+    // thing on both, or "Disconnect Jira" leaves credentials behind.
+    if let Some(path) = state.jira_credentials_path.as_ref() {
+        jira::write_stored_credentials(path.as_ref(), None).map_err(|message| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "jira_credentials_not_cleared",
+                message,
+            )
+        })?;
+        state.jira_readiness.set_credentials(None).await;
+        state.control_room_notify.notify_waiters();
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     let oauth = state.jira_readiness.oauth_client().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,

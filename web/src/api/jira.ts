@@ -7,7 +7,13 @@ export type JiraConnectionState =
   | "network_unavailable"
   | "credentials_invalid"
   | "permission_denied";
-export type JiraReadiness = { configured: boolean; connection: JiraConnectionState; account_name: string | null };
+export type JiraReadiness = {
+  configured: boolean;
+  /** Whether this host takes an Atlassian API token typed into Settings, rather than being wired to an OAuth app at start. */
+  accepts_api_token: boolean;
+  connection: JiraConnectionState;
+  account_name: string | null;
+};
 export type JiraProject = { id: string; key: string; name: string };
 export type JiraProjectStatus = { id: string; name: string; category_key: string; recommended_task_state: TaskState };
 export type JiraProjectBinding = {
@@ -81,6 +87,18 @@ export async function addJiraComment(operatorToken: string, taskId: string, body
 
 export async function fetchJiraReadiness(operatorToken: string): Promise<JiraReadiness> {
   const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/readiness");
+  return response.json() as Promise<JiraReadiness>;
+}
+
+export async function connectJiraWithApiToken(
+  operatorToken: string,
+  credentials: { base_url: string; email: string; api_token: string },
+): Promise<JiraReadiness> {
+  const response = await authenticatedFetch(operatorToken, "/api/v1/integrations/jira/credentials", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(credentials),
+  });
   return response.json() as Promise<JiraReadiness>;
 }
 

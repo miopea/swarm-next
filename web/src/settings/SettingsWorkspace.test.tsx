@@ -232,9 +232,9 @@ test("uses distinct readable labels for every resource pressure state", () => {
 });
 
 test("uses actionable Jira diagnostic states", () => {
-  expect(jiraStatusLabel({ configured: true, connection: "ready", account_name: "Bea" }, false)).toBe("Connected · Bea");
-  expect(jiraStatusLabel({ configured: true, connection: "network_unavailable", account_name: null }, false)).toBe("Network unavailable");
-  expect(jiraStatusLabel({ configured: true, connection: "credentials_invalid", account_name: null }, false)).toBe("Credentials need attention");
+  expect(jiraStatusLabel({ configured: true, accepts_api_token: false, connection: "ready", account_name: "Bea" }, false)).toBe("Connected · Bea");
+  expect(jiraStatusLabel({ configured: true, accepts_api_token: false, connection: "network_unavailable", account_name: null }, false)).toBe("Network unavailable");
+  expect(jiraStatusLabel({ configured: true, accepts_api_token: false, connection: "credentials_invalid", account_name: null }, false)).toBe("Credentials need attention");
   expect(jiraStatusLabel(undefined, true)).toBe("Unavailable");
 });
 

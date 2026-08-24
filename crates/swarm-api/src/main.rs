@@ -342,7 +342,13 @@ fn configure_jira(
     );
     let public_url = env::var("SWARM_PUBLIC_BASE_URL").ok();
     match (api_token, oauth) {
-        ((None, None, None), (None, None)) => {}
+        // Nothing in the environment is the ORDINARY case now, not an error:
+        // the operator types an Atlassian API token into Settings and this
+        // host keeps it. Anything already stored is loaded here, so a restart
+        // does not disconnect Jira.
+        ((None, None, None), (None, None)) => {
+            state = state.with_jira_credentials_path(jira_credentials_path(database_path))?;
+        }
         ((None, None, None), (Some(client_id), Some(client_secret))) => {
             let public_url = public_url.ok_or("Jira OAuth requires SWARM_PUBLIC_BASE_URL")?;
             state = state.with_jira_oauth(
@@ -365,6 +371,14 @@ fn configure_jira(
         _ => return Err("Jira authentication settings are incomplete".into()),
     }
     Ok(state)
+}
+
+fn jira_credentials_path(database_path: &std::path::Path) -> PathBuf {
+    database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("secrets")
+        .join("jira-api-token.json")
 }
 
 fn jira_token_path(database_path: &std::path::Path) -> PathBuf {

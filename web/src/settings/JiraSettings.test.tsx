@@ -51,7 +51,7 @@ test("discovers a project, maps its workflow, and connects it as a shared Hive p
   render(
     <JiraSettings
       operatorToken="operator-token"
-      readiness={{ configured: true, connection: "ready", account_name: "Bea" }}
+      readiness={{ configured: true, accepts_api_token: false, connection: "ready", account_name: "Bea" }}
       unavailable={false}
     />,
   );
@@ -99,7 +99,7 @@ test("offers an operator-facing Atlassian connection instead of host-setting ins
   render(
     <JiraSettings
       operatorToken="operator-token"
-      readiness={{ configured: true, connection: "not_connected", account_name: null }}
+      readiness={{ configured: true, accepts_api_token: false, connection: "not_connected", account_name: null }}
       unavailable={false}
       onNavigate={assign}
     />,
@@ -108,6 +108,47 @@ test("offers an operator-facing Atlassian connection instead of host-setting ins
   expect(screen.getByText("Connect your Atlassian account to choose projects.")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Connect with Atlassian" }));
   await waitFor(() => expect(assign).toHaveBeenCalledWith("https://auth.atlassian.test/authorize"));
+});
+
+test("a fresh Hive connects Jira with the operator's own token, and is told where to get one", async () => {
+  // Reported 2026-08-24 from a first install: the card offered a disabled
+  // "Atlassian app setup required" button, because credentials could only come
+  // from environment variables at process start. An operator cannot edit a
+  // systemd unit from the settings page they are looking at.
+  const sent: unknown[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/v1/integrations/jira/credentials")) {
+      sent.push(JSON.parse(String(init?.body)));
+      return ok({ configured: true, accepts_api_token: true, connection: "ready", account_name: "Brad" });
+    }
+    if (url.endsWith("/api/v1/integrations/jira/bindings")) return ok([]);
+    throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
+  }));
+
+  render(
+    <JiraSettings
+      operatorToken="operator-token"
+      readiness={{ configured: false, accepts_api_token: true, connection: "not_connected", account_name: null }}
+      unavailable={false}
+    />,
+  );
+
+  // The way in is named and linked, not described.
+  const tokenLinks = screen.getAllByRole("link", { name: /API tokens|api tokens page/i });
+  expect(tokenLinks.length).toBeGreaterThan(0);
+  expect(tokenLinks[0]).toHaveAttribute("href", "https://id.atlassian.com/manage-profile/security/api-tokens");
+
+  fireEvent.change(screen.getByLabelText("Jira site"), { target: { value: "https://rcg.atlassian.net" } });
+  fireEvent.change(screen.getByLabelText("Atlassian email"), { target: { value: "brad@rcg.org" } });
+  fireEvent.change(screen.getByLabelText("API token"), { target: { value: "a-real-token" } });
+  fireEvent.click(screen.getByRole("button", { name: "Connect Jira" }));
+
+  await waitFor(() => expect(sent).toEqual([
+    { base_url: "https://rcg.atlassian.net", email: "brad@rcg.org", api_token: "a-real-token" },
+  ]));
+  // The token does not stay in the page once it has been handed over.
+  await waitFor(() => expect(screen.getByLabelText("API token")).toHaveValue(""));
 });
 
 test("keeps a transient binding failure distinct from an empty Jira configuration", async () => {
@@ -130,7 +171,7 @@ test("keeps a transient binding failure distinct from an empty Jira configuratio
   render(
     <JiraSettings
       operatorToken="operator-token"
-      readiness={{ configured: true, connection: "ready", account_name: "Bea" }}
+      readiness={{ configured: true, accepts_api_token: false, connection: "ready", account_name: "Bea" }}
       unavailable={false}
     />,
   );
