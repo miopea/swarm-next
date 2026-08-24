@@ -795,3 +795,19 @@ test("calls it completed once something has", async () => {
   expect(await screen.findByText("Completed")).toBeInTheDocument();
   expect(screen.queryByText("Finished · unverified")).not.toBeInTheDocument();
 });
+
+test("a task's age is readable without opening it", async () => {
+  // The operator found five-day-old stuck drafts by opening ninety tasks one at
+  // a time, because a row said title, worker, state and open work, and nothing
+  // about how long any of it had been sitting there.
+  const fiveDaysAgo = Math.floor(Date.now() / 1000) - 5 * 24 * 60 * 60;
+  const stale = { ...task, id: "stale", title: "Waiting since Tuesday", created_at: fiveDaysAgo };
+  renderBoard({ tasks: [stale] });
+
+  const card = await screen.findByLabelText("Waiting since Tuesday");
+  const swarmDetails = within(card).getByRole("region", { name: "Swarm details" });
+  expect(within(swarmDetails).getByText("Age")).toBeInTheDocument();
+  expect(within(swarmDetails).getByText("5d")).toBeInTheDocument();
+  // The exact moment stays available without spending a row on it.
+  expect(within(swarmDetails).getByText("5d")).toHaveAttribute("title", expect.stringMatching(/^Created /));
+});

@@ -85,3 +85,23 @@ test("filters and sorts finished work the same way as work in progress", () => {
   );
   expect(ordered.completed.map((entry) => entry.title)).toEqual(["Newest", "Oldest"]);
 });
+
+test("orders by when work was created, oldest first, so neglect surfaces", () => {
+  // updated_at moves whenever anything touches a task, including automation, so
+  // it answers "what changed recently". The question that finds a five-day-old
+  // draft nobody has picked up is "what has been waiting longest", and
+  // newest-first would bury exactly those.
+  const aged: Task[] = [
+    { ...tasks[0], id: "newest", created_at: 900, updated_at: 900, position: 0 },
+    { ...tasks[0], id: "oldest", created_at: 100, updated_at: 999, position: 1 },
+    { ...tasks[0], id: "middle", created_at: 500, updated_at: 500, position: 2 },
+  ];
+  const byCreated = buildTaskBoardView(aged, [], [worker], { ...baseQuery, sort: "created" });
+  expect(byCreated.open.map((task) => task.id)).toEqual(["oldest", "middle", "newest"]);
+
+  // And it is a different answer from "recently updated", which is the whole
+  // reason for adding it: the oldest task here was touched most recently.
+  const byUpdated = buildTaskBoardView(aged, [], [worker], { ...baseQuery, sort: "updated" });
+  expect(byUpdated.open.map((task) => task.id)).toEqual(["oldest", "newest", "middle"]);
+  expect(byCreated.open.map((task) => task.id)).not.toEqual(byUpdated.open.map((task) => task.id));
+});

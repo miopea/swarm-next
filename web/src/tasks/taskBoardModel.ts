@@ -2,7 +2,7 @@ import type { JiraTaskLink, Task, TaskPriority, TaskState, Worker } from "../api
 
 export type TaskBoardFilter = "all" | "unassigned" | "assigned" | "active" | "attention";
 export type TaskBoardSource = "all" | "jira" | "email" | "local";
-export type TaskBoardSort = "queue" | "priority" | "status" | "updated" | "worker" | "project";
+export type TaskBoardSort = "queue" | "priority" | "status" | "created" | "updated" | "worker" | "project";
 
 export type TaskBoardQuery = {
   text: string;
@@ -30,6 +30,12 @@ function taskComparator(
 ): (left: Task, right: Task) => number {
   if (sort === "priority") return (left, right) => priorityOrder[left.priority] - priorityOrder[right.priority] || left.position - right.position;
   if (sort === "status") return (left, right) => stateOrder[left.state] - stateOrder[right.state] || left.position - right.position;
+  // Oldest first, and that is the point of having it. updated_at moves whenever
+  // anything touches a task, including automation, so it answers "what changed
+  // recently"; created_at answers "what has been waiting longest", which is the
+  // question that surfaces neglect. Newest-first would bury exactly the tasks
+  // this ordering exists to find.
+  if (sort === "created") return (left, right) => left.created_at - right.created_at || left.position - right.position;
   if (sort === "updated") return (left, right) => right.updated_at - left.updated_at || left.position - right.position;
   if (sort === "worker") return (left, right) => (workerNames.get(left.assigned_worker_id ?? "") ?? "Unassigned").localeCompare(workerNames.get(right.assigned_worker_id ?? "") ?? "Unassigned") || left.position - right.position;
   if (sort === "project") return (left, right) => (jiraProjects.get(left.id) ?? "Local work").localeCompare(jiraProjects.get(right.id) ?? "Local work") || left.position - right.position;

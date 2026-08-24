@@ -1,4 +1,5 @@
 import type { JiraTaskLink, Task, TaskPriority, TaskState } from "../api";
+import { taskAge, taskAgeTitle } from "./taskAge";
 
 const stateLabels: Record<TaskState, string> = {
   draft: "Draft",
@@ -40,6 +41,9 @@ export default function TaskMetadata({ task, jiraLink, busy, onRetryJira }: {
         <dl>
           <div><dt>Status</dt><dd><span className={`task-state state-${task.state}${task.state === "completed" && !task.deployment_recorded ? " unverified" : ""}`} title={task.state === "completed" && !task.deployment_recorded ? "The work is finished. Nothing has recorded where it is running, so nothing has shown it to be live." : undefined}>{taskStateLabel(task)}</span></dd></div>
           <div><dt>Priority</dt><dd><span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span></dd></div>
+          {/* Beside the state, because "which of these has gone wrong" is
+              answered by age and the board previously said nothing about it. */}
+          <div><dt>Age</dt><dd><span className="task-age" title={taskAgeTitle(task.created_at)}>{taskAge(task.created_at, Date.now())}</span></dd></div>
         </dl>
       </section>
       {jiraLink && (

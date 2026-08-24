@@ -764,6 +764,9 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-jira-origin .jira-sync-state.conflict, .task-jira-origin .jira-sync-state.uncertain { color: var(--danger); }
 .task-jira-origin .jira-sync-retry { min-height: 28px; margin-left: auto; padding: 3px 7px; }
 .task-priority { padding: 3px 7px; border: 1px solid currentColor; border-radius: 999px; font-size: .63rem; font-weight: 500; letter-spacing: .035em; text-transform: uppercase; }
+/* Quieter than the state and priority beside it. Age is context for those two,
+   not a third thing competing with them for attention. */
+.task-age { color: var(--text-muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
 .priority-low { color: var(--quiet); }
 .priority-normal { color: var(--good); }
 .priority-high { color: var(--warn); background: var(--warn-soft); }
