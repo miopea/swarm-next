@@ -218,7 +218,16 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    collapsed the code to a dot. It should degrade to slightly wrong, never to
    invisible. */
 .tunnel-qr { flex: 0 0 auto; border-radius: 8px; overflow: hidden; background: #fff; line-height: 0; }
-.tunnel-qr svg { display: block; min-width: 164px; min-height: 164px; }
+/* Opted out of the icon rule above, deliberately and on both counts.
+   `svg:not(.bee-mascot)` styles every icon in the app: stroke: currentColor at
+   stroke-width 1.8, and a fixed 18px box. Applied to a QR that is measured in
+   viewBox units, a 1.8-unit stroke is nearly twice a module's width — every
+   module bleeds 0.9 units in every direction, adjacent ones merge, and the
+   background rect gains the black frame the operator photographed. The same
+   rule's width also beat the symbol's own size, so a 45-module address rendered
+   into a 164px box at 3.644px per module. Both are why the code was unreadable
+   in the card while the identical SVG scanned perfectly on its own. */
+.tunnel-qr svg { display: block; width: auto; height: auto; min-width: 164px; min-height: 164px; fill: #000; stroke: none; }
 @media (max-width: 620px) { .tunnel-address { flex-direction: column; align-items: flex-start; } }
 .passkey-settings { display: grid; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .passkey-settings h4 { margin: 0; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
