@@ -2998,7 +2998,7 @@ async fn mcp(State(state): State<Arc<AppState>>, request: axum::extract::Request
     let Some(bridge) = state.agent_bridge.clone() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let response = agent::handle(bridge, request).await;
+    let response = agent::handle(bridge, Arc::clone(&state), request).await;
     state.deliver_coordination().await;
     response
 }

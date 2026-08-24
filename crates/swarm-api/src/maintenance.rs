@@ -145,8 +145,26 @@ pub(super) async fn request_development_reload(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
+    start_development_reload(&state).await?;
+    Ok(StatusCode::ACCEPTED.into_response())
+}
+
+/// What was asked for, so a caller can tell whether the build that comes back
+/// is the one it asked for.
+pub(crate) struct StartedDevelopmentReload {
+    pub(crate) source_revision: String,
+    pub(crate) previous_version: String,
+}
+
+/// Asks the development reload service to rebuild and swap this Hive.
+///
+/// Shared by the control room's button and the agent tool, so a guard added to
+/// one cannot go missing from the other.
+pub(crate) async fn start_development_reload(
+    state: &Arc<AppState>,
+) -> Result<StartedDevelopmentReload, ApiError> {
     let _guard = state.development_reload.lock().await;
-    let source = runtime::development_source_status(&state);
+    let source = runtime::development_source_status(state);
     if source.as_ref().is_some_and(|status| !status.aligned) {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
@@ -166,7 +184,7 @@ pub(super) async fn request_development_reload(
     }
     let source_revision = source.map_or_else(|| "unknown".into(), |source| source.revision);
     if matches!(
-        runtime::development_reload_state_for_source(&state, Some(&source_revision)),
+        runtime::development_reload_state_for_source(state, Some(&source_revision)),
         "requested" | "building"
     ) {
         return Err(ApiError::new(
@@ -219,7 +237,10 @@ pub(super) async fn request_development_reload(
             format!("the development reload request could not be recorded: {error}"),
         )
     })?;
-    Ok(StatusCode::ACCEPTED.into_response())
+    Ok(StartedDevelopmentReload {
+        source_revision,
+        previous_version: build_version().to_owned(),
+    })
 }
 
 async fn maintain_worker_engine_locked(

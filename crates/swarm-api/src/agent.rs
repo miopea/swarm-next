@@ -152,7 +152,11 @@ impl AgentBridge {
     }
 }
 
-pub async fn handle(bridge: AgentBridge, request: Request<Body>) -> Response {
+pub async fn handle(
+    bridge: AgentBridge,
+    state: Arc<crate::AppState>,
+    request: Request<Body>,
+) -> Response {
     let principal = match bridge.authenticate(request.headers()) {
         Ok(principal) => principal,
         Err(AgentBridgeError::Unauthorized) => {
@@ -175,6 +179,7 @@ pub async fn handle(bridge: AgentBridge, request: Request<Body>) -> Response {
         principal,
         changed: bridge.changed.clone(),
         jira: bridge.jira.clone(),
+        state,
     };
     let service: StreamableHttpService<AgentMcp, LocalSessionManager> = StreamableHttpService::new(
         move || Ok(handler.clone()),
@@ -196,6 +201,9 @@ struct AgentMcp {
     principal: AgentPrincipal,
     changed: Arc<Notify>,
     jira: crate::jira::JiraReadinessProbe,
+    /// Reaches the running installation, not just the task store: reloading
+    /// this Hive needs its configured paths and its own build version.
+    state: Arc<crate::AppState>,
 }
 
 impl ServerHandler for AgentMcp {
@@ -225,6 +233,9 @@ impl ServerHandler for AgentMcp {
             list_decisions_tool(),
             request_decision_tool(),
         ];
+        if self.may_reload_this_hive() {
+            tools.push(reload_app_tool());
+        }
         if self.principal.role == WorkerRole::Queen {
             tools.extend([
                 list_workers_tool(),
@@ -281,6 +292,7 @@ impl ServerHandler for AgentMcp {
                 .list_visible_tasks(self.principal)
                 .and_then(|tasks| structured(json!({ "tasks": tasks }))),
             "swarm_read_task_history" => self.read_task_history(arguments),
+            "swarm_reload_app" => self.reload_app(arguments).await,
             "swarm_approve_no_deployment" => self.approve_no_deployment(arguments),
             "swarm_retire_task" => self.retire_task(arguments),
             "swarm_transition_task" => self.transition_task(arguments).await,
@@ -571,6 +583,98 @@ impl AgentMcp {
                 "The current unattended Queen run is not authorized for that action. Ask the operator for a decision or finish the run as needs_operator.".into(),
             )))
         }
+    }
+
+    /// Whether this caller may restart the Hive it is talking to.
+    ///
+    /// Only the worker whose own workspace is the development checkout. A
+    /// worker in another repository restarting this Hive would be restarting
+    /// somebody else's control room to fix its own bug, and Queen coordinates
+    /// rather than builds.
+    fn may_reload_this_hive(&self) -> bool {
+        let Some(checkout) = self.state.development_checkout_path.as_ref() else {
+            return false;
+        };
+        if self.state.development_reload_request_path.is_none() {
+            return false;
+        }
+        self.tasks
+            .store()
+            .get_worker_profile(self.principal.worker_id)
+            .is_ok_and(|profile| {
+                std::fs::canonicalize(&profile.workspace).is_ok_and(|workspace| {
+                    std::fs::canonicalize(checkout.as_ref())
+                        .is_ok_and(|checkout| workspace == checkout)
+                })
+            })
+    }
+
+    /// Rebuilds and restarts this Hive, or reports what the last request did.
+    ///
+    /// Split into request and status because the API cannot answer a call that
+    /// restarts the API. The worker asks, the process is replaced, and the
+    /// worker asks again — which is also the only version of this that proves
+    /// anything, since the running build is read after the swap rather than
+    /// predicted before it.
+    async fn reload_app(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<ReloadAppInput>(arguments)?;
+        if !self.may_reload_this_hive() {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        let source = crate::runtime::development_source_status(&self.state);
+        if input.action == ReloadAppAction::Status {
+            let running_revision = crate::runtime::build_source_revision();
+            return structured(json!({
+                "running_version": crate::build_version(),
+                "running_revision": running_revision,
+                "checkout_revision": source.as_ref().map(|status| status.revision.clone()),
+                "checkout_dirty": source.as_ref().is_some_and(|status| status.dirty),
+                "state": crate::runtime::development_reload_state_for_source(
+                    &self.state,
+                    source.as_ref().map(|status| status.revision.as_str()),
+                ),
+                "reload_available": source
+                    .as_ref()
+                    .is_some_and(|status| status.reload_available),
+            }));
+        }
+        // Ruling, 2026-08-23: refuse while the operator is at the Hive rather
+        // than queue until they leave. A reload the operator did not ask for,
+        // arriving whenever they happen to step away, is worse than being told
+        // to try again — and a queued one would fire into a control room that
+        // has since been reopened.
+        let now = crate::unix_timestamp();
+        let presence = self
+            .tasks
+            .store()
+            .operator_presence(now)
+            .map_err(ApplicationError::Store)?;
+        // Two questions, because presence answers only the first. Somebody can
+        // be holding a terminal on a device that has stopped reporting as
+        // present, and restarting under them is the thing this guard exists to
+        // prevent.
+        let holding_a_terminal = self
+            .tasks
+            .store()
+            .operator_holds_any_terminal(now)
+            .map_err(ApplicationError::Store)?;
+        if presence.mode == swarm_domain::PresenceMode::AtHive || holding_a_terminal {
+            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                "The operator is at the Hive or holding a terminal. Reloading restarts the control room and API they are using, so it is refused while they are here — commit the fix and ask again once they are away, or ask them to press Build and release."
+                    .into(),
+            )));
+        }
+        let started = crate::maintenance::start_development_reload(&self.state)
+            .await
+            .map_err(|error| {
+                ApplicationError::Store(TaskStoreError::IntegrityFailure(error.message.clone()))
+            })?;
+        structured(json!({
+            "requested": true,
+            "expect_revision": started.source_revision,
+            "previous_version": started.previous_version,
+            "next": "The API restarts now, so this call cannot report the result. Poll swarm_reload_app with action=status until state is 'ready' or 'failed', then check running_revision against expect_revision before claiming the fix is running.",
+        }))
     }
 
     fn retire_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -981,6 +1085,18 @@ struct CommentJiraTaskInput {
     body: String,
 }
 
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ReloadAppAction {
+    Request,
+    Status,
+}
+
+#[derive(Deserialize)]
+struct ReloadAppInput {
+    action: ReloadAppAction,
+}
+
 #[derive(Deserialize)]
 struct RetireTaskInput {
     task_id: String,
@@ -1110,6 +1226,25 @@ fn list_tasks_tool() -> Tool {
         "List durable tasks visible to this agent. Queen sees the Hive queue; a worker sees only its current assignment.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
+    )
+}
+
+fn reload_app_tool() -> Tool {
+    tool(
+        "swarm_reload_app",
+        "Rebuild and restart this Hive's App and API from the development checkout, so a fix does not wait for the operator to press a button. Only for the worker whose workspace IS that checkout. Refused while the operator is at the Hive: restarting the API takes the control room out from under whoever is using it. action=request starts a build and returns the revision it will produce; the API restarts, so it cannot answer again from the same call. Poll action=status afterwards and compare running_revision to the revision you were given before claiming anything was reloaded. Workers keep running across the reload; the terminal host is a separate service.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "enum": ["request", "status"],
+                    "description": "request starts a build; status reports the running build and whether one is in flight."
+                }
+            },
+            "required": ["action"],
+            "additionalProperties": false
+        }),
+        false,
     )
 }
 
@@ -1646,6 +1781,12 @@ mod tests {
         (bridge, store, queen.id, worker.id, directory)
     }
 
+    /// An installation with no development checkout configured, which is every
+    /// test that is not about reloading one.
+    fn plain_state() -> Arc<crate::AppState> {
+        Arc::new(crate::AppState::default())
+    }
+
     fn bearer_from_path(path: &Path) -> String {
         let config = std::fs::read_to_string(path).unwrap();
         token_from_config(&config).unwrap()
@@ -1688,7 +1829,7 @@ mod tests {
     #[tokio::test]
     async fn endpoint_fails_closed_without_a_scoped_worker_credential() {
         let (bridge, _, _, _, _) = setup();
-        let response = handle(bridge, mcp_request(None, "tools/list", &json!({}))).await;
+        let response = handle(bridge, plain_state(), mcp_request(None, "tools/list", &json!({}))).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(response.headers()[header::WWW_AUTHENTICATE], "Bearer");
     }
@@ -1738,6 +1879,7 @@ mod tests {
         let queen = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(Some(&queen_token), "tools/list", &json!({})),
             )
             .await,
@@ -1746,6 +1888,7 @@ mod tests {
         let worker = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(Some(&worker_token), "tools/list", &json!({})),
             )
             .await,
@@ -1800,6 +1943,7 @@ mod tests {
         let listed = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -1821,10 +1965,205 @@ mod tests {
         assert_eq!(reopened.ensure_worker_config(queen_id).unwrap(), queen_path);
         let response = handle(
             reopened,
+            plain_state(),
             mcp_request(Some(&queen_token), "tools/list", &json!({})),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// A Hive wired to a development checkout, the worker whose workspace IS
+    /// that checkout, and a worker in another repository.
+    fn reloadable_hive() -> (
+        AgentBridge,
+        TaskStore,
+        Arc<crate::AppState>,
+        String,
+        String,
+        Vec<tempfile::TempDir>,
+    ) {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let checkout = tempdir().unwrap();
+        let developer = store
+            .create_worker(
+                "Swarm Next",
+                ProviderKind::ClaudeCode,
+                checkout.path().to_str().unwrap(),
+                false,
+                1,
+            )
+            .unwrap();
+        let outsider = store
+            .create_worker(
+                "Platform",
+                ProviderKind::ClaudeCode,
+                "/workspace/platform",
+                false,
+                1,
+            )
+            .unwrap();
+        let directory = tempdir().unwrap();
+        let bridge = AgentBridge::new(
+            store.clone(),
+            directory.path().to_path_buf(),
+            "http://127.0.0.1:8876/mcp",
+            Arc::new(Notify::new()),
+        );
+        let runtime = tempdir().unwrap();
+        let state = Arc::new(
+            crate::AppState::default()
+                .with_task_store(store.clone())
+                .with_development_checkout_path(checkout.path().to_path_buf())
+                .with_development_reload_paths(
+                    runtime.path().join("development-reload.request"),
+                    runtime.path().join("development-reload.status"),
+                ),
+        );
+        let developer_token = bearer_from_path(&bridge.ensure_worker_config(developer.id).unwrap());
+        let outsider_token = bearer_from_path(&bridge.ensure_worker_config(outsider.id).unwrap());
+        (
+            bridge,
+            store,
+            state,
+            developer_token,
+            outsider_token,
+            vec![checkout, directory, runtime],
+        )
+    }
+
+    async fn reload_call(
+        bridge: &AgentBridge,
+        state: &Arc<crate::AppState>,
+        token: &str,
+        action: &str,
+    ) -> Value {
+        response_json(
+            handle(
+                bridge.clone(),
+                Arc::clone(state),
+                mcp_request(
+                    Some(token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_reload_app",
+                        "arguments": { "action": action }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await
+    }
+
+    /// Restarting this Hive is for the worker that builds it, nobody else. A
+    /// worker in another repository would be restarting somebody else's control
+    /// room to fix its own bug.
+    #[tokio::test]
+    async fn only_the_worker_whose_workspace_is_the_checkout_may_reload_this_hive() {
+        let (bridge, _store, state, developer_token, outsider_token, _keep) = reloadable_hive();
+        let names = |token: String| {
+            let bridge = bridge.clone();
+            let state = Arc::clone(&state);
+            async move {
+                let listed = response_json(
+                    handle(
+                        bridge,
+                        state,
+                        mcp_request(Some(&token), "tools/list", &json!({})),
+                    )
+                    .await,
+                )
+                .await;
+                listed["result"]["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert!(
+            names(developer_token).await.iter().any(|name| name == "swarm_reload_app"),
+            "the worker whose workspace is the checkout may reload it"
+        );
+        assert!(
+            !names(outsider_token.clone()).await.iter().any(|name| name == "swarm_reload_app"),
+            "a worker in another repository must not be offered this Hive's restart"
+        );
+
+        let denied = reload_call(&bridge, &state, &outsider_token, "status").await;
+        assert!(
+            denied["result"]["isError"].as_bool().unwrap_or(false) || denied["error"].is_object(),
+            "and must be refused if it asks anyway, not answered: {denied}"
+        );
+    }
+
+    /// The operator asked for self-reload so a fix is not gated on them
+    /// pressing a button, then ruled that it must refuse while they are at the
+    /// Hive rather than queue until they leave.
+    #[tokio::test]
+    async fn a_reload_is_refused_while_the_operator_is_here_and_never_queued() {
+        let (bridge, store, state, developer_token, _outsider_token, _keep) = reloadable_hive();
+
+        // Away: allowed to reach the mechanism. There is no build to make in a
+        // bare checkout, so it may be refused on that ground — which is still
+        // proof it got past the presence guard.
+        store
+            .set_manual_presence(Some(swarm_domain::PresenceMode::Away), 1_000)
+            .unwrap();
+        let away = reload_call(&bridge, &state, &developer_token, "request")
+            .await
+            .to_string();
+        assert!(
+            !away.contains("refused while they are here"),
+            "a reload must not be refused on presence while the operator is away: {away}"
+        );
+
+        store
+            .set_manual_presence(Some(swarm_domain::PresenceMode::AtHive), 1_000)
+            .unwrap();
+        let refused = reload_call(&bridge, &state, &developer_token, "request").await;
+        assert!(
+            refused.to_string().contains("refused while they are here"),
+            "a reload must be refused while the operator is using the control room: {refused}"
+        );
+
+        // Away again, but somebody is holding a terminal: still refused. A
+        // device can stop reporting as present while a person is still typing.
+        store
+            .set_manual_presence(Some(swarm_domain::PresenceMode::Away), 1_000)
+            .unwrap();
+        let worker = store.list_worker_profiles().unwrap();
+        let holder = worker
+            .iter()
+            .find(|profile| profile.name == "Platform")
+            .unwrap();
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(holder.id, session).unwrap();
+        store
+            .renew_worker_engagement(
+                session,
+                Some(swarm_domain::PresenceDeviceId::new()),
+                crate::unix_timestamp(),
+                300,
+            )
+            .unwrap();
+        let held = reload_call(&bridge, &state, &developer_token, "request").await;
+        assert!(
+            held.to_string().contains("holding a terminal"),
+            "a reload must be refused while a terminal is held, whatever presence says: {held}"
+        );
+        store.release_worker_session(session).unwrap();
+
+        // Status stays readable throughout: it changes nothing, and it is how
+        // the worker closes the loop after a reload.
+        let status = reload_call(&bridge, &state, &developer_token, "status").await;
+        assert_eq!(
+            status["result"]["structuredContent"]["running_version"],
+            crate::build_version(),
+            "status must report the build that is actually running: {status}"
+        );
     }
 
     #[tokio::test]
@@ -1840,10 +2179,10 @@ mod tests {
             )
         };
 
-        let attention = response_json(handle(bridge.clone(), request(&queen_token)).await).await;
+        let attention = response_json(handle(bridge.clone(), plain_state(), request(&queen_token)).await).await;
         assert!(attention["result"]["structuredContent"]["attention"].is_array());
 
-        let denied = response_json(handle(bridge, request(&worker_token)).await).await;
+        let denied = response_json(handle(bridge, plain_state(), request(&worker_token)).await).await;
         assert!(denied["result"]["isError"].as_bool().unwrap_or(false));
     }
 
@@ -1859,6 +2198,7 @@ mod tests {
         let assigned = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -1879,6 +2219,7 @@ mod tests {
         let start = |bridge: AgentBridge| {
             handle(
                 bridge,
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -1926,6 +2267,7 @@ mod tests {
         let blocked = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -1949,6 +2291,7 @@ mod tests {
         let finished = response_json(
             handle(
                 bridge,
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -2039,6 +2382,7 @@ mod tests {
         let grouped = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 request(json!({
                     "kind": "approval",
                     "title": "Approve all queued work",
@@ -2062,6 +2406,7 @@ mod tests {
         let mismatched = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 request(json!({
                     "task_id": task.id.to_string(),
                     "kind": "approval",
@@ -2086,6 +2431,7 @@ mod tests {
         let concrete = response_json(
             handle(
                 bridge,
+                plain_state(),
                 request(json!({
                     "task_id": task.id.to_string(),
                     "kind": "approval",
@@ -2124,6 +2470,7 @@ mod tests {
         let workers = response_json(
             handle(
                 bridge,
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -2165,6 +2512,7 @@ mod tests {
         let queen = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(Some(&queen_token), "tools/call", &arguments),
             )
             .await,
@@ -2176,6 +2524,7 @@ mod tests {
         let worker = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(Some(&worker_token), "tools/call", &arguments),
             )
             .await,
@@ -2191,6 +2540,7 @@ mod tests {
         let elevated = response_json(
             handle(
                 bridge,
+                plain_state(),
                 mcp_request(
                     Some(&worker_token),
                     "tools/call",
@@ -2227,6 +2577,7 @@ mod tests {
         let hives = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -2246,6 +2597,7 @@ mod tests {
         let invalid_route = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -2276,6 +2628,7 @@ mod tests {
         let worker = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(Some(&worker_token), "tools/call", &arguments),
             )
             .await,
@@ -2287,6 +2640,7 @@ mod tests {
         let queen = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(Some(&queen_token), "tools/call", &arguments),
             )
             .await,
@@ -2305,6 +2659,7 @@ mod tests {
         let listed = response_json(
             handle(
                 bridge,
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -2413,6 +2768,7 @@ mod tests {
         let preview = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -2441,6 +2797,7 @@ mod tests {
         let imported = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -2465,6 +2822,7 @@ mod tests {
         let transitioned = response_json(
             handle(
                 bridge,
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
@@ -2504,6 +2862,7 @@ mod tests {
         let created = response_json(
             handle(
                 bridge.clone(),
+                plain_state(),
                 mcp_request(
                     Some(&worker_token),
                     "tools/call",
@@ -2536,6 +2895,7 @@ mod tests {
         let listed = response_json(
             handle(
                 bridge,
+                plain_state(),
                 mcp_request(
                     Some(&queen_token),
                     "tools/call",
