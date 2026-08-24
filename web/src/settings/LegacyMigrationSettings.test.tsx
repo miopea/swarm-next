@@ -295,9 +295,9 @@ test("previews selected Legacy workers as sleeping before adding them", async ()
         skipped: 1,
         invalid: 0,
         records: [
-          { source_id: "daisy", name: "Daisy", workspace: "/projects/daisy", provider: "claude_code", disposition: "ready", selectable: true, conversation_available: true, warnings: [] },
-          { source_id: "clover", name: "Clover", workspace: "/projects/clover", provider: "claude_code", disposition: "duplicate", selectable: false, conversation_available: true, existing_worker_id: "next-clover", warnings: ["Swarm already has worker 'Clover' for this name or repository."] },
-          { source_id: "root", name: "Project Root", workspace: "/projects", provider: "claude_code", disposition: "managed_by_next", selectable: false, conversation_available: false, warnings: ["Swarm Scout owns cross-repository work; Project Root is not duplicated."] },
+          { source_id: "daisy", name: "Daisy", workspace: "/projects/daisy", provider: "claude_code", disposition: "ready", selectable: true, asleep: true, conversation_available: true, warnings: [] },
+          { source_id: "clover", name: "Clover", workspace: "/projects/clover", provider: "claude_code", disposition: "duplicate", selectable: false, asleep: true, conversation_available: true, existing_worker_id: "next-clover", warnings: ["Swarm already has worker 'Clover' for this name or repository."] },
+          { source_id: "root", name: "Project Root", workspace: "/projects", provider: "claude_code", disposition: "managed_by_next", selectable: false, asleep: true, conversation_available: false, warnings: ["Swarm Scout owns cross-repository work; Project Root is not duplicated."] },
         ],
       });
     }
@@ -331,6 +331,39 @@ test("previews selected Legacy workers as sleeping before adding them", async ()
   expect(taskPreviewCount).toBe(2);
   const commit = requests.find((request) => request.url.endsWith("/workers/commit"));
   expect(commit?.body).toMatchObject({ commit: { selected_source_ids: expect.arrayContaining(["daisy", "clover"]), resume_legacy_conversations: true, replace_existing_conversations: true } });
+});
+
+/// The card printed "Sleeping" as a literal on every worker while the import
+/// refused any worker with an open session. The operator ticked a match the
+/// wizard called sleeping, pressed Confirm, and the import was refused.
+test("will not offer an awake matching worker for conversation replacement", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/workers/preview")) {
+      return ok({
+        bundle_digest: "digest",
+        source_installation_id: "legacy",
+        selectable: 0,
+        skipped: 1,
+        invalid: 0,
+        records: [
+          { source_id: "clover", name: "Clover", workspace: "/projects/clover", provider: "claude_code", disposition: "duplicate", selectable: false, asleep: false, conversation_available: true, existing_worker_id: "next-clover", warnings: ["This matching worker is awake. Put it to sleep and refresh the preview to replace its conversation."] },
+        ],
+      });
+    }
+    return ok({ bundle_digest: "digest", source_installation_id: "legacy", selectable: 0, skipped: 0, invalid: 0, records: [] });
+  }));
+  const { container } = render(<LegacyMigrationSettings busy={false} operatorToken="token" />);
+  const payload = JSON.stringify({ format: "swarm-next-migration", version: 1, source: { installation_id: "legacy", exported_at: 1, snapshot_digest: "source" }, tasks: [], workers: [{ source_id: "clover" }] });
+  const file = new File([payload], "legacy.json", { type: "application/json" });
+  Object.defineProperty(file, "text", { value: async () => payload });
+  fireEvent.change(container.querySelector("input[type=file]")!, { target: { files: [file] } });
+
+  expect(await screen.findByText("Clover")).toBeInTheDocument();
+  expect(screen.getByText(/Awake/)).toBeInTheDocument();
+  expect(screen.getByText(/Put it to sleep/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("checkbox", { name: /Replace conversations on matching workers/ }));
+  expect(screen.getByText("Clover").closest("label")?.querySelector("input")).toBeDisabled();
 });
 
 function ok(body: unknown, status = 200) {

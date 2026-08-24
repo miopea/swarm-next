@@ -111,6 +111,10 @@ pub struct LegacyWorkerPreview {
     /// Existing sleeping Swarm worker that will receive the Legacy
     /// conversation instead of creating a duplicate roster entry.
     pub existing_worker_id: Option<WorkerId>,
+    /// Whether the matching Swarm worker has no open session. The wizard used
+    /// to print "Sleeping" on every card as a literal, which is what let an
+    /// awake worker be selected and then refused at the final confirmation.
+    pub asleep: bool,
     pub warnings: Vec<String>,
 }
 
@@ -231,6 +235,9 @@ struct NormalizedWorker {
     existing_worker_id: Option<WorkerId>,
     disposition: LegacyWorkerImportDisposition,
     selectable: bool,
+    /// Whether the matching Swarm worker, if any, has no open session. A record
+    /// with no match is asleep by definition — there is nothing to wake.
+    asleep: bool,
     warnings: Vec<String>,
 }
 
@@ -338,6 +345,7 @@ impl TaskStore {
                 selectable: worker.selectable,
                 conversation_available: worker.provider_conversation_id.is_some(),
                 existing_worker_id: worker.existing_worker_id,
+                asleep: worker.asleep,
                 warnings: worker.warnings,
             })
             .collect::<Vec<_>>();
@@ -1203,6 +1211,9 @@ impl TaskStore {
         let home = migration_home_directory();
         let connection = self.connection()?;
         let mut output = Vec::with_capacity(bundle.workers.len());
+        // (name, workspace) of every worker this batch would newly create, so a
+        // later record can see a collision the roster alone does not show.
+        let mut claimed: Vec<(String, String)> = Vec::new();
         for source in &bundle.workers {
             let source_id = source.source_id.trim().to_owned();
             let name = source.name.trim().to_owned();
@@ -1291,11 +1302,29 @@ impl TaskStore {
                 |row| row.get::<_, bool>(0),
             )?;
             let duplicate = existing.iter().find(|worker| {
-                worker.name.eq_ignore_ascii_case(&name)
-                    || workspace_identity(&worker.workspace, home.as_deref())
-                        == workspace_identity(&workspace, home.as_deref())
+                collides_with_existing_worker(
+                    &worker.name,
+                    &worker.workspace,
+                    &name,
+                    &workspace,
+                    home.as_deref(),
+                )
             });
-            if selectable && (already_imported || duplicate.is_some()) {
+            // A bundle can carry two workers for one repository. The commit
+            // inserts them one at a time and the second one collides with the
+            // first, so the preview has to see the batch it is proposing —
+            // not just the roster as it stands before the batch runs.
+            let claimed_in_batch = claimed.iter().any(|(other_name, other_workspace)| {
+                collides_with_existing_worker(
+                    other_name,
+                    other_workspace,
+                    &name,
+                    &workspace,
+                    home.as_deref(),
+                )
+            });
+            let asleep = duplicate.is_none_or(|worker| worker.active_session_id.is_none());
+            if selectable && (already_imported || duplicate.is_some() || claimed_in_batch) {
                 disposition = LegacyWorkerImportDisposition::Duplicate;
                 selectable = false;
                 warnings.push(if already_imported {
@@ -1307,7 +1336,7 @@ impl TaskStore {
                         duplicate.name
                     )
                 } else {
-                    "Swarm already has this worker.".into()
+                    "Another Legacy worker in this same package already claims this name or repository; import one of them.".into()
                 });
                 if !already_imported
                     && let Some(duplicate) = duplicate.filter(|duplicate| {
@@ -1317,12 +1346,23 @@ impl TaskStore {
                             && provider_conversation_id.is_some()
                     })
                 {
+                    // The match is named either way. `asleep` is what gates
+                    // the checkbox, so an awake worker is shown as the match it
+                    // is rather than silently dropping to the fresh-import
+                    // path — and the commit still guards the wake-after-preview
+                    // race, which is the only way it can now be reached.
                     existing_worker_id = Some(duplicate.id);
-                    warnings.push(
+                    warnings.push(if duplicate.active_session_id.is_some() {
+                        "This matching worker is awake. Put it to sleep and refresh the preview to replace its conversation."
+                            .into()
+                    } else {
                         "The migration wizard can explicitly replace this matching worker's current conversation after the worker is put to sleep."
-                            .into(),
-                    );
+                            .to_owned()
+                    });
                 }
+            }
+            if selectable && existing_worker_id.is_none() {
+                claimed.push((name.clone(), workspace.clone()));
             }
             output.push(NormalizedWorker {
                 source_id,
@@ -1334,6 +1374,7 @@ impl TaskStore {
                 existing_worker_id,
                 disposition,
                 selectable,
+                asleep,
                 warnings,
             });
         }
@@ -1347,6 +1388,24 @@ fn migration_home_directory() -> Option<String> {
         .or_else(|| std::env::var("USERPROFILE").ok())
         .map(|home| home.replace('\\', "/").trim_end_matches('/').to_owned())
         .filter(|home| !home.is_empty())
+}
+
+/// Whether a Legacy worker collides with one Swarm already has.
+///
+/// The preview and the commit MUST agree on this. They did not: the preview
+/// normalised the workspace with [`workspace_identity`] while the commit
+/// compared the raw column, so a record the wizard offered could be refused a
+/// moment later — reported as "the package changed", which sent the operator
+/// to re-scan a package that was fine.
+fn collides_with_existing_worker(
+    existing_name: &str,
+    existing_workspace: &str,
+    name: &str,
+    workspace: &str,
+    home: Option<&str>,
+) -> bool {
+    existing_name.trim().eq_ignore_ascii_case(name.trim())
+        || workspace_identity(existing_workspace, home) == workspace_identity(workspace, home)
 }
 
 fn workspace_identity(workspace: &str, home: Option<&str>) -> String {
@@ -1657,8 +1716,13 @@ fn adopt_existing_legacy_conversation(
         )
         .optional()?
         .ok_or(TaskStoreError::MigrationBundleChanged)?;
-    if active
-        || provider.parse::<ProviderKind>().ok() != Some(worker.provider)
+    // An open session is its own refusal. Folding it into "the package
+    // changed" told the operator to re-scan, which cannot help: the package was
+    // never the problem, and re-scanning produced the identical refusal.
+    if active {
+        return Err(TaskStoreError::MigrationWorkerAwake(worker.name.clone()));
+    }
+    if provider.parse::<ProviderKind>().ok() != Some(worker.provider)
         || workspace_identity(&workspace, migration_home_directory().as_deref())
             != workspace_identity(&worker.workspace, migration_home_directory().as_deref())
     {
@@ -1709,15 +1773,33 @@ fn import_new_legacy_worker(
     worker: &NormalizedWorker,
     resume_legacy_conversations: bool,
 ) -> Result<(WorkerId, bool), TaskStoreError> {
-    let duplicate_exists: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM worker_profiles
-         WHERE hive_id = ?1 AND archived_at IS NULL
-           AND (lower(trim(name)) = lower(trim(?2)) OR workspace = ?3))",
-        params![hive_id, worker.name, worker.workspace],
-        |row| row.get(0),
+    // Compared in Rust with the same predicate the preview uses. The old SQL
+    // matched the workspace column raw, so the two disagreed and a record the
+    // wizard offered could be refused here. Rows inserted earlier in this same
+    // transaction are visible, which is what catches an intra-batch collision.
+    let home = migration_home_directory();
+    let mut roster = transaction.prepare(
+        "SELECT name, workspace FROM worker_profiles
+         WHERE hive_id = ?1 AND archived_at IS NULL",
     )?;
-    if duplicate_exists {
-        return Err(TaskStoreError::MigrationBundleChanged);
+    let collision = roster
+        .query_map(params![hive_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|(name, workspace)| {
+            collides_with_existing_worker(
+                name,
+                workspace,
+                &worker.name,
+                &worker.workspace,
+                home.as_deref(),
+            )
+        });
+    drop(roster);
+    if let Some((name, _)) = collision {
+        return Err(TaskStoreError::MigrationWorkerDuplicate(name));
     }
     let worker_id = WorkerId::new();
     let provider_conversation_id = resume_legacy_conversations
@@ -1816,6 +1898,123 @@ mod tests {
             isolation: String::new(),
             provider_conversation_id: None,
         }
+    }
+
+    /// The wizard used to print "Sleeping" as a literal on every card while the
+    /// commit refused any worker with an open session, so an awake match could
+    /// be selected and then refused at the final confirmation.
+    #[test]
+    fn worker_preview_reports_an_awake_match_as_awake_and_will_not_offer_it() {
+        let store = store();
+        let home = migration_home_directory().expect("test process has a home directory");
+        let workspace = format!("{home}/projects/daisy");
+        let existing = store
+            .create_worker("Daisy", ProviderKind::ClaudeCode, &workspace, false, 3)
+            .unwrap();
+        let mut source = worker("daisy", "Daisy", &workspace);
+        source.provider_conversation_id = Some(swarm_domain::ProviderConversationId::new().to_string());
+        let bundle = worker_bundle(vec![source]);
+
+        let sleeping = store.preview_legacy_worker_migration(&bundle).unwrap();
+        assert!(sleeping.records[0].asleep);
+        assert_eq!(sleeping.records[0].existing_worker_id, Some(existing.id));
+
+        store
+            .bind_worker_session(existing.id, WorkerSessionId::new())
+            .unwrap();
+
+        let awake = store.preview_legacy_worker_migration(&bundle).unwrap();
+        assert!(!awake.records[0].asleep, "an open session is not sleeping");
+        assert_eq!(
+            awake.records[0].existing_worker_id,
+            Some(existing.id),
+            "the match is still named so the operator knows what to put to sleep"
+        );
+        assert!(
+            awake.records[0]
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("awake"))
+        );
+    }
+
+    /// A package can carry two workers for one repository. The preview compared
+    /// each against the roster as it stood beforehand, so neither looked like a
+    /// duplicate; the commit inserted the first and refused the second, taking
+    /// the whole batch with it.
+    #[test]
+    fn worker_preview_sees_a_collision_inside_the_package_it_is_proposing() {
+        let store = store();
+        let home = migration_home_directory().expect("test process has a home directory");
+
+        let preview = store
+            .preview_legacy_worker_migration(&worker_bundle(vec![
+                worker("first", "Daisy", &format!("{home}/projects/shared")),
+                worker("second", "Rosie", &format!("{home}/projects/shared/")),
+            ]))
+            .unwrap();
+
+        assert_eq!(preview.selectable, 1, "one of the two is importable");
+        assert!(preview.records[0].selectable);
+        assert!(!preview.records[1].selectable);
+        assert_eq!(
+            preview.records[1].disposition,
+            LegacyWorkerImportDisposition::Duplicate
+        );
+        assert!(
+            preview.records[1]
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("same package"))
+        );
+    }
+
+    /// The commit matched the workspace column raw while the preview normalised
+    /// it, so the two could disagree. When the commit does refuse, it now says
+    /// which worker collided instead of blaming the package.
+    #[test]
+    fn commit_refuses_a_colliding_worker_by_name_rather_than_blaming_the_package() {
+        let store = store();
+        let home = migration_home_directory().expect("test process has a home directory");
+        store
+            .create_worker(
+                "Daisy",
+                ProviderKind::ClaudeCode,
+                &format!("{home}/projects/daisy"),
+                false,
+                3,
+            )
+            .unwrap();
+
+        // Selection validation refuses first, because the preview now sees it.
+        let bundle = worker_bundle(vec![worker(
+            "daisy",
+            "Rosie",
+            &format!("{home}/projects/daisy//"),
+        )]);
+        let preview = store.preview_legacy_worker_migration(&bundle).unwrap();
+        assert!(!preview.records[0].selectable);
+        assert!(matches!(
+            store.commit_legacy_worker_migration(
+                &bundle,
+                &LegacyWorkerMigrationCommit {
+                    bundle_digest: preview.bundle_digest,
+                    selected_source_ids: vec!["daisy".into()],
+                    resume_legacy_conversations: false,
+                    replace_existing_conversations: false,
+                },
+            ),
+            Err(TaskStoreError::InvalidMigrationSelection)
+        ));
+
+        // And the guard underneath names the collision it found.
+        assert!(collides_with_existing_worker(
+            "Daisy",
+            &format!("{home}/projects/daisy"),
+            "Rosie",
+            &format!("{home}/projects/daisy//"),
+            Some(&home),
+        ));
     }
 
     fn worker_bundle(workers: Vec<LegacyWorkerRecord>) -> LegacyMigrationBundle {
@@ -2241,7 +2440,7 @@ mod tests {
                     replace_existing_conversations: true,
                 },
             ),
-            Err(TaskStoreError::MigrationBundleChanged)
+            Err(TaskStoreError::MigrationWorkerAwake(_))
         ));
     }
 

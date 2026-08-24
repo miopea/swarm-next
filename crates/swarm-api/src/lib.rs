@@ -7189,6 +7189,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "migration_bundle_changed",
             error.to_string(),
         ),
+        TaskStoreError::MigrationWorkerAwake(_) => ApiError::new(
+            StatusCode::CONFLICT,
+            "migration_worker_awake",
+            error.to_string(),
+        ),
+        TaskStoreError::MigrationWorkerDuplicate(_) => ApiError::new(
+            StatusCode::CONFLICT,
+            "migration_worker_duplicate",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidMigrationSelection => ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_migration_selection",

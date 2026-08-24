@@ -315,7 +315,7 @@ export default function LegacyMigrationSettings({ busy, operatorToken, onOpenTas
                 />
                 <span className="migration-record-copy">
                   <strong>{record.name || "Unnamed Legacy worker"}</strong>
-                  <small>{record.workspace} · {record.provider === "codex" ? "Codex" : "Claude Code"} · Sleeping</small>
+                  <small>{record.workspace} · {record.provider === "codex" ? "Codex" : "Claude Code"}{record.asleep ? "" : " · Awake"}</small>
                   <small className={record.conversation_available ? "migration-conversation-found" : "migration-warning"}>{record.conversation_available ? (record.existing_worker_id ? "Exact Legacy conversation found · matching Next worker" : "Exact Legacy conversation found") : "Starts with a fresh conversation"}</small>
                   {record.warnings.map((warning) => <small key={warning} className="migration-warning">{warning}</small>)}
                 </span>
@@ -546,8 +546,11 @@ function isMissingReceiptEndpoint(error: unknown) {
 }
 
 function canSelectWorker(record: LegacyWorkerPreview, replaceExistingConversations: boolean) {
+  // `asleep` is redundant with the server, which only sets existing_worker_id
+  // for a sleeping match. It is stated here anyway: the import refuses an awake
+  // worker, so the rule belongs where the checkbox is enabled.
   return record.selectable
-    || Boolean(replaceExistingConversations && record.existing_worker_id && record.conversation_available);
+    || Boolean(replaceExistingConversations && record.existing_worker_id && record.conversation_available && record.asleep);
 }
 
 function migrationRecordSummary(record: LegacyTaskPreview) {

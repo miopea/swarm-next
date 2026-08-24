@@ -37,6 +37,8 @@ export type LegacyWorkerPreview = {
   selectable: boolean;
   conversation_available: boolean;
   existing_worker_id?: string;
+  /** Whether the matching Swarm worker has no open session. True when nothing matches. */
+  asleep: boolean;
   warnings: string[];
 };
 

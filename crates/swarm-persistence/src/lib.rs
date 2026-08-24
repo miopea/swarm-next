@@ -430,6 +430,20 @@ pub enum TaskStoreError {
     MigrationBundleChanged,
     #[error("the Legacy migration selection is empty, duplicated, or no longer eligible")]
     InvalidMigrationSelection,
+    /// A selected worker had an open session when the import ran.
+    ///
+    /// Distinct from [`Self::MigrationBundleChanged`] because nothing about the
+    /// package changed: the operator was told to re-scan, which never helped.
+    #[error(
+        "worker '{0}' has an open session; put it to sleep, refresh the preview, and import again"
+    )]
+    MigrationWorkerAwake(String),
+    /// A selected worker collides with a worker Swarm already has, by name or
+    /// by repository — including one imported earlier in the same batch.
+    #[error(
+        "Swarm already has a worker for '{0}'; rename or deselect it, then import again"
+    )]
+    MigrationWorkerDuplicate(String),
     #[error("the Legacy migration batch was not found or was already rolled back")]
     MigrationBatchNotFound,
     #[error("the Legacy migration batch contains work that has changed and cannot be rolled back")]
