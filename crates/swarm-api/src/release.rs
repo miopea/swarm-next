@@ -520,9 +520,16 @@ async fn fetch_artifact(offer: &ReleaseOffer, root: &Path) -> Result<PathBuf, St
         .get(&offer.artifact_url)
         .send()
         .await
-        .map_err(|_| "the artifact could not be fetched".to_owned())?;
+        .map_err(|error| format!("{} could not be reached ({error})", offer.artifact_url))?;
+    // The status is named. A signed manifest can point at a URL that 404s, and
+    // collapsing that into "could not be fetched" meant the operator saw a bare
+    // 502 with nothing to act on — the manifest was wrong, not the network.
     if !response.status().is_success() {
-        return Err("the artifact could not be fetched".to_owned());
+        return Err(format!(
+            "{} answered {}",
+            offer.artifact_url,
+            response.status().as_u16()
+        ));
     }
 
     let archive = staging.join("artifact.tar.gz");

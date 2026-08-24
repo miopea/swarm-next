@@ -55,8 +55,22 @@ for tarball in "$@"; do
     *-dev-*) die "$name is a development build; only releases are offered";;
   esac
 
-  offer=$(printf '{"version":"%s","protocol":"%s","artifact_url":"%s/%s","artifact_sha256":"%s","artifact_bytes":%s,"worker_engine_build_id":"%s","notes_url":null}' \
-    "$version" "$protocol" "${base_url%/}" "$name" "$digest" "$bytes" "$engine")
+  artifact_url="${base_url%/}/$name"
+
+  # Signing is what makes an offer real, so the URL is proved BEFORE it is
+  # signed. 0.8.7 shipped a manifest whose base_url was missing its /vX.Y.Z/
+  # segment: every Hive saw the release, fetched a 404, and answered its own
+  # Download with 502. A manifest that names an artifact nobody can fetch stops
+  # every upgrade at once, and nothing in this pipeline was checking.
+  if [ -z "${SWARM_RELEASE_SKIP_URL_CHECK:-}" ]; then
+    status=$(curl -sSL -o /dev/null -w '%{http_code}' --retry 2 --max-time 60 -I "$artifact_url" 2>/dev/null) \
+      || die "could not reach $artifact_url to verify it; publish the GitHub release first"
+    [ "$status" = "200" ] \
+      || die "$artifact_url answers $status, not 200 — the manifest would offer an artifact no Hive can download"
+  fi
+
+  offer=$(printf '{"version":"%s","protocol":"%s","artifact_url":"%s","artifact_sha256":"%s","artifact_bytes":%s,"worker_engine_build_id":"%s","notes_url":null}' \
+    "$version" "$protocol" "$artifact_url" "$digest" "$bytes" "$engine")
   if [ -z "$offers" ]; then offers=$offer; else offers="$offers,$offer"; fi
 done
 
