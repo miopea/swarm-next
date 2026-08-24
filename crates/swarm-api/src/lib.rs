@@ -7318,6 +7318,13 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
             "jira_comment_queue_full",
             error.to_string(),
         ),
+        // Its own code, because the remedy is an ordering step rather than a
+        // correction to what was sent.
+        TaskStoreError::DeploymentEvidenceTooEarly => ApiError::new(
+            StatusCode::CONFLICT,
+            "deployment_evidence_too_early",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidEmailMessage
         | TaskStoreError::InvalidEmailAttachment
         | TaskStoreError::InvalidTaskDeployment

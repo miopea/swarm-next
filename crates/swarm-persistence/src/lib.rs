@@ -338,6 +338,10 @@ pub enum TaskStoreError {
     EmailSourceNotFound,
     #[error("task deployment evidence is invalid")]
     InvalidTaskDeployment,
+    #[error(
+        "deployment evidence belongs on work that is finished: move this task to review first"
+    )]
+    DeploymentEvidenceTooEarly,
     #[error("email resolution reply content is invalid")]
     InvalidEmailReply,
     #[error("email resolution replies require completed and deployed work")]

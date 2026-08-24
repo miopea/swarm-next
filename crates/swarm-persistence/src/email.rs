@@ -564,7 +564,11 @@ impl TaskStore {
         if task_state != TaskState::Completed.to_string()
             && task_state != TaskState::Review.to_string()
         {
-            return Err(TaskStoreError::InvalidTaskDeployment);
+            // Says which rule was broken. "evidence is invalid" is what this
+            // used to answer for a perfectly well-formed reference recorded a
+            // moment too early, and it cost two failed attempts and a bug
+            // report filed against the wrong thing entirely.
+            return Err(TaskStoreError::DeploymentEvidenceTooEarly);
         }
         let id = Uuid::now_v7().to_string();
         transaction.execute(
@@ -2236,8 +2240,27 @@ mod tests {
                 "release-51",
                 1_786_730_300
             ),
-            Err(TaskStoreError::InvalidTaskDeployment)
+            // Names the ordering rule rather than blaming the reference. The
+            // old answer, "evidence is invalid", was returned for a
+            // well-formed reference recorded a moment too early, and cost two
+            // failed attempts and a bug report filed against the wrong thing.
+            Err(TaskStoreError::DeploymentEvidenceTooEarly)
         ));
+
+        // And it is accepted the moment the work is handed off.
+        store
+            .transition_task(imported.task.id, TaskState::Review)
+            .unwrap();
+        assert!(
+            store
+                .record_task_deployment(
+                    imported.task.id,
+                    "production",
+                    "release-51",
+                    1_786_730_300
+                )
+                .is_ok()
+        );
     }
 
     /// The operator's screenshot: "Send this reply to 5 original threads?"
