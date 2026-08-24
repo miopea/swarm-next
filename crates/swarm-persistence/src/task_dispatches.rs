@@ -7,6 +7,16 @@ use super::{TaskStore, TaskStoreError, insert_control_room_event};
 use swarm_domain::ControlRoomEventKind;
 
 const MAX_DISPATCH_CLAIMS: i64 = 16;
+/// The same ceiling the assign and transition paths enforce, so repairing a
+/// queue cannot push it past a bound those paths respect.
+const MAX_PENDING_DISPATCHES: i64 = 256;
+/// How long a delivered briefing gets before the work it briefed stops holding
+/// up the rest of that worker's queue.
+///
+/// A worker acting on a briefing leaves Ready within seconds, so this is not a
+/// race against normal work: it is the line between "still reading it" and
+/// abandoned. The stall that prompted it had been Ready for fifteen hours.
+const ABANDONED_BRIEF_SECONDS: i64 = 30 * 60;
 const MAX_DISPATCH_ATTEMPTS: i64 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,7 +53,8 @@ pub enum DispatchHold {
     OperatorInTheTerminal,
     /// The worker is already on something. Two briefs at once is two tasks.
     WorkerAlreadyWorking,
-    /// Nothing is holding it; it is simply next in the queue.
+    /// Behind earlier Ready work for the same worker that has not been briefed
+    /// yet. `blocked_by` names it.
     WaitingItsTurn,
 }
 
@@ -56,6 +67,10 @@ pub struct HeldTaskDispatch {
     pub worker_name: String,
     pub queued_at: i64,
     pub reason: DispatchHold,
+    /// The earlier task this one is queued behind, when that is the hold.
+    /// Without it "waiting its turn" is unfalsifiable — sixteen briefings
+    /// reported it at once on 2026-08-24 and it named nothing to look at.
+    pub blocked_by: Option<String>,
 }
 
 impl TaskStore {
@@ -118,6 +133,51 @@ impl TaskStore {
             .collect()
     }
 
+    /// Briefs Ready work that has a live assignment and has never been briefed.
+    ///
+    /// A briefing is created when work is assigned while Ready, and when work
+    /// already assigned becomes Ready. Some work reaches Ready through neither
+    /// — measured 2026-08-24, three tasks on one worker with a live assignment,
+    /// a live session and no dispatch row at all. Undeliverable, and because
+    /// queue order is decided on task position, they blocked every later task
+    /// for that worker as well.
+    ///
+    /// Deliberately only work with no dispatch at all. A briefing that was
+    /// delivered and ignored must not be sent again on every tick: that is a
+    /// loop, and "Ready work whose delivered brief did not start" is already a
+    /// coordination-attention case for Queen to judge.
+    ///
+    /// Run before every claim so it repairs the queue it is about to read,
+    /// rather than needing a sweep somebody remembers to schedule.
+    fn rebrief_ready_work_without_a_briefing(
+        transaction: &rusqlite::Transaction<'_>,
+    ) -> Result<usize, TaskStoreError> {
+        let queued: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
+            [],
+            |row| row.get(0),
+        )?;
+        if queued >= MAX_PENDING_DISPATCHES {
+            return Ok(0);
+        }
+        Ok(transaction.execute(
+            "INSERT INTO task_dispatches (assignment_id, task_id, worker_id, state)
+             SELECT assignment.id, assignment.task_id, session.worker_id, 'queued'
+             FROM task_assignments assignment
+             JOIN tasks t ON t.id = assignment.task_id
+             JOIN worker_sessions session
+               ON session.session_id = assignment.worker_session_id
+              AND session.ended_at IS NULL
+             WHERE assignment.released_at IS NULL
+               AND t.state = 'ready' AND t.removed_at IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM task_dispatches dispatch
+                   WHERE dispatch.assignment_id = assignment.id
+               )",
+            [],
+        )?)
+    }
+
     /// Atomically claims a bounded batch of current assignments whose worker is quiet.
     ///
     /// # Errors
@@ -146,22 +206,35 @@ impl TaskStore {
                     EXISTS(SELECT 1 FROM tasks other
                            WHERE other.assigned_worker_id = td.worker_id
                              AND other.state = 'active' AND other.removed_at IS NULL
-                             AND other.id <> td.task_id) AS busy
+                             AND other.id <> td.task_id) AS busy,
+                    (SELECT earlier.title FROM tasks earlier
+                      WHERE earlier.assigned_worker_id = td.worker_id
+                        AND earlier.state = 'ready' AND earlier.removed_at IS NULL
+                        AND (earlier.position < t.position
+                             OR (earlier.position = t.position AND earlier.id < t.id))
+                        AND NOT EXISTS (
+                            SELECT 1 FROM task_dispatches earlier_brief
+                            WHERE earlier_brief.task_id = earlier.id
+                              AND earlier_brief.state IN ('delivered','uncertain')
+                              AND earlier_brief.updated_at + ?2 <= ?1)
+                      ORDER BY earlier.position, earlier.id LIMIT 1) AS blocked_by
              FROM task_dispatches td
              JOIN tasks t ON t.id = td.task_id
              JOIN worker_profiles w ON w.id = td.worker_id
              WHERE td.state = 'queued' AND t.removed_at IS NULL
              ORDER BY td.updated_at",
         )?;
-        let rows = statement.query_map(params![now], |row| {
+        let rows = statement.query_map(params![now, ABANDONED_BRIEF_SECONDS], |row| {
             let engaged: bool = row.get(5)?;
             let busy: bool = row.get(6)?;
+            let blocked_by: Option<String> = row.get(7)?;
             Ok(HeldTaskDispatch {
                 task_id: row.get::<_, String>(0)?,
                 title: row.get(1)?,
                 worker_id: row.get::<_, String>(2)?,
                 worker_name: row.get(3)?,
                 queued_at: row.get(4)?,
+                blocked_by: blocked_by.clone(),
                 reason: if engaged {
                     DispatchHold::OperatorInTheTerminal
                 } else if busy {
@@ -181,80 +254,8 @@ impl TaskStore {
     pub fn claim_task_dispatches(&self, now: i64) -> Result<Vec<TaskDispatch>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let candidates = {
-            let mut statement = transaction.prepare(
-                "SELECT td.assignment_id, td.task_id, td.worker_id, a.worker_session_id,
-                        t.title, t.description, t.priority, t.workspace,
-                        t.operator_instruction,
-                        (SELECT COALESCE(NULLIF(link.sender_name, ''), link.sender_address)
-                         FROM email_message_links link
-                         WHERE link.task_id = t.id
-                         ORDER BY link.received_at LIMIT 1)
-                 FROM task_dispatches td
-                 JOIN task_assignments a ON a.id = td.assignment_id AND a.released_at IS NULL
-                 JOIN tasks t ON t.id = td.task_id
-                 JOIN worker_sessions ws ON ws.session_id = a.worker_session_id
-                     AND ws.worker_id = td.worker_id AND ws.ended_at IS NULL
-                 -- A briefing is owed for work that has already started, not
-                 -- only for work still waiting. Delivery runs on a timer, and a
-                 -- task can be started within a second of being assigned, so
-                 -- requiring 'ready' here stranded the briefing permanently:
-                 -- never claimed, never attempted, no error, and a woken worker
-                 -- sitting at a blank prompt.
-                 WHERE td.state = 'queued' AND t.removed_at IS NULL
-                   AND t.state IN ('ready', 'active')
-                   AND NOT EXISTS (
-                       SELECT 1 FROM worker_engagements e
-                       WHERE e.worker_id = td.worker_id AND e.expires_at > ?1
-                   )
-                   -- Other active work still holds a briefing back. The task
-                   -- being briefed does not count against itself.
-                   AND NOT EXISTS (
-                       SELECT 1 FROM tasks active
-                       WHERE active.assigned_worker_id = td.worker_id
-                         AND active.state = 'active' AND active.removed_at IS NULL
-                         AND active.id <> t.id
-                   )
-                   -- Queue order governs work that is waiting. Work already
-                   -- under way is not waiting its turn.
-                   AND (t.state = 'active' OR NOT EXISTS (
-                       SELECT 1 FROM tasks earlier
-                       WHERE earlier.assigned_worker_id = td.worker_id
-                         AND earlier.state = 'ready' AND earlier.removed_at IS NULL
-                         AND (earlier.position < t.position
-                              OR (earlier.position = t.position AND earlier.id < t.id))
-                   ))
-                 ORDER BY t.position, td.updated_at, td.assignment_id
-                 LIMIT ?2",
-            )?;
-            statement
-                .query_map(params![now, MAX_DISPATCH_CLAIMS], |row| {
-                    let priority = TaskPriority::from_str(&row.get::<_, String>(6)?)
-                        .map_err(|_| rusqlite::Error::InvalidQuery)?;
-                    Ok(TaskDispatch {
-                        assignment_id: row.get(0)?,
-                        task_id: row
-                            .get::<_, String>(1)?
-                            .parse()
-                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                        worker_id: row
-                            .get::<_, String>(2)?
-                            .parse()
-                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                        session_id: row
-                            .get::<_, String>(3)?
-                            .parse()
-                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                        title: row.get(4)?,
-                        description: row.get(5)?,
-                        priority,
-                        workspace: row.get(7)?,
-                        operator_instruction: row.get(8)?,
-                        email_requester: row.get(9)?,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?
-        };
+        Self::rebrief_ready_work_without_a_briefing(&transaction)?;
+        let candidates = deliverable_briefings(&transaction, now)?;
         for delivery in &candidates {
             let updated = transaction.execute(
                 "UPDATE task_dispatches SET state = 'dispatching', attempts = attempts + 1,
@@ -387,6 +388,105 @@ impl TaskStore {
         Ok(changed)
     }
 }
+/// The briefings that may be delivered right now, in queue order.
+///
+/// Split out of `claim_task_dispatches` only because the conditions and the
+/// history behind each one no longer fit in one function.
+fn deliverable_briefings(
+    transaction: &rusqlite::Transaction<'_>,
+    now: i64,
+) -> Result<Vec<TaskDispatch>, TaskStoreError> {
+    let mut statement = transaction.prepare(
+        "SELECT td.assignment_id, td.task_id, td.worker_id, a.worker_session_id,
+                    t.title, t.description, t.priority, t.workspace,
+                    t.operator_instruction,
+                    (SELECT COALESCE(NULLIF(link.sender_name, ''), link.sender_address)
+                     FROM email_message_links link
+                     WHERE link.task_id = t.id
+                     ORDER BY link.received_at LIMIT 1)
+             FROM task_dispatches td
+             JOIN task_assignments a ON a.id = td.assignment_id AND a.released_at IS NULL
+             JOIN tasks t ON t.id = td.task_id
+             JOIN worker_sessions ws ON ws.session_id = a.worker_session_id
+                 AND ws.worker_id = td.worker_id AND ws.ended_at IS NULL
+             -- A briefing is owed for work that has already started, not
+             -- only for work still waiting. Delivery runs on a timer, and a
+             -- task can be started within a second of being assigned, so
+             -- requiring 'ready' here stranded the briefing permanently:
+             -- never claimed, never attempted, no error, and a woken worker
+             -- sitting at a blank prompt.
+             WHERE td.state = 'queued' AND t.removed_at IS NULL
+               AND t.state IN ('ready', 'active')
+               AND NOT EXISTS (
+                   SELECT 1 FROM worker_engagements e
+                   WHERE e.worker_id = td.worker_id AND e.expires_at > ?1
+               )
+               -- Other active work still holds a briefing back. The task
+               -- being briefed does not count against itself.
+               AND NOT EXISTS (
+                   SELECT 1 FROM tasks active
+                   WHERE active.assigned_worker_id = td.worker_id
+                     AND active.state = 'active' AND active.removed_at IS NULL
+                     AND active.id <> t.id
+               )
+               -- Queue order governs work that is waiting. Work already
+               -- under way is not waiting its turn.
+               -- A briefing already delivered holds the queue only while
+               -- the worker could still be acting on it. Blocking on
+               -- position with no time limit let one task that was briefed
+               -- and never started hold up every later task for that
+               -- worker indefinitely: measured at sixteen briefings queued
+               -- behind five such tasks, none of them claimable, which
+               -- read from outside as Queen refusing to route work.
+               AND (t.state = 'active' OR NOT EXISTS (
+                   SELECT 1 FROM tasks earlier
+                   WHERE earlier.assigned_worker_id = td.worker_id
+                     AND earlier.state = 'ready' AND earlier.removed_at IS NULL
+                     AND (earlier.position < t.position
+                          OR (earlier.position = t.position AND earlier.id < t.id))
+                     AND NOT EXISTS (
+                         SELECT 1 FROM task_dispatches earlier_brief
+                         WHERE earlier_brief.task_id = earlier.id
+                           AND earlier_brief.state IN ('delivered','uncertain')
+                           AND earlier_brief.updated_at + ?3 <= ?1
+                     )
+               ))
+             ORDER BY t.position, td.updated_at, td.assignment_id
+             LIMIT ?2",
+    )?;
+    statement
+        .query_map(
+            params![now, MAX_DISPATCH_CLAIMS, ABANDONED_BRIEF_SECONDS],
+            |row| {
+                let priority = TaskPriority::from_str(&row.get::<_, String>(6)?)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                Ok(TaskDispatch {
+                    assignment_id: row.get(0)?,
+                    task_id: row
+                        .get::<_, String>(1)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    worker_id: row
+                        .get::<_, String>(2)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    session_id: row
+                        .get::<_, String>(3)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    title: row.get(4)?,
+                    description: row.get(5)?,
+                    priority,
+                    workspace: row.get(7)?,
+                    operator_instruction: row.get(8)?,
+                    email_requester: row.get(9)?,
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(TaskStoreError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -744,5 +844,108 @@ mod tests {
             .find(|entry| entry.task_id == next.id.to_string())
             .expect("the second briefing is queued");
         assert_eq!(waiting.reason, DispatchHold::WorkerAlreadyWorking);
+    }
+
+    /// An engaged worker with a live session and no work briefed yet.
+    fn engaged_worker() -> (TaskStore, WorkerSessionId) {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        store
+            .renew_worker_engagement(session, Some(PresenceDeviceId::new()), 100, 300)
+            .unwrap();
+        (store, session)
+    }
+
+    fn ready_task_assigned_to(store: &TaskStore, session: WorkerSessionId, title: &str) -> TaskId {
+        let task = store
+            .create_task_with_details(title, "", TaskPriority::Normal, "/workspace/petal")
+            .unwrap();
+        store
+            .transition_task(task.id, swarm_domain::TaskState::Ready)
+            .unwrap();
+        store.assign_task(task.id, session).unwrap();
+        task.id
+    }
+
+    /// The shape behind "workers are idle and she hasn't pushed them to work".
+    ///
+    /// Ready work that reached Ready through neither path that creates a
+    /// briefing has none, so it can never be delivered — and because queue
+    /// order was decided on task position alone, it also held up every later
+    /// task for that worker. Measured 2026-08-24: sixteen briefings queued and
+    /// zero claimable.
+    #[test]
+    fn ready_work_that_was_never_briefed_is_briefed_rather_than_stranded() {
+        let (store, session) = engaged_worker();
+        let task_id = ready_task_assigned_to(&store, session, "Never briefed");
+        // Reaching Ready by a path that leaves no dispatch row behind.
+        store
+            .connection()
+            .unwrap()
+            .execute("DELETE FROM task_dispatches", [])
+            .unwrap();
+
+        let claimed = store.claim_task_dispatches(401).unwrap();
+        assert_eq!(
+            claimed
+                .iter()
+                .filter(|dispatch| dispatch.task_id == task_id)
+                .count(),
+            1,
+            "assigned Ready work with no briefing must be given one"
+        );
+    }
+
+    /// Sculpt Studio's stall.
+    ///
+    /// A briefing that was delivered and never started leaves its task Ready
+    /// forever. Holding the queue on position with no time limit let that one
+    /// task block every later task for its worker indefinitely. Once the
+    /// briefing is old enough that the worker plainly is not acting on it, the
+    /// queue moves on; whether to chase the abandoned one is Queen's to judge,
+    /// not the queue's.
+    #[test]
+    fn work_already_briefed_does_not_hold_up_the_rest_of_the_queue() {
+        let (store, session) = engaged_worker();
+        let stalled = ready_task_assigned_to(&store, session, "Briefed, never started");
+        let delivered = store.claim_task_dispatches(401).unwrap();
+        assert_eq!(delivered.len(), 1);
+        store
+            .complete_task_dispatch(&delivered[0].assignment_id, 402)
+            .unwrap();
+
+        let behind = ready_task_assigned_to(&store, session, "Behind it");
+
+        // Still being acted on: the queue holds, which is the rule that keeps a
+        // worker from being handed two tasks at once.
+        assert!(
+            store.claim_task_dispatches(403).unwrap().is_empty(),
+            "a briefing delivered seconds ago must still hold the queue"
+        );
+
+        // An hour later it plainly is not being acted on. Written out rather
+        // than derived from the constant, so the contract is asserted and not
+        // just restated.
+        let an_hour_later = 402 + 60 * 60;
+        let claimed = store.claim_task_dispatches(an_hour_later).unwrap();
+        assert!(
+            claimed.iter().any(|dispatch| dispatch.task_id == behind),
+            "an abandoned briefing must not block the queue forever"
+        );
+        assert!(
+            !claimed.iter().any(|dispatch| dispatch.task_id == stalled),
+            "and it must not be briefed a second time on every tick"
+        );
     }
 }
