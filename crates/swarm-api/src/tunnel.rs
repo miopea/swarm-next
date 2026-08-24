@@ -191,6 +191,23 @@ impl TunnelSupervisor {
         }
         let mut child = Command::new("cloudflared")
             .args([
+                // An empty config, deliberately, and this is the whole reason
+                // the feature never worked.
+                //
+                // `cloudflared tunnel --url ...` reads ~/.cloudflared/config.yml
+                // if it exists. On a machine that already runs a NAMED tunnel —
+                // which is the normal state for anyone who has published a Hive
+                // properly — that file carries the named tunnel's credentials
+                // and its ingress rules. cloudflared then prints a fresh quick
+                // hostname while running the named tunnel's ingress, the new
+                // hostname matches none of its rules, and every request falls
+                // through to the catch-all. The operator's own config ends in
+                // `- service: http_status:404`, which is where the 404 came
+                // from. Measured 2026-08-24: identical origin, identical
+                // command, 404 forever with the ambient config and 200 within
+                // five seconds without it.
+                "--config",
+                "/dev/null",
                 "tunnel",
                 "--no-autoupdate",
                 "--url",
