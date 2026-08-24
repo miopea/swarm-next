@@ -84,6 +84,7 @@ import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttenti
 import UnansweredEmailAttentionCard from "./tasks/UnansweredEmailAttentionCard";
 import HeldDeliveryAttentionCard from "./orchestration/HeldDeliveryAttentionCard";
 import { passkeysSupported, signInWithPasskey } from "./settings/passkeys";
+import { configureTerminalImageLimit } from "./terminal/TerminalAttachments";
 import { queenAutomationNeedsAttention } from "./orchestration/queenAutomationPresentation";
 import { foreignEngagement, workerAttention, workerSwitcherDetail } from "./workers/workerAttention";
 import DecisionInbox from "./decisions/DecisionInbox";
@@ -391,7 +392,13 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     void recoverTransientRuntime(fetchHealth)
-      .then((health) => { if (!cancelled) setLoadState({ kind: "ready", health }); })
+      .then((health) => {
+        if (cancelled) return;
+        // The Hive's own number, so an oversized image is refused with the
+        // limit that is actually enforced rather than a copy that can drift.
+        if (health.attachment_max_bytes) configureTerminalImageLimit(health.attachment_max_bytes);
+        setLoadState({ kind: "ready", health });
+      })
       .catch((error: unknown) => {
         if (!cancelled) setLoadState({ kind: "unavailable" });
       });

@@ -8,7 +8,17 @@ use std::{
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
-pub const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
+/// The largest image a terminal will take.
+///
+/// Raised from 8 MiB on the operator's instruction, 2026-08-24: "I cannot
+/// shrink it, we need a reasonable limit." Eight was comfortable for a
+/// screenshot and too tight for a screen recording, which is what people
+/// actually reach for when showing a bug that moves.
+///
+/// The cost of the larger number is disk and one upload's worth of memory. It
+/// does not reach a provider's context: the attachment is written to the
+/// terminal as a path, so what a provider spends is unchanged.
+pub const MAX_ATTACHMENT_BYTES: usize = 32 * 1024 * 1024;
 /// The store's share of whatever disk it lives on, rather than a fixed number.
 ///
 /// A flat 128 MiB is nothing when screenshots arrive all day, and it is also

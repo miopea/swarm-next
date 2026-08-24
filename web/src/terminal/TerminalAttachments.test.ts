@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 
-import { clipboardImage, dragCarriesFiles, supportedImageSummary, terminalAttachmentPaste, terminalTextPaste, transferredImage, uploadTerminalImage } from "./TerminalAttachments";
+import { clipboardImage, configureTerminalImageLimit, dragCarriesFiles, maxTerminalImageBytes, supportedImageSummary, terminalAttachmentPaste, terminalTextPaste, transferredImage, uploadTerminalImage } from "./TerminalAttachments";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -183,6 +183,7 @@ test("a drag is recognised from items when types is unhelpful", () => {
  * before any code that could explain it. The operator got silence.
  */
 test("an image over the limit is refused with its size and the limit", () => {
+  configureTerminalImageLimit(8 * 1024 * 1024);
   const big = new File([new Uint8Array(1)], "party.gif", { type: "image/gif" });
   Object.defineProperty(big, "size", { value: 16 * 1024 * 1024 });
   const dropped = { types: ["Files"], files: [big], items: [] } as unknown as DataTransfer;
@@ -195,9 +196,34 @@ test("an image over the limit is refused with its size and the limit", () => {
 });
 
 test("an image inside the limit is still accepted", () => {
+  configureTerminalImageLimit(8 * 1024 * 1024);
   const fine = new File([new Uint8Array(1)], "party.gif", { type: "image/gif" });
   Object.defineProperty(fine, "size", { value: 4 * 1024 * 1024 });
   const dropped = { types: ["Files"], files: [fine], items: [] } as unknown as DataTransfer;
 
   expect(transferredImage(dropped).kind).toBe("image");
+});
+
+/**
+ * "I cannot shrink it, we need a reasonable limit." The limit moved to 32 MiB,
+ * and the browser now takes the number from the Hive rather than holding its
+ * own copy — a copy is what made the original failure silent, with the browser
+ * believing one number and the route enforcing another.
+ */
+test("the limit comes from the Hive, not from a copy of it", () => {
+  configureTerminalImageLimit(32 * 1024 * 1024);
+  const recording = new File([new Uint8Array(1)], "bug.gif", { type: "image/gif" });
+  Object.defineProperty(recording, "size", { value: 16 * 1024 * 1024 });
+  const dropped = { types: ["Files"], files: [recording], items: [] } as unknown as DataTransfer;
+
+  expect(maxTerminalImageBytes()).toBe(32 * 1024 * 1024);
+  expect(transferredImage(dropped).kind).toBe("image");
+});
+
+test("an unusable limit is ignored rather than believed", () => {
+  configureTerminalImageLimit(32 * 1024 * 1024);
+  configureTerminalImageLimit(0);
+  configureTerminalImageLimit(Number.NaN);
+
+  expect(maxTerminalImageBytes()).toBe(32 * 1024 * 1024);
 });

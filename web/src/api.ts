@@ -171,7 +171,13 @@ export type {
   WorkspaceChoice,
 } from "./api/workers";
 
-export type Health = { status: "ok"; version: string; worker_engine_build_id?: string };
+export type Health = {
+  status: "ok";
+  version: string;
+  worker_engine_build_id?: string;
+  /** Largest image this Hive accepts; absent on older builds. */
+  attachment_max_bytes?: number;
+};
 export type ProcessResources = {
   resident_memory_bytes: number | null;
   process_tree_resident_memory_bytes?: number | null;

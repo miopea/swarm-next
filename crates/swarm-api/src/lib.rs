@@ -1869,6 +1869,14 @@ struct HealthResponse {
     status: &'static str,
     version: &'static str,
     worker_engine_build_id: &'static str,
+    /// The largest image this Hive will accept.
+    ///
+    /// Carried here rather than behind its own request because health is the
+    /// one thing every client already asks for. The control room refuses an
+    /// oversized image before uploading it, and it must refuse with the number
+    /// this Hive actually enforces — a copied constant is what made the
+    /// original failure silent.
+    attachment_max_bytes: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -2998,6 +3006,7 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
         version: build_version(),
+        attachment_max_bytes: attachments::MAX_ATTACHMENT_BYTES,
         worker_engine_build_id: worker_engine_build_id(),
     })
 }

@@ -34,7 +34,24 @@ export function clipboardImage(clipboard: DataTransfer): File | undefined {
  * body limit, which rejects the upload before any code that could explain why.
  * The operator dropped a 16 MB GIF and got silence.
  */
-export const MAX_TERMINAL_IMAGE_BYTES = 8 * 1024 * 1024;
+const DEFAULT_TERMINAL_IMAGE_BYTES = 32 * 1024 * 1024;
+let terminalImageLimit = DEFAULT_TERMINAL_IMAGE_BYTES;
+
+/**
+ * Adopts the server's real limit, so the refusal quotes a number that is true.
+ *
+ * A copied constant is what made the original failure silent: the browser
+ * believed one number, the route enforced another, and an oversized upload died
+ * in a transport layer with nothing to say. The default is only what to believe
+ * before the Hive has been asked.
+ */
+export function configureTerminalImageLimit(bytes: number): void {
+  if (Number.isFinite(bytes) && bytes > 0) terminalImageLimit = bytes;
+}
+
+export function maxTerminalImageBytes(): number {
+  return terminalImageLimit;
+}
 
 /** Human sizes, for saying what was too big and by how much. */
 export function describeBytes(bytes: number): string {
@@ -92,20 +109,20 @@ export function transferredImage(transfer: DataTransfer): TransferredImage {
     // A file whose type the browser did not fill in still has a name. Re-typing
     // it here is safe: the server checks the magic bytes and rejects a mislabel.
     if (!type) continue;
-    if (file.size > MAX_TERMINAL_IMAGE_BYTES) {
+    if (file.size > maxTerminalImageBytes()) {
       return {
         kind: "too-large",
-        description: `${file.name} is ${describeBytes(file.size)}; the limit is ${describeBytes(MAX_TERMINAL_IMAGE_BYTES)}`,
+        description: `${file.name} is ${describeBytes(file.size)}; the limit is ${describeBytes(maxTerminalImageBytes())}`,
       };
     }
     return { kind: "image", file: type === file.type ? file : new File([file], file.name, { type }) };
   }
   const image = clipboardImage(transfer);
   if (image) {
-    return image.size > MAX_TERMINAL_IMAGE_BYTES
+    return image.size > maxTerminalImageBytes()
       ? {
           kind: "too-large",
-          description: `that image is ${describeBytes(image.size)}; the limit is ${describeBytes(MAX_TERMINAL_IMAGE_BYTES)}`,
+          description: `that image is ${describeBytes(image.size)}; the limit is ${describeBytes(maxTerminalImageBytes())}`,
         }
       : { kind: "image", file: image };
   }

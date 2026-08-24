@@ -36,6 +36,9 @@ struct TerminalRuntimeLimits {
     max_rows: u16,
     max_columns: u16,
     max_cells: usize,
+    /// Published so the control room refuses an oversized image with the real
+    /// number rather than a copy of it that can drift.
+    attachment_max_bytes: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -161,6 +164,7 @@ pub(super) async fn limits(State(state): State<Arc<AppState>>) -> Json<RuntimeLi
             max_rows: MAX_TERMINAL_ROWS,
             max_columns: MAX_TERMINAL_COLUMNS,
             max_cells: MAX_TERMINAL_CELLS,
+            attachment_max_bytes: crate::attachments::MAX_ATTACHMENT_BYTES,
         },
     })
 }
