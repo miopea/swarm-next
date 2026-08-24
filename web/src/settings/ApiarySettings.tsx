@@ -395,6 +395,23 @@ export default function ApiarySettings({ busy, hiveIdentity, operatorToken, onHi
           ) : null}
         </div>
       ) : null}
+      {/* A Hive belongs to exactly one Apiary. import_apiary_invitation_bundle
+          refuses a second with ApiaryMembershipConflict, so there is no paste
+          box to render here — but rendering NOTHING is what sent the operator
+          hunting for a field that was never going to exist. Say the rule where
+          the field would be. */}
+      {!personal && context?.mode === "federated" ? (
+        <div className="apiary-join-closed">
+          <p>
+            <strong>This Hive is already in {context.apiary.name}.</strong> A Hive belongs to one
+            Apiary at a time, so an invitation to another cannot be accepted while this one holds.
+          </p>
+          <p className="privacy-note">
+            To join a different Apiary, leave this one first. Leaving is below, and it keeps every
+            worker, repository and task on this Hive.
+          </p>
+        </div>
+      ) : null}
       {personal ? (
         <>
           <p>Your personal Hive remains fully independent. Form an Apiary only when separate one-operator Hives should share Jira work and coordination.</p>

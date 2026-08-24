@@ -743,3 +743,18 @@ function apiaryJoinLink(state: "open" | "awaiting_approval" | "approved" | "invi
 function ok(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
+
+test("a Hive already in an Apiary is told the rule where the paste box would be", async () => {
+  // The operator went looking for somewhere to paste a join link and found
+  // nothing. There is nothing to find: import_apiary_invitation_bundle refuses
+  // a second Apiary with ApiaryMembershipConflict, so a Hive belongs to exactly
+  // one. Rendering nothing made a rule look like a missing feature.
+  render(<ApiarySettings busy={false} hiveIdentity={memberIdentity()} operatorToken="secret" onHiveIdentityChange={vi.fn()} />);
+
+  expect(await screen.findByText(/already in Wildflower Garden/)).toBeInTheDocument();
+  expect(screen.getByText(/belongs to one\s+Apiary at a time/)).toBeInTheDocument();
+  // And it names the way out rather than leaving the operator to guess.
+  expect(screen.getByText(/leave this one first/i)).toBeInTheDocument();
+  // The personal-Hive paste box still must not appear here.
+  expect(screen.queryByPlaceholderText("Paste the complete link")).toBeNull();
+});
