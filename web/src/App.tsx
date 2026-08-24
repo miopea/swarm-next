@@ -79,6 +79,7 @@ import {
   type Worker,
   type WorkspaceChoice,
   readTunnel,
+  stopTunnel,
   type TunnelStatus,
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
@@ -1320,7 +1321,14 @@ export function App() {
                 <span><SettingsIcon /> Settings</span>
               </button>
 
-              <PublicAddressWarning status={publicAddress} onOpen={() => openSettings("settings-access")} />
+              <PublicAddressWarning
+                status={publicAddress}
+                onOpen={() => openSettings("settings-access")}
+                onStop={async () => {
+                  if (!operatorToken) return;
+                  setPublicAddress(await stopTunnel(operatorToken));
+                }}
+              />
             </nav>}
 
             {/* Settings navigates from the rail like every other surface. It

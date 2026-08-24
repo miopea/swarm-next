@@ -142,19 +142,6 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    nav entry is a button, so the pop-out cannot nest inside it — hence the row.
    It stays out of the way until the entry is hovered, focused or current, so
    the rail still reads as five destinations rather than ten controls. */
-/* Says the Hive is reachable from the internet, on every surface.
-   Deliberately not styled as another destination in the rail: it is a state,
-   so it reads as a warning first and a link second. The operator accepted the
-   exposure; what they refused was it being invisible outside one card. */
-.public-address-warning { display: flex; width: 100%; align-items: center; gap: 9px; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 9px; background: var(--warn-soft); color: var(--text); text-align: left; }
-.public-address-warning:hover { border-color: var(--warn); filter: brightness(1.03); }
-.public-address-warning > span:last-child { display: grid; min-width: 0; gap: 1px; }
-.public-address-warning strong { font-size: .82rem; font-weight: 600; }
-.public-address-warning small { overflow: hidden; color: var(--text-muted); font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
-.public-address-pulse { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--warn); animation: public-address-pulse 2s ease-in-out infinite; }
-@keyframes public-address-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-@media (prefers-reduced-motion: reduce) { .public-address-pulse { animation: none; } }
-
 .surface-nav-item { display: flex; min-width: 0; align-items: center; gap: 2px; }
 .surface-nav-item > button:first-child { flex: 1 1 auto; min-width: 0; }
 /* Scoped to the nav on purpose. This is a button inside `.surface-nav`, and
@@ -172,6 +159,24 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .surface-nav button small { display: grid; min-width: 23px; height: 21px; place-items: center; border-radius: 7px; color: var(--muted); background: color-mix(in srgb, var(--text) 5%, transparent); font-size: .7rem; }
 .surface-nav button:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
 .surface-nav button.selected { border-color: color-mix(in srgb, var(--good) 38%, transparent); color: var(--text); background: color-mix(in srgb, var(--good-soft) 68%, transparent); }
+
+/* Scoped into the rail on purpose. `.surface-nav button` sets a transparent
+   background and border on every button here and sits later in this file, so a
+   bare `.public-address-warning` lost on both specificity and order and the
+   warning rendered as plain text. It is a state, not a destination, so it is
+   styled as a warning and carries the control that ends it. */
+.surface-nav .public-address-warning { display: grid; gap: 6px; margin-top: 8px; padding: 9px 10px; border: 1px solid var(--warn); border-radius: 10px; background: var(--warn-soft); }
+.surface-nav .public-address-open { display: flex; min-height: 0; align-items: center; justify-content: flex-start; gap: 9px; padding: 0; border: 0; color: var(--warn-strong); background: transparent; }
+.surface-nav .public-address-open:hover { background: transparent; text-decoration: underline; }
+.surface-nav .public-address-open > span:last-child { display: grid; min-width: 0; gap: 1px; }
+.surface-nav .public-address-open strong { color: var(--warn-strong); font-size: .82rem; font-weight: 700; }
+.surface-nav .public-address-open small { display: block; overflow: hidden; min-width: 0; height: auto; place-items: unset; border-radius: 0; color: var(--warn-strong); background: transparent; font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
+.surface-nav .public-address-stop { display: block; min-height: 0; justify-content: center; padding: 6px 10px; border: 1px solid var(--warn); border-radius: 8px; color: var(--warn-strong); background: color-mix(in srgb, #fff 45%, transparent); font-size: .74rem; font-weight: 600; text-align: center; }
+.surface-nav .public-address-stop:hover { background: #fff; }
+.surface-nav .public-address-stop:disabled { opacity: .6; }
+.public-address-pulse { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--warn); animation: public-address-pulse 2s ease-in-out infinite; }
+@keyframes public-address-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .public-address-pulse { animation: none; } }
 .surface-nav button.selected small { color: var(--text); background: var(--panel-raised); }
 
 .rail-context { display: flex; min-height: 0; flex: 1; flex-direction: column; padding-top: 17px; overflow: hidden; }
