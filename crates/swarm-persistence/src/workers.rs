@@ -784,6 +784,25 @@ impl TaskStore {
         Ok(true)
     }
 
+    /// Whether a person currently holds any worker terminal.
+    ///
+    /// Presence answers "is the operator at the Hive", which can be Away while
+    /// somebody is still typing in a terminal on a device that is no longer
+    /// heartbeating as present. Anything that would interrupt a live session —
+    /// restarting the App and API, for one — needs this stronger question as
+    /// well as that one.
+    ///
+    /// # Errors
+    /// Returns an error when persistence is unavailable.
+    pub fn operator_holds_any_terminal(&self, now: i64) -> Result<bool, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM worker_engagements WHERE expires_at > ?1)",
+            params![now],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Releases an operator engagement only when the requesting device still owns it.
     /// Returns whether an engagement was released.
     ///
@@ -1650,6 +1669,57 @@ mod tests {
         let current = store.get_worker_profile(worker.id).unwrap();
         assert_eq!(current.id, worker.id);
         assert_eq!(current.active_session_id, Some(second));
+    }
+
+    /// What an unplanned reboot did to the whole board.
+    ///
+    /// The startup sweep ends sessions whose process is gone, but leaves their
+    /// assignments and queued briefings behind. Delivery requires the
+    /// assignment's own session to be live, so every briefing was stranded, and
+    /// the repair in `bind_worker_session` could not see those tasks either —
+    /// it skips anything still holding an unreleased assignment. Measured
+    /// 2026-08-24: seventeen of eighteen queued briefings, on four workers that
+    /// were all running again.
+    #[test]
+    fn work_survives_a_worker_session_that_ended_without_being_released() {
+        use swarm_domain::{TaskActivityActor, TaskPriority, TaskState};
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+            .unwrap();
+        let first = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, first).unwrap();
+        let task = store
+            .create_task_with_details("Waiting on a reboot", "", TaskPriority::Normal, "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::worker(queen.id))
+            .unwrap();
+
+        // The machine goes down. Nothing releases anything; on the way back up
+        // the sweep only observes that the process is gone.
+        assert_eq!(
+            store.release_missing_worker_sessions(&HashSet::new()).unwrap(),
+            1
+        );
+        let second = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, second).unwrap();
+        let claimed = store.claim_task_dispatches(1_000).unwrap();
+        let delivered = claimed
+            .iter()
+            .find(|dispatch| dispatch.task_id == task.id)
+            .expect("work assigned before a reboot must still be deliverable after it");
+        assert_eq!(
+            delivered.session_id, second,
+            "and it must be delivered to the session the worker is actually running"
+        );
+        assert_eq!(
+            claimed.iter().filter(|d| d.task_id == task.id).count(),
+            1,
+            "the stranded briefing must be cleared, not delivered twice"
+        );
     }
 
     #[test]

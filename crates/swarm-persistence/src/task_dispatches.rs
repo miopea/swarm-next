@@ -254,6 +254,7 @@ impl TaskStore {
     pub fn claim_task_dispatches(&self, now: i64) -> Result<Vec<TaskDispatch>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
+        repoint_assignments_left_on_a_dead_session(&transaction)?;
         Self::rebrief_ready_work_without_a_briefing(&transaction)?;
         let candidates = deliverable_briefings(&transaction, now)?;
         for delivery in &candidates {
@@ -388,6 +389,51 @@ impl TaskStore {
         Ok(changed)
     }
 }
+/// Points work at the session its worker is actually running.
+///
+/// Delivery requires the assignment's own session to be live. A deliberate stop
+/// releases assignments as it goes, but a crash, a reboot, or a killed host
+/// does not: the rows survive naming a session that will never come back, and
+/// every briefing behind one is undeliverable for good. The startup sweep ends
+/// those sessions and clears their engagements, but has never touched their
+/// assignments.
+///
+/// Measured after an unplanned reboot on 2026-08-24: seventeen of eighteen
+/// queued briefings, across four workers that were all up and running again on
+/// new sessions. From the board it looked like every worker had gone quiet.
+///
+/// Re-pointing rather than releasing, because the work is still that worker's
+/// and the briefing is still owed — releasing would drop both and leave the
+/// task assigned with nothing queued. The assignment names where work is being
+/// sent, not a record of where it was once sent; `task_activity` is the log.
+///
+/// Run before every claim, so a Hive repairs itself on the next tick rather
+/// than needing its workers restarted a second time.
+fn repoint_assignments_left_on_a_dead_session(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<usize, TaskStoreError> {
+    Ok(transaction.execute(
+        "UPDATE task_assignments AS stranded
+            SET worker_session_id = (
+                SELECT live.session_id FROM worker_sessions live
+                JOIN tasks task ON task.id = stranded.task_id
+                WHERE live.worker_id = task.assigned_worker_id AND live.ended_at IS NULL
+            )
+          WHERE stranded.released_at IS NULL
+            AND EXISTS (
+                SELECT 1 FROM worker_sessions dead
+                WHERE dead.session_id = stranded.worker_session_id
+                  AND dead.ended_at IS NOT NULL
+            )
+            AND EXISTS (
+                SELECT 1 FROM worker_sessions live
+                JOIN tasks task ON task.id = stranded.task_id
+                WHERE live.worker_id = task.assigned_worker_id AND live.ended_at IS NULL
+            )",
+        [],
+    )?)
+}
+
 /// The briefings that may be delivered right now, in queue order.
 ///
 /// Split out of `claim_task_dispatches` only because the conditions and the
