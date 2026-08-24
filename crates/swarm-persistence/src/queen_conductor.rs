@@ -17,6 +17,12 @@ use crate::{
 };
 
 const MAX_AUTOMATION_ATTEMPTS: i64 = 3;
+/// How long a verdict on an unchanged board stands before Queen looks again.
+///
+/// Bounds the cost of re-reading: at worst four runs an hour, against a Hive
+/// that otherwise stops until a human notices. Only applies while there is
+/// actionable work, so a genuinely empty board stays quiet.
+const RECHECK_UNCHANGED_BOARD_SECONDS: i64 = 15 * 60;
 const MAX_FINGERPRINT_TASKS: i64 = 256;
 const RUN_TIMEOUT_SECONDS: i64 = 60 * 60;
 
@@ -190,18 +196,36 @@ impl TaskStore {
         expire_stale_run(&transaction, now)?;
         resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
         let (fingerprint, count) = actionable_fingerprint(&transaction)?;
-        let (enabled, state, delivered): (bool, String, String) = transaction.query_row(
-            "SELECT enabled, state, delivered_fingerprint FROM queen_automation WHERE id = 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
+        let (enabled, state, delivered, finished_at): (bool, String, String, Option<i64>) =
+            transaction.query_row(
+                "SELECT enabled, state, delivered_fingerprint, finished_at
+                 FROM queen_automation WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        // "I already looked at this" expires.
+        //
+        // The fingerprint gate stops Queen re-reading an unchanged board on
+        // every tick, which is right. What it also did was make a no_action
+        // verdict permanent: the board only changes when somebody acts on it,
+        // and Queen is who acts, so a Hive holding work she declined once sat
+        // still indefinitely. Measured 2026-08-24: she ran at 01:30, returned
+        // no_action, and was still idle at 01:49 with 22 tasks ready, 3 in
+        // review and several workers doing nothing.
+        //
+        // Judgement is not a pure function of the board. Workers finish, a
+        // review becomes answerable, her own tools change — none of which move
+        // the fingerprint. So an unchanged board is worth another look after a
+        // while, and only while there is something actionable to look at.
+        let looked_recently = finished_at
+            .is_some_and(|finished| now.saturating_sub(finished) < RECHECK_UNCHANGED_BOARD_SECONDS);
         let queued = enabled
             && count > 0
             && !matches!(
                 state.as_str(),
                 "queued" | "delivering" | "running" | "uncertain"
             )
-            && fingerprint != delivered;
+            && (fingerprint != delivered || !looked_recently);
         if queued {
             queue_run(
                 &transaction,
@@ -782,6 +806,62 @@ pub(super) fn migrate_queen_delivery_session(
 mod tests {
     use super::*;
     use swarm_domain::{ProviderKind, TaskActivityActor, TaskPriority, TaskState};
+
+    /// "She has been idle for the last 30 minutes when we have workers with
+    /// work they could start on and reviews that need to be done."
+    ///
+    /// Measured: Queen ran, returned `no_action`, and was still idle nineteen
+    /// minutes later with 22 tasks ready, 3 in review and workers doing
+    /// nothing. The board had not changed, so the fingerprint gate never woke
+    /// her — and the board only changes when somebody acts on it, which is her.
+    #[test]
+    fn a_verdict_on_an_unchanged_board_expires() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store
+            .create_task_with_details("Waiting on judgement", "", TaskPriority::Normal, "/workspace")
+            .unwrap();
+        store.set_queen_automation_enabled(true, 100).unwrap();
+
+        // She looks, and decides there is nothing to do.
+        let delivery = store.claim_queen_automation(101).unwrap().unwrap();
+        store
+            .complete_queen_automation_delivery(&delivery.run_id, 102)
+            .unwrap();
+        store
+            .finish_queen_automation_run(&delivery.run_id, QueenAutomationOutcome::NoAction, 110)
+            .unwrap();
+
+        // Nothing about the board changed, so she is not woken straight away.
+        assert!(!store.observe_queen_automation(200).unwrap());
+
+        // But the verdict does not stand forever.
+        assert!(
+            store
+                .observe_queen_automation(110 + RECHECK_UNCHANGED_BOARD_SECONDS + 1)
+                .unwrap(),
+            "an unchanged board is worth another look once the verdict is stale"
+        );
+    }
+
+    /// The gate still earns its keep: an empty board stays quiet however long
+    /// it has been, so this cannot become a timer that wakes her for nothing.
+    #[test]
+    fn an_empty_board_never_wakes_her_however_stale_the_verdict() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(queen.id, session).unwrap();
+        store.set_queen_automation_enabled(true, 100).unwrap();
+
+        assert!(
+            !store
+                .observe_queen_automation(100 + RECHECK_UNCHANGED_BOARD_SECONDS * 10)
+                .unwrap()
+        );
+    }
 
     /// "The queen sat idle all night." She had 22 drafts in front of her, the
     /// oldest five days old, and was woken for none of them — a draft was not
