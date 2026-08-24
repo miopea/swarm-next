@@ -28,6 +28,17 @@ use crate::{ApiError, AppState, authorize, unix_timestamp};
 
 /// How long to wait for cloudflared to announce a hostname before giving up.
 const HOSTNAME_TIMEOUT_SECONDS: u64 = 30;
+/// How long the address gets to start actually serving before we admit it is
+/// not going to.
+///
+/// cloudflared prints the address and then says, in its own banner, "it may
+/// take some time to be reachable". Measured 2026-08-24 on this host: the DNS
+/// record appeared about three seconds after the address was printed, and the
+/// edge still answered 404 with ZERO requests reaching cloudflared two minutes
+/// later. So "printed" and "serving" are genuinely different states, and the
+/// operator was shown a QR code for the first while believing it was the
+/// second.
+const REACHABLE_TIMEOUT_SECONDS: u64 = 45;
 
 #[derive(Debug, Default)]
 pub(super) struct TunnelSupervisor {
@@ -64,11 +75,17 @@ fn cloudflared_available() -> bool {
 /// Built here rather than in the browser so the page needs no encoder and no
 /// external script — the artifact CSP forbids one, and so does a control room
 /// that must work with no internet beyond the tunnel it just opened.
+/// Four, because ISO/IEC 18004 says four.
+const QUIET_ZONE_MODULES: usize = 4;
+
 fn qr_svg(url: &str) -> Option<String> {
     use qrcode::{EcLevel, QrCode};
     let code = QrCode::with_error_correction_level(url.as_bytes(), EcLevel::M).ok()?;
     let width = code.width();
-    let quiet = 2;
+    // ISO/IEC 18004 requires four modules of quiet zone. It was two, and
+    // scanners rely on it to find the symbol at all — a QR with a thin border
+    // reads as noise rather than as a code that failed to decode.
+    let quiet = QUIET_ZONE_MODULES;
     let side = width + quiet * 2;
     let mut modules = String::new();
     for (index, dark) in code.into_colors().into_iter().enumerate() {
@@ -79,8 +96,13 @@ fn qr_svg(url: &str) -> Option<String> {
         let y = index / width + quiet;
         let _ = write!(modules, r#"<rect x="{x}" y="{y}" width="1" height="1"/>"#);
     }
+    // crispEdges is deliberately gone. It snaps every module edge to a whole
+    // device pixel, so at any size that is not an exact multiple of the module
+    // count the browser drops some rows and doubles others — which is what the
+    // operator photographed. A slightly soft module scans; a missing one does
+    // not.
     Some(format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {side} {side}" shape-rendering="crispEdges" role="img" aria-label="QR code for this Hive's temporary address"><rect width="{side}" height="{side}" fill="#fff"/><g fill="#000">{modules}</g></svg>"##
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {side} {side}" role="img" aria-label="QR code for this Hive's temporary address"><rect width="{side}" height="{side}" fill="#fff"/><g fill="#000">{modules}</g></svg>"##
     ))
 }
 
@@ -164,9 +186,21 @@ impl TunnelSupervisor {
                 "cloudflared produced no output to read its address from",
             ));
         };
-        let Ok(Some(url)) = tokio::time::timeout(
+        // The reader outlives this function, and that is the whole fix.
+        //
+        // read_tunnel_hostname used to OWN stderr and return as soon as it
+        // matched the address. Returning dropped the BufReader, which closed
+        // the read end of the pipe; cloudflared kept logging, its next write
+        // took SIGPIPE, and the process died seconds after we reported success.
+        // The address was real and had already stopped being served — which is
+        // exactly what Cloudflare error 1033 says.
+        //
+        // Draining for the life of the child costs one task and nothing else.
+        let (found, url_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(drain_tunnel_output(stderr, found));
+        let Ok(Ok(url)) = tokio::time::timeout(
             std::time::Duration::from_secs(HOSTNAME_TIMEOUT_SECONDS),
-            read_tunnel_hostname(stderr),
+            url_rx,
         )
         .await
         else {
@@ -177,6 +211,20 @@ impl TunnelSupervisor {
                 "cloudflared did not report an address; check that this machine can reach Cloudflare",
             ));
         };
+        // Do not hand over a QR code for an address that does not serve yet.
+        //
+        // This is the half that would have caught the shipped bug from the
+        // outside: with the pipe closed, cloudflared died at one second and the
+        // address never resolved, and nothing checked. Now the address has to
+        // answer before it is shown.
+        if let Err(reason) = wait_until_serving(&url, &mut child).await {
+            let _ = child.kill().await;
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "cloudflared_not_reachable",
+                reason,
+            ));
+        }
         let started_at = unix_timestamp();
         *guard = Some(RunningTunnel {
             child,
@@ -207,15 +255,75 @@ impl TunnelSupervisor {
     }
 }
 
-/// Reads cloudflared's banner until it names the hostname it was given.
-async fn read_tunnel_hostname(stderr: tokio::process::ChildStderr) -> Option<String> {
+/// Polls the address until it serves, or says why it never did.
+///
+/// Any HTTP answer counts, including one the Hive itself would refuse: what is
+/// being established is that Cloudflare routes to this machine, not that a
+/// particular route exists. A 404 from Cloudflare's own edge is NOT an answer —
+/// that is what an unrouted quick tunnel returns, and telling the two apart is
+/// the entire point of this check.
+async fn wait_until_serving(url: &str, child: &mut Child) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("the address could not be checked: {error}"))?;
+    let deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_secs(REACHABLE_TIMEOUT_SECONDS);
+    let mut last = String::from("it never answered");
+    while tokio::time::Instant::now() < deadline {
+        // A dead child is decisive; there is nothing left to wait for.
+        if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+            return Err(
+                "cloudflared exited before its address started serving. Check that this machine can reach Cloudflare."
+                    .to_owned(),
+            );
+        }
+        match client.get(url).send().await {
+            Ok(response) => {
+                let status = response.status();
+                let from_edge = response
+                    .headers()
+                    .get("server")
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|server| server.eq_ignore_ascii_case("cloudflare"));
+                if !(status == reqwest::StatusCode::NOT_FOUND && from_edge) {
+                    return Ok(());
+                }
+                last = format!(
+                    "Cloudflare answered {status} for it without routing to this machine"
+                );
+            }
+            Err(error) => {
+                last = format!("it could not be reached: {error}");
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    Err(format!(
+        "The address was created but never started serving within {REACHABLE_TIMEOUT_SECONDS} seconds — {last}. Nothing was published; try again."
+    ))
+}
+
+/// Reads cloudflared's banner for the hostname, then keeps reading.
+///
+/// The second half matters as much as the first: cloudflared logs for as long
+/// as it runs, and a reader that stops reading closes the pipe under it. This
+/// returns only at EOF, which is when the child has gone.
+async fn drain_tunnel_output(
+    stderr: tokio::process::ChildStderr,
+    found: tokio::sync::oneshot::Sender<String>,
+) {
     let mut lines = BufReader::new(stderr).lines();
+    let mut found = Some(found);
     while let Ok(Some(line)) = lines.next_line().await {
-        if let Some(url) = extract_quick_tunnel_url(&line) {
-            return Some(url);
+        if let Some(url) = extract_quick_tunnel_url(&line)
+            && let Some(sender) = found.take()
+        {
+            // The receiver is gone if the caller timed out. Keep draining
+            // regardless: the child is still alive until someone kills it.
+            let _ = sender.send(url);
         }
     }
-    None
 }
 
 /// Pulls the assigned address out of one line of cloudflared output.
@@ -272,6 +380,88 @@ pub(super) async fn stop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug that shipped: reading the address killed the tunnel.
+    ///
+    /// The reader used to own stderr and return the moment it matched. That
+    /// dropped the pipe, and cloudflared — which logs continuously — took
+    /// SIGPIPE on its next write and died seconds after Swarm reported
+    /// success. The operator scanned a real address that was already dead, and
+    /// Cloudflare answered 1033.
+    ///
+    /// Reproduced with a process that behaves the same way: print the address,
+    /// then keep writing. It survives only if something keeps reading.
+    #[tokio::test]
+    async fn a_process_that_keeps_logging_survives_us_reading_its_address() {
+        let mut child = Command::new("sh")
+            .args([
+                "-c",
+                // Announce, then log every 50ms for 10s. Any write to a closed
+                // pipe kills this with SIGPIPE, which is exactly cloudflared's
+                // behaviour and exactly what we are testing for.
+                "echo 'INF |  https://kept-alive-test.trycloudflare.com  |' >&2; \
+                 i=0; while [ $i -lt 200 ]; do echo \"INF still connected $i\" >&2; \
+                 sleep 0.05; i=$((i+1)); done",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("test child starts");
+        let stderr = child.stderr.take().expect("piped stderr");
+
+        let (found, url_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(drain_tunnel_output(stderr, found));
+        let url = tokio::time::timeout(std::time::Duration::from_secs(5), url_rx)
+            .await
+            .expect("the address arrives")
+            .expect("the sender is not dropped");
+        assert_eq!(url, "https://kept-alive-test.trycloudflare.com");
+
+        // The address is in hand. Now let it write a great deal more than a
+        // pipe buffer would hold, and confirm it is still alive — which is the
+        // whole difference between a tunnel that serves and error 1033.
+        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
+        assert!(
+            matches!(child.try_wait(), Ok(None)),
+            "the child must still be running after we have taken its address"
+        );
+        let _ = child.kill().await;
+    }
+
+    /// A scanner finds a symbol by its quiet zone. Two modules is not enough,
+    /// and a photograph of the result reads as noise rather than as a code that
+    /// failed to decode.
+    #[test]
+    fn the_qr_carries_the_quiet_zone_the_standard_requires() {
+        let svg = qr_svg("https://neat-lion-quiet-fox.trycloudflare.com").expect("a code");
+        let side: usize = svg
+            .split("viewBox=\"0 0 ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .and_then(|value| value.parse().ok())
+            .expect("a square viewBox");
+
+        let code = qrcode::QrCode::with_error_correction_level(
+            "https://neat-lion-quiet-fox.trycloudflare.com".as_bytes(),
+            qrcode::EcLevel::M,
+        )
+        .expect("a code");
+        assert_eq!(
+            side,
+            code.width() + QUIET_ZONE_MODULES * 2,
+            "the symbol must sit inside four modules of quiet zone on every side"
+        );
+        assert_eq!(QUIET_ZONE_MODULES, 4, "ISO/IEC 18004 requires four");
+
+        // crispEdges snapped module edges to whole device pixels, so at a size
+        // that was not an exact multiple of the module count the browser dropped
+        // rows and doubled others. That is what the operator photographed.
+        assert!(
+            !svg.contains("crispEdges"),
+            "a slightly soft module scans; a missing one does not"
+        );
+    }
 
     /// cloudflared draws its address inside a box, and the decoration has
     /// changed between releases. Matching the hostname rather than the banner
