@@ -36,7 +36,8 @@ use swarm_domain::{
     TaskState, WorkerId, WorkerRole,
 };
 use swarm_persistence::{
-    JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, TaskStore, TaskStoreError,
+    JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, QueenAutomationFinish, TaskStore,
+    TaskStoreError,
 };
 use tokio::sync::Notify;
 use tower::ServiceExt;
@@ -526,7 +527,7 @@ impl ServerHandler for AgentMcp {
                     if self.principal.role != WorkerRole::Queen {
                         return Err(ApplicationError::NotAuthorized);
                     }
-                    let changed = self
+                    let finish = self
                         .tasks
                         .store()
                         .finish_queen_automation_run(
@@ -535,9 +536,24 @@ impl ServerHandler for AgentMcp {
                             crate::unix_timestamp(),
                         )
                         .map_err(ApplicationError::Store)?;
-                    if !changed {
+                    // Say which of the reasons it was. The old text claimed no
+                    // matching run existed, which was false whenever the marker
+                    // had simply moved state, and left the caller retrying the
+                    // same call because nothing in it suggested what to do.
+                    if let Some(reason) = match &finish {
+                        QueenAutomationFinish::Closed => None,
+                        QueenAutomationFinish::WrongState { state } => Some(format!(
+                            "This run is the current one but its marker is {state}, so there is nothing to close. A completed run needs no second finish; a queued or delivering one has not been handed to you yet."
+                        )),
+                        QueenAutomationFinish::DifferentRun { current } => Some(format!(
+                            "That run is over. The current run is {current} — finish that one if it was delivered to you, and ignore the older prompt in your scrollback."
+                        )),
+                        QueenAutomationFinish::NoRun => Some(
+                            "No Queen automation run has been recorded on this Hive.".to_owned(),
+                        ),
+                    } {
                         return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
-                            "No matching active Queen automation run".into(),
+                            reason,
                         )));
                     }
                     structured(json!({

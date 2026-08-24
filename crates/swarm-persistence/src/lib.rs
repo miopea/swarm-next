@@ -95,7 +95,7 @@ pub use notifications::{
 mod deployment_grants;
 mod orchestration;
 mod queen_conductor;
-pub use queen_conductor::{QueenAutomationDelivery, QueenAutomationFailure};
+pub use queen_conductor::{QueenAutomationDelivery, QueenAutomationFailure, QueenAutomationFinish};
 mod presentation;
 pub use presentation::{PresentationColorTheme, PresentationDeviceClass, PresentationPreferences};
 mod task_dispatches;

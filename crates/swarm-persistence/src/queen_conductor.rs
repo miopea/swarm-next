@@ -45,6 +45,21 @@ pub enum QueenAutomationFailure {
     Uncertain,
 }
 
+/// Why a finish call did not close the run, so the caller is told which of
+/// those it was rather than that no run exists.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum QueenAutomationFinish {
+    Closed,
+    /// The run is the current one, but its marker is in a state the finish does
+    /// not cover — already completed, or still queued or delivering.
+    WrongState { state: String },
+    /// A different run is current. The caller is holding an id from an earlier
+    /// turn, which is the shape a stale prompt in scrollback produces.
+    DifferentRun { current: String },
+    /// No run has ever been recorded.
+    NoRun,
+}
+
 impl TaskStore {
     /// Returns bounded, content-free automation state for the operator UI.
     ///
@@ -262,15 +277,49 @@ impl TaskStore {
             params![MAX_AUTOMATION_ATTEMPTS, now],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, String>(4)?)),
         ).optional()?;
-        let Some((run_id, session_id, trigger, count, queen_id)) = candidate else {
+        let Some((run_id, session_id, trigger, _queued_count, queen_id)) = candidate else {
             transaction.commit()?;
             return Ok(None);
         };
+        // The board as it is now, not as it was when the run was queued.
+        //
+        // A run waits queued until Queen is running and nobody else owns her
+        // attention, which can be a long time: the run that prompted this was
+        // requested at 21:14 and delivered at 15:20 the next day. The prompt
+        // carried the count from queue time, so it told her to review four
+        // records when one had been completed hours earlier and another was an
+        // attention false positive that had since been fixed. She was sent to
+        // look at yesterday's queue.
+        let count = actionable_count(&transaction)?;
+        let (fingerprint, _) = actionable_fingerprint(&transaction)?;
+        // A manual run is the operator asking, and an empty board is not a
+        // reason to refuse them: they may want her to look at something Swarm
+        // does not count as actionable. Only a run this Hive queued by itself
+        // is abandoned when what triggered it is gone.
+        if count == 0 && trigger != QueenAutomationTrigger::Manual.to_string() {
+            // Everything actionable was handled while this waited. Waking Queen
+            // to review nothing is the "she says she is buzzing and her terminal
+            // is idle" complaint, so the run closes itself instead. Recorded as
+            // a real outcome rather than discarded: it did finish, and the
+            // fingerprint it finishes on is the empty board it actually found.
+            transaction.execute(
+                "UPDATE queen_automation
+                    SET state = 'completed', outcome = 'no_action', finished_at = ?2,
+                        delivered_fingerprint = ?3, pending_fingerprint = NULL,
+                        actionable_count = 0, updated_at = ?2
+                  WHERE id = 1 AND run_id = ?1 AND state = 'queued'",
+                params![run_id, now, fingerprint],
+            )?;
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+            transaction.commit()?;
+            return Ok(None);
+        }
         let changed = transaction.execute(
             "UPDATE queen_automation SET state = 'delivering', attempts = attempts + 1,
-                 attempted_at = ?2, delivery_session_id = ?3, updated_at = ?2
+                 attempted_at = ?2, delivery_session_id = ?3,
+                 actionable_count = ?4, pending_fingerprint = ?5, updated_at = ?2
              WHERE id = 1 AND run_id = ?1 AND state = 'queued'",
-            params![run_id, now, session_id],
+            params![run_id, now, session_id, count, fingerprint],
         )?;
         if changed != 1 {
             return Err(TaskStoreError::IntegrityFailure(
@@ -454,7 +503,7 @@ impl TaskStore {
         run_id: &str,
         outcome: QueenAutomationOutcome,
         now: i64,
-    ) -> Result<bool, TaskStoreError> {
+    ) -> Result<QueenAutomationFinish, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         // "I need the operator" is a claim about something they can act on, so
@@ -508,9 +557,30 @@ impl TaskStore {
         )? == 1;
         if changed {
             insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+            transaction.commit()?;
+            return Ok(QueenAutomationFinish::Closed);
         }
+        // Why it was refused, rather than a flat denial that the run exists.
+        //
+        // "No matching active Queen automation run" was false on its face: the
+        // run existed and was simply in a state the update did not cover.
+        // Queen spent three calls and a database read to learn that, and the
+        // answer was in the row the whole time.
+        let marker: Option<(String, Option<String>)> = transaction
+            .query_row(
+                "SELECT state, run_id FROM queen_automation WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
         transaction.commit()?;
-        Ok(changed)
+        Ok(match marker {
+            Some((state, Some(current))) if current == run_id => {
+                QueenAutomationFinish::WrongState { state }
+            }
+            Some((_, Some(current))) => QueenAutomationFinish::DifferentRun { current },
+            Some((_, None)) | None => QueenAutomationFinish::NoRun,
+        })
     }
 
     /// Applies the presence ceiling only while an unattended automation marker is active.
@@ -870,6 +940,89 @@ mod tests {
     /// Deciding about a draft is the review. If it does not wake her, nothing
     /// does: no one else promotes a draft, and the fingerprint gate means an
     /// unchanged board never asks twice.
+    /// Queen was sent to review "4 actionable records" that were not four and
+    /// were not actionable: the run was requested at 21:14 and delivered at
+    /// 15:20 the next day, and the prompt carried the count from queue time.
+    /// One of the four had been completed hours earlier.
+    #[test]
+    fn the_prompt_counts_the_board_as_it_is_at_delivery_not_as_it_was_when_queued() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let first = store
+            .create_task_with_details("Triage me", "", TaskPriority::Normal, "/workspace")
+            .unwrap();
+        store
+            .create_task_with_details("And me", "", TaskPriority::Normal, "/workspace")
+            .unwrap();
+        let status = store.set_queen_automation_enabled(true, 100).unwrap();
+        assert_eq!(status.state, QueenAutomationState::Queued);
+
+        // Time passes before Queen is free to take it, and one of them is dealt
+        // with meanwhile.
+        store
+            .remove_task_as(
+                first.id,
+                &swarm_domain::TaskActivityActor::worker(queen.id),
+                "handled already",
+            )
+            .unwrap();
+
+        let delivery = store.claim_queen_automation(200).unwrap().unwrap();
+        assert_eq!(
+            delivery.actionable_count, 1,
+            "the prompt must name the board Queen will actually find"
+        );
+    }
+
+    /// The same staleness taken to its end: everything the run was queued for
+    /// was handled while it waited. Waking Queen to review nothing is the "she
+    /// says she is buzzing and her terminal is idle" complaint.
+    #[test]
+    fn a_self_triggered_run_whose_work_was_all_handled_closes_itself_rather_than_waking_her() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let task = store
+            .create_task_with_details("Triage me", "", TaskPriority::Normal, "/workspace")
+            .unwrap();
+        assert_eq!(
+            store.set_queen_automation_enabled(true, 100).unwrap().state,
+            QueenAutomationState::Queued
+        );
+        store
+            .remove_task_as(
+                task.id,
+                &swarm_domain::TaskActivityActor::worker(queen.id),
+                "handled already",
+            )
+            .unwrap();
+
+        assert!(
+            store.claim_queen_automation(200).unwrap().is_none(),
+            "a run with nothing left to review must not be delivered"
+        );
+        let status = store.queen_automation_status(201).unwrap();
+        assert_eq!(
+            status.state,
+            QueenAutomationState::Completed,
+            "and it must close itself rather than sit queued forever"
+        );
+
+        // An operator asking directly is a different thing. An empty board is
+        // not a reason to refuse them: they may want her to look at something
+        // Swarm does not count as actionable.
+        store.request_queen_automation_run(300).unwrap();
+        assert!(
+            store.claim_queen_automation(301).unwrap().is_some(),
+            "a manual request reaches Queen whatever the board looks like"
+        );
+    }
+
     #[test]
     fn a_draft_is_work_queen_has_not_decided_about_yet_so_it_wakes_her() {
         let store = TaskStore::in_memory().unwrap();
@@ -934,10 +1087,11 @@ mod tests {
                 .queen_automation_permits(QueenActionClass::ModifyWorkspace, 13)
                 .unwrap()
         );
-        assert!(
+        assert_eq!(
             store
                 .finish_queen_automation_run(&delivery.run_id, QueenAutomationOutcome::NoAction, 14)
-                .unwrap()
+                .unwrap(),
+            QueenAutomationFinish::Closed
         );
         assert!(
             store
@@ -987,10 +1141,11 @@ mod tests {
         );
 
         // Queen, whose terminal never stopped, reports what she did.
-        assert!(
+        assert_eq!(
             store
                 .finish_queen_automation_run(&delivery.run_id, QueenAutomationOutcome::NoAction, 13)
                 .unwrap(),
+            QueenAutomationFinish::Closed,
             "Queen's own report is the evidence the delivery landed"
         );
         assert_eq!(
@@ -1010,10 +1165,14 @@ mod tests {
             .unwrap();
         store.request_queen_automation_run(10).unwrap();
 
+        // And it says which of the reasons it was, rather than claiming no run
+        // exists when one plainly does.
+        let refused = store
+            .finish_queen_automation_run("not-a-run", QueenAutomationOutcome::NoAction, 11)
+            .unwrap();
         assert!(
-            !store
-                .finish_queen_automation_run("not-a-run", QueenAutomationOutcome::NoAction, 11)
-                .unwrap()
+            matches!(refused, QueenAutomationFinish::DifferentRun { .. }),
+            "an id from an older turn must be told which run is current: {refused:?}"
         );
     }
 
@@ -1212,14 +1371,15 @@ mod tests {
                 .complete_queen_automation_delivery(&original_run_id, 14)
                 .unwrap()
         );
-        assert!(
+        assert_eq!(
             store
                 .finish_queen_automation_run(
                     &original_run_id,
                     QueenAutomationOutcome::Completed,
                     15,
                 )
-                .unwrap()
+                .unwrap(),
+            QueenAutomationFinish::Closed
         );
         assert_eq!(
             store.queen_automation_status(16).unwrap().state,
@@ -1413,14 +1573,15 @@ mod tests {
             .complete_queen_automation_delivery(&delivery.run_id, 12)
             .unwrap();
 
-        assert!(
+        assert_eq!(
             store
                 .finish_queen_automation_run(
                     &delivery.run_id,
                     QueenAutomationOutcome::NeedsOperator,
                     13,
                 )
-                .unwrap()
+                .unwrap(),
+            QueenAutomationFinish::Closed
         );
 
         // The run finished — it really did happen — but it does not leave a

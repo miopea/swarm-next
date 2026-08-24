@@ -13090,14 +13090,15 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        assert!(
+        assert_eq!(
             store
                 .finish_queen_automation_run(
                     &run_id,
                     swarm_domain::QueenAutomationOutcome::Completed,
                     102,
                 )
-                .unwrap()
+                .unwrap(),
+            swarm_persistence::QueenAutomationFinish::Closed
         );
         let finished = store.queen_automation_status(103).unwrap();
         assert_eq!(
