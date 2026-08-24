@@ -69,7 +69,9 @@ the replicated code lives.
 
 **A held Jira write no longer freezes the task.** The local lifecycle advances,
 the Jira write is queued, and a missing mapping fails at delivery where it is
-visible — rather than aborting the local transition with it.
+visible — rather than aborting the local transition with it. Recorded as
+[ADR 0052](decisions/0052-a-held-jira-write-does-not-freeze-the-local-lifecycle.md),
+which is where the ruling and its cost now live.
 
 The filed question priced this third option as "a queue and a reconciliation
 path that does not exist today". It does exist: `jira_transition_deliveries`
