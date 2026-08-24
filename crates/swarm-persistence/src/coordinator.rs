@@ -2416,6 +2416,82 @@ mod tests {
         );
     }
 
+    /// Two tasks sat assigned and unreachable for twenty-one minutes, looking
+    /// routed on the board, until the operator asked from the other side why he
+    /// could not see those workers in the list. They were not running, and
+    /// assignment to a sleeping worker creates no session binding and no
+    /// briefing, so nothing anywhere said the work could not be delivered.
+    ///
+    /// The control matters as much as the case. The original report was made
+    /// twice with `pgrep -af <worker id>`, which matched the reporting shell's
+    /// own command line and so could never answer NO. This asserts both
+    /// directions against `worker_sessions`.
+    #[test]
+    fn work_assigned_to_a_worker_that_is_not_running_is_visible_as_such() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let sleeping = store
+            .create_worker("RCG Hub", ProviderKind::ClaudeCode, "/workspace/hub", false, 1)
+            .unwrap();
+        let running = store
+            .create_worker("Scout", ProviderKind::ClaudeCode, "/workspace/scout", false, 1)
+            .unwrap();
+        store
+            .bind_worker_session(running.id, WorkerSessionId::new())
+            .unwrap();
+
+        let parked = store
+            .create_task_with_details("Latent hub work", "", TaskPriority::Normal, "/workspace/hub")
+            .unwrap();
+        store.transition_task(parked.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(parked.id, sleeping.id, &TaskActivityActor::worker(queen.id))
+            .unwrap();
+
+        // The control: same shape, on a worker that is actually running.
+        let reachable = store
+            .create_task_with_details("Scout work", "", TaskPriority::Normal, "/workspace/scout")
+            .unwrap();
+        store
+            .transition_task(reachable.id, TaskState::Ready)
+            .unwrap();
+        store
+            .assign_task_to_worker_as(reachable.id, running.id, &TaskActivityActor::worker(queen.id))
+            .unwrap();
+
+        // The wake itself IS armed: assignment queues one for the sleeping
+        // worker. So the promise in the tool description is kept up to this
+        // point, and what failed was further along — the coordinator declining
+        // to start anything and saying nothing about it.
+        let wakes = store.claim_coordinator_worker_wakes(1_000).unwrap();
+        assert!(
+            wakes.iter().any(|wake| wake.worker_id == sleeping.id),
+            "assignment must queue a wake for a sleeping worker: {wakes:?}"
+        );
+
+        let unreachable = store.work_assigned_to_a_worker_that_is_not_running().unwrap();
+        assert_eq!(
+            unreachable.len(),
+            1,
+            "exactly the work that cannot be delivered: {unreachable:?}"
+        );
+        assert_eq!(unreachable[0].task_id, parked.id.to_string());
+        assert_eq!(unreachable[0].worker_name, "RCG Hub");
+
+        // And it stops being reported the moment the worker is running, so
+        // starting it is the whole fix.
+        store
+            .bind_worker_session(sleeping.id, WorkerSessionId::new())
+            .unwrap();
+        assert!(
+            store
+                .work_assigned_to_a_worker_that_is_not_running()
+                .unwrap()
+                .is_empty(),
+            "a worker that is up must not still be reported as unreachable"
+        );
+    }
+
     #[test]
     fn stale_attention_is_revision_bound_visible_and_idempotent() {
         let store = TaskStore::in_memory().unwrap();
@@ -2753,9 +2829,66 @@ pub const REFUSAL_DELIVERY_HELD_UNSENT_TEXT: &str = "delivery_held_unsent_text";
 /// The work is assigned and was never started, and nothing about the task says
 /// so — it reads as routed. Deliberately not retried: a worker woken twice gets
 /// its briefing twice.
+/// Assigned work whose worker is not running, so no briefing can reach it.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct UnreachableAssignment {
+    pub task_id: String,
+    pub title: String,
+    pub worker_id: String,
+    pub worker_name: String,
+    pub assigned_at: i64,
+}
+
 pub const REFUSAL_WAKE_UNCERTAIN: &str = "wake_uncertain";
+/// The coordinator was not admitted to start anything, so queued wakes were
+/// not even attempted.
+pub const REFUSAL_WAKE_NOT_ADMITTED: &str = "wake_not_admitted";
 
 impl TaskStore {
+    /// Work that is assigned and cannot be reached, because the worker holding
+    /// it is not running.
+    ///
+    /// Assignment to a sleeping worker creates no session binding and no
+    /// briefing — there is nowhere to put one — so the task carries an owner
+    /// and nothing else. On the board that is indistinguishable from work whose
+    /// brief is simply queued behind something, which is how two tasks sat
+    /// assigned and unreachable for twenty-one minutes while the operator asked
+    /// why he could not see those workers in the list.
+    ///
+    /// Answers from `worker_sessions`, so it can say NO. The report that led
+    /// here was made twice with `pgrep -af <worker id>`, which matched the
+    /// reporting shell's own command line and could never return a negative.
+    ///
+    /// # Errors
+    /// Returns a persistence or data-integrity error.
+    pub fn work_assigned_to_a_worker_that_is_not_running(
+        &self,
+    ) -> Result<Vec<UnreachableAssignment>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT task.id, task.title, worker.id, worker.name, task.updated_at
+             FROM tasks task
+             JOIN worker_profiles worker
+               ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
+             WHERE task.state = 'ready' AND task.removed_at IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM worker_sessions session
+                   WHERE session.worker_id = worker.id AND session.ended_at IS NULL
+               )
+             ORDER BY task.updated_at, task.id LIMIT 32",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(UnreachableAssignment {
+                task_id: row.get::<_, String>(0)?,
+                title: row.get(1)?,
+                worker_id: row.get::<_, String>(2)?,
+                worker_name: row.get(3)?,
+                assigned_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     /// Records that the coordinator declined to act, or that it is still
     /// declining.
     ///

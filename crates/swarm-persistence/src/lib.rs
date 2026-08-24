@@ -25,7 +25,8 @@ pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, CoordinatorAttention,
     CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake, ExitedWorkerOwnedWorkCandidate,
     OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD, REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
-    REFUSAL_WAKE_UNCERTAIN, StaleOwnedWorkCandidate,
+    REFUSAL_WAKE_UNCERTAIN, StaleOwnedWorkCandidate, UnreachableAssignment,
+    REFUSAL_WAKE_NOT_ADMITTED,
 };
 pub use passkeys::RegisteredPasskey;
 mod decisions;

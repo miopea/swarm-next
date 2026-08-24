@@ -336,6 +336,17 @@ impl ServerHandler for AgentMcp {
                                     .store()
                                     .held_task_dispatches(crate::unix_timestamp())
                                     .unwrap_or_default(),
+                                // Assigned to a worker that is not running.
+                                // There is no briefing to hold and no session
+                                // to hold it for, so this appears nowhere
+                                // above: the task simply carries an owner and
+                                // waits. Two sat like that for twenty-one
+                                // minutes looking routed.
+                                "unreachable_assignments": self
+                                    .tasks
+                                    .store()
+                                    .work_assigned_to_a_worker_that_is_not_running()
+                                    .unwrap_or_default(),
                             }))
                         })
                 } else {
@@ -1333,7 +1344,7 @@ fn list_workers_tool() -> Tool {
 fn list_coordination_attention_tool() -> Tool {
     tool(
         "swarm_list_coordination_attention",
-        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Also reports briefings that are queued and not being delivered, and what each is waiting on — an operator using that terminal, or the worker already having Active work. A briefing held for either reason is working as intended and is not a task to chase. One waiting its turn names the earlier task it is queued behind in blocked_by; if that task has been Ready for a long time it is the thing to steer, because the whole queue behind it is stopped. Recheck the task and worker before deciding whether to steer, wait, or ask the operator.",
+        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Also reports work assigned to a worker that is not running at all, which has no briefing anywhere because there is no session to put one in — start that worker or move the work. And briefings that are queued and not being delivered, and what each is waiting on — an operator using that terminal, or the worker already having Active work. A briefing held for either reason is working as intended and is not a task to chase. One waiting its turn names the earlier task it is queued behind in blocked_by; if that task has been Ready for a long time it is the thing to steer, because the whole queue behind it is stopped. Recheck the task and worker before deciding whether to steer, wait, or ask the operator.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )

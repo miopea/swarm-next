@@ -1195,6 +1195,37 @@ impl AppState {
         admission: runtime::CoordinatorStartAdmission,
     ) {
         if !admission.permits_start() {
+            // Say so, rather than returning in silence.
+            //
+            // Nothing recorded this, so a wake that was never even attempted
+            // looked exactly like a wake that was never owed: assignment
+            // reported success, the board showed the work routed, and
+            // journalctl had nothing to say about either worker. Two tasks sat
+            // assigned and unreachable for twenty-one minutes before the
+            // operator noticed from the other side — "why don't I see those
+            // workers in the list?"
+            //
+            // Only when something is actually waiting, so a quiet Hive under
+            // pressure does not manufacture a complaint about nothing.
+            let waiting = store
+                .work_assigned_to_a_worker_that_is_not_running()
+                .unwrap_or_default();
+            for item in waiting {
+                let Ok(worker_id) = item.worker_id.parse() else {
+                    continue;
+                };
+                let _ = store.record_coordinator_refusal(
+                    swarm_persistence::REFUSAL_WAKE_NOT_ADMITTED,
+                    &format!("wake:{}", item.task_id),
+                    Some(worker_id),
+                    None,
+                    &format!(
+                        "{} is not running and this Hive is not currently admitted to start it, so this work cannot be delivered",
+                        item.worker_name
+                    ),
+                    unix_timestamp(),
+                );
+            }
             return;
         }
         let actions = match store.claim_coordinator_worker_wakes(unix_timestamp()) {
