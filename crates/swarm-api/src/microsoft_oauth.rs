@@ -161,14 +161,23 @@ impl MicrosoftOAuthClient {
     ) -> Result<Self, String> {
         let public_base_url =
             Url::parse(public_base_url).map_err(|_| "SWARM_PUBLIC_BASE_URL must be a valid URL")?;
-        if public_base_url.scheme() != "https"
+        // HTTPS, or loopback. Microsoft exempts http://localhost from its
+        // HTTPS requirement for exactly this case, and refusing it here meant a
+        // Hive nobody had published could not register an app at all — the
+        // redirect field read "Public Hive URL required" and Save was dead,
+        // with the tenant, client id and secret all in hand.
+        let loopback = matches!(
+            public_base_url.host_str(),
+            Some("localhost" | "127.0.0.1" | "::1")
+        );
+        if (public_base_url.scheme() != "https" && !(public_base_url.scheme() == "http" && loopback))
             || !public_base_url.username().is_empty()
             || public_base_url.password().is_some()
             || public_base_url.query().is_some()
             || public_base_url.fragment().is_some()
         {
             return Err(
-                "SWARM_PUBLIC_BASE_URL must be an HTTPS URL without credentials, query, or fragment"
+                "The Hive address must be an HTTPS URL, or http on localhost, without credentials, query, or fragment"
                     .into(),
             );
         }

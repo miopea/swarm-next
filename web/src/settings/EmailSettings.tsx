@@ -98,7 +98,7 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
             <li>Add delegated permissions: <strong>User.Read, Mail.Read, Mail.Send</strong>.</li>
             <li>Create a client secret, then save its value here before leaving Entra.</li>
           </ol>
-          <label className="email-callback-field">Web redirect URI<input readOnly value={configuration?.callback_url ?? "Public Hive URL required"} onFocus={(event) => event.currentTarget.select()} /></label>
+          <label className="email-callback-field">Web redirect URI<input readOnly value={configuration?.callback_url ?? "This Hive does not know its own address yet"} onFocus={(event) => event.currentTarget.select()} /></label>
           <div className="email-configuration-fields">
             <label>Directory (tenant) ID<input required autoComplete="off" value={tenantId} onChange={(event) => setTenantId(event.target.value)} placeholder="organizations or tenant UUID" /></label>
             <label>Application (client) ID<input required autoComplete="off" value={clientId} onChange={(event) => setClientId(event.target.value)} placeholder="00000000-0000-0000-0000-000000000000" /></label>
@@ -107,7 +107,7 @@ export default function EmailSettings({ operatorToken, readiness, unavailable, o
           <small className="privacy-note">The secret travels only to this Hive over HTTPS, is stored in its private host directory, and is never returned to the browser, Queen, or workers.</small>
           <div className="email-configuration-actions">
             {configured ? <button className="secondary-button" type="button" disabled={busy} onClick={() => setEditingConfiguration(false)}>Cancel</button> : null}
-            <button className="primary-action" type="submit" disabled={busy || !configuration?.callback_url}>{busy ? "Saving privately…" : "Save app registration"}</button>
+            <button className="primary-action" type="submit" disabled={busy}>{busy ? "Saving privately…" : "Save app registration"}</button>
           </div>
         </form>
       ) : connected ? (

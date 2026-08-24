@@ -396,9 +396,8 @@ impl AppState {
             return Ok(self);
         };
         let public_base_url = self
-            .public_base_url
-            .as_deref()
-            .ok_or("Microsoft email OAuth requires SWARM_PUBLIC_BASE_URL")?;
+            .consent_base_url()
+            .ok_or("Microsoft email OAuth needs an address to come back to")?;
         let token_path = self
             .email_oauth_token_path
             .as_deref()
@@ -412,7 +411,7 @@ impl AppState {
             &configuration.tenant_id,
             configuration.client_id.clone(),
             configuration.client_secret,
-            public_base_url,
+            &public_base_url,
             token_path.clone(),
         )?;
         self.outlook = Arc::new(RwLock::new(outlook::OutlookProbe::oauth(oauth)));
@@ -527,7 +526,28 @@ impl AppState {
         self
     }
 
-    /// Tells this Hive where it listens, so it can offer to tunnel itself.
+    /// Where a browser comes back to after an identity provider consent page.
+    ///
+    /// A public URL when this Hive has one. Otherwise the address it is
+    /// actually listening on, as localhost — which is not a fallback so much as
+    /// the correct answer for a Hive nobody has published. Microsoft and Google
+    /// both exempt `http://localhost` from their HTTPS requirement precisely so
+    /// a local install can complete a consent flow.
+    ///
+    /// Reported 2026-08-24: a developer running Swarm locally could not connect
+    /// Outlook at all. The redirect field read "Public Hive URL required" and
+    /// Save was disabled, so having the tenant, client and secret in hand was
+    /// not enough to get anywhere.
+    fn consent_base_url(&self) -> Option<String> {
+        if let Some(public) = self.public_base_url.as_deref() {
+            return Some(public.trim_end_matches('/').to_owned());
+        }
+        self.api_bind_address
+            .map(|address| format!("http://localhost:{}", address.port()))
+    }
+
+    /// Tells this Hive where it listens, so it can offer to tunnel itself and
+    /// can name its own consent address.
     #[must_use]
     pub fn with_api_bind_address(mut self, address: std::net::SocketAddr) -> Self {
         self.api_bind_address = Some(address);
@@ -5309,9 +5329,8 @@ async fn email_configuration(
     authorize(&state, &headers)?;
     let configuration = state.email_oauth_configuration.read().await.clone();
     let callback_url = state
-        .public_base_url
-        .as_deref()
-        .map(|base| format!("{}/auth/email/callback", base.trim_end_matches('/')));
+        .consent_base_url()
+        .map(|base| format!("{base}/auth/email/callback"));
     let response = match configuration {
         Some(configuration) => EmailOAuthConfigurationView {
             configured: true,
@@ -5370,11 +5389,15 @@ async fn update_email_configuration(
     let tenant_id = request.tenant_id.trim().to_owned();
     let client_id = request.client_id.trim().to_owned();
     let client_secret = request.client_secret;
-    let public_base_url = state.public_base_url.as_deref().ok_or_else(|| {
+    // A Hive nobody has published still has an address, and Microsoft accepts
+    // http://localhost as a redirect. Refusing the registration outright left a
+    // developer holding a tenant, a client id and a secret with nowhere to put
+    // them.
+    let public_base_url = state.consent_base_url().ok_or_else(|| {
         ApiError::new(
             StatusCode::CONFLICT,
             "email_public_url_unconfigured",
-            "Set the Hive public URL before configuring Microsoft email OAuth",
+            "This Hive does not know what address to come back to after Microsoft's consent page.",
         )
     })?;
     let configuration_path = state.email_oauth_config_path.as_deref().ok_or_else(|| {
@@ -5406,7 +5429,7 @@ async fn update_email_configuration(
         &tenant_id,
         client_id.clone(),
         client_secret.clone(),
-        public_base_url,
+        &public_base_url,
         token_path.clone(),
     )
     .map_err(|error| {
@@ -14796,6 +14819,62 @@ mod tests {
         assert_eq!(body["configured"], false);
         assert_eq!(body["connection"], "not_connected");
         assert_eq!(body["account_address"], Value::Null);
+    }
+
+    /// A developer running Swarm locally could not connect Outlook at all.
+    ///
+    /// The redirect field read "Public Hive URL required" and Save was
+    /// disabled, so holding the tenant, the client id and the secret got them
+    /// nowhere. A Hive nobody has published still has an address, and Microsoft
+    /// exempts <http://localhost> from its HTTPS rule precisely so a local
+    /// install can complete a consent flow.
+    #[tokio::test]
+    async fn a_hive_nobody_published_still_knows_where_microsoft_comes_back_to() {
+        let runtime = TempDir::new().unwrap();
+        let state = AppState::default()
+            .with_terminal_host(
+                HostClient::new(runtime.path().join("absent.sock")),
+                "secret",
+            )
+            // No public base URL — the ordinary state of a local Hive.
+            .with_api_bind_address("127.0.0.1:8766".parse().unwrap())
+            .with_email_oauth_paths(
+                runtime.path().join("secrets/email-oauth-config.json"),
+                runtime.path().join("secrets/email-oauth.json"),
+            );
+        let app = router(state);
+
+        let view = response_json(
+            authorized_get(app.clone(), "/api/v1/integrations/email/configuration").await,
+        )
+        .await;
+        assert_eq!(
+            view["callback_url"], "http://localhost:8766/auth/email/callback",
+            "a local Hive must offer the address it is actually listening on"
+        );
+
+        // And the registration saves, which is the whole point: the three
+        // values are what is being stored, and the redirect is only where the
+        // browser returns later.
+        let saved = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/v1/integrations/email/configuration")
+                    .header("authorization", "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"tenant_id":"organizations","client_id":"00000000-0000-0000-0000-000000000001","client_secret":"a-secret-microsoft-showed-once"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            saved.status().is_success(),
+            "a local Hive must be able to store its registration: {}",
+            saved.status()
+        );
     }
 
     #[tokio::test]
