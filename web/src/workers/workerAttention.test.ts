@@ -64,3 +64,19 @@ test("stays quiet when this device already holds the terminal", () => {
   // Nobody engaged is not the same as somebody else engaged.
   expect(foreignEngagement(worker, "desktop-1")).toBeUndefined();
 });
+
+test("tells a worker with nothing to do apart from one whose task is still running", () => {
+  // The operator saw a roster of Resting workers and could not tell which had
+  // finished and which had left something going. The classifier is right that
+  // the turn is over — a resting prompt outranks a background shell, and
+  // treating it as busy stalled the whole Hive — so this changes the label, not
+  // the state.
+  const idle = { ...worker, running: true, attention_state: "resting" as const };
+  const stillRunning = { ...idle, background_work: true };
+
+  expect(workerAttention(idle).label).toBe("Resting");
+  expect(workerAttention(stillRunning).label).toBe("Resting · task running");
+  // Same state, so nothing that routes on it sees a new case.
+  expect(workerAttention(stillRunning).state).toBe("resting");
+  expect(workerAttention(stillRunning).presence).toBe(workerAttention(idle).presence);
+});

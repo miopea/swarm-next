@@ -28,7 +28,7 @@ pub use provider::{
     ProviderCommand, ProviderCommandError, ProviderRelease, ProviderTerminalAdapter,
     provider_release, provider_release_superseded,
 };
-pub use provider_activity::{ProviderActivity, classify_provider_activity};
+pub use provider_activity::{ProviderActivity, background_work_running, classify_provider_activity};
 pub use resources::{ProcessResourceSample, sample_current_process, sample_process_tree};
 pub use state::{
     CANONICAL_COMPACTION_INPUT_BYTES, CANONICAL_SCROLLBACK_ROWS, CanonicalTerminalState,

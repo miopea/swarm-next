@@ -76,6 +76,24 @@ fn classify_visible_text(provider: ProviderKind, visible: &str) -> ProviderActiv
     ProviderActivity::Unknown
 }
 
+/// Whether something the worker started is still running after its turn ended.
+///
+/// The classifier deliberately lets a resting prompt outrank a background
+/// shell — the turn HAS ended, and treating the worker as busy stalled the
+/// whole Hive. But that collapses two situations an operator needs to tell
+/// apart: a worker with nothing to do, and one that finished while a `gh run
+/// watch` it started is still going. Both read "Resting", and the operator
+/// reported exactly that confusion.
+///
+/// Reported separately rather than as another activity, so nothing that routes
+/// work on activity has to learn a new case.
+#[must_use]
+pub fn background_work_running(provider: ProviderKind, snapshot: &TerminalSnapshot) -> bool {
+    let mut parser = vt100::Parser::new(snapshot.rows, snapshot.columns, 0);
+    parser.process(&snapshot.bytes);
+    background_work_signal(provider, &parser.screen().contents().to_lowercase())
+}
+
 /// The provider is working on the operator's turn and must not be interrupted.
 fn active_signal(normalized: &str) -> bool {
     normalized.contains("esc to interrupt")
@@ -270,6 +288,38 @@ mod tests {
         assert_eq!(
             classify_visible_text(ProviderKind::ClaudeCode, working),
             ProviderActivity::Active
+        );
+    }
+
+    /// The two situations that both classify as Resting, and must not read the
+    /// same to an operator.
+    #[test]
+    fn a_finished_turn_reports_whether_it_left_something_running() {
+        // The operator's own terminal text, from the report that produced the
+        // resting-outranks-a-shell rule.
+        let resting_with_shell = concat!(
+            "✻ Churned for 48s · 1 shell still running\n",
+            "❯\n",
+            "⏵⏵ auto mode on · 1 shell · ← for agents\n",
+        );
+        let resting_alone = "❯\n";
+        assert!(
+            background_work_signal(ProviderKind::ClaudeCode, &resting_with_shell.to_lowercase()),
+            "a shell the worker started is still running"
+        );
+        assert!(
+            !background_work_signal(ProviderKind::ClaudeCode, &resting_alone.to_lowercase()),
+            "and a bare prompt has nothing running behind it"
+        );
+        // Both are still Resting. The turn HAS ended in each; that is the whole
+        // reason this is reported separately rather than as a third activity.
+        assert_eq!(
+            classify_visible_text(ProviderKind::ClaudeCode, resting_with_shell),
+            ProviderActivity::Resting
+        );
+        assert_eq!(
+            classify_visible_text(ProviderKind::ClaudeCode, resting_alone),
+            ProviderActivity::Resting
         );
     }
 }

@@ -108,10 +108,11 @@ pub(super) async fn list_workers(
                 .is_some_and(|session_id| live.contains_key(&session_id));
             let runtime_error = errors.get(&profile.id).cloned();
             let needs_operator = awaiting_operator.contains(&profile.id);
-            let activity = profile
+            let signals = profile
                 .active_session_id
-                .and_then(|session_id| provider_activity.get(&session_id).copied())
-                .unwrap_or(ProviderActivity::Unknown);
+                .and_then(|session_id| provider_activity.get(&session_id).copied());
+            let activity = signals.map_or(ProviderActivity::Unknown, |seen| seen.activity);
+            let background_work = signals.is_some_and(|seen| seen.background_work);
             let is_scout = scout_id == Some(profile.id);
             let profile_id = profile.id;
             let last_output_at = profile
@@ -125,6 +126,7 @@ pub(super) async fn list_workers(
                     awaiting_operator: needs_operator,
                     runtime_error,
                     provider_activity: activity,
+                    background_work,
                     system_role: is_scout.then_some("scout"),
                     last_output_at,
                     held_for_answer: held.get(&profile_id).copied(),

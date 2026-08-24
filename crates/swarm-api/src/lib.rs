@@ -177,7 +177,7 @@ pub struct AppState {
     email_delivery: Arc<Mutex<()>>,
     worker_errors: Arc<RwLock<HashMap<WorkerId, String>>>,
     worker_recovery_attempts: Arc<RwLock<HashMap<WorkerId, i64>>>,
-    provider_activity: Arc<RwLock<HashMap<WorkerSessionId, ProviderActivity>>>,
+    provider_activity: Arc<RwLock<HashMap<WorkerSessionId, provider_activity::ProviderSignals>>>,
     coordinator_start_admission: Arc<AtomicU8>,
     control_room_notify: Arc<Notify>,
     notification_sender: Option<notifications::NotificationSender>,
@@ -1335,7 +1335,7 @@ impl AppState {
         }
         let activity = self.provider_activity.read().await;
         for candidate in candidates {
-            if !should_surface_stale_owned_work(activity.get(&candidate.session_id)) {
+            if !should_surface_stale_owned_work(activity.get(&candidate.session_id).map(|signals| signals.activity).as_ref()) {
                 continue;
             }
             match store.record_stale_owned_work_attention(&candidate, now, STALE_OWNED_WORK_SECONDS)
@@ -1368,7 +1368,7 @@ impl AppState {
         }
         let activity = self.provider_activity.read().await;
         for candidate in candidates {
-            if !should_surface_stale_owned_work(activity.get(&candidate.session_id)) {
+            if !should_surface_stale_owned_work(activity.get(&candidate.session_id).map(|signals| signals.activity).as_ref()) {
                 continue;
             }
             match store.record_assigned_ready_work_not_started_attention(
@@ -1688,7 +1688,9 @@ impl AppState {
                 return;
             }
         };
-        if provider_activity::observe_session(self, delivery.session_id, provider).await
+        if provider_activity::observe_session(self, delivery.session_id, provider)
+            .await
+            .map(|signals| signals.activity)
             != Some(ProviderActivity::Resting)
         {
             self.hold_queen_automation_until_resting(store, &delivery);
@@ -1948,11 +1950,23 @@ struct HealthResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "a response shape: each flag is an independent fact the roster renders"
+)]
 struct WorkerView {
     #[serde(flatten)]
     profile: WorkerProfile,
     running: bool,
     attention_state: WorkerAttentionState,
+    /// Something this worker started is still running after its turn ended.
+    ///
+    /// Sits beside the state rather than changing it: a resting prompt
+    /// deliberately outranks a background shell, because treating the worker as
+    /// busy stalled the whole Hive. But "finished, something still running" and
+    /// "nothing to do" both read Resting, and the operator could not tell them
+    /// apart.
+    background_work: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     engagement_expires_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2164,11 +2178,20 @@ struct SetStewardshipRequest {
 /// What the API knows about one worker beyond its durable profile. Grouped so
 /// the view keeps one parameter per caller decision rather than a row of
 /// positional booleans nobody can read at the call site.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the facts one worker view is built from: each is independently observed"
+)]
 struct WorkerViewFacts {
     running: bool,
     awaiting_operator: bool,
     runtime_error: Option<String>,
     provider_activity: ProviderActivity,
+    /// Something this worker started is still running after its turn ended.
+    /// Reported beside the activity rather than inside it: both situations
+    /// classify as Resting, deliberately, but "finished with a shell running"
+    /// and "nothing to do" are not the same thing to look at.
+    background_work: bool,
     /// The worker's system role, if it holds one. Carried as the role itself
     /// rather than a flag per role, so adding a second one does not add a
     /// second boolean nobody can read at the call site.
@@ -2188,6 +2211,7 @@ impl Default for WorkerViewFacts {
             awaiting_operator: false,
             runtime_error: None,
             provider_activity: ProviderActivity::Unknown,
+            background_work: false,
             system_role: None,
             last_output_at: None,
             held_for_answer: None,
@@ -2203,6 +2227,7 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         awaiting_operator,
         runtime_error,
         provider_activity,
+        background_work,
         system_role,
         last_output_at,
         held_for_answer,
@@ -2231,6 +2256,7 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         profile,
         running,
         attention_state,
+        background_work,
         engagement_expires_at,
         runtime_error,
         system_role,
@@ -10948,7 +10974,13 @@ mod tests {
             .provider_activity
             .write()
             .await
-            .insert(session, ProviderActivity::Resting);
+            .insert(
+                session,
+                provider_activity::ProviderSignals {
+                    activity: ProviderActivity::Resting,
+                    background_work: false,
+                },
+            );
 
         state.observe_assigned_ready_work_not_started(&store).await;
 

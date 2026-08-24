@@ -90,7 +90,7 @@ async fn observe(
     state: &AppState,
     profiles: &[WorkerProfile],
     live: &HashSet<WorkerSessionId>,
-) -> HashMap<WorkerSessionId, ProviderActivity> {
+) -> HashMap<WorkerSessionId, ProviderSignals> {
     let observations = profiles
         .iter()
         .filter_map(|profile| {
@@ -103,7 +103,7 @@ async fn observe(
         .map(|(session_id, provider)| async move {
             observe_session(state, session_id, provider)
                 .await
-                .map(|activity| (session_id, activity))
+                .map(|signals| (session_id, signals))
         })
         .buffer_unordered(8)
         .filter_map(async move |observation| observation)
@@ -115,11 +115,23 @@ async fn observe(
 ///
 /// Coordination delivery uses this immediately before writing so an open
 /// provider question is an input-authority boundary rather than a visual hint.
+/// What one observation of a session saw.
+///
+/// Activity decides routing; background work is reported beside it so an
+/// operator can tell a worker with nothing to do from one that finished while
+/// something it started is still running. Both classify as Resting, and that is
+/// deliberate — the turn HAS ended — but they are not the same situation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ProviderSignals {
+    pub(super) activity: ProviderActivity,
+    pub(super) background_work: bool,
+}
+
 pub(super) async fn observe_session(
     state: &AppState,
     session_id: WorkerSessionId,
     provider: ProviderKind,
-) -> Option<ProviderActivity> {
+) -> Option<ProviderSignals> {
     match request_host(
         state,
         HostRequest::Read {
@@ -133,7 +145,10 @@ pub(super) async fn observe_session(
             resume: swarm_terminal::Resume::Snapshot { snapshot },
             running: true,
             ..
-        }) => Some(classify_observed_activity(provider, &snapshot)),
+        }) => Some(ProviderSignals {
+            activity: classify_observed_activity(provider, &snapshot),
+            background_work: swarm_terminal::background_work_running(provider, &snapshot),
+        }),
         _ => None,
     }
 }
@@ -267,7 +282,7 @@ pub(super) async fn refresh(
     state: &AppState,
     profiles: &[WorkerProfile],
     live: &HashSet<WorkerSessionId>,
-) -> HashMap<WorkerSessionId, ProviderActivity> {
+) -> HashMap<WorkerSessionId, ProviderSignals> {
     let observed = observe(state, profiles, live).await;
     let changed = {
         let mut previous = state.provider_activity.write().await;

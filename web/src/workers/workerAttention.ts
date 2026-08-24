@@ -24,7 +24,20 @@ export function workerAttention(worker: Worker, now = Date.now()): WorkerAttenti
     && worker.engagement_expires_at * 1000 <= now
     ? "resting"
     : worker.attention_state;
-  return { state, ...presentation[state] };
+  const shown = presentation[state];
+  // Resting with something still running is not the same as resting with
+  // nothing to do, and both used to read "Resting". The classifier is right to
+  // call the turn over — treating the worker as busy stalled the whole Hive —
+  // so this distinguishes the two without changing which one it is.
+  if (state === "resting" && worker.background_work) {
+    return {
+      state,
+      ...shown,
+      label: "Resting · task running",
+      compactLabel: "task running",
+    };
+  }
+  return { state, ...shown };
 }
 
 /**

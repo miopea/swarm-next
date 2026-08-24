@@ -26,6 +26,8 @@ export type Worker = {
   updated_at: number;
   running: boolean;
   attention_state: WorkerAttentionState;
+  /** Something this worker started is still running after its turn ended. */
+  background_work?: boolean;
   /** Wall-clock second this worker's terminal last produced output. */
   last_output_at?: number;
   /** When this worker's oldest unanswered request was filed, while it holds. */
