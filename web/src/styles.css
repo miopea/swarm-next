@@ -205,13 +205,14 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .tunnel-address > div { display: grid; min-width: 0; gap: 4px; }
 .tunnel-address a { overflow-wrap: anywhere; font-weight: 600; }
 .tunnel-address small { color: var(--text-muted); font-size: .72rem; }
-/* 164px, not 124px. A version-4 code with the required 4-module quiet zone is
-   41 modules across, so 164 gives each module exactly 4 device pixels. At 124
-   it was 3.02 per module, and the fractional remainder is what tore rows out
-   of the symbol. Sized in whole modules so the code stays scannable rather
-   than merely present. */
-.tunnel-qr { flex: 0 0 auto; width: 164px; height: 164px; border-radius: 8px; overflow: hidden; background: #fff; }
-.tunnel-qr svg { display: block; width: 100%; height: 100%; }
+/* No fixed box, deliberately. The SVG carries its own size in whole pixels —
+   4 per module — because the module count depends on how long the address is
+   (33 or 37, measured over real quick-tunnel hostnames). Any fixed CSS size is
+   an exact multiple for one of those and a fractional one for the other, and a
+   fractional scale is what tore rows out of the symbol. Letting the intrinsic
+   size win is what keeps it scannable for every address. */
+.tunnel-qr { flex: 0 0 auto; border-radius: 8px; overflow: hidden; background: #fff; line-height: 0; }
+.tunnel-qr svg { display: block; }
 @media (max-width: 620px) { .tunnel-address { flex-direction: column; align-items: flex-start; } }
 .passkey-settings { display: grid; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .passkey-settings h4 { margin: 0; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }

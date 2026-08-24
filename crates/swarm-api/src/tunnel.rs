@@ -95,6 +95,17 @@ fn cloudflared_available() -> bool {
 /// that must work with no internet beyond the tunnel it just opened.
 /// Four, because ISO/IEC 18004 says four.
 const QUIET_ZONE_MODULES: usize = 4;
+/// Device pixels per module, which is what makes a QR scannable rather than
+/// merely present.
+///
+/// The symbol has to land on WHOLE pixels. A fixed CSS box cannot do that,
+/// because the module count depends on how long the address is: measured over
+/// real quick-tunnel hostnames, 33 modules for most and 37 for the longer ones,
+/// so side is 41 or 45. The 164px box that replaced the original 124px was an
+/// exact 4px per module for 41 and 3.644 for 45 — still fractional, still
+/// tearing rows out, just for fewer addresses. Sizing FROM the module count is
+/// the only version that holds for every address.
+const MODULE_PIXELS: usize = 4;
 
 fn qr_svg(url: &str) -> Option<String> {
     use qrcode::{EcLevel, QrCode};
@@ -114,13 +125,13 @@ fn qr_svg(url: &str) -> Option<String> {
         let y = index / width + quiet;
         let _ = write!(modules, r#"<rect x="{x}" y="{y}" width="1" height="1"/>"#);
     }
-    // crispEdges is deliberately gone. It snaps every module edge to a whole
-    // device pixel, so at any size that is not an exact multiple of the module
-    // count the browser drops some rows and doubles others — which is what the
-    // operator photographed. A slightly soft module scans; a missing one does
-    // not.
+    // An intrinsic size in whole pixels, so the browser never has to divide a
+    // module across a pixel boundary. crispEdges stays gone: it snapped edges
+    // to the pixel grid, which is what dropped and doubled rows whenever the
+    // scale was fractional.
+    let pixels = side * MODULE_PIXELS;
     Some(format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {side} {side}" role="img" aria-label="QR code for this Hive's temporary address"><rect width="{side}" height="{side}" fill="#fff"/><g fill="#000">{modules}</g></svg>"##
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {side} {side}" width="{pixels}" height="{pixels}" role="img" aria-label="QR code for this Hive's temporary address"><rect width="{side}" height="{side}" fill="#fff"/><g fill="#000">{modules}</g></svg>"##
     ))
 }
 
@@ -540,6 +551,53 @@ mod tests {
         assert!(
             !svg.contains("crispEdges"),
             "a slightly soft module scans; a missing one does not"
+        );
+    }
+
+    /// Every address, not just the short ones.
+    ///
+    /// The first attempt at this replaced a 124px box with a 164px one, which
+    /// is an exact 4px per module for a 33-module code and 3.644 for a
+    /// 37-module one. Real quick-tunnel hostnames produce BOTH, so half of them
+    /// still tore. A test that only exercised one length would have passed.
+    #[test]
+    fn every_address_length_lands_the_symbol_on_whole_pixels() {
+        let mut sides = std::collections::BTreeSet::new();
+        for url in [
+            // Measured from real quick tunnels on 2026-08-24: the short shape
+            // gives 33 modules, the long one 37.
+            "https://actual-border-leone-geneva.trycloudflare.com",
+            "https://blues-lesson-rhythm-balloon.trycloudflare.com",
+            "https://dicke-urge-popularity-commodities.trycloudflare.com",
+            "https://playstation-compilation-organizational-earnings.trycloudflare.com",
+            "https://conversation-browsers-contributions-permit.trycloudflare.com",
+        ] {
+            let svg = qr_svg(url).expect("a code");
+            let side: usize = svg
+                .split("viewBox=\"0 0 ")
+                .nth(1)
+                .and_then(|rest| rest.split(' ').next())
+                .and_then(|value| value.parse().ok())
+                .expect("a square viewBox");
+            let pixels: usize = svg
+                .split("width=\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .and_then(|value| value.parse().ok())
+                .expect("an intrinsic width in pixels");
+            sides.insert(side);
+            assert_eq!(
+                pixels % side,
+                0,
+                "{url} renders {side} modules into {pixels}px, which is {} px per module",
+                f64::from(u32::try_from(pixels).unwrap())
+                    / f64::from(u32::try_from(side).unwrap())
+            );
+            assert_eq!(pixels / side, MODULE_PIXELS);
+        }
+        assert!(
+            sides.len() > 1,
+            "the addresses used here must cover more than one symbol size, or this proves nothing: {sides:?}"
         );
     }
 
