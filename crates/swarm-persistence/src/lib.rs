@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 mod apiary;
 mod coordinator;
+pub use task_dispatches::{DispatchHold, HeldTaskDispatch};
 pub use task_outcomes::CompletionEvidence;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, CoordinatorAttention,

@@ -311,7 +311,18 @@ impl ServerHandler for AgentMcp {
                                     "reason": item.reason,
                                     "observed_at": item.observed_at,
                                     "age_seconds": item.age_seconds,
-                                })).collect::<Vec<_>>()
+                                })).collect::<Vec<_>>(),
+                                // Briefings that are queued and not moving, and
+                                // what each is waiting on. A dispatch that is
+                                // never claimed is never attempted and so never
+                                // refused, which left it invisible everywhere:
+                                // thirteen of them sat six hours with attempts
+                                // at zero and nothing anywhere saying why.
+                                "held_briefings": self
+                                    .tasks
+                                    .store()
+                                    .held_task_dispatches(crate::unix_timestamp())
+                                    .unwrap_or_default(),
                             }))
                         })
                 } else {
@@ -1171,7 +1182,7 @@ fn list_workers_tool() -> Tool {
 fn list_coordination_attention_tool() -> Tool {
     tool(
         "swarm_list_coordination_attention",
-        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Recheck the task and worker before deciding whether to steer, wait, or ask the operator.",
+        "Queen only: list current deterministic coordination attention, including Ready work whose delivered brief did not start, Active work that is durably unchanged while its loaded worker is resting, and Active work whose worker exited. Also reports briefings that are queued and not being delivered, and what each is waiting on — an operator using that terminal, or the worker already having Active work. A briefing held for either reason is working as intended and is not a task to chase; one waiting its turn behind nothing is. Recheck the task and worker before deciding whether to steer, wait, or ask the operator.",
         &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         true,
     )

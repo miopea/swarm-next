@@ -41,6 +41,13 @@ pub(super) struct CoordinatorStatusResponse {
     /// coordinator: declining to type into a terminal with an unanswered
     /// prompt is correct, and saying nothing about it for a day is not.
     held: Vec<HeldDeliveryResponse>,
+    /// Briefings queued and not moving, and what each is waiting on.
+    ///
+    /// A held delivery was attempted and refused. A briefing the dispatcher
+    /// never claims is never attempted, so nothing recorded it: thirteen sat
+    /// six hours with attempts at zero while the board showed work assigned and
+    /// apparently ignored.
+    held_briefings: Vec<swarm_persistence::HeldTaskDispatch>,
 }
 
 /// One thing the coordinator is holding, and for how long.
@@ -63,6 +70,18 @@ pub(super) struct HeldDeliveryResponse {
 /// into an item would teach the operator to ignore the queue. Two minutes is
 /// long enough that nobody is coming.
 const HELD_DELIVERY_GRACE_SECONDS: i64 = 120;
+
+/// Briefings queued and not moving, with what each is waiting on.
+///
+/// Distinct from a held delivery: those were attempted and refused, so they
+/// reach the refusal ledger. A briefing the dispatcher never claims is never
+/// attempted, so nothing recorded it and the board showed work assigned and
+/// apparently ignored.
+fn held_briefings(state: &Arc<AppState>) -> Result<Vec<swarm_persistence::HeldTaskDispatch>, ApiError> {
+    crate::task_store(state)?
+        .held_task_dispatches(crate::unix_timestamp())
+        .map_err(|error| task_store_error(&error))
+}
 
 fn held_deliveries(state: &Arc<AppState>) -> Result<Vec<HeldDeliveryResponse>, ApiError> {
     let refusals = crate::task_store(state)?
@@ -145,6 +164,7 @@ pub(super) async fn coordinator_status(
             automatic_start_admission: state.coordinator_start_admission(),
             automatic_start_batch_limit: usize::from(AUTOMATIC_WAKE_BATCH_LIMIT),
             held: held_deliveries(&state)?,
+            held_briefings: held_briefings(&state)?,
         }),
     )
         .into_response())

@@ -826,3 +826,53 @@ test("stops a cycle longer than two sizes", async () => {
   host.remove();
   vi.useRealTimers();
 });
+
+/**
+ * Measured on the operator's Hive while it was happening: 200 size requests in
+ * 7 seconds alternating 66x151 and 67x151 — a two-cycle, the exact shape the
+ * oscillation guard was written to stop, on a build that already had it.
+ *
+ * Every one of those went through fit(), which had no guard and, worse, never
+ * recorded what it applied — so the memory the observer path reads was always
+ * empty and its guard could never fire either.
+ */
+test("fit refuses to apply a size it just left", async () => {
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.stubGlobal("ResizeObserver", class { observe(): void {} disconnect(): void {} });
+  const surface = new XtermSurface();
+  const host = document.createElement("div");
+  document.body.append(host);
+  surface.open(host);
+  if (xterm.terminal) {
+    xterm.terminal.rows = 66;
+    xterm.terminal.cols = 151;
+  }
+
+  const sizes = [
+    { rows: 67, cols: 151 },
+    { rows: 66, cols: 151 },
+    { rows: 67, cols: 151 },
+  ];
+  let step = 0;
+  xterm.propose.mockReset().mockImplementation(() => sizes[Math.min(step, sizes.length - 1)]);
+  const resize = vi.spyOn(xterm.terminal!, "resize" as never);
+
+  for (const _ of sizes) {
+    const fitting = surface.fit();
+    for (let frame = 0; frame < 8; frame += 1) {
+      await Promise.resolve();
+      frames.shift()?.(frame * 16);
+      await Promise.resolve();
+    }
+    await fitting;
+    step += 1;
+  }
+
+  // 66 -> 67 is real. Going back to 66, then to 67 again, is the loop.
+  expect(resize.mock.calls.length).toBeLessThanOrEqual(1);
+  host.remove();
+});

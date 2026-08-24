@@ -35,6 +35,29 @@ pub enum TaskDispatchFailure {
     Uncertain,
 }
 
+/// Why a briefing that is ready to send has not been sent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchHold {
+    /// Somebody is using that terminal. Delivering would type into their work.
+    OperatorInTheTerminal,
+    /// The worker is already on something. Two briefs at once is two tasks.
+    WorkerAlreadyWorking,
+    /// Nothing is holding it; it is simply next in the queue.
+    WaitingItsTurn,
+}
+
+/// One briefing waiting, and what it is waiting on.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct HeldTaskDispatch {
+    pub task_id: String,
+    pub title: String,
+    pub worker_id: String,
+    pub worker_name: String,
+    pub queued_at: i64,
+    pub reason: DispatchHold,
+}
+
 impl TaskStore {
     /// Forgets unconfirmed briefings for work that has since moved on.
     ///
@@ -99,6 +122,58 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns a persistence or data-integrity error.
+    /// Why each queued briefing is not being delivered.
+    ///
+    /// A briefing is held back while the operator is in that worker's terminal,
+    /// and while the worker already has other Active work. Both are right —
+    /// nobody wants a brief typed into a terminal a person is using, or two
+    /// tasks started at once. Neither left any trace.
+    ///
+    /// Measured 2026-08-24: thirteen briefings six hours old, `attempts` still
+    /// zero, nothing in the refusal ledger and nothing in the log, because a
+    /// dispatch that is never claimed is never attempted and so never refused.
+    /// From the board it was indistinguishable from a broken dispatcher, and
+    /// the operator reasonably read it as Queen failing to route work.
+    ///
+    /// # Errors
+    /// Returns an error when the dispatch queue cannot be read.
+    pub fn held_task_dispatches(&self, now: i64) -> Result<Vec<HeldTaskDispatch>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT td.task_id, t.title, td.worker_id, w.name, td.updated_at,
+                    EXISTS(SELECT 1 FROM worker_engagements e
+                           WHERE e.worker_id = td.worker_id AND e.expires_at > ?1) AS engaged,
+                    EXISTS(SELECT 1 FROM tasks other
+                           WHERE other.assigned_worker_id = td.worker_id
+                             AND other.state = 'active' AND other.removed_at IS NULL
+                             AND other.id <> td.task_id) AS busy
+             FROM task_dispatches td
+             JOIN tasks t ON t.id = td.task_id
+             JOIN worker_profiles w ON w.id = td.worker_id
+             WHERE td.state = 'queued' AND t.removed_at IS NULL
+             ORDER BY td.updated_at",
+        )?;
+        let rows = statement.query_map(params![now], |row| {
+            let engaged: bool = row.get(5)?;
+            let busy: bool = row.get(6)?;
+            Ok(HeldTaskDispatch {
+                task_id: row.get::<_, String>(0)?,
+                title: row.get(1)?,
+                worker_id: row.get::<_, String>(2)?,
+                worker_name: row.get(3)?,
+                queued_at: row.get(4)?,
+                reason: if engaged {
+                    DispatchHold::OperatorInTheTerminal
+                } else if busy {
+                    DispatchHold::WorkerAlreadyWorking
+                } else {
+                    DispatchHold::WaitingItsTurn
+                },
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn claim_task_dispatches(&self, now: i64) -> Result<Vec<TaskDispatch>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -587,5 +662,83 @@ mod tests {
             store.get_task(task_id).unwrap().dispatch_state,
             Some(TaskDispatchState::Uncertain)
         );
+    }
+
+    /// Thirteen briefings sat six hours with `attempts` at zero and nothing
+    /// anywhere saying why: a dispatch the claim skips is never attempted, so
+    /// it never reaches the refusal ledger either. From the board it looked
+    /// like Queen had assigned work and nothing had happened.
+    #[test]
+    fn a_briefing_that_is_not_moving_says_what_it_is_waiting_on() {
+        use swarm_domain::{TaskActivityActor, TaskPriority, TaskState};
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        let task = store
+            .create_task_with_details("Brief me", "", TaskPriority::Normal, "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::worker(queen.id))
+            .unwrap();
+
+        // Nothing in the way: it is simply next.
+        let waiting = store.held_task_dispatches(1_000).unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].reason, DispatchHold::WaitingItsTurn);
+        assert_eq!(waiting[0].worker_name, "Petal");
+
+        // The operator opens that terminal. The briefing is now held, and says so.
+        let device = swarm_domain::PresenceDeviceId::new();
+        store
+            .renew_worker_engagement(session, Some(device), 1_000, 300)
+            .unwrap();
+
+        let held = store.held_task_dispatches(1_100).unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].reason, DispatchHold::OperatorInTheTerminal);
+        assert_eq!(held[0].task_id, task.id.to_string());
+    }
+
+    /// The other legitimate hold: one worker, one task at a time.
+    #[test]
+    fn a_worker_already_working_is_a_different_answer_from_an_open_terminal() {
+        use swarm_domain::{TaskActivityActor, TaskPriority, TaskState};
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        let busy = store
+            .create_task_with_details("Under way", "", TaskPriority::Normal, "/workspace/petal")
+            .unwrap();
+        store.transition_task(busy.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(busy.id, worker.id, &TaskActivityActor::worker(queen.id))
+            .unwrap();
+        store.transition_task(busy.id, TaskState::Active).unwrap();
+
+        let next = store
+            .create_task_with_details("Waiting", "", TaskPriority::Normal, "/workspace/petal")
+            .unwrap();
+        store.transition_task(next.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(next.id, worker.id, &TaskActivityActor::worker(queen.id))
+            .unwrap();
+
+        let held = store.held_task_dispatches(1_000).unwrap();
+        let waiting = held
+            .iter()
+            .find(|entry| entry.task_id == next.id.to_string())
+            .expect("the second briefing is queued");
+        assert_eq!(waiting.reason, DispatchHold::WorkerAlreadyWorking);
     }
 }

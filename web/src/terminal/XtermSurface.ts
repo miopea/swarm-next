@@ -135,6 +135,28 @@ export class XtermSurface implements TerminalSurface {
         else stableFrames = 1;
         previous = usable;
         if (stableFrames < STABLE_FIT_FRAMES) continue;
+        // The same anti-flap the observer path uses, because this is the path
+        // the loop actually runs through.
+        //
+        // The guard lived only in #fitIfUsable. Measured live on the operator's
+        // Hive while it was happening: 200 requests in 7 seconds alternating
+        // 66x151 and 67x151 — a two-cycle, the exact shape that guard was
+        // written to stop, on a build that had it. Every one of those went
+        // through fit(), which applied whatever it measured and never recorded
+        // what it applied, so the memory the other path reads was always empty.
+        // The size it was already at is a size it has been. Recorded on the
+        // first fit rather than when the surface opens, because at open the
+        // terminal still carries its constructed default and the real size
+        // arrives later — seeding there remembered a number that was never on
+        // screen.
+        if (this.#appliedSizes.length === 0) {
+          this.#rememberApplied({ rows: this.#terminal.rows, columns: this.#terminal.cols });
+        }
+        if (this.#wouldOscillate(usable)) {
+          this.#refreshViewport();
+          return { rows: this.#terminal.rows, columns: this.#terminal.cols };
+        }
+        this.#rememberApplied(usable);
         this.#terminal.resize(usable.columns, usable.rows);
         this.#refreshViewport();
         return usable;
@@ -419,11 +441,17 @@ export class XtermSurface implements TerminalSurface {
    */
   #wouldOscillate(next: { rows: number; columns: number }): boolean {
     const since = Date.now() - OSCILLATION_WINDOW_MS;
-    // Skips the current size: proposing it is not a change, and the caller has
-    // already established that this one is.
-    return this.#appliedSizes
-      .slice(1)
-      .some((seen) => seen.at >= since && seen.rows === next.rows && seen.columns === next.columns);
+    // Every remembered size, including the current one.
+    //
+    // Skipping the current entry looked right — proposing the size you are
+    // already at is not a change — but it made the guard blind to the simplest
+    // cycle of all. Going A to B and straight back to A is caught only if A is
+    // still in the list, and A is exactly the entry that skip removed. That is
+    // the two-cycle measured live on the operator's Hive, 66x151 to 67x151 and
+    // back, a hundred times in seven seconds.
+    return this.#appliedSizes.some(
+      (seen) => seen.at >= since && seen.rows === next.rows && seen.columns === next.columns,
+    );
   }
 
   #rememberApplied(size: { rows: number; columns: number }): void {
