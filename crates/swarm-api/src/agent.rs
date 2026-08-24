@@ -45,10 +45,16 @@ use tower::ServiceExt;
 /// The MCP server name a worker sees.
 ///
 /// Renaming this removes every running worker's Swarm access at once rather
-/// than degrading it: a worker's tool schema is fixed when its session
-/// connects, so the old name keeps being used until that session reconnects.
-/// The config payload replaces the whole file, so a restarted worker gets this
-/// name and no stale entry beside it.
+/// than degrading it: a running client keeps calling the old name until it
+/// reconnects. The config payload replaces the whole file, so a restarted
+/// worker gets this name and no stale entry beside it.
+///
+/// This used to say a worker's tool schema is "fixed when its session
+/// connects". That is not true, and it was the sentence people found when a
+/// newly shipped tool appeared to be missing — measured 2026-08-24, a worker
+/// session acquired `swarm_reload_app` part-way through without restarting.
+/// What is true is that the refresh happens on the client's schedule, for
+/// reasons this server neither triggers nor observes: see ADR 0053.
 const CONFIG_SERVER_NAME: &str = "swarm";
 const MCP_BRIDGE_COMMAND: &str = "swarm-terminal-host";
 const TOKEN_BYTES: usize = 32;
