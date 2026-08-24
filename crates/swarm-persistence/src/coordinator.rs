@@ -30,7 +30,7 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
              JOIN worker_sessions session ON session.session_id = action.session_id
-             WHERE action.kind IN ('stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention')
+             WHERE action.kind IN ('stale_owned_work_attention','owned_work_never_briefed_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention')
                AND action.state = 'completed'
                AND task.updated_at = action.evidence_revision
                AND session.worker_id = action.worker_id
@@ -54,6 +54,18 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                    OR (action.kind = 'stale_owned_work_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'active' AND session.ended_at IS NULL)
+                   -- Clears itself the moment a brief is confirmed delivered,
+                   -- so redelivering the work is the whole fix and nothing has
+                   -- to be dismissed by hand.
+                   OR (action.kind = 'owned_work_never_briefed_attention'
+                       AND task.assigned_worker_id = action.worker_id
+                       AND task.state = 'active' AND session.ended_at IS NULL
+                       AND NOT EXISTS (
+                           SELECT 1 FROM task_dispatches delivered
+                           WHERE delivered.task_id = action.task_id
+                             AND delivered.worker_id = action.worker_id
+                             AND delivered.delivered_at IS NOT NULL
+                       ))
                    OR (action.kind = 'owned_work_worker_exited_attention'
                        AND task.assigned_worker_id = action.worker_id
                        AND task.state = 'active'
@@ -662,8 +674,56 @@ impl TaskStore {
             transaction.commit()?;
             return Ok(false);
         }
+        // Whether this worker was ever actually handed the work.
+        //
+        // The two cases look identical from outside — no commits, no files
+        // touched, a resting worker on Active work — so this reported both as
+        // "unchanged while resting", which names the worker. Measured
+        // 2026-08-19: a high-priority brief sat with one attempt and no
+        // delivery for 27 hours while the worker was blamed for being idle. It
+        // had nothing to act on.
+        //
+        // The dispatch row carried the answer the whole time; nothing consulted
+        // it. A brief that was never confirmed delivered is a different problem
+        // with a different fix, so it is a different kind of attention.
+        //
+        // Only an `uncertain` row counts, because only that one is provably
+        // going nowhere: queued and dispatching are still in flight, and the
+        // absence of any row proves nothing at all — old rows are trimmed once
+        // there are more than 1024 of them, so inferring "never briefed" from a
+        // missing row would invent the same false accusation in the other
+        // direction.
+        let never_briefed: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM task_dispatches dispatch
+                 WHERE dispatch.task_id = ?1 AND dispatch.worker_id = ?2
+                   AND dispatch.state = 'uncertain' AND dispatch.delivered_at IS NULL
+             ) AND NOT EXISTS(
+                 SELECT 1 FROM task_dispatches delivered
+                 WHERE delivered.task_id = ?1 AND delivered.worker_id = ?2
+                   AND delivered.delivered_at IS NOT NULL
+             )",
+            params![
+                candidate.task_id.to_string(),
+                candidate.worker_id.to_string()
+            ],
+            |row| row.get(0),
+        )?;
+        let (kind, reason, key) = if never_briefed {
+            (
+                "owned_work_never_briefed_attention",
+                "This worker was never given this brief — the delivery was never confirmed, so it has nothing to act on. Re-assign the task to send it again rather than steering the worker.",
+                "owned-work-never-briefed",
+            )
+        } else {
+            (
+                "stale_owned_work_attention",
+                "Active work is unchanged while its loaded worker is resting",
+                "stale-owned-work",
+            )
+        };
         let idempotency_key = format!(
-            "stale-owned-work:{}:{}:{}:{}",
+            "{key}:{}:{}:{}:{}",
             candidate.task_id, candidate.worker_id, candidate.session_id, candidate.task_revision
         );
         let changed = transaction.execute(
@@ -671,8 +731,8 @@ impl TaskStore {
                  (id, idempotency_key, kind, worker_id, task_id, session_id,
                   evidence_revision, observed_age_seconds, state, reason,
                   finished_at, updated_at)
-             VALUES (?1, ?2, 'stale_owned_work_attention', ?3, ?4, ?5, ?6, ?7,
-                     'completed', 'Active work is unchanged while its loaded worker is resting',
+             VALUES (?1, ?2, ?9, ?3, ?4, ?5, ?6, ?7,
+                     'completed', ?10,
                      ?8, ?8)",
             params![
                 Uuid::now_v7().to_string(),
@@ -683,6 +743,8 @@ impl TaskStore {
                 candidate.task_revision,
                 candidate.age_seconds,
                 now,
+                kind,
+                reason,
             ],
         )? == 1;
         if changed {
@@ -1247,6 +1309,80 @@ pub(super) fn migrate_worker_filed_draft_attention(
         )?;
     }
     transaction.pragma_update(None, "user_version", WORKER_FILED_DRAFT_SCHEMA_VERSION)
+}
+
+/// Tells "the worker has the brief and is idle" apart from "the worker was
+/// never given the brief".
+///
+/// Those look identical from outside — no commits, no files touched, a resting
+/// worker on Active work — and `stale_owned_work_attention` reported both as
+/// the first, which points the reader at a worker that is innocent. Measured
+/// 2026-08-19: a high-priority brief sat undelivered for 27 hours while every
+/// board read the task as work in progress.
+///
+/// A separate kind rather than a different wording, because the two need
+/// different actions: one is steer the worker, the other is redeliver the
+/// brief.
+pub(super) fn migrate_undelivered_brief_attention(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%owned_work_never_briefed_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    // As with the step before it: a database can arrive here still carrying an
+    // older shape, so widen only the shape this actually widens.
+    let ready: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%worker_filed_draft_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    if ready && !present {
+        transaction.execute_batch(
+            "DROP INDEX IF EXISTS coordinator_actions_queue;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE coordinator_actions RENAME TO coordinator_actions_v88;
+             CREATE TABLE coordinator_actions (
+                 id TEXT PRIMARY KEY,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','owned_work_never_briefed_attention')),
+                 worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 session_id TEXT,
+                 evidence_revision INTEGER,
+                 observed_age_seconds INTEGER,
+                 state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                 reason TEXT NOT NULL,
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                 attempted_at INTEGER,
+                 finished_at INTEGER,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );
+             INSERT INTO coordinator_actions (
+                 id, idempotency_key, kind, worker_id, task_id, session_id,
+                 evidence_revision, observed_age_seconds, state, reason, attempts,
+                 attempted_at, finished_at, created_at, updated_at
+             ) SELECT id, idempotency_key, kind, worker_id, task_id, session_id,
+                      evidence_revision, observed_age_seconds, state, reason, attempts,
+                      attempted_at, finished_at, created_at, updated_at
+               FROM coordinator_actions_v88;
+             DROP TABLE coordinator_actions_v88;
+             CREATE INDEX coordinator_actions_queue
+                 ON coordinator_actions(state, created_at, id);
+             PRAGMA legacy_alter_table = OFF;",
+        )?;
+    }
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION,
+    )
 }
 
 #[cfg(test)]
@@ -2212,6 +2348,71 @@ mod tests {
                 .stale_owned_work_candidates(1_001, 600)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// A worker was blamed for 27 hours for being idle on work it had never
+    /// been given.
+    ///
+    /// The brief was claimed, the API died before it landed, and the row sat
+    /// `uncertain` with no delivery. From outside that is indistinguishable
+    /// from a resting worker — no commits, no files touched — so the detector
+    /// reported "unchanged while its loaded worker is resting" and pointed at
+    /// the wrong thing. The dispatch row held the answer all along.
+    #[test]
+    fn work_whose_brief_was_never_delivered_names_the_brief_not_the_worker() {
+        let store = TaskStore::in_memory().unwrap();
+        let (worker, _session, task) = active_owned_work(&store, "Clover", 100);
+
+        // The API dies mid-delivery: claimed, attempted, never delivered.
+        let claimed = store.claim_task_dispatches(200).unwrap();
+        assert_eq!(claimed.len(), 1, "the brief is in flight");
+        assert_eq!(store.recover_inflight_task_dispatches().unwrap(), 1);
+
+        let candidate = store
+            .stale_owned_work_candidates(1_000, 600)
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(
+            store
+                .record_stale_owned_work_attention(&candidate, 1_000, 600)
+                .unwrap()
+        );
+        let attention = store.current_coordinator_attention().unwrap();
+        assert_eq!(attention.len(), 1);
+        assert_eq!(
+            attention[0].kind, "owned_work_never_briefed_attention",
+            "a brief that never landed must not be reported as an idle worker: {:?}",
+            attention[0]
+        );
+        assert!(
+            attention[0].reason.contains("never given this brief"),
+            "and it must say what to do about it: {}",
+            attention[0].reason
+        );
+
+        // Re-assigning is Queen's lever for stranded work, and for Active work
+        // it used to bind a session and deliver nothing. It now redelivers,
+        // which is the whole repair — no walking the task through `blocked` to
+        // reach `ready`, which lies on the board while it happens.
+        store
+            .assign_task_to_worker_as(task, worker, &TaskActivityActor::operator())
+            .unwrap();
+        let redelivered = store.claim_task_dispatches(2_000).unwrap();
+        assert!(
+            redelivered.iter().any(|dispatch| dispatch.task_id == task),
+            "re-assigning Active work must send the brief again"
+        );
+        store
+            .complete_task_dispatch(&redelivered[0].assignment_id, 2_001)
+            .unwrap();
+
+        // And the attention clears itself once the brief lands, rather than
+        // needing to be dismissed by hand.
+        assert!(
+            store.current_coordinator_attention().unwrap().is_empty(),
+            "a delivered brief answers the question the attention was asking"
         );
     }
 

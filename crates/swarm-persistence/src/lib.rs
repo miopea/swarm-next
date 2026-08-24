@@ -139,7 +139,8 @@ const DECISION_DEADLINE_ATTENTION_SCHEMA_VERSION: i64 = 85;
 const COORDINATOR_REFUSAL_SCHEMA_VERSION: i64 = 86;
 const OPERATOR_PASSKEY_SCHEMA_VERSION: i64 = 87;
 const TERMINAL_GEOMETRY_LEDGER_SCHEMA_VERSION: i64 = 88;
-const CURRENT_SCHEMA_VERSION: i64 = TERMINAL_GEOMETRY_LEDGER_SCHEMA_VERSION;
+const UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION: i64 = 89;
+const CURRENT_SCHEMA_VERSION: i64 = UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -1779,7 +1780,23 @@ impl TaskStore {
                  VALUES (?1, ?2, ?3)",
                 params![assignment_id, id.to_string(), session_id],
             )?;
-            if state == TaskState::Ready.to_string() {
+            // Active work is briefed on re-assignment too, and that is the
+            // repair rather than a side effect.
+            //
+            // Re-assigning is Queen's documented lever for stranded work, and
+            // for a task already Active it did nothing: it bound a session and
+            // created no briefing, so the worker woke into silence. The only
+            // route that actually redelivered was walking the task
+            // active -> blocked -> ready, which lies on the board while it
+            // happens, because there is no active -> ready edge. Measured
+            // 2026-08-19: a high-priority brief undelivered for 27 hours, and
+            // it landed one second after finally being queued.
+            //
+            // Safe because delivery already covers work that has started —
+            // claim_task_dispatches takes 'ready' and 'active' — and because a
+            // worker genuinely holding the work is not re-assigned by accident:
+            // this runs only when somebody asked for it.
+            if state == TaskState::Ready.to_string() || state == TaskState::Active.to_string() {
                 let queued: i64 = transaction.query_row(
                     "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
                     [],
@@ -2268,6 +2285,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < TERMINAL_GEOMETRY_LEDGER_SCHEMA_VERSION {
         migrate_terminal_geometry_ledger(transaction)?;
+    }
+    if schema_version < UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION {
+        coordinator::migrate_undelivered_brief_attention(transaction)?;
     }
     Ok(())
 }
@@ -5323,6 +5343,39 @@ mod tests {
             artifact: "",
             undo_sql: "",
             probe_sql: "",
+        },
+        SchemaStep {
+            table: "coordinator_actions",
+            artifact: "",
+            // A value inside a CHECK again, so the undo rebuilds the table at
+            // the shape before this step rather than dropping a column.
+            undo_sql: "DROP INDEX IF EXISTS coordinator_actions_queue;
+                 PRAGMA legacy_alter_table = ON;
+                 ALTER TABLE coordinator_actions RENAME TO coordinator_actions_undo;
+                 CREATE TABLE coordinator_actions (
+                     id TEXT PRIMARY KEY,
+                     idempotency_key TEXT NOT NULL UNIQUE,
+                     kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention')),
+                     worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                     session_id TEXT,
+                     evidence_revision INTEGER,
+                     observed_age_seconds INTEGER,
+                     state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                     reason TEXT NOT NULL,
+                     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                     attempted_at INTEGER,
+                     finished_at INTEGER,
+                     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                 );
+                 DROP TABLE coordinator_actions_undo;
+                 CREATE INDEX coordinator_actions_queue
+                     ON coordinator_actions(state, created_at, id);
+                 PRAGMA legacy_alter_table = OFF",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'coordinator_actions'
+                   AND sql LIKE '%owned_work_never_briefed_attention%')",
         },
     ];
 
