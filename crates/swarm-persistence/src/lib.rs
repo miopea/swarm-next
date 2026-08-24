@@ -339,8 +339,13 @@ pub enum TaskStoreError {
     InvalidEmailAttachment,
     #[error("email source was not found")]
     EmailSourceNotFound,
-    #[error("task deployment evidence is invalid")]
-    InvalidTaskDeployment,
+    #[error(
+        "a deployment reference and environment must each be present and no more than \
+         {max} bytes. Nothing about the shape is checked: a bare commit, \
+         a bare URL and a sentence are all accepted, so say whatever a third party could use to \
+         confirm this is running."
+    )]
+    InvalidTaskDeployment { max: usize },
     #[error(
         "deployment evidence belongs on work that is finished: move this task to review first"
     )]

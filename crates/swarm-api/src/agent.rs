@@ -1586,8 +1586,8 @@ fn record_deployment_tool() -> Tool {
             "type": "object",
             "properties": {
                 "task_id": { "type": "string", "format": "uuid" },
-                "environment": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Where it is running, such as production or staging." },
-                "reference": { "type": "string", "minLength": 1, "maxLength": 200, "description": "The release, URL, or deployment reference someone else could check." }
+                "environment": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Where it is running, such as production or staging." },
+                "reference": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Anything a third party could use to confirm this is running. Nothing about the shape is required — a bare commit or a bare URL is accepted — but the more checkable the better. Example: \"budgetbug e99140c (PR #66 squash-merge), deploy run 32667983788 — /api/health returns sha e99140c matching origin/main, read 2026-08-23T21:49Z\"." }
             },
             "required": ["task_id", "environment", "reference"],
             "additionalProperties": false

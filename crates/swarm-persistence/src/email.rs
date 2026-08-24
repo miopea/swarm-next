@@ -22,7 +22,7 @@ const MAX_EMAIL_ATTACHMENT_TOTAL_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_ATTACHMENT_NAME_BYTES: usize = 255;
 const MAX_MEDIA_TYPE_BYTES: usize = 127;
 const MAX_CONTENT_ID_BYTES: usize = 512;
-const MAX_DEPLOYMENT_FIELD_BYTES: usize = 512;
+pub(crate) const MAX_DEPLOYMENT_FIELD_BYTES: usize = 512;
 const MAX_EMAIL_REPLY_BYTES: usize = 10_000;
 const MAX_PENDING_EMAIL_REPLIES: i64 = 256;
 const MAX_EMAIL_MESSAGES_PER_TASK: usize = 20;
@@ -544,7 +544,9 @@ impl TaskStore {
             || !bounded_text(reference, MAX_DEPLOYMENT_FIELD_BYTES)
             || deployed_at <= 0
         {
-            return Err(TaskStoreError::InvalidTaskDeployment);
+            return Err(TaskStoreError::InvalidTaskDeployment {
+                max: MAX_DEPLOYMENT_FIELD_BYTES,
+            });
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
@@ -2373,6 +2375,59 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    /// Driven by the inputs that FAILED, because the message a stuck caller
+    /// sees is the entire defect.
+    ///
+    /// A worker reported that a bare SHA and a bare URL were rejected as
+    /// "task deployment evidence is invalid", and filed against the validator.
+    /// The validator never inspected shape. What it rejected was the task's
+    /// STATE — the reference was fine and recorded a moment too early — and it
+    /// answered with the wrong rule, which is how the report came to be filed
+    /// against the wrong thing entirely.
+    #[test]
+    fn a_refused_deployment_says_which_rule_it_broke() {
+        use swarm_domain::{TaskPriority, TaskState};
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task_with_details("Shipped", "", TaskPriority::Normal, "/workspace")
+            .unwrap();
+
+        // Too early: the rule broken is the state, and the message says so
+        // rather than blaming the evidence.
+        let early = store
+            .record_task_deployment(task.id, "production", "e99140c", 1_000)
+            .expect_err("a task not yet finished cannot carry deployment evidence");
+        assert!(
+            matches!(early, TaskStoreError::DeploymentEvidenceTooEarly),
+            "the state rule must not be reported as invalid evidence: {early}"
+        );
+        assert!(early.to_string().contains("move this task to review first"));
+
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+
+        // The shapes the report said were rejected. They are not, and never
+        // were: nothing here inspects shape.
+        for reference in ["e99140c", "https://github.com/owner/repo/releases/tag/v1"] {
+            store
+                .record_task_deployment(task.id, "production", reference, 1_000)
+                .unwrap_or_else(|error| panic!("{reference} must be accepted: {error}"));
+        }
+
+        // What IS rejected, and the refusal now names the limit rather than
+        // leaving the caller to guess at a shape that was never checked.
+        let empty = store
+            .record_task_deployment(task.id, "production", "   ", 1_000)
+            .expect_err("an empty reference is not evidence");
+        let said = empty.to_string();
+        assert!(said.contains("512"), "the limit must be named: {said}");
+        assert!(
+            said.contains("bare commit") && said.contains("bare URL"),
+            "and it must say the shape is not what was wrong: {said}"
         );
     }
 }

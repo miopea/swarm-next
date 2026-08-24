@@ -7479,7 +7479,7 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         ),
         TaskStoreError::InvalidEmailMessage
         | TaskStoreError::InvalidEmailAttachment
-        | TaskStoreError::InvalidTaskDeployment
+        | TaskStoreError::InvalidTaskDeployment { .. }
         | TaskStoreError::InvalidEmailReply => ApiError::new(
             StatusCode::BAD_REQUEST,
             "invalid_email_workflow",
