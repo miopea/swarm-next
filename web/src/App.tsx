@@ -1,3 +1,4 @@
+import PublicAddressWarning from "./PublicAddressWarning";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 
 import {
@@ -77,6 +78,8 @@ import {
   type RepositoryState,
   type Worker,
   type WorkspaceChoice,
+  readTunnel,
+  type TunnelStatus,
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
@@ -230,6 +233,29 @@ export function App() {
   const [colorTheme, setColorTheme] = useState<ColorTheme>(initialColorTheme);
   const [mobileKeysVisible, setMobileKeysVisible] = useState(initialMobileKeysVisibility);
   const [liveFeedState, setLiveFeedState] = useState<LiveFeedState>("connecting");
+  // Whether this Hive is currently reachable from the internet.
+  //
+  // Read app-wide rather than only inside the settings card that starts it: a
+  // quick tunnel publishes the whole Hive, and knowing that was previously
+  // confined to the one screen an operator had to already be on. The operator's
+  // ruling is that the exposure is acceptable and being unaware of it is not.
+  const [publicAddress, setPublicAddress] = useState<TunnelStatus>();
+  // Polled, not pushed. The control-room feed carries task and worker change,
+  // and a tunnel is neither; a fifteen-second local read is cheaper than a new
+  // event kind for something an operator starts by hand.
+  useEffect(() => {
+    if (!operatorToken || detached) return undefined;
+    let cancelled = false;
+    const read = () => {
+      void readTunnel(operatorToken)
+        .then((status) => { if (!cancelled) setPublicAddress(status); })
+        .catch(() => { /* a Hive that cannot answer is not publishing */ });
+    };
+    read();
+    const timer = window.setInterval(read, 15_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [operatorToken, detached]);
+
   const [presence, setPresence] = useState<OperatorPresence>();
   const [lockDetectionState, setLockDetectionState] = useState<LockDetectionState>("unsupported");
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>();
@@ -1293,6 +1319,8 @@ export function App() {
               <button className={surface === "settings" ? "selected" : ""} aria-current={surface === "settings" ? "page" : undefined} onClick={() => openSettings()}>
                 <span><SettingsIcon /> Settings</span>
               </button>
+
+              <PublicAddressWarning status={publicAddress} onOpen={() => openSettings("settings-access")} />
             </nav>}
 
             {/* Settings navigates from the rail like every other surface. It

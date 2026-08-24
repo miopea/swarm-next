@@ -530,6 +530,9 @@ test("switching workers releases only the previously selected engagement", async
     if (url.includes(`/api/v1/terminal/sessions/${queenSession}/engagements/`)) {
       return Promise.resolve(ok({}));
     }
+    if (url.includes("/api/v1/runtime/tunnel")) {
+      return Promise.resolve(ok({ available: false, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null }));
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   vi.stubGlobal("fetch", fetch);
@@ -607,6 +610,9 @@ test("does not invent a Queen request that was never filed", async () => {
     if (url === "/api/v1/providers") return Promise.resolve(ok({ claude_code: true, codex: false }));
     if (url === "/api/v1/preferences/presentation/desktop") return Promise.resolve(ok({ device_class: "desktop", color_theme: "light", terminal_keys_visible: true, configured: true }));
     if (url.includes("/api/v1/control-room/events")) return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    if (url.includes("/api/v1/runtime/tunnel")) {
+      return Promise.resolve(ok({ available: false, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null }));
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
   vi.stubGlobal("fetch", fetch);
@@ -767,6 +773,12 @@ test("creates a persisted task draft from the task board", async () => {
     // response.
     if (String(url).includes("/api/v1/preferences/start-surface")) {
       return Promise.resolve(ok({ start_surface: "tasks" }));
+    }
+    // The rail reads this on every surface to say whether the Hive is on the
+    // internet. Named here for the same reason as the two above: the queue is
+    // consumed in call order.
+    if (String(url).includes("/api/v1/runtime/tunnel")) {
+      return Promise.resolve(ok({ available: false, running: false, serving: false, error: null, url: null, started_at: null, qr_svg: null }));
     }
     const response = responses.shift();
     if (!response) throw new Error(`Unexpected request: ${String(url)}`);

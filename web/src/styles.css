@@ -142,6 +142,19 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    nav entry is a button, so the pop-out cannot nest inside it — hence the row.
    It stays out of the way until the entry is hovered, focused or current, so
    the rail still reads as five destinations rather than ten controls. */
+/* Says the Hive is reachable from the internet, on every surface.
+   Deliberately not styled as another destination in the rail: it is a state,
+   so it reads as a warning first and a link second. The operator accepted the
+   exposure; what they refused was it being invisible outside one card. */
+.public-address-warning { display: flex; width: 100%; align-items: center; gap: 9px; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 9px; background: var(--warn-soft); color: var(--text); text-align: left; }
+.public-address-warning:hover { border-color: var(--warn); filter: brightness(1.03); }
+.public-address-warning > span:last-child { display: grid; min-width: 0; gap: 1px; }
+.public-address-warning strong { font-size: .82rem; font-weight: 600; }
+.public-address-warning small { overflow: hidden; color: var(--text-muted); font-size: .7rem; text-overflow: ellipsis; white-space: nowrap; }
+.public-address-pulse { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--warn); animation: public-address-pulse 2s ease-in-out infinite; }
+@keyframes public-address-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .public-address-pulse { animation: none; } }
+
 .surface-nav-item { display: flex; min-width: 0; align-items: center; gap: 2px; }
 .surface-nav-item > button:first-child { flex: 1 1 auto; min-width: 0; }
 /* Scoped to the nav on purpose. This is a button inside `.surface-nav`, and
