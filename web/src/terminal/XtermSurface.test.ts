@@ -876,3 +876,41 @@ test("fit refuses to apply a size it just left", async () => {
   expect(resize.mock.calls.length).toBeLessThanOrEqual(1);
   host.remove();
 });
+
+test("repairs the host once, not on every settled fit that changed nothing", async () => {
+  // The repair exists because another device can leave the shared PTY at stale
+  // dimensions while this renderer believes it is fitted. It was firing on
+  // every settled fit, so most of what this surface sent asked for the size the
+  // terminal was already at: measured on the live ledger, 57 of 85 requests in
+  // two hours, 67%.
+  vi.useFakeTimers();
+  vi.stubGlobal("ResizeObserver", class { observe(): void {} disconnect(): void {} });
+  const element = document.createElement("div");
+  document.body.append(element);
+  xterm.propose.mockReset().mockReturnValue({ rows: 24, cols: 80 });
+  const surface = new XtermSurface();
+  surface.open(element);
+  const listener = vi.fn();
+  surface.onResize(listener);
+
+  window.dispatchEvent(new Event("resize"));
+  await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_FOR_TEST_MS + 16);
+  expect(listener).toHaveBeenCalledTimes(1);
+
+  // Nothing has moved. Saying it again tells the host nothing it was not told.
+  for (let settle = 0; settle < 4; settle += 1) {
+    window.dispatchEvent(new Event("resize"));
+    await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_FOR_TEST_MS + 16);
+  }
+  expect(listener, "a repeated repair is not worth a request").toHaveBeenCalledTimes(1);
+
+  // A restore means the host wrote to us, so the next repair is owed again.
+  await surface.restore({ rows: 24, columns: 80, sequence: 1, data: "" } as never);
+  window.dispatchEvent(new Event("resize"));
+  await vi.advanceTimersByTimeAsync(RESIZE_SETTLE_FOR_TEST_MS + 16);
+  expect(listener.mock.calls.length, "a restore makes the repair owed again").toBeGreaterThan(1);
+
+  surface.dispose();
+  element.remove();
+  vi.useRealTimers();
+});

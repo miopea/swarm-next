@@ -49,6 +49,20 @@ export class XtermSurface implements TerminalSurface {
    * take authority over the PTY.
    */
   #geometryPublicationOrigin: "viewport" | "restore" = "viewport";
+  /**
+   * The size this surface last published purely to repair the host.
+   *
+   * The repair below fires on every settled fit that changed nothing, which is
+   * most of them. Measured on the live ledger: 57 of 85 geometry requests in
+   * two hours asked for the size the terminal was already at — 67%, against
+   * the 46% recorded when this was filed. The repair is worth keeping; sending
+   * it again and again after nothing has moved is not.
+   *
+   * Cleared whenever the world could have moved underneath us: a real resize,
+   * or a snapshot restore, which is exactly when the host may hold a size we
+   * do not.
+   */
+  #lastRepairPublished: { rows: number; columns: number } | undefined;
   /** The sizes this renderer recently applied, newest first, and when. */
   #appliedSizes: { rows: number; columns: number; at: number }[] = [];
   #resizeObserver: ResizeObserver | undefined;
@@ -187,6 +201,7 @@ export class XtermSurface implements TerminalSurface {
     this.#terminal.reset();
     // Everything this resize publishes is an echo of a size decided elsewhere.
     this.#geometryPublicationOrigin = "restore";
+    this.#lastRepairPublished = undefined;
     this.#terminal.resize(snapshot.columns, snapshot.rows);
     // The cover comes down when the bytes are on screen, not when someone
     // later re-fits. It used to be removed only by `fit`, and the controller
@@ -413,13 +428,25 @@ export class XtermSurface implements TerminalSurface {
     }
     if (changed) {
       this.#rememberApplied(usable);
+      // The size moved, so any earlier repair says nothing about where the
+      // host is now.
+      this.#lastRepairPublished = undefined;
       this.#terminal.resize(usable.columns, usable.rows);
     } else {
       // A different device can leave the shared PTY at stale dimensions while
       // this renderer already believes it is correctly fitted. Re-publish the
       // settled visible geometry so the active Swarm window can repair the
       // host without relying on xterm to emit a changed-size event.
-      this.#queueGeometryPublication(true);
+      //
+      // Once, though, not on every settled fit. Repeating a repair the host has
+      // already been told about changes nothing and is most of this surface's
+      // traffic; the memo is cleared the moment anything could have moved.
+      const repeated = this.#lastRepairPublished?.rows === usable.rows
+        && this.#lastRepairPublished?.columns === usable.columns;
+      if (!repeated) {
+        this.#lastRepairPublished = { ...usable };
+        this.#queueGeometryPublication(true);
+      }
     }
     // A stable row/column count does not mean Chromium's backing canvas is
     // healthy. Explicitly repaint after responsive layout and PWA resumes.
