@@ -36,8 +36,8 @@ use swarm_domain::{
     TaskState, WorkerId, WorkerRole,
 };
 use swarm_persistence::{
-    JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, QueenAutomationFinish, TaskStore,
-    TaskStoreError,
+    CompletionEvidence, JiraIssueSnapshot, MAX_TASK_ACTIVITY_NOTE_BYTES, QueenAutomationFinish,
+    TaskStore, TaskStoreError,
 };
 use tokio::sync::Notify;
 use tower::ServiceExt;
@@ -780,7 +780,15 @@ impl AgentMcp {
             .tasks
             .transition_task(self.principal, task_id, input.state, &input.note)?;
         crate::deliver_jira_transition_batch(store, &self.jira, self.changed.as_ref()).await;
-        structured(task)
+        let next_step =
+            review_evidence_next_step(input.state, &store.completion_evidence(task_id)?);
+        let mut payload = serde_json::to_value(task).map_err(|error| {
+            ApplicationError::Store(TaskStoreError::IntegrityFailure(error.to_string()))
+        })?;
+        if let (Some(next_step), Some(object)) = (next_step, payload.as_object_mut()) {
+            object.insert("next_step".to_owned(), json!(next_step));
+        }
+        structured(payload)
     }
 
     async fn list_jira_comments(
@@ -1020,6 +1028,42 @@ impl AgentMcp {
             "imported_count": imported_ids.len(),
             "refreshed_count": snapshots.len(),
         }))
+    }
+}
+
+/// What a worker still owes after moving a task to Review.
+///
+/// A task that ships records evidence with one call, which auto-completes it.
+/// A task that ships nothing needs a claim, then Queen's approval, then a
+/// transition — three steps against one, and nothing prompted the first. So a
+/// worker wrote "nothing shipped" in its handoff and stopped, because prose is
+/// not the tool call, and the task sat in Review looking unfinished. Three did
+/// in one day.
+///
+/// Said here because this is the moment it is actionable and the moment the
+/// answer is known. The two routes are stated as equals on purpose: shipping
+/// nothing is frequently the correct outcome, and a prompt that reads as "you
+/// should have deployed" would push workers away from recording it honestly.
+///
+/// Deliberately not an error and deliberately not an auto-approval. The
+/// transition is legitimate and stands; the worker still records its own claim
+/// and Queen still approves it, because the party deciding its work needs no
+/// evidence cannot also be the party accepting that decision.
+fn review_evidence_next_step(
+    state: TaskState,
+    evidence: &CompletionEvidence,
+) -> Option<&'static str> {
+    if state != TaskState::Review {
+        return None;
+    }
+    match evidence {
+        CompletionEvidence::None => Some(
+            "This task is in Review with no completion evidence recorded. If something shipped, record it with swarm_record_deployment. If nothing shipped — a spike, an investigation, a documentation change, a defensible no-change-needed — record that with swarm_record_no_deployment. Both are complete answers, and neither is a lesser one; this cannot be closed until one of them exists, and a handoff that says so in prose is not the record.",
+        ),
+        CompletionEvidence::ExemptionClaimed => Some(
+            "Your claim that this task had nothing to deploy is recorded. Queen approves it before the task can complete; nothing further is needed from you.",
+        ),
+        CompletionEvidence::Deployed | CompletionEvidence::ExemptionApproved => None,
     }
 }
 
@@ -2277,6 +2321,92 @@ mod tests {
         let active = response_json(start(bridge).await).await;
         assert_eq!(active["result"]["isError"], false);
         assert_eq!(active["result"]["structuredContent"]["state"], "active");
+    }
+
+    /// Three tasks stranded in Review in one day because their workers said
+    /// "nothing shipped" in prose and never made the call. Driven through the
+    /// real MCP entry point, so this is the response a live worker gets.
+    #[tokio::test]
+    async fn a_worker_moving_to_review_with_no_evidence_is_told_what_is_missing() {
+        let (bridge, store, _, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let session = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, session).unwrap();
+        let task = store
+            .create_task("Read-only investigation", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task.id, worker_id).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+
+        let to_review = |bridge: AgentBridge| {
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_transition_task",
+                        "arguments": {
+                            "task_id": task.id.to_string(),
+                            "state": "review",
+                            "note": "Cause was in another repository; nothing changed here."
+                        }
+                    }),
+                ),
+            )
+        };
+
+        let review = response_json(to_review(bridge.clone()).await).await;
+        assert_eq!(review["result"]["isError"], false);
+        assert_eq!(review["result"]["structuredContent"]["state"], "review");
+        let prompt = review["result"]["structuredContent"]["next_step"]
+            .as_str()
+            .expect("a worker with nothing recorded is told so in the transition response");
+        // Both routes, stated as equals: shipping nothing is a correct outcome
+        // and must not be discouraged into a false deployment claim.
+        assert!(prompt.contains("swarm_record_no_deployment"));
+        assert!(prompt.contains("swarm_record_deployment"));
+        assert!(prompt.contains("prose is not the record"));
+
+        // The claim is the worker's to make, and making it does not close the
+        // task — the response says who does.
+        let claimed = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_record_no_deployment",
+                        "arguments": {
+                            "task_id": task.id.to_string(),
+                            "reason": "Read-only investigation; the cause was in another repository."
+                        }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(claimed["result"]["isError"], false);
+        assert_eq!(
+            store.completion_evidence(task.id).unwrap(),
+            CompletionEvidence::ExemptionClaimed,
+            "claimed, not approved — the worker cannot accept its own claim"
+        );
+
+        // Moving through Review again now reports the real remaining step
+        // rather than repeating the ask.
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        let again = response_json(to_review(bridge).await).await;
+        let settled = again["result"]["structuredContent"]["next_step"]
+            .as_str()
+            .expect("a claimed exemption still has a step, and it is Queen's");
+        assert!(settled.contains("Queen approves"));
+        assert!(!settled.contains("swarm_record_no_deployment"));
     }
 
     #[tokio::test]
