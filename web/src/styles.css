@@ -210,9 +210,15 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    (33 or 37, measured over real quick-tunnel hostnames). Any fixed CSS size is
    an exact multiple for one of those and a fractional one for the other, and a
    fractional scale is what tore rows out of the symbol. Letting the intrinsic
-   size win is what keeps it scannable for every address. */
+   size win is what keeps it scannable for every address.
+
+   The min-* pair is insurance, not layout. An SVG with a viewBox and no width
+   attribute fills its container, and a container with no width is zero — so a
+   browser holding a cached bundle from before the address carried its own size
+   collapsed the code to a dot. It should degrade to slightly wrong, never to
+   invisible. */
 .tunnel-qr { flex: 0 0 auto; border-radius: 8px; overflow: hidden; background: #fff; line-height: 0; }
-.tunnel-qr svg { display: block; }
+.tunnel-qr svg { display: block; min-width: 164px; min-height: 164px; }
 @media (max-width: 620px) { .tunnel-address { flex-direction: column; align-items: flex-start; } }
 .passkey-settings { display: grid; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .passkey-settings h4 { margin: 0; color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
