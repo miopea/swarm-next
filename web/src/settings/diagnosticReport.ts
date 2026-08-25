@@ -40,6 +40,43 @@ type DiagnosticReportInput = {
   jiraUnavailable?: boolean;
 };
 
+/**
+ * The size the layout is actually deciding from, and what it decided.
+ *
+ * Added because a report arrived without it and could not be answered. The
+ * operator sent a screenshot of a window 863 pixels wide showing the stacked
+ * layout, saying "I am not using my phone at all" — and both halves were true.
+ * At 1.5x display scaling that window is 575 CSS pixels, below the 680px
+ * breakpoint, so the browser was right and the window looked wrong. Physical
+ * size and CSS size are different numbers and only one of them is visible to a
+ * person looking at their screen.
+ *
+ * Moving a window between monitors of different DPI changes this without
+ * touching the window, which is what makes it intermittent and why it survives
+ * a refresh and later clears on its own.
+ *
+ * Content-free, in keeping with the rest of this report: sizes and a media
+ * query result, no text and nothing identifying.
+ */
+function viewportDiagnostics() {
+  const stacked = (() => {
+    try {
+      return window.matchMedia?.("(max-width: 680px)").matches ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  return {
+    css_width: window.innerWidth,
+    css_height: window.innerHeight,
+    device_pixel_ratio: window.devicePixelRatio,
+    // What the window looks like to the person, as opposed to what the layout
+    // is deciding from. The gap between these two is the whole diagnosis.
+    physical_width: Math.round(window.innerWidth * window.devicePixelRatio),
+    stacked_layout: stacked,
+  };
+}
+
 export function buildSanitizedDiagnosticReport({ context, health, hiveIdentity, liveFeedState, recentEvents, runtime, sessions, workers, jiraReadiness, jiraUnavailable }: DiagnosticReportInput) {
   const launchFailures = workers.filter((worker) => Boolean(worker.runtime_error)).length;
   const expectation = context?.expectation?.trim();
@@ -66,6 +103,7 @@ export function buildSanitizedDiagnosticReport({ context, health, hiveIdentity, 
       live_updates: liveFeedState,
       recent_failures: readClientFailures(),
       route_paint: routePaintSummary(readRoutePaints()),
+      viewport: viewportDiagnostics(),
     },
     api: health ? { status: "healthy", version: health.version } : { status: "unavailable" },
     database: {
