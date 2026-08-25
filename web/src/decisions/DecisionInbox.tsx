@@ -182,7 +182,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     the live inbox they ran to about five thousand characters
                     together — so they fold behind it rather than in front. */}
                 {decision.summary ? <p className="decision-summary">{decision.summary}</p> : null}
-                <p className="decision-ask"><span>Asking you to</span> {decision.suggested_action}</p>
+                <p className="decision-ask"><span>Asking the operator to</span> {decision.suggested_action}</p>
                 <details className="decision-argument">
                   <summary>Why, and what it rests on</summary>
                   <DecisionReason reason={decision.reason} />

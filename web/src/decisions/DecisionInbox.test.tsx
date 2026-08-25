@@ -74,7 +74,7 @@ test("names the repository the decision is about, and the ask, without opening t
   expect(screen.queryByText("queen")).not.toBeInTheDocument();
 
   // The ask is on the card, not the last row of a list under a folded details.
-  const ask = screen.getByText("Asking you to").closest("p");
+  const ask = screen.getByText("Asking the operator to").closest("p");
   expect(ask).toHaveTextContent("Merge PR #419");
   expect(ask?.closest("details")).toBeNull();
 });
