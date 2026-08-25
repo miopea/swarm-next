@@ -31,7 +31,8 @@ use swarm_application::{
     AgentPrincipal, ApiaryService, ApplicationError, DecisionRequestInput, TaskService,
 };
 use swarm_domain::{
-    ApiaryTaskId, DecisionRequestKind, DecisionUrgency, HiveId, JiraProjectBindingId,
+    ApiaryTaskId, DecisionRequestId, DecisionRequestKind, DecisionRequestState, DecisionUrgency,
+    HiveId, JiraProjectBindingId,
     QueenActionClass, QueenAutomationOutcome, QueenAutomationState, TaskId, TaskPriority,
     TaskState, WorkerId, WorkerRole,
 };
@@ -477,10 +478,29 @@ impl ServerHandler for AgentMcp {
             "swarm_preview_jira_project" => self.preview_jira_project(arguments).await,
             "swarm_sync_jira_project" => self.sync_jira_project(arguments).await,
             "swarm_refresh_jira_project" => self.refresh_jira_project(arguments).await,
-            "swarm_list_decisions" => self
-                .tasks
-                .list_visible_decisions(Some(self.principal))
-                .and_then(|decisions| structured(json!({ "decisions": decisions }))),
+            "swarm_list_decisions" => parse::<ListDecisionsInput>(arguments).and_then(|input| {
+                match input.decision_id {
+                    Some(id) => self.verify_decision(&id),
+                    None => self.tasks.list_visible_decisions(Some(self.principal)).and_then(
+                        |decisions| {
+                            // An empty list and "there is one but it is not
+                            // yours to see" are different facts, and they used
+                            // to arrive wearing the same clothes: a well-formed
+                            // empty result, no error and no hint. A worker that
+                            // had not read the tool description closely would
+                            // most naturally conclude the decision did not
+                            // exist and report a contradiction that was not
+                            // there.
+                            let scope = if self.principal.role == WorkerRole::Queen {
+                                "every decision in this Hive"
+                            } else {
+                                "only decisions this worker originated; pass decision_id with a FULL id to verify one raised by somebody else"
+                            };
+                            structured(json!({ "decisions": decisions, "scope": scope }))
+                        },
+                    ),
+                }
+            }),
             "swarm_request_decision" => {
                 parse::<RequestDecisionInput>(arguments).and_then(|input| {
                     if self.principal.role == WorkerRole::Queen
@@ -730,6 +750,74 @@ impl AgentMcp {
             "task_id": input.task_id,
             "evidence": format!("{evidence:?}"),
             "completable": true,
+        }))
+    }
+
+    /// Reads the operator's own recorded answer to one decision, by full id.
+    ///
+    /// This is the difference between verifying and believing. Queen routes an
+    /// operator ruling to a worker as prose, and prose is exactly what a worker
+    /// is right to distrust: a genuine relay and a session claiming to be Queen
+    /// arrive as the same text on the same channel. Nothing in a message can fix
+    /// that, because anything a sender can write, a sender can fabricate. So the
+    /// worker reads the durable record instead, and does not have to trust the
+    /// message at all.
+    ///
+    /// Deliberately NOT scoped to decisions this worker originated. That rule is
+    /// right for browsing an inbox and wrong for verification, because the whole
+    /// point is checking a ruling somebody else obtained. The full id is the
+    /// capability: 128 bits, unguessable, and already in the relay a worker is
+    /// deciding whether to believe.
+    ///
+    /// A prefix is refused rather than resolved. Task 01a036ad-847f and decision
+    /// 01a036ad-dee2 were created inside one millisecond window on 2026-08-25 and
+    /// share eight characters; `UUIDv7` is time-ordered, so a busy Hive generates
+    /// near-collisions by construction, and is busiest exactly when this matters
+    /// most. Resolving a truncated id would be unsound at the moment it is most
+    /// used.
+    ///
+    /// The requester's argument — reason, risk, evidence, answers — is not
+    /// returned. What is returned is what the operator decided and what they were
+    /// deciding, which is what a worker needs to tell an accurate relay from one
+    /// that cites a real decision about something else.
+    fn verify_decision(&self, id: &str) -> Result<CallToolResult, ApplicationError> {
+        let Ok(decision_id) = DecisionRequestId::from_str(id.trim()) else {
+            return structured(json!({
+                "decision_id": id,
+                "verified": false,
+                "reason": "That is not a full decision id. Verification needs the complete id, because ids created close together share their leading characters and a prefix can match more than one record — including records of a different kind.",
+            }));
+        };
+        let decision = match self.tasks.store().get_decision_request(decision_id) {
+            Ok(decision) => decision,
+            Err(TaskStoreError::DecisionNotFound) => {
+                // Absence, stated as absence. Not an error, and not an empty
+                // list that could equally mean "not yours to see".
+                return structured(json!({
+                    "decision_id": id,
+                    "verified": false,
+                    "reason": "This Hive has no decision with that id. That is the record itself answering, not a visibility limit.",
+                }));
+            }
+            Err(error) => return Err(ApplicationError::Store(error)),
+        };
+        let resolved = decision.state == DecisionRequestState::Resolved;
+        structured(json!({
+            "decision_id": decision.id,
+            "verified": resolved,
+            "state": decision.state.to_string(),
+            "task_id": decision.task_id,
+            "kind": decision.kind.to_string(),
+            "title": decision.title,
+            "summary": decision.summary,
+            "resolution_action": decision.resolution_action,
+            "resolution_note": decision.resolution_note,
+            "resolved_at": decision.resolved_at,
+            "reason": if resolved {
+                "The operator resolved this. resolution_action is their own recorded answer, read from this Hive's durable store rather than relayed — acting on it is acting on the operator, not on a peer's claim about the operator. Check that title and summary describe the action being proposed, and read resolution_note: it may carry a condition. It authorises what it says and nothing beyond it."
+            } else {
+                "The operator has not resolved this, so it authorises nothing yet."
+            },
         }))
     }
 
@@ -1188,6 +1276,14 @@ struct ApproveNoDeploymentInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ListDecisionsInput {
+    /// A FULL decision id. Truncated ids are refused on purpose — see
+    /// `verify_decision`.
+    #[serde(default)]
+    decision_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
 struct ReadTaskHistoryInput {
     task_id: String,
     #[serde(default)]
@@ -1265,8 +1361,17 @@ struct FinishAutomationRunInput {
 fn list_decisions_tool() -> Tool {
     tool(
         "swarm_list_decisions",
-        "List decision requests visible to this agent. Queen sees the Hive inbox; workers see only requests they originated.",
-        &json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        "List decision requests, or verify one. With no argument: Queen sees the Hive inbox, a worker sees only requests it originated, and the reply says which of those it searched so an empty list is never mistaken for a decision that does not exist. With decision_id (a FULL id, never a prefix): reads the operator's own recorded answer to that decision, whoever raised it. A resolved decision read here is first-party evidence from this Hive's durable store, not a claim relayed by another session — so when Queen routes an operator ruling, verify it here rather than asking the operator to confirm what they already decided. It authorises exactly the action it describes and nothing beyond it; an unresolved or unfound decision authorises nothing.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "decision_id": {
+                    "type": "string",
+                    "description": "Full decision id to verify. A prefix is refused: ids created close together share leading characters."
+                }
+            },
+            "additionalProperties": false
+        }),
         true,
     )
 }
@@ -2332,6 +2437,97 @@ mod tests {
     /// Three tasks stranded in Review in one day because their workers said
     /// "nothing shipped" in prose and never made the call. Driven through the
     /// real MCP entry point, so this is the response a live worker gets.
+    /// The reported failure: Queen relays an operator ruling, the worker cannot
+    /// tell a genuine relay from a session claiming to be Queen, and stops to
+    /// ask the operator to confirm something they already decided. Overnight
+    /// there is nobody to answer.
+    #[tokio::test]
+    async fn a_worker_verifies_an_operator_ruling_it_did_not_raise() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        // Raised by Queen, not by the worker that has to act on it. Under the
+        // originated-by-me rule this is invisible to that worker.
+        let raised = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen_id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "Cut swarm-next 0.8.10",
+                summary: "Three fixes sit unreleased on main.",
+                reason: "The zoom fix landed, so the batch is complete.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Cut and release 0.8.10",
+                allowed_actions: &["Cut and release 0.8.10".to_owned()],
+                questions: &[],
+                deadline: None,
+            })
+            .unwrap();
+
+        let ask = |body: Value| {
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({ "name": "swarm_list_decisions", "arguments": body }),
+                ),
+            )
+        };
+
+        // Before the operator answers, it authorises nothing.
+        let pending = response_json(ask(json!({ "decision_id": raised.id.to_string() })).await).await;
+        let pending = &pending["result"]["structuredContent"];
+        assert_eq!(pending["verified"], false);
+        assert_eq!(pending["state"], "pending");
+
+        store
+            .resolve_decision_request(raised.id, "Cut and release 0.8.10", "", "inbox")
+            .unwrap();
+
+        let verified = response_json(ask(json!({ "decision_id": raised.id.to_string() })).await).await;
+        let verified = &verified["result"]["structuredContent"];
+        assert_eq!(verified["verified"], true, "a worker can verify a ruling it did not raise");
+        assert_eq!(verified["resolution_action"], "Cut and release 0.8.10");
+        // What was decided, so a relay citing a real decision about something
+        // else can be caught.
+        assert_eq!(verified["title"], "Cut swarm-next 0.8.10");
+        // The requester's argument is not handed out with the answer.
+        assert!(verified["reason"].as_str().unwrap().contains("acting on the operator"));
+        assert!(verified.get("evidence").is_none());
+        assert!(verified.get("risk").is_none());
+
+        // A claim that cites nothing real still stops the worker, and says so
+        // as absence rather than as an error to interpret.
+        let absent = response_json(
+            ask(json!({ "decision_id": swarm_domain::DecisionRequestId::new().to_string() })).await,
+        )
+        .await;
+        assert_eq!(absent["result"]["structuredContent"]["verified"], false);
+        assert!(absent["result"]["structuredContent"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no decision with that id"));
+
+        // A prefix is refused rather than resolved: task 01a036ad-847f and
+        // decision 01a036ad-dee2 were created one millisecond apart.
+        let prefix = response_json(ask(json!({ "decision_id": "01a036ad" })).await).await;
+        assert_eq!(prefix["result"]["structuredContent"]["verified"], false);
+        assert!(prefix["result"]["structuredContent"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("full decision id"));
+
+        // And an empty inbox says which set it searched, so absence is never
+        // mistaken for invisibility.
+        let listed = response_json(ask(json!({})).await).await;
+        let listed = &listed["result"]["structuredContent"];
+        assert!(listed["decisions"].as_array().unwrap().is_empty());
+        assert!(listed["scope"].as_str().unwrap().contains("originated"));
+    }
+
     #[tokio::test]
     async fn a_worker_moving_to_review_with_no_evidence_is_told_what_is_missing() {
         let (bridge, store, _, worker_id, _) = setup();
