@@ -6,6 +6,12 @@ import DecisionInterview from "./DecisionInterview";
 import LongText from "./LongText";
 import WorkActivity from "./WorkActivity";
 
+/// The repository a person recognises, out of an absolute workspace path.
+function repoName(workspace: string) {
+  const trimmed = workspace.replace(/\/+$/, "");
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1) || trimmed;
+}
+
 const kindLabel = {
   input: "Input",
   approval: "Approval",
@@ -41,6 +47,13 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
   const [activityFailed, setActivityFailed] = useState(false);
   const taskNames = useMemo(() => new Map(tasks.map((task) => [task.id, task.title])), [tasks]);
   const workerNames = useMemo(() => new Map(workers.map((worker) => [worker.id, worker.name])), [workers]);
+  // Which repository this is about. The operator could not tell from the card:
+  // the only mention of it was inside the evidence prose, and on a Queen-raised
+  // approval the requester's own workspace is the Queen directory, not the repo
+  // the decision concerns. So the linked task wins, and the requester is the
+  // fallback for a decision with no task.
+  const taskRepos = useMemo(() => new Map(tasks.map((task) => [task.id, task.workspace])), [tasks]);
+  const workerRepos = useMemo(() => new Map(workers.map((worker) => [worker.id, worker.workspace])), [workers]);
   // A pending card the operator can already see keeps its place. The server
   // orders decisions newest first, so without this an arrival during an
   // ordinary refresh is inserted ABOVE the card being read and shoves it down
@@ -149,13 +162,18 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
         <div className="decision-list">
           {visible.map((decision) => {
             const requester = workerNames.get(decision.requesting_worker_id) ?? "Worker";
+            const repo = (decision.task_id ? taskRepos.get(decision.task_id) : undefined)
+              ?? workerRepos.get(decision.requesting_worker_id);
             const note = notes[decision.id] ?? "";
             return (
               <article className={`decision-card urgency-${decision.urgency} state-${decision.state}`} data-decision-id={decision.id} key={decision.id} tabIndex={-1}>
                 <header>
                   <div className="decision-requester">
                     <span className="decision-bee"><BeeMascot expression={decision.urgency === "time_sensitive" ? "blocked" : "focused"} /></span>
-                    <div><p className="eyebrow">{requester} · {kindLabel[decision.kind]}</p><h4>{decision.title}</h4></div>
+                    <div>
+                      <p className="eyebrow">{requester} · {kindLabel[decision.kind]}{repo ? <> · <span className="decision-repo" title={repo}>{repoName(repo)}</span></> : null}</p>
+                      <h4>{decision.title}</h4>
+                    </div>
                   </div>
                   <span className={`decision-urgency ${decision.urgency}`}>{decision.urgency === "time_sensitive" ? "Time-sensitive" : "When ready"}</span>
                 </header>
@@ -164,6 +182,7 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                     the live inbox they ran to about five thousand characters
                     together — so they fold behind it rather than in front. */}
                 {decision.summary ? <p className="decision-summary">{decision.summary}</p> : null}
+                <p className="decision-ask"><span>Asking you to</span> {decision.suggested_action}</p>
                 <details className="decision-argument">
                   <summary>Why, and what it rests on</summary>
                   <DecisionReason reason={decision.reason} />
@@ -172,7 +191,6 @@ export default function DecisionInbox({ decisions, tasks, workers, busy, focusDe
                   {decision.task_id && <div><dt>Task</dt><dd>{onOpenTask ? <button type="button" className="decision-task-link" onClick={() => onOpenTask(decision.task_id!)}>{taskNames.get(decision.task_id) ?? "Linked task"}</button> : taskNames.get(decision.task_id) ?? "Linked task"}</dd></div>}
                   {decision.risk && <div><dt>Risk</dt><dd><LongText text={decision.risk} label="the risk" /></dd></div>}
                   {decision.evidence && <div><dt>Evidence</dt><dd><LongText text={decision.evidence} label="the evidence" /></dd></div>}
-                  <div><dt>Suggested</dt><dd>{decision.suggested_action}</dd></div>
                 </dl>
                 {decision.state === "pending" && decision.questions?.length ? (
                   <div className="decision-resolution">

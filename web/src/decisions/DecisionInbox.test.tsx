@@ -51,6 +51,43 @@ const uncertain = { ...resolved, id: "decision-5", title: "Uncertain release", d
 const task = { id: "task-1", title: "Stabilize reloads" } as Task;
 const worker = { id: "worker-1", name: "Petal" } as Worker;
 
+test("names the repository the decision is about, and the ask, without opening the argument", () => {
+  // The reported card: Queen raising an approval about another repository. Her
+  // own workspace is the Queen directory, so the requester is the wrong source
+  // for "which repo is this" — the linked task is the right one.
+  const queen = { id: "queen-1", name: "Queen", workspace: "/home/bee/workspaces/queen" } as Worker;
+  const platformTask = { id: "task-9", title: "CI never builds packages/app-logger", workspace: "/home/bee/projects/rcg-platform" } as Task;
+  const approval = {
+    ...pending,
+    id: "decision-9",
+    requesting_worker_id: "queen-1",
+    task_id: "task-9",
+    kind: "approval",
+    title: "Merge PR #419?",
+    suggested_action: "Merge PR #419",
+  } as DecisionRequest;
+
+  render(<DecisionInbox decisions={[approval]} tasks={[platformTask]} workers={[queen]} busy={false} onResolve={vi.fn()} />);
+
+  expect(screen.getByText("rcg-platform")).toBeInTheDocument();
+  expect(screen.getByTitle("/home/bee/projects/rcg-platform")).toBeInTheDocument();
+  expect(screen.queryByText("queen")).not.toBeInTheDocument();
+
+  // The ask is on the card, not the last row of a list under a folded details.
+  const ask = screen.getByText("Asking you to").closest("p");
+  expect(ask).toHaveTextContent("Merge PR #419");
+  expect(ask?.closest("details")).toBeNull();
+});
+
+test("falls back to the requesting worker's repository when no task is linked", () => {
+  const petal = { id: "worker-1", name: "Petal", workspace: "/home/bee/projects/rcg-admin/" } as Worker;
+  const untied = { ...pending, id: "decision-10", task_id: null } as DecisionRequest;
+
+  render(<DecisionInbox decisions={[untied]} tasks={[]} workers={[petal]} busy={false} onResolve={vi.fn()} />);
+
+  expect(screen.getByText("rcg-admin")).toBeInTheDocument();
+});
+
 test("keeps resolved history quiet until the operator asks for it", () => {
   render(
     <DecisionInbox
