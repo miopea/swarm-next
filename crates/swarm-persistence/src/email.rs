@@ -165,6 +165,15 @@ pub struct UnansweredEmailTask {
     /// The worker that carried this work, so the queue says whose it was
     /// rather than only that something is waiting.
     pub worker_name: Option<String>,
+    /// How many original threads one send actually answers.
+    ///
+    /// A task can be linked to several inbound emails, and the reply fans out
+    /// to every one of them. The queue named only the earliest sender, so a
+    /// send that reached seven people looked exactly like a send that reached
+    /// one — and the seven-target case is not hypothetical, it is in this
+    /// Hive's own history. Deciding whether to press Send without knowing how
+    /// many people hear about it is not a decision.
+    pub thread_count: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -462,7 +471,8 @@ impl TaskStore {
                     (SELECT r.body FROM email_reply_deliveries r
                      WHERE r.task_id = t.id AND r.state = 'draft'
                      ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
-                    (SELECT w.name FROM worker_profiles w WHERE w.id = t.assigned_worker_id)
+                    (SELECT w.name FROM worker_profiles w WHERE w.id = t.assigned_worker_id),
+                    COUNT(link.id)
              FROM tasks t
              JOIN email_message_links link ON link.task_id = t.id
              WHERE t.state = 'completed' AND t.removed_at IS NULL
@@ -494,6 +504,7 @@ impl TaskStore {
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
+                    row.get::<_, i64>(9)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -509,6 +520,7 @@ impl TaskStore {
                     draft_id,
                     draft_body,
                     worker_name,
+                    thread_count,
                 )| {
                     Ok(UnansweredEmailTask {
                         task_id: TaskId::from_str(&id)
@@ -521,6 +533,7 @@ impl TaskStore {
                         draft_id,
                         draft_body,
                         worker_name,
+                        thread_count: usize::try_from(thread_count).unwrap_or(1).max(1),
                     })
                 },
             )
@@ -1879,6 +1892,62 @@ mod tests {
         assert!(!existing.created);
         assert_eq!(existing.task.id, imported.task.id);
         assert_eq!(existing.sources.len(), 2);
+    }
+
+    /// The queue says how many people one Send actually reaches.
+    ///
+    /// A task can be linked to several inbound emails and the reply fans out to
+    /// every one of them, but the waiting-reply row carried a single sender —
+    /// whichever wrote in first. So a send answering seven threads presented
+    /// exactly like a send answering one, and the operator approved it from a
+    /// line naming one person. This Hive's own history has replies with five
+    /// and seven targets.
+    #[test]
+    fn a_task_answering_several_threads_says_how_many() {
+        let store = TaskStore::in_memory().unwrap();
+        let second = EmailMessageSnapshot {
+            integration_id: "operator-outlook",
+            message_id: "AAMk-message-2",
+            conversation_id: "AAQk-conversation-2",
+            internet_message_id: Some("<issue-2@example.test>"),
+            subject: "A second report",
+            sender_name: "Another Member",
+            sender_address: "another@example.test",
+            received_at: 1_786_730_100,
+            web_url: "https://outlook.office.com/mail/inbox/id/AAMk-message-2",
+            body_text: "The same form fails for me.",
+            attachments: &[],
+        };
+        let imported = store
+            .import_email_messages(
+                &[message(&[]), second],
+                &EmailTaskDraft {
+                    title: "Fix both reported form failures",
+                    description: "Two people reported the same outcome.",
+                    priority: TaskPriority::Normal,
+                    worker_id: None,
+                    state: TaskState::Ready,
+                },
+            )
+            .unwrap();
+        for state in [TaskState::Active, TaskState::Review, TaskState::Completed] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+        store
+            .record_task_deployment(imported.task.id, "production", "release-43", 1_786_730_200)
+            .unwrap();
+
+        let awaiting = store.completed_email_tasks_awaiting_a_reply().unwrap();
+
+        assert_eq!(
+            awaiting.len(),
+            1,
+            "one task, however many threads it answers"
+        );
+        assert_eq!(
+            awaiting[0].thread_count, 2,
+            "the row named one sender and hid the other, which is the whole defect"
+        );
     }
 
     #[test]

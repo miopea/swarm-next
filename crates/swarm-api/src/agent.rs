@@ -1858,12 +1858,12 @@ fn record_no_deployment_tool() -> Tool {
 fn draft_email_reply_tool() -> Tool {
     tool(
         "swarm_draft_email_reply",
-        "Write the reply for a task that came in by email, as part of finishing it. A person is waiting on that thread and finishing the work tells them nothing. Write for them: what changed, what they can do now, and no internal implementation detail. This drafts only — the operator reviews and sends. Needs the task reported to review or completed, with its deployment recorded.",
+        "Write the reply for a task that came in by email, as part of finishing it. A person is waiting on that thread and finishing the work tells them nothing. Write for them: what changed, what they can do now, and no internal implementation detail. KEEP IT SHORT — aim for under 150 words, and match the length of what you are replying to rather than the size of the work you did. A person who asked a one-line question does not want six paragraphs, and length is the single most common reason a draft is rejected: the drafts written before this instruction existed ran 273 to 627 words. Say what changed, say what they can do, stop. This drafts only — the operator reviews and sends. Needs the task reported to review or completed, with its deployment recorded.",
         &json!({
             "type": "object",
             "properties": {
                 "task_id": { "type": "string", "format": "uuid" },
-                "body": { "type": "string", "minLength": 1, "maxLength": 8000, "description": "Plain language for the person who wrote in, not a status report." }
+                "body": { "type": "string", "minLength": 1, "maxLength": 4000, "description": "Plain language for the person who wrote in, not a status report. Under 150 words in the ordinary case; the cap is a far-off backstop, not a target." }
             },
             "required": ["task_id", "body"],
             "additionalProperties": false
@@ -2819,6 +2819,36 @@ mod tests {
         // A refusal is the policy working, so she stops asking rather than retrying.
         assert!(brief.contains("refused during"), "{brief}");
         assert!(brief.contains("needs_operator"), "{brief}");
+    }
+
+    /// The drafting tool says how LONG to write, not only what to say.
+    ///
+    /// It described the content well — what changed, what they can do, no
+    /// internal detail — and said nothing about length, with an 8000-character
+    /// cap that permits about thirteen hundred words. What got written on the
+    /// operator's own Hive: 273, 484 and 627 words, against one delivered reply
+    /// of 18. Their verdict on the 484-word one was "way too long, but I like
+    /// how it's written" — so the voice was landing and only the length was
+    /// wrong, which is a thing an instruction can fix and a rewrite would break.
+    #[test]
+    fn the_email_drafting_tool_asks_for_a_short_reply() {
+        let tool = draft_email_reply_tool();
+        let description = tool.description.as_deref().unwrap_or_default();
+
+        assert!(description.contains("under 150 words"), "{description}");
+        assert!(
+            description.contains("match the length of what you are replying to"),
+            "a bare word count invites padding to reach it: {description}"
+        );
+        // The cap is a backstop. Set below the largest real draft (3435 chars)
+        // it would refuse work that is merely long rather than wrong.
+        let max = tool.input_schema["properties"]["body"]["maxLength"]
+            .as_u64()
+            .expect("the body still declares a maximum");
+        assert!(
+            (3600..=4400).contains(&max),
+            "cap should sit clear of real drafts without licensing an essay, got {max}"
+        );
     }
 
     /// A worker is told the opposite half: its authority is its assignment, and

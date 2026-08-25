@@ -217,6 +217,8 @@ export type UnansweredEmailTask = {
   draft_body: string | null;
   /** The worker that carried this work. */
   worker_name: string | null;
+  /** How many original threads one send actually answers. */
+  thread_count: number;
 };
 
 export async function fetchEmailTasksAwaitingReply(operatorToken: string): Promise<UnansweredEmailTask[]> {

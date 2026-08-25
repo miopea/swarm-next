@@ -1122,7 +1122,7 @@ export function App() {
   // operator to stop believing the badge, which is the one thing it has to do.
   const heldDeliveryAttentionCount = heldDeliveries.length > 0 ? 1 : 0;
   const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
-    + heldDeliveryAttentionCount + (awaitingReply.length > 0 ? 1 : 0);
+    + heldDeliveryAttentionCount + awaitingReply.length;
   const orphanSessions = useMemo(
     () => sessions.filter((session) => session.running && !workers.some((worker) => worker.active_session_id === session.session_id)),
     [sessions, workers],
@@ -1683,7 +1683,7 @@ export function App() {
               busy={busy}
               focusDecisionId={decisionFocus?.id}
               focusRequest={decisionFocus?.request}
-              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + (awaitingReply.length > 0 ? 1 : 0)}
+              additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + awaitingReply.length}
               attentionCards={<>
                 <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
