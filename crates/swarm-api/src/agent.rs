@@ -790,7 +790,7 @@ impl AgentMcp {
             .any(|task| task.state == TaskState::Active);
         if holding_active_work {
             return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
-                "This worker still has active work. A reload restarts the API under whatever is in flight, so finish or report the task first and ask again."
+                "You still hold Active work. This checks YOUR OWN assignments only, not the fleet's — finish or report your task and ask again."
                     .into(),
             )));
         }
@@ -1538,7 +1538,7 @@ fn list_tasks_tool() -> Tool {
 fn reload_app_tool() -> Tool {
     tool(
         "swarm_reload_app",
-        "Rebuild and restart this Hive's App and API from the development checkout, so a fix does not wait for the operator to press a button. Only for the worker whose workspace IS that checkout. Refused while the operator is at the Hive: restarting the API takes the control room out from under whoever is using it. action=request starts a build and returns the revision it will produce; the API restarts, so it cannot answer again from the same call. Poll action=status afterwards and compare running_revision to the revision you were given before claiming anything was reloaded. Workers keep running across the reload; the terminal host is a separate service.",
+        "Rebuild and restart this Hive's App and API from the development checkout, so a fix does not wait for the operator to press a button. Only for the worker whose workspace IS that checkout. Refused while YOU still hold Active work — finish or report it first; the operator being at the Hive is not a refusal. action=request starts a build and returns the revision it will produce; the API restarts, so it cannot answer again from the same call. Poll action=status afterwards and compare running_revision to the revision you were given before claiming anything was reloaded. Workers keep running across the reload; the terminal host is a separate service. Other workers do keep running, but the API restarts under all of them, so a call mid-flight can fail — worth a thought when the fleet is busy, and worth more than a thought when the reload carries a schema migration.",
         &json!({
             "type": "object",
             "properties": {
@@ -2488,8 +2488,18 @@ mod tests {
             .await
             .to_string();
         assert!(
-            refused.contains("still has active work"),
+            refused.contains("still hold Active work"),
             "a worker holding active work must not restart the API under it: {refused}"
+        );
+        // And the refusal says whose work it checked. It used to read "a reload
+        // restarts the API under whatever is in flight", which names the fleet
+        // while the condition above it reads one worker's assignments — so a
+        // reader was told the guard protects everyone when it protects the
+        // caller. Whatever the scope should be, the message must describe the
+        // scope that exists.
+        assert!(
+            refused.contains("YOUR OWN assignments only"),
+            "the refusal must not imply a fleet-wide check it does not perform: {refused}"
         );
 
         // Reported, and it may ask again. The rule is a state query rather than
@@ -2897,6 +2907,40 @@ mod tests {
     /// of 18. Their verdict on the 484-word one was "way too long, but I like
     /// how it's written" — so the voice was landing and only the length was
     /// wrong, which is a thing an instruction can fix and a rewrite would break.
+    /// A worker reading its own tools is not told the opposite of live policy.
+    ///
+    /// The description carried ADR 0053's rule — refused while the operator is
+    /// at the Hive — long after ADR 0055 superseded it on the operator's own
+    /// ruling. The only reason it did not stop a reload was that the worker who
+    /// hit it had written ADR 0055 and knew the text was stale. Any other
+    /// reader would have believed its tool and stopped, which is the more
+    /// dangerous half: a stale refusal does not announce itself, it just looks
+    /// like the rule.
+    #[test]
+    fn the_reload_tool_describes_the_guard_that_actually_runs() {
+        let description = reload_app_tool()
+            .description
+            .unwrap_or_default()
+            .to_string();
+
+        assert!(
+            !description.contains("Refused while the operator is at the Hive"),
+            "presence stopped being a refusal when ADR 0055 superseded ADR 0051: {description}"
+        );
+        // What does refuse, stated as the caller's own condition.
+        assert!(description.contains("Active work"), "{description}");
+        assert!(
+            description.contains("not a refusal"),
+            "the reader has to be told presence is fine, not merely left to infer it: {description}"
+        );
+        // And the fleet consequence stays, because it is true and it is the
+        // thing a caller should weigh even though nothing blocks on it.
+        assert!(
+            description.contains("the API restarts under all of them"),
+            "a caller deciding for the fleet needs to know the fleet is affected: {description}"
+        );
+    }
+
     #[test]
     fn the_email_drafting_tool_asks_for_a_short_reply() {
         let tool = draft_email_reply_tool();
