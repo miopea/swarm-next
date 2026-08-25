@@ -14,6 +14,7 @@ import {
   fetchStartSurface,
   setStartSurface as setStartSurfaceRequest,
   sendEmailReply,
+  updateEmailReplyDraft,
   restartSupersededWorkers,
   runQueenAutomation,
   type UnansweredEmailTask,
@@ -932,6 +933,23 @@ export function App() {
   }
 
   /**
+   * Saves an edited reply without leaving this screen.
+   *
+   * Editing used to mean being thrown to the task board to find the task the
+   * reply belonged to — the operator: "This kicks me to the task page to edit,
+   * this should stay on the task page." Reading the words is the only part of
+   * an email task that is theirs, and it was the one part that made them go
+   * somewhere else to do it.
+   */
+  async function saveAwaitingReply(taskId: string, body: string) {
+    if (!operatorToken) return;
+    await perform(async () => {
+      await updateEmailReplyDraft(operatorToken, taskId, body);
+      setAwaitingReply(await fetchEmailTasksAwaitingReply(operatorToken));
+    }, "Saving the reply…");
+  }
+
+  /**
    * Takes a worker back for this screen, without sending it anything.
    *
    * ADR 0049. The claim is granted rather than negotiated — one operator moving
@@ -1685,7 +1703,7 @@ export function App() {
               focusRequest={decisionFocus?.request}
               additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + awaitingReply.length}
               attentionCards={<>
-                <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <HeldDeliveryAttentionCard held={heldDeliveries} onOpenWorker={(name) => { const worker = workers.find((candidate) => candidate.name === name); if (worker) openWorker(worker.id); }} />

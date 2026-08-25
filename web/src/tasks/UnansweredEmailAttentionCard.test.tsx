@@ -66,29 +66,63 @@ test("gives every waiting person their own item, approvable on its own", () => {
   expect(onSendReply).toHaveBeenCalledWith("reply-3");
 });
 
-test("a long draft is cut for scanning and says how long it really is", () => {
-  // The drafts being written measured 273 to 627 words on the operator's own
-  // Hive the day they called one "way too long". Printing that inline is what
-  // buried everyone below it.
+test("the draft is shown whole, however long, with its length stated", () => {
+  // A correction of a correction. This was briefly cut to 45 words on the
+  // reasoning that a wall of text buries the people below it — but the
+  // per-card split had already fixed that, so the cut bought nothing and cost
+  // sense. The operator: "we jumped to the other ditch. The view of the reply
+  // gets cut off with an ellipse and doesn't make sense."
   const body = Array.from({ length: 200 }, (_, index) => `word${index}`).join(" ");
   render(<UnansweredEmailAttentionCard
     awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: body }]}
     onOpenTask={vi.fn()}
   />);
 
-  expect(screen.getByText(/200 words · shown in part/)).toBeInTheDocument();
-  expect(screen.getByText(/word0 word1/)).toBeInTheDocument();
-  expect(screen.queryByText(/word199/)).not.toBeInTheDocument();
+  expect(screen.getByText(/word199/)).toBeInTheDocument();
+  expect(screen.queryByText(/…/)).not.toBeInTheDocument();
+  // The count stays: "how long is this" is the complaint that started all of it.
+  expect(screen.getByText("200 words")).toBeInTheDocument();
 });
 
-test("a short draft is shown whole, and still says its length", () => {
+test("the reply is edited and saved without leaving this screen", () => {
+  // The operator: "This kicks me to the task page to edit, this should stay on
+  // the task page." Reading and fixing the words is the only part of an email
+  // task that is theirs, and it was the one part that sent them elsewhere.
+  const onSaveReply = vi.fn();
+  const onOpenTask = vi.fn();
   render(<UnansweredEmailAttentionCard
-    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "The adjustment saves correctly now." }]}
-    onOpenTask={vi.fn()}
+    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Original wording." }]}
+    onOpenTask={onOpenTask}
+    onSendReply={vi.fn()}
+    onSaveReply={onSaveReply}
   />);
 
-  expect(screen.getByText("The adjustment saves correctly now.")).toBeInTheDocument();
-  expect(screen.getByText("5 words")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Edit here" }));
+  const editor = screen.getByRole("textbox");
+  expect(editor).toHaveValue("Original wording.");
+
+  fireEvent.change(editor, { target: { value: "Shorter wording." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+  expect(onSaveReply).toHaveBeenCalledWith("task-1", "Shorter wording.");
+  // And nothing navigated away to do it.
+  expect(onOpenTask).not.toHaveBeenCalled();
+});
+
+test("cancelling an edit restores the draft and sends nothing", () => {
+  const onSaveReply = vi.fn();
+  render(<UnansweredEmailAttentionCard
+    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Original wording." }]}
+    onOpenTask={vi.fn()}
+    onSaveReply={onSaveReply}
+  />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit here" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Discard me." } });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+  expect(onSaveReply).not.toHaveBeenCalled();
+  expect(screen.getByText("Original wording.")).toBeInTheDocument();
 });
 
 test("says how many people one Send actually reaches", () => {
@@ -133,6 +167,7 @@ test("puts the written reply where the operator already is, and sends it from th
     awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Thank you for reporting this. The adjustment saves correctly now." }]}
     onOpenTask={onOpenTask}
     onSendReply={onSendReply}
+    onSaveReply={vi.fn()}
   />);
 
   // The words themselves, not a promise that they exist somewhere else.
@@ -140,9 +175,10 @@ test("puts the written reply where the operator already is, and sends it from th
 
   fireEvent.click(screen.getByRole("button", { name: "Send this reply" }));
   expect(onSendReply).toHaveBeenCalledWith("reply-1");
-  // Opening the task is still there for changing the wording, but it is no
-  // longer the only way through.
-  expect(screen.getByRole("button", { name: "Edit first" })).toBeInTheDocument();
+  // Changing the wording happens here too, not on the task board — and the
+  // task itself stays reachable for the thread, attachments and history.
+  expect(screen.getByRole("button", { name: "Edit here" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Open the task" })).toBeInTheDocument();
 });
 
 test("names the worker whose work this was", () => {
