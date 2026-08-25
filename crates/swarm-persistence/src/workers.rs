@@ -99,7 +99,8 @@ impl TaskStore {
         &self,
         workspace: &str,
     ) -> Result<Option<WorkerProfile>, TaskStoreError> {
-        let workspace = workspace.trim();
+        let workspace = normalize_workspace(workspace)?;
+        let workspace = workspace.as_str();
         if workspace.is_empty() || workspace.len() > MAX_WORKSPACE_BYTES {
             return Err(TaskStoreError::InvalidWorkspace);
         }
@@ -1396,7 +1397,8 @@ impl TaskStore {
         let (autostart, position) = startup;
         let name = name.trim();
         let description = description.trim();
-        let workspace = workspace.trim();
+        let workspace = normalize_workspace(workspace)?;
+        let workspace = workspace.as_str();
         validate_profile(name, workspace)?;
         validate_worker_description(description)?;
         let hive_id = self.local_hive_identity()?.hive.id;
@@ -1453,6 +1455,37 @@ impl TaskStore {
         drop(connection);
         self.get_worker_profile(id)
     }
+}
+
+/// The absolute path a worker's workspace means.
+///
+/// EXPANDS rather than refuses. A profile was stored as `~/projects/...` on
+/// 2026-08-16 and never started once: the tilde is not a filesystem concept, so
+/// the directory was never found, so no session could spawn. The operator
+/// plainly meant a real directory — the directory existed the whole time — so
+/// refusing the input would have been correct and useless. Expanding gives them
+/// what they meant.
+///
+/// A path that is still not absolute after expansion IS refused, and says why.
+/// A relative workspace resolves against whatever directory a process happens
+/// to start in, which is a different bug wearing the same clothes.
+pub(crate) fn normalize_workspace(workspace: &str) -> Result<String, TaskStoreError> {
+    let workspace = workspace.trim();
+    let expanded = match workspace.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+            match std::env::var("HOME").ok().filter(|home| !home.is_empty()) {
+                Some(home) => format!("{}{rest}", home.trim_end_matches('/')),
+                // No home to expand against. Refusing beats storing a tilde
+                // that will never resolve.
+                None => return Err(TaskStoreError::InvalidWorkspace),
+            }
+        }
+        _ => workspace.to_owned(),
+    };
+    if !expanded.starts_with('/') {
+        return Err(TaskStoreError::InvalidWorkspace);
+    }
+    Ok(expanded)
 }
 
 fn validate_profile(name: &str, workspace: &str) -> Result<(), TaskStoreError> {
@@ -1560,6 +1593,48 @@ fn move_worker_repository(
 
 #[cfg(test)]
 mod tests {
+
+    /// A profile stored `~/projects/rcg/rcg-dev-install` on 2026-08-16 and never
+    /// started once. The tilde is not a filesystem concept, the directory was
+    /// never found, and no session could spawn — while the directory it meant
+    /// existed the whole time. Three operator rulings were spent on it.
+    #[test]
+    fn a_tilde_workspace_is_expanded_rather_than_stored_and_hoped_for() {
+        let home = std::env::var("HOME").expect("tests run with a home directory");
+        assert_eq!(
+            super::normalize_workspace("~/projects/rcg/rcg-dev-install").unwrap(),
+            format!("{}/projects/rcg/rcg-dev-install", home.trim_end_matches('/')),
+        );
+        // A bare tilde is the home directory itself.
+        assert_eq!(super::normalize_workspace("~").unwrap(), home.trim_end_matches('/'));
+        // Not every tilde is a home reference: a directory may legitimately
+        // start with one.
+        assert!(super::normalize_workspace("~notauser/thing").is_err());
+    }
+
+    /// Expanding is the fix for a tilde. It is not a licence to accept anything
+    /// that resolves differently depending on where a process happened to start.
+    #[test]
+    fn a_relative_workspace_is_refused_rather_than_guessed_at() {
+        assert!(super::normalize_workspace("projects/rcg").is_err());
+        assert!(super::normalize_workspace("./projects").is_err());
+        assert!(super::normalize_workspace("../elsewhere").is_err());
+        assert!(super::normalize_workspace("/home/somebody/projects").is_ok());
+    }
+
+    #[test]
+    fn a_worker_created_with_a_tilde_gets_a_path_that_can_actually_start() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker("Installer", ProviderKind::ClaudeCode, "~/projects/thing", false, 1)
+            .unwrap();
+        assert!(
+            worker.workspace.starts_with('/'),
+            "stored workspace must be absolute, got {}",
+            worker.workspace
+        );
+        assert!(!worker.workspace.contains('~'));
+    }
     use super::*;
 
     #[test]

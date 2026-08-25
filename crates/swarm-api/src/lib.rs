@@ -2281,6 +2281,28 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         None => (None, None),
     };
     let engagement_expires_at = profile.engagement_expires_at;
+    // A worker whose workspace is not there can never start, and until now said
+    // nothing: the roster showed it Resting, indistinguishable from the ten
+    // workers that are merely idle. Three operator rulings were spent starting
+    // one such worker before anybody read the path, and the failure they were
+    // told to go and watch for never appeared, because nothing was ever
+    // attempted.
+    //
+    // Reported through runtime_error because that already means "this worker
+    // cannot run and here is why", and already reads as Blocked rather than
+    // Resting. A real runtime error wins: it describes something that happened,
+    // where this describes something that cannot.
+    //
+    // One stat per worker per read. The alternative is a stored flag that goes
+    // stale the moment somebody clones the directory.
+    let runtime_error = runtime_error.or_else(|| {
+        (!std::path::Path::new(&profile.workspace).is_dir()).then(|| {
+            format!(
+                "Workspace {} does not exist, so this worker cannot start. Fix the path in its settings, or create the directory.",
+                profile.workspace
+            )
+        })
+    });
     let attention_state = if runtime_error.is_some() {
         WorkerAttentionState::Blocked
     } else if !running {
@@ -10859,7 +10881,13 @@ mod tests {
     #[test]
     fn explicit_decisions_drive_attention_without_overriding_operator_engagement() {
         let store = TaskStore::in_memory().unwrap();
-        let profile = store.ensure_queen("/workspace/queen").unwrap();
+        // A real directory: a worker whose workspace is missing now reads as
+        // Blocked, which is the point of that change and would mask what this
+        // test is actually about.
+        let workspace = tempfile::tempdir().unwrap();
+        let profile = store
+            .ensure_queen(workspace.path().to_str().unwrap())
+            .unwrap();
         assert_eq!(
             worker_view(
                 profile.clone(),
@@ -10890,10 +10918,93 @@ mod tests {
         );
     }
 
+    /// THE TEST THAT MATTERS: can a reader tell a worker that cannot start from
+    /// one that is merely resting?
+    ///
+    /// Before this, no. A profile whose workspace did not resolve showed
+    /// `active_session_id` null and attention Resting — the same as the ten
+    /// workers legitimately idle right now. Three operator rulings were spent
+    /// starting one such worker, and the failure they were told to watch for
+    /// never came, because nothing was ever attempted.
+    #[test]
+    fn a_worker_whose_workspace_is_missing_is_not_mistaken_for_one_at_rest() {
+        let store = TaskStore::in_memory().unwrap();
+        let present = tempfile::tempdir().unwrap();
+        let resting = store
+            .create_worker(
+                "Resting",
+                swarm_domain::ProviderKind::ClaudeCode,
+                present.path().to_str().unwrap(),
+                false,
+                1,
+            )
+            .unwrap();
+        let missing = tempfile::tempdir().unwrap();
+        let gone = missing.path().to_owned();
+        let unstartable = store
+            .create_worker(
+                "Unstartable",
+                swarm_domain::ProviderKind::ClaudeCode,
+                gone.to_str().unwrap(),
+                false,
+                2,
+            )
+            .unwrap();
+        // The directory goes away after the profile was made — which is also
+        // what happens when a repository is moved or never cloned.
+        drop(missing);
+
+        let facts = || WorkerViewFacts {
+            running: false,
+            awaiting_operator: false,
+            runtime_error: None,
+            provider_activity: ProviderActivity::Resting,
+            background_work: false,
+            system_role: None,
+            last_output_at: None,
+            held_for_answer: None,
+            unconfirmed_delivery: false,
+            engaged_device: None,
+        };
+
+        let at_rest = worker_view(resting, facts());
+        assert_eq!(at_rest.attention_state, WorkerAttentionState::Sleeping);
+        assert!(at_rest.runtime_error.is_none());
+
+        let cannot_start = worker_view(unstartable, facts());
+        assert_eq!(
+            cannot_start.attention_state,
+            WorkerAttentionState::Blocked,
+            "a worker that cannot start must not read as one that is idle"
+        );
+        let reason = cannot_start.runtime_error.expect("it says why");
+        assert!(reason.contains("does not exist"), "{reason}");
+        // Names the path, so the reader can check it without opening settings.
+        assert!(reason.contains(gone.to_str().unwrap()), "{reason}");
+
+        // And it clears when the directory comes back — cloning the repository
+        // is the actual fix for most of these, and a signal that stuck would be
+        // its own version of this bug.
+        std::fs::create_dir_all(&gone).unwrap();
+        let recovered = store
+            .list_worker_profiles()
+            .unwrap()
+            .into_iter()
+            .find(|profile| profile.name == "Unstartable")
+            .unwrap();
+        let now_fine = worker_view(recovered, facts());
+        assert_eq!(now_fine.attention_state, WorkerAttentionState::Sleeping);
+        assert!(now_fine.runtime_error.is_none());
+        std::fs::remove_dir_all(&gone).ok();
+    }
+
     #[test]
     fn provider_activity_distinguishes_loaded_idle_from_active_and_unloaded() {
         let store = TaskStore::in_memory().unwrap();
-        let profile = store.ensure_queen("/workspace/queen").unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let profile = store
+            .ensure_queen(workspace.path().to_str().unwrap())
+            .unwrap();
         assert_eq!(
             worker_view(
                 profile.clone(),
