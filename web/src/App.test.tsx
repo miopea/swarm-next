@@ -248,7 +248,20 @@ test("gives a Member Hive a first-class Apiary membership surface", async () => 
   vi.stubGlobal("fetch", fetch);
   render(<App />);
 
-  const needsYou = await screen.findByRole("button", { name: "Needs you 1" });
+  const needsYou = await screen.findByRole("button", { name: /^Needs you 1/ });
+  // A queue holding work must not look like an empty one. The operator: "I
+  // sometimes don't realize I have something pending which is slowing the whole
+  // system down" — and every item here is something only they can clear, so a
+  // silent queue stalls the fleet at its one irreplaceable participant.
+  expect(within(needsYou).getByText("1")).toHaveAttribute("data-waiting");
+  // Not colour alone: WCAG 2.1 AA, and it has to survive greyscale and forced
+  // colours. The state reaches a screen reader as words.
+  expect(needsYou).toHaveAccessibleName(/waiting for you/);
+  // The tab title is the only part of this that reaches an operator who is not
+  // looking at the page. A browser notification cannot serve the case they
+  // reported, because push is deliberately suppressed while they are AT the
+  // Hive — and being at the Hive is exactly when they missed it.
+  await waitFor(() => expect(document.title).toBe("(1) Swarm"));
   expect(screen.getByLabelText("1 pending help offer")).toBeInTheDocument();
   fireEvent.click(needsYou);
   expect(await screen.findByRole("heading", { name: "A trusted Steward offered help" })).toBeInTheDocument();
@@ -621,6 +634,11 @@ test("does not invent a Queen request that was never filed", async () => {
 
   // Nothing is waiting, so the queue says so rather than counting a phantom.
   const needsYou = await screen.findByRole("button", { name: "Needs you 0" });
+  // And it carries no waiting state: an empty queue must not look like a full
+  // one, in either direction.
+  expect(within(needsYou).getByText("0")).not.toHaveAttribute("data-waiting");
+  expect(needsYou).toHaveAccessibleName("Needs you 0");
+  await waitFor(() => expect(document.title).toBe("Swarm"));
   fireEvent.click(needsYou);
   expect(await screen.findByRole("heading", { name: "Nothing needs your attention" })).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Queen needs you" })).not.toBeInTheDocument();

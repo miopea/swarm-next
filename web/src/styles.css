@@ -27,6 +27,12 @@
   --accent-strong: #b77d12;
   --accent-soft: #f3dfad;
   --accent-ink: var(--accent-strong);
+  /* Text sitting ON an accent-strong fill. One value serves both themes
+     because both accents are mid-to-light ambers: 5.25:1 on #b77d12 and
+     10.00:1 on #e9b74f, so it clears WCAG 2.1 AA for normal text either way.
+     A token rather than a literal so the next accent change has one place to
+     check the contrast. */
+  --on-accent: #1b1205;
   --accent-line: color-mix(in srgb, var(--accent) 38%, var(--line));
   --gold: var(--accent);
   --honey: var(--accent);
@@ -88,6 +94,7 @@
   --accent: #dfaa40;
   --accent-strong: #e9b74f;
   --accent-soft: #443b24;
+  --on-accent: #1b1205;
   --good: #9aaa89;
   --busy: #7fd070;
   --with-operator: #b79bf0;
@@ -157,6 +164,12 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
 .surface-nav button { display: flex; min-height: 42px; align-items: center; justify-content: space-between; padding: 0 10px; border: 1px solid transparent; border-radius: 10px; color: var(--muted); background: transparent; text-align: left; }
 .surface-nav button > span { display: flex; align-items: center; gap: 10px; }
 .surface-nav button small { display: grid; min-width: 23px; height: 21px; place-items: center; border-radius: 7px; color: var(--muted); background: color-mix(in srgb, var(--text) 5%, transparent); font-size: .7rem; }
+/* A queue holding work must not look like an empty one. Three channels, so
+   the state survives losing any of them: weight, a filled accent ground, and
+   a ring that reads even in forced-colours or greyscale. WCAG 2.1 AA — the
+   count itself carries the meaning, colour only reinforces it. */
+.surface-nav button small[data-waiting] { color: var(--on-accent); background: var(--accent-strong); box-shadow: 0 0 0 1px var(--accent-strong); font-weight: 700; font-variant-numeric: tabular-nums; }
+@media (forced-colors: active) { .surface-nav button small[data-waiting] { outline: 2px solid currentColor; outline-offset: 1px; } }
 .surface-nav button:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
 .surface-nav button.selected { border-color: color-mix(in srgb, var(--good) 38%, transparent); color: var(--text); background: color-mix(in srgb, var(--good-soft) 68%, transparent); }
 

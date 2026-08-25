@@ -1310,6 +1310,24 @@ export function App() {
     return () => { current = false; };
   }, [operatorToken, activeWorker?.id]);
 
+  /**
+   * The count in the browser tab, which is the only part of this that reaches
+   * an operator not looking at the page.
+   *
+   * A real browser notification cannot serve the case they reported: push is
+   * deliberately suppressed while they are AT the Hive
+   * (enqueue_decision_notifications returns early on PresenceMode::AtHive), on
+   * the reasonable assumption that someone here can see the queue. Their
+   * complaint is that they are here and cannot — "I sometimes don't realize I
+   * have something pending which is slowing the whole system down". A tab title
+   * survives the tab being backgrounded, needs no permission, and cannot be
+   * revoked, which makes it the right instrument for exactly this gap.
+   */
+  useEffect(() => {
+    const base = "Swarm";
+    document.title = attentionCount > 0 ? `(${attentionCount}) ${base}` : base;
+  }, [attentionCount]);
+
   useEffect(() => {
     if (surface !== "workers" || !activeSessionId) return;
     const frame = requestAnimationFrame(() => {
@@ -1344,7 +1362,21 @@ export function App() {
           <>
             {detached ? null : <nav className={`surface-nav${federated ? " with-apiary" : ""}`} aria-label="Primary">
               <span className="surface-nav-item"><button className={surface === "decisions" ? "selected" : ""} aria-current={surface === "decisions" ? "page" : undefined} data-detached={surfaceIsDetached("decisions") || undefined} onClick={() => showSurface("decisions")}>
-                <span><DecisionIcon /> Needs you</span><small>{attentionCount}</small>
+                {/* data-waiting is what makes a queue holding work look
+                    different from an empty one. The operator: "I sometimes
+                    don't realize I have something pending which is slowing the
+                    whole system down." Every item here is by construction
+                    something only they can clear, so a queue that does not
+                    announce itself stalls the fleet at its one irreplaceable
+                    participant. */}
+                <span><DecisionIcon /> Needs you</span>
+                <small data-waiting={attentionCount > 0 || undefined}>
+                  {attentionCount}
+                  {/* Not colour alone — WCAG 2.1 AA. The count is already a
+                      number; this gives the state a second, non-colour channel
+                      for anyone who cannot rely on the first. */}
+                  {attentionCount > 0 ? <span className="visually-hidden"> waiting for you</span> : null}
+                </small>
               </button>{operatorToken && !detached ? <button type="button" className="surface-nav-popout" aria-label={`Open ${surfaceLabel("decisions")} in a new window`} title={`Open ${surfaceLabel("decisions")} in a new window. Workers keep running; a window only views them.`} onClick={() => setPopoutBlocked(!openSurfaceWindow("decisions", (url, name, features) => window.open(url, name, features)))}><PopoutIcon /></button> : null}</span>
               <span className="surface-nav-item"><button className={surface === "tasks" ? "selected" : ""} aria-current={surface === "tasks" ? "page" : undefined} data-detached={surfaceIsDetached("tasks") || undefined} onClick={() => showSurface("tasks")}>
                 <span><TaskIcon /> Tasks</span><small>{openTaskCount}</small>
