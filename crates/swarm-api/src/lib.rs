@@ -11,6 +11,7 @@ use coordination_delivery::{
 };
 mod decisions;
 mod email_attachments;
+mod email_reply_ai;
 pub mod federation_http;
 mod feedback;
 mod jira;
@@ -3078,6 +3079,10 @@ fn api_router(state: AppState) -> Router {
                 .put(update_email_reply_draft),
         )
         .route(
+            "/api/v1/tasks/{task_id}/email/reply/revision",
+            post(revise_email_reply_draft),
+        )
+        .route(
             "/api/v1/integrations/email/replies/{reply_id}/send",
             post(send_email_reply),
         )
@@ -5418,6 +5423,14 @@ struct EmailReplyRequest {
     body: String,
 }
 
+/// What the operator typed into the steering wheel, and nothing else. The draft
+/// and the original are read from the store rather than accepted from the
+/// client, so a request cannot smuggle in different material to revise.
+#[derive(Debug, Deserialize)]
+struct EmailReplyRevisionRequest {
+    instruction: String,
+}
+
 struct StoredEmailAttachment {
     storage_name: String,
     display_name: String,
@@ -6118,6 +6131,77 @@ async fn update_email_reply_draft(
         .update_email_reply_draft(parse_task_id(&task_id)?, &request.body)
         .map_err(|error| task_store_error(&error))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(reply)).into_response())
+}
+
+/// Revises a draft under an operator instruction and RETURNS it unsaved.
+///
+/// Deliberately not a write. The operator ruled that an AI edit replaces the
+/// draft in place with the previous version recoverable, and a pure call is the
+/// cheapest way to keep that true: the editor swaps the text in, and the text
+/// it replaced is still in the editor until they choose to save. A revision
+/// that overshoots costs one Undo rather than a draft they liked. It also means
+/// a failure here can never damage what is already stored.
+async fn revise_email_reply_draft(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(task_id): Path<String>,
+    Json(request): Json<EmailReplyRevisionRequest>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    let task_id = parse_task_id(&task_id)?;
+    let store = task_store(&state)?;
+    let task = store
+        .get_task(task_id)
+        .map_err(|error| task_store_error(&error))?;
+    let reply = store
+        .email_reply_for_task(task_id)
+        .map_err(|error| task_store_error(&error))?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "email_reply_not_found",
+                "there is no draft reply on this task to revise",
+            )
+        })?;
+    // The original message travels with the draft. Without it "match their
+    // length" and "answer what they actually asked" cannot be expressed, and
+    // length is the complaint this path exists to serve. The description is
+    // where the inbound email lands at import.
+    let mut context = format!(
+        "--- ORIGINAL MESSAGE ---\n{}\n\n--- CURRENT DRAFT ---\n{}",
+        task.description, reply.body
+    );
+    if context.len() > email_reply_ai::MAX_CONTEXT_BYTES {
+        // Trim the original rather than the draft: the draft is the thing being
+        // rewritten and losing its tail would silently truncate the reply.
+        let room = email_reply_ai::MAX_CONTEXT_BYTES.saturating_sub(reply.body.len() + 64);
+        // Walk back to a character boundary by hand: floor_char_boundary is
+        // stable only from 1.91 and this workspace is pinned to a 1.90 MSRV.
+        let mut cut = room.min(task.description.len());
+        while cut > 0 && !task.description.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let mut original = task.description.clone();
+        original.truncate(cut);
+        context = format!(
+            "--- ORIGINAL MESSAGE (truncated) ---\n{original}\n\n--- CURRENT DRAFT ---\n{}",
+            reply.body
+        );
+    }
+    let revised = email_reply_ai::revise_reply(&context, &request.instruction)
+        .await
+        .map_err(|error| {
+            ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "email_reply_revision_failed",
+                error.to_string(),
+            )
+        })?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({ "body": revised })),
+    )
+        .into_response())
 }
 
 async fn send_email_reply(

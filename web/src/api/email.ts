@@ -186,6 +186,18 @@ export async function prepareEmailReply(operatorToken: string, taskId: string, b
   return response.json() as Promise<EmailReply>;
 }
 
+/**
+ * Revises a draft under a typed instruction and returns the new text WITHOUT
+ * saving it, so the version it replaces is still recoverable in the editor.
+ */
+export async function reviseEmailReplyDraft(operatorToken: string, taskId: string, instruction: string): Promise<string> {
+  const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email/reply/revision`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction }),
+  });
+  const revised = await response.json() as { body: string };
+  return revised.body;
+}
+
 export async function updateEmailReplyDraft(operatorToken: string, taskId: string, body: string): Promise<EmailReply> {
   const response = await authenticatedFetch(operatorToken, `/api/v1/tasks/${encodeURIComponent(taskId)}/email/reply`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }),

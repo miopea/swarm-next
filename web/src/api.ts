@@ -114,6 +114,7 @@ export {
   prepareEmailReply,
   recordTaskDeployment,
   retryEmailReply,
+  reviseEmailReplyDraft,
   sendEmailReply,
   updateEmailConfiguration,
   updateEmailReplyDraft,

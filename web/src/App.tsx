@@ -14,6 +14,7 @@ import {
   fetchStartSurface,
   setStartSurface as setStartSurfaceRequest,
   sendEmailReply,
+  reviseEmailReplyDraft,
   updateEmailReplyDraft,
   restartSupersededWorkers,
   runQueenAutomation,
@@ -941,6 +942,23 @@ export function App() {
    * an email task that is theirs, and it was the one part that made them go
    * somewhere else to do it.
    */
+  /**
+   * Asks Claude to revise a draft, and hands the text back UNSAVED.
+   *
+   * Nothing is written here. The editor swaps the revision in and keeps what it
+   * replaced, so a prompt that overshoots costs one Undo rather than a draft
+   * the operator liked — which is the failure they are most exposed to, having
+   * already said of one draft "I like how it's written".
+   */
+  async function reviseAwaitingReply(taskId: string, instruction: string): Promise<string | null> {
+    if (!operatorToken) return null;
+    let revised: string | null = null;
+    await perform(async () => {
+      revised = await reviseEmailReplyDraft(operatorToken, taskId, instruction);
+    }, "Claude is revising the reply…");
+    return revised;
+  }
+
   async function saveAwaitingReply(taskId: string, body: string) {
     if (!operatorToken) return;
     await perform(async () => {
@@ -1703,7 +1721,7 @@ export function App() {
               focusRequest={decisionFocus?.request}
               additionalPendingCount={pendingAssistCount + queenAutomationAttentionCount + heldDeliveryAttentionCount + awaitingReply.length}
               attentionCards={<>
-                <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
+                <UnansweredEmailAttentionCard awaiting={awaitingReply} busy={busy} onSendReply={sendAwaitingReply} onSaveReply={saveAwaitingReply} onReviseReply={reviseAwaitingReply} onOpenTask={(taskId) => { setTaskFocus((current) => ({ id: taskId, request: (current?.request ?? 0) + 1 })); setSurface("tasks"); }} />
                 <QueenAutomationAttentionCard status={queenAutomation} queenRequestPending={pendingQueenDecisionCount > 0} coveredBySpecificDecision={pendingQueenDecisionCount > 0} onOpenQueen={openQueenForAttention} onReviewSettings={() => openSettings("settings-workers")} onRetry={resumeQueenReview} />
                 <ApiaryAttentionCard pendingAssistance={pendingAssistCount} onReview={() => setSurface("apiary")} />
                 <HeldDeliveryAttentionCard held={heldDeliveries} onOpenWorker={(name) => { const worker = workers.find((candidate) => candidate.name === name); if (worker) openWorker(worker.id); }} />

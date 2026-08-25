@@ -127,7 +127,7 @@ fn description_prompt(context: &str) -> String {
     )
 }
 
-async fn read_bounded<R: AsyncRead + Unpin>(
+pub(super) async fn read_bounded<R: AsyncRead + Unpin>(
     mut reader: R,
     limit: usize,
 ) -> io::Result<(Vec<u8>, bool)> {

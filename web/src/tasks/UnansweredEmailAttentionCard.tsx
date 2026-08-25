@@ -34,12 +34,13 @@ import BeeMascot from "../brand/BeeMascot";
  * page". Reading and fixing the words is the only part of an email task that is
  * genuinely theirs, and it was the one part that sent them somewhere else.
  */
-export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTask, onSendReply, onSaveReply }: {
+export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTask, onSendReply, onSaveReply, onReviseReply }: {
   awaiting: UnansweredEmailTask[];
   busy?: boolean;
   onOpenTask: (taskId: string) => void;
   onSendReply?: (replyId: string) => void;
   onSaveReply?: (taskId: string, body: string) => void;
+  onReviseReply?: (taskId: string, instruction: string) => Promise<string | null>;
 }) {
   if (awaiting.length === 0) return null;
   return (
@@ -52,23 +53,44 @@ export default function UnansweredEmailAttentionCard({ awaiting, busy, onOpenTas
           onOpenTask={onOpenTask}
           onSendReply={onSendReply}
           onSaveReply={onSaveReply}
+          onReviseReply={onReviseReply}
         />
       ))}
     </>
   );
 }
 
-function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply }: {
+function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply, onReviseReply }: {
   item: UnansweredEmailTask;
   busy?: boolean;
   onOpenTask: (taskId: string) => void;
   onSendReply?: (replyId: string) => void;
   onSaveReply?: (taskId: string, body: string) => void;
+  onReviseReply?: (taskId: string, instruction: string) => Promise<string | null>;
 }) {
   const [editing, setEditing] = useState(false);
   const [body, setBody] = useState(item.draft_body ?? "");
+  const [instruction, setInstruction] = useState("");
+  // What the last AI revision replaced. Undo is the whole safety of this
+  // feature: the operator has already said of one draft "I like how it's
+  // written", so the expensive failure is a prompt that overshoots and takes a
+  // good draft with it. Held here rather than saved, so nothing is written
+  // until they choose to write it.
+  const [undoBody, setUndoBody] = useState<string | null>(null);
   const heading = `unanswered-email-${item.task_id}`;
   const canEditHere = Boolean(item.draft_body && onSaveReply);
+
+  async function revise() {
+    if (!onReviseReply || !instruction.trim()) return;
+    const previous = body;
+    const revised = await onReviseReply(item.task_id, instruction.trim());
+    // A failed revision leaves the draft exactly as it was, and offers no undo
+    // for a change that never happened.
+    if (revised === null) return;
+    setUndoBody(previous);
+    setBody(revised);
+    setInstruction("");
+  }
   return (
     <section className="queen-attention-card" aria-labelledby={heading}>
       <span className="queen-attention-bee" aria-hidden="true"><BeeMascot expression="focused" /></span>
@@ -86,11 +108,34 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply 
           {item.draft_body ? " A reply is written and waiting for you to read it." : item.drafted ? " A reply is written but was never sent." : " No reply has been written."}
         </p>
         {editing ? (
-          <label className="unanswered-email-editor">
-            <span className="field-caption">Reply to {item.sender_name || item.sender_address}</span>
-            <textarea rows={12} value={body} disabled={busy} onChange={(event) => setBody(event.target.value)} />
+          <div className="unanswered-email-editor">
+            <label>
+              <span className="field-caption">Reply to {item.sender_name || item.sender_address}</span>
+              <textarea rows={12} value={body} disabled={busy} onChange={(event) => { setBody(event.target.value); setUndoBody(null); }} />
+            </label>
             <small>{countWords(body)} words</small>
-          </label>
+            {onReviseReply ? (
+              <div className="unanswered-email-revise">
+                <label>
+                  <span className="field-caption">Ask Claude to change it</span>
+                  <input
+                    type="text"
+                    value={instruction}
+                    disabled={busy}
+                    placeholder="Halve it · warmer · drop the second paragraph"
+                    onChange={(event) => setInstruction(event.target.value)}
+                    onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void revise(); } }}
+                  />
+                </label>
+                <button className="secondary-button" type="button" disabled={busy || !instruction.trim()} onClick={() => void revise()}>Revise</button>
+                {/* Undo is offered only when there is something to undo, so it
+                    never implies a history that does not exist. */}
+                {undoBody !== null ? (
+                  <button className="text-button" type="button" disabled={busy} onClick={() => { setBody(undoBody); setUndoBody(null); }}>Undo revision</button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         ) : item.draft_body ? (
           <blockquote className="unanswered-email-draft">
             {item.draft_body}

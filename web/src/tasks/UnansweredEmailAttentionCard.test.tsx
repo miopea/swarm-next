@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import UnansweredEmailAttentionCard from "./UnansweredEmailAttentionCard";
@@ -107,6 +107,52 @@ test("the reply is edited and saved without leaving this screen", () => {
   expect(onSaveReply).toHaveBeenCalledWith("task-1", "Shorter wording.");
   // And nothing navigated away to do it.
   expect(onOpenTask).not.toHaveBeenCalled();
+});
+
+test("a prompted revision replaces the draft and stays undoable", async () => {
+  // The operator ruled: replace in place, with the previous version
+  // recoverable. The expensive failure is a prompt that overshoots and takes a
+  // draft they liked with it — they said of one "I like how it's written".
+  const onReviseReply = vi.fn().mockResolvedValue("Short version.");
+  const onSaveReply = vi.fn();
+  render(<UnansweredEmailAttentionCard
+    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "A long original draft." }]}
+    onOpenTask={vi.fn()}
+    onSaveReply={onSaveReply}
+    onReviseReply={onReviseReply}
+  />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit here" }));
+  fireEvent.change(screen.getByPlaceholderText(/Halve it/), { target: { value: "halve it" } });
+  fireEvent.click(screen.getByRole("button", { name: "Revise" }));
+
+  await waitFor(() => expect(screen.getByRole("textbox", { name: /Reply to/ })).toHaveValue("Short version."));
+  expect(onReviseReply).toHaveBeenCalledWith("task-1", "halve it");
+  // Nothing is written until the operator says so.
+  expect(onSaveReply).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Undo revision" }));
+  expect(screen.getByRole("textbox", { name: /Reply to/ })).toHaveValue("A long original draft.");
+});
+
+test("a failed revision leaves the draft alone and offers no undo", async () => {
+  // A revision that could not be produced must not present as a change, or the
+  // operator undoes something that never happened.
+  const onReviseReply = vi.fn().mockResolvedValue(null);
+  render(<UnansweredEmailAttentionCard
+    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Untouched draft." }]}
+    onOpenTask={vi.fn()}
+    onSaveReply={vi.fn()}
+    onReviseReply={onReviseReply}
+  />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit here" }));
+  fireEvent.change(screen.getByPlaceholderText(/Halve it/), { target: { value: "halve it" } });
+  fireEvent.click(screen.getByRole("button", { name: "Revise" }));
+
+  await waitFor(() => expect(onReviseReply).toHaveBeenCalled());
+  expect(screen.getByRole("textbox", { name: /Reply to/ })).toHaveValue("Untouched draft.");
+  expect(screen.queryByRole("button", { name: "Undo revision" })).not.toBeInTheDocument();
 });
 
 test("cancelling an edit restores the draft and sends nothing", () => {
