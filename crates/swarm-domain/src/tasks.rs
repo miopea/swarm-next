@@ -54,7 +54,7 @@ impl TaskState {
                 | (Self::Ready, Self::Active | Self::Blocked)
                 | (Self::Active, Self::Blocked | Self::Review)
                 | (Self::Blocked, Self::Ready | Self::Active)
-                | (Self::Review, Self::Active | Self::Completed)
+                | (Self::Review, Self::Active | Self::Ready | Self::Completed)
         )
     }
 }

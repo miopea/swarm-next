@@ -751,6 +751,10 @@ mod tests {
     fn task_transitions_are_explicit() {
         assert!(TaskState::Draft.can_transition_to(TaskState::Ready));
         assert!(TaskState::Review.can_transition_to(TaskState::Completed));
+        // Sending work back to the queue is a normal outcome of review. It was
+        // not permitted, so the only rejection path was Review -> Active, which
+        // put the task where nobody was working it.
+        assert!(TaskState::Review.can_transition_to(TaskState::Ready));
         assert!(TaskState::Blocked.can_transition_to(TaskState::Active));
         assert!(!TaskState::Ready.can_transition_to(TaskState::Completed));
         assert!(!TaskState::Completed.can_transition_to(TaskState::Active));

@@ -30,7 +30,7 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
              JOIN tasks task ON task.id = action.task_id
              JOIN worker_profiles worker ON worker.id = action.worker_id
              JOIN worker_sessions session ON session.session_id = action.session_id
-             WHERE action.kind IN ('stale_owned_work_attention','owned_work_never_briefed_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention')
+             WHERE action.kind IN ('stale_owned_work_attention','owned_work_never_briefed_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','reviewed_work_without_evidence_attention')
                AND action.state = 'completed'
                AND task.updated_at = action.evidence_revision
                AND session.worker_id = action.worker_id
@@ -50,6 +50,20 @@ pub(super) const LIVE_ATTENTION_SOURCE: &str = "FROM coordinator_actions action
                              AND request.state = 'pending'
                              AND request.deadline IS NOT NULL
                              AND request.deadline <= unixepoch()
+                       ))
+                   -- Finished work nobody can close. Clears itself the
+                   -- moment either kind of evidence exists, or the task leaves
+                   -- review, so recording the claim is the whole fix and
+                   -- nothing has to be dismissed by hand.
+                   OR (action.kind = 'reviewed_work_without_evidence_attention'
+                       AND task.state = 'review'
+                       AND NOT EXISTS (
+                           SELECT 1 FROM task_deployments deployment
+                           WHERE deployment.task_id = task.id
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM task_completion_exemptions exemption
+                           WHERE exemption.task_id = task.id
                        ))
                    OR (action.kind = 'stale_owned_work_attention'
                        AND task.assigned_worker_id = action.worker_id
@@ -123,6 +137,17 @@ pub struct ExitedWorkerOwnedWorkCandidate {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssignedReadyWorkNotStartedCandidate {
+    pub worker_id: WorkerId,
+    pub session_id: WorkerSessionId,
+    pub task_id: TaskId,
+    pub task_revision: i64,
+    pub age_seconds: i64,
+}
+
+/// Finished work that cannot be closed, because neither kind of completion
+/// evidence exists for it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewedWorkWithoutEvidenceCandidate {
     pub worker_id: WorkerId,
     pub session_id: WorkerSessionId,
     pub task_id: TaskId,
@@ -498,6 +523,152 @@ impl TaskStore {
                   finished_at, updated_at)
              VALUES (?1, ?2, 'assigned_ready_work_not_started_attention', ?3, ?4, ?5, ?6, ?7,
                      'completed', 'Ready work was delivered but its loaded worker did not start it',
+                     ?8, ?8)",
+            params![
+                Uuid::now_v7().to_string(),
+                idempotency_key,
+                candidate.worker_id.to_string(),
+                candidate.task_id.to_string(),
+                candidate.session_id.to_string(),
+                candidate.task_revision,
+                candidate.age_seconds,
+                now,
+            ],
+        )? == 1;
+        if changed {
+            insert_control_room_event(&transaction, ControlRoomEventKind::WorkersChanged)?;
+        }
+        transaction.commit()?;
+        Ok(changed)
+    }
+
+    /// Work in review that has neither a deployment nor a no-deployment claim.
+    ///
+    /// Unlike every other kind here, the session is not required to be live:
+    /// the worst version of this is exactly the one where the worker has moved
+    /// on, because then nothing else will ever record the claim.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn reviewed_work_without_evidence_candidates(
+        &self,
+        now: i64,
+        minimum_age_seconds: i64,
+    ) -> Result<Vec<ReviewedWorkWithoutEvidenceCandidate>, TaskStoreError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT task.assigned_worker_id, session.session_id, task.id,
+                    task.updated_at, MAX(0, ?1 - task.updated_at)
+             FROM tasks task
+             JOIN worker_profiles worker
+               ON worker.id = task.assigned_worker_id AND worker.archived_at IS NULL
+             JOIN task_assignments assignment
+               ON assignment.task_id = task.id
+             JOIN worker_sessions session
+               ON session.session_id = assignment.worker_session_id
+                  AND session.worker_id = worker.id
+             WHERE task.state = 'review' AND task.removed_at IS NULL
+               AND task.updated_at + ?2 <= ?1
+               AND NOT EXISTS (
+                   SELECT 1 FROM task_deployments deployment
+                   WHERE deployment.task_id = task.id
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM task_completion_exemptions exemption
+                   WHERE exemption.task_id = task.id
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM coordinator_actions action
+                   WHERE action.kind = \'reviewed_work_without_evidence_attention\'
+                     AND action.task_id = task.id AND action.worker_id = worker.id
+                     AND action.session_id = session.session_id
+                     AND action.evidence_revision = task.updated_at
+               )
+             GROUP BY task.id
+             ORDER BY task.updated_at, task.id LIMIT ?3",
+        )?;
+        statement
+            .query_map(
+                params![now, minimum_age_seconds, MAX_UNSTARTED_WORK_CANDIDATES],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )?
+            .map(|row| {
+                let (worker_id, session_id, task_id, task_revision, age_seconds) = row?;
+                Ok::<_, rusqlite::Error>(ReviewedWorkWithoutEvidenceCandidate {
+                    worker_id: worker_id
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    session_id: session_id
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    task_id: task_id.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    task_revision,
+                    age_seconds,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(TaskStoreError::from)
+    }
+
+    /// Records one exact observation of finished work with no evidence.
+    ///
+    /// # Errors
+    /// Returns a persistence error.
+    pub fn record_reviewed_work_without_evidence_attention(
+        &self,
+        candidate: &ReviewedWorkWithoutEvidenceCandidate,
+        now: i64,
+        minimum_age_seconds: i64,
+    ) -> Result<bool, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let still_current: bool = transaction.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM tasks task
+                 WHERE task.id = ?1 AND task.state = \'review\'
+                   AND task.assigned_worker_id = ?2 AND task.updated_at = ?3
+                   AND task.updated_at + ?4 <= ?5
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_deployments deployment
+                       WHERE deployment.task_id = task.id
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM task_completion_exemptions exemption
+                       WHERE exemption.task_id = task.id
+                   )
+             )",
+            params![
+                candidate.task_id.to_string(),
+                candidate.worker_id.to_string(),
+                candidate.task_revision,
+                minimum_age_seconds,
+                now,
+            ],
+            |row| row.get(0),
+        )?;
+        if !still_current {
+            transaction.commit()?;
+            return Ok(false);
+        }
+        let idempotency_key = format!(
+            "reviewed-work-without-evidence:{}:{}:{}:{}",
+            candidate.task_id, candidate.worker_id, candidate.session_id, candidate.task_revision
+        );
+        let changed = transaction.execute(
+            "INSERT OR IGNORE INTO coordinator_actions
+                 (id, idempotency_key, kind, worker_id, task_id, session_id,
+                  evidence_revision, observed_age_seconds, state, reason,
+                  finished_at, updated_at)
+             VALUES (?1, ?2, \'reviewed_work_without_evidence_attention\', ?3, ?4, ?5, ?6, ?7,
+                     \'completed\', \'Work reached review with neither a deployment nor a no-deployment claim\',
                      ?8, ?8)",
             params![
                 Uuid::now_v7().to_string(),
@@ -1407,6 +1578,167 @@ pub(super) fn migrate_undelivered_brief_attention(
         "user_version",
         crate::UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION,
     )
+}
+
+/// Adds the kind that says finished work is waiting on evidence nobody gave it.
+///
+/// Review was the one task state no attention kind covered. Work that was done
+/// and work that was abandoned looked identical on the board, and the only way
+/// to tell them apart was reading the handoff prose — which is how three tasks
+/// sat stranded in a day.
+pub(super) fn migrate_reviewed_work_evidence_attention(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%reviewed_work_without_evidence_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    // Only widen the shape this actually widens: a database can arrive here
+    // carrying an older one.
+    let ready: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'coordinator_actions'
+           AND sql LIKE '%owned_work_never_briefed_attention%')",
+        [],
+        |row| row.get(0),
+    )?;
+    if ready && !present {
+        transaction.execute_batch(
+            "DROP INDEX IF EXISTS coordinator_actions_queue;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE coordinator_actions RENAME TO coordinator_actions_v89;
+             CREATE TABLE coordinator_actions (
+                 id TEXT PRIMARY KEY,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','owned_work_never_briefed_attention','reviewed_work_without_evidence_attention')),
+                 worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 session_id TEXT,
+                 evidence_revision INTEGER,
+                 observed_age_seconds INTEGER,
+                 state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                 reason TEXT NOT NULL,
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                 attempted_at INTEGER,
+                 finished_at INTEGER,
+                 created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                 updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+             );
+             INSERT INTO coordinator_actions (
+                 id, idempotency_key, kind, worker_id, task_id, session_id,
+                 evidence_revision, observed_age_seconds, state, reason, attempts,
+                 attempted_at, finished_at, created_at, updated_at
+             ) SELECT id, idempotency_key, kind, worker_id, task_id, session_id,
+                      evidence_revision, observed_age_seconds, state, reason, attempts,
+                      attempted_at, finished_at, created_at, updated_at
+               FROM coordinator_actions_v89;
+             DROP TABLE coordinator_actions_v89;
+             CREATE INDEX coordinator_actions_queue
+                 ON coordinator_actions(state, created_at, id);
+             PRAGMA legacy_alter_table = OFF;",
+        )?;
+    }
+    transaction.pragma_update(
+        None,
+        "user_version",
+        crate::REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION,
+    )
+}
+
+#[cfg(test)]
+mod reviewed_work_tests {
+    use crate::TaskStore;
+    use swarm_domain::{ProviderKind, TaskState, WorkerSessionId};
+
+    /// Review was the one task state no attention kind covered, so finished
+    /// work and abandoned work looked identical on the board. Three tasks sat
+    /// stranded in a day because the only way to tell them apart was reading
+    /// the handoff prose.
+    #[test]
+    fn finished_work_with_no_evidence_is_surfaced_and_clears_when_the_claim_lands() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store
+            .create_task("Read-only investigation", "/workspace/petal")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+
+        let now = i64::MAX / 4;
+        let grace = 15 * 60;
+        let fresh = store.reviewed_work_without_evidence_candidates(0, grace).unwrap();
+        assert!(fresh.is_empty(), "work just reported is not yet stranded");
+
+        let candidates = store
+            .reviewed_work_without_evidence_candidates(now, grace)
+            .unwrap();
+        assert_eq!(candidates.len(), 1, "no evidence of either kind");
+        assert_eq!(candidates[0].task_id, task.id);
+        assert!(
+            store
+                .record_reviewed_work_without_evidence_attention(&candidates[0], now, grace)
+                .unwrap()
+        );
+        assert!(
+            store
+                .current_coordinator_attention(now)
+                .unwrap()
+                .iter()
+                .any(|attention| attention.kind == "reviewed_work_without_evidence_attention"),
+            "Queen can see it"
+        );
+
+        // Recording the claim is the whole fix: nothing is dismissed by hand.
+        store
+            .claim_completion_exemption(task.id, "Read-only investigation", Some(worker.id), now)
+            .unwrap();
+        assert!(
+            !store
+                .current_coordinator_attention(now)
+                .unwrap()
+                .iter()
+                .any(|attention| attention.kind == "reviewed_work_without_evidence_attention"),
+            "the claim clears it without anything having to delete the row"
+        );
+    }
+
+    /// A task that shipped is not stranded, so it is never raised.
+    #[test]
+    fn recorded_deployment_is_not_stranded_work() {
+        let store = TaskStore::in_memory().unwrap();
+        store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+        let task = store.create_task("Shipped work", "/workspace/petal").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.assign_task(task.id, session).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        let now = i64::MAX / 4;
+        store
+            .record_task_deployment(task.id, "production", "abc123", now)
+            .unwrap();
+
+        assert!(
+            store
+                .reviewed_work_without_evidence_candidates(now, 15 * 60)
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 #[cfg(test)]

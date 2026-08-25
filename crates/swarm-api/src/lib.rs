@@ -153,6 +153,11 @@ const WORKER_RECOVERY_STABILITY_SECONDS: i64 = 5 * 60;
 /// leave asleep.
 pub(crate) const WORKER_REVIVAL_INTENT_MAX_AGE_SECONDS: i64 = 15 * 60;
 const ASSIGNED_READY_START_GRACE_SECONDS: i64 = 5 * 60;
+/// How long finished work may sit in review before Queen is told it cannot be
+/// closed. Longer than the start grace on purpose: a worker recording its claim
+/// straight after reporting is the normal path, and this only exists for the
+/// case where that did not happen.
+const REVIEWED_WORK_EVIDENCE_GRACE_SECONDS: i64 = 15 * 60;
 const STALE_OWNED_WORK_SECONDS: i64 = 30 * 60;
 const MAX_WORKER_DESCRIPTION_IMPROVEMENTS: usize = 1;
 
@@ -1122,6 +1127,7 @@ impl AppState {
         self.observe_overdue_decisions(store);
         self.observe_exited_worker_owned_work(store);
         self.observe_assigned_ready_work_not_started(store).await;
+        self.observe_reviewed_work_without_evidence(store);
         self.observe_stale_owned_work(store).await;
         let admission = runtime::coordinator_start_admission(self).await;
         self.coordinator_start_admission
@@ -1383,6 +1389,42 @@ impl AppState {
                     worker_id = %candidate.worker_id,
                     message = %error,
                     "delivered Ready work attention could not be recorded"
+                ),
+            }
+        }
+    }
+
+    /// Tells Queen about finished work that nobody can close.
+    ///
+    /// Review was the one task state with no attention kind, so work that was
+    /// done and work that was abandoned looked identical on the board. Unlike
+    /// the unstarted-work sweep, this deliberately does not consult provider
+    /// activity: the worst version of this is the one where the worker is gone,
+    /// and a quiet terminal is the symptom rather than a reason to stay silent.
+    fn observe_reviewed_work_without_evidence(&self, store: &TaskStore) {
+        let now = unix_timestamp();
+        let candidates = match store
+            .reviewed_work_without_evidence_candidates(now, REVIEWED_WORK_EVIDENCE_GRACE_SECONDS)
+        {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(message = %error, "deterministic coordinator could not inspect reviewed work");
+                return;
+            }
+        };
+        for candidate in candidates {
+            match store.record_reviewed_work_without_evidence_attention(
+                &candidate,
+                now,
+                REVIEWED_WORK_EVIDENCE_GRACE_SECONDS,
+            ) {
+                Ok(true) => self.control_room_notify.notify_waiters(),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    task_id = %candidate.task_id,
+                    worker_id = %candidate.worker_id,
+                    message = %error,
+                    "reviewed work attention could not be recorded"
                 ),
             }
         }

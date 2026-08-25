@@ -141,7 +141,8 @@ const COORDINATOR_REFUSAL_SCHEMA_VERSION: i64 = 86;
 const OPERATOR_PASSKEY_SCHEMA_VERSION: i64 = 87;
 const TERMINAL_GEOMETRY_LEDGER_SCHEMA_VERSION: i64 = 88;
 const UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION: i64 = 89;
-const CURRENT_SCHEMA_VERSION: i64 = UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION;
+const REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION: i64 = 90;
+const CURRENT_SCHEMA_VERSION: i64 = REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -450,7 +451,32 @@ pub enum TaskStoreError {
     MigrationBatchChanged,
 }
 
+fn rearm_briefing_for_returned_work(
+    transaction: &rusqlite::Transaction<'_>,
+    id: TaskId,
+) -> Result<(), TaskStoreError> {
+    // assignment_id is the primary key of task_dispatches, so there is at most
+    // one row per assignment and a second briefing is a re-arm rather than an
+    // insert. Both halves of the delivered CHECK move together.
+    transaction.execute(
+        "UPDATE task_dispatches
+         SET state = 'queued', delivered_at = NULL, attempts = 0,
+             updated_at = unixepoch()
+         WHERE task_id = ?1
+           AND assignment_id IN (
+               SELECT assignment.id FROM task_assignments assignment
+               JOIN worker_sessions session
+                 ON session.session_id = assignment.worker_session_id
+                AND session.ended_at IS NULL
+               WHERE assignment.task_id = ?1 AND assignment.released_at IS NULL
+           )",
+        [id.to_string()],
+    )?;
+    Ok(())
+}
+
 impl TaskStore {
+
     /// Opens, migrates, and integrity-checks a file-backed task database.
     ///
     /// # Errors
@@ -1628,7 +1654,25 @@ impl TaskStore {
             "UPDATE tasks SET state = ?2, updated_at = unixepoch() WHERE id = ?1",
             params![id.to_string(), target.to_string()],
         )?;
-        if target == TaskState::Ready {
+        // Work sent back to a worker owes it a briefing again. Queen's only
+        // non-completing exit from Review used to be Active, and that
+        // transition enqueued nothing: the task changed column, the worker was
+        // never told, and it sat in Active looking like work nobody was doing.
+        // The same held for Blocked -> Active. Delivery already accepts an
+        // active task — `deliverable_briefings` takes 'ready' or 'active', and
+        // still holds a brief back while the worker has other active work or
+        // the operator is at its terminal — so this only closes the enqueue
+        // side.
+        //
+        // Re-entry only. A worker moving its own Ready -> Active is starting
+        // the work it was just briefed on, and re-arming there would replay a
+        // briefing it has already acted on.
+        let returning_to_a_worker =
+            target == TaskState::Active && matches!(current, TaskState::Review | TaskState::Blocked);
+        if returning_to_a_worker {
+            rearm_briefing_for_returned_work(&transaction, id)?;
+        }
+        if target == TaskState::Ready || returning_to_a_worker {
             let queued: i64 = transaction.query_row(
                 "SELECT COUNT(*) FROM task_dispatches WHERE state IN ('queued','dispatching')",
                 [],
@@ -2308,6 +2352,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION {
         coordinator::migrate_undelivered_brief_attention(transaction)?;
+    }
+    if schema_version < REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION {
+        coordinator::migrate_reviewed_work_evidence_attention(transaction)?;
     }
     Ok(())
 }
@@ -5396,6 +5443,40 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'table' AND name = 'coordinator_actions'
                    AND sql LIKE '%owned_work_never_briefed_attention%')",
+        },
+        SchemaStep {
+            table: "coordinator_actions",
+            artifact: "",
+            // Another value inside a CHECK, so the undo rebuilds the table at
+            // the v89 shape. Every kind that existed before this step is
+            // carried across; dropping one would silently void live rows.
+            undo_sql: "DROP INDEX IF EXISTS coordinator_actions_queue;
+                 PRAGMA legacy_alter_table = ON;
+                 ALTER TABLE coordinator_actions RENAME TO coordinator_actions_undo;
+                 CREATE TABLE coordinator_actions (
+                     id TEXT PRIMARY KEY,
+                     idempotency_key TEXT NOT NULL UNIQUE,
+                     kind TEXT NOT NULL CHECK (kind IN ('wake_assigned_worker','stale_owned_work_attention','owned_work_worker_exited_attention','assigned_ready_work_not_started_attention','worker_filed_draft_attention','decision_deadline_passed_attention','owned_work_never_briefed_attention')),
+                     worker_id TEXT NOT NULL REFERENCES worker_profiles(id),
+                     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                     session_id TEXT,
+                     evidence_revision INTEGER,
+                     observed_age_seconds INTEGER,
+                     state TEXT NOT NULL CHECK (state IN ('queued','running','completed','uncertain','cancelled')),
+                     reason TEXT NOT NULL,
+                     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 1),
+                     attempted_at INTEGER,
+                     finished_at INTEGER,
+                     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                 );
+                 DROP TABLE coordinator_actions_undo;
+                 CREATE INDEX coordinator_actions_queue
+                     ON coordinator_actions(state, created_at, id);
+                 PRAGMA legacy_alter_table = OFF",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'coordinator_actions'
+                   AND sql LIKE '%reviewed_work_without_evidence_attention%')",
         },
     ];
 

@@ -538,6 +538,62 @@ mod tests {
     use super::*;
     use swarm_domain::{PresenceDeviceId, ProviderKind, TaskDispatchState};
 
+    /// Queen's only non-completing exit from review used to be Active, and
+    /// that transition enqueued nothing: the task changed column and the worker
+    /// was never told, so it sat in Active looking like work nobody was doing.
+    #[test]
+    fn work_sent_back_from_review_is_briefed_again() {
+        let (store, task_id, _session) = assigned_task();
+        let first = store.claim_task_dispatches(100).unwrap();
+        assert_eq!(first.len(), 1, "the original briefing");
+        store
+            .complete_task_dispatch(&first[0].assignment_id, 100)
+            .unwrap();
+        store
+            .transition_task(task_id, swarm_domain::TaskState::Active)
+            .unwrap();
+        store
+            .transition_task(task_id, swarm_domain::TaskState::Review)
+            .unwrap();
+        assert!(
+            store.claim_task_dispatches(100).unwrap().is_empty(),
+            "nothing is owed while the work sits in review"
+        );
+
+        store
+            .transition_task(task_id, swarm_domain::TaskState::Active)
+            .unwrap();
+
+        let again = store.claim_task_dispatches(100).unwrap();
+        assert_eq!(
+            again.len(),
+            1,
+            "work handed back to a worker owes it a briefing again"
+        );
+        assert_eq!(again[0].task_id, task_id);
+    }
+
+    /// A worker starting its own Ready work is acting on the briefing it was
+    /// just given. Re-arming there would replay it.
+    #[test]
+    fn a_worker_starting_its_own_ready_work_is_not_briefed_twice() {
+        let (store, task_id, _session) = assigned_task();
+        let first = store.claim_task_dispatches(100).unwrap();
+        assert_eq!(first.len(), 1);
+        store
+            .complete_task_dispatch(&first[0].assignment_id, 100)
+            .unwrap();
+
+        store
+            .transition_task(task_id, swarm_domain::TaskState::Active)
+            .unwrap();
+
+        assert!(
+            store.claim_task_dispatches(100).unwrap().is_empty(),
+            "starting the work is not a reason to repeat its briefing"
+        );
+    }
+
     fn assigned_task() -> (TaskStore, TaskId, WorkerSessionId) {
         let store = TaskStore::in_memory().unwrap();
         store.ensure_queen("/workspace/queen").unwrap();
