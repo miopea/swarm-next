@@ -93,10 +93,39 @@ fn provider_start_request(
     mcp_config: Option<PathBuf>,
 ) -> Result<HostRequest, ApiError> {
     let worker_workspace = PathBuf::from(expand_home(&profile.workspace));
+    // BOTH SIDES MUST JUDGE THE SAME PATH.
+    //
+    // This decides whether to send the override; the terminal host then decides
+    // whether to honour the roots, and it CANONICALIZES first. Comparing the
+    // stored string here while the host compares the resolved target means the
+    // two agree on every ordinary path and disagree on exactly one shape: a
+    // symlink sitting inside a root that points outside it. There the stored
+    // path looks contained, so no override is sent, and the host resolves the
+    // target, finds it outside, and refuses.
+    //
+    // That is not hypothetical. The RCG Development Installer's workspace is
+    // /home/bschleifer/projects/rcg/rcg-dev-install, a symlink to
+    // /home/bschleifer/rcg-dev-install, with the roots set to
+    // /home/bschleifer/projects. It had never started a session in its entire
+    // existence, and every existence check anyone ran passed, because is_dir()
+    // follows symlinks.
+    //
+    // Canonicalizing is not a relaxation. The host still applies the same roots
+    // rule to the same resolved path it always did; this only stops the caller
+    // deciding the question from different evidence. Containment is established
+    // at worker creation by resolve_workspace_path, which refuses a symlink
+    // outright and stores the canonical target — so a worker created through
+    // that path can never reach here in this shape, and one that does got its
+    // row written some other way.
+    //
+    // A path that cannot be resolved falls back to the stored form rather than
+    // failing: the host will refuse it and now says why.
+    let judged_workspace =
+        std::fs::canonicalize(&worker_workspace).unwrap_or_else(|_| worker_workspace.clone());
     let allow_outside_roots = !state
         .workspace_roots
         .iter()
-        .any(|root| worker_workspace.starts_with(root));
+        .any(|root| judged_workspace.starts_with(root));
     let request = match profile.provider {
         ProviderKind::ClaudeCode => {
             // A conversation Claude no longer holds is a lost thread, not a
@@ -288,6 +317,107 @@ async fn reconcile_worker_bindings_unlocked(state: &AppState) -> Result<LiveSess
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds the start request for a worker whose workspace is `workspace`,
+    /// with `root` as the only configured root, and reports whether the
+    /// override was sent.
+    #[cfg(unix)]
+    fn override_sent_for(workspace: &Path, root: &Path) -> bool {
+        use swarm_domain::ProviderKind;
+
+        let state = crate::AppState::default().with_workspace_roots(vec![root.to_path_buf()]);
+        let store = swarm_persistence::TaskStore::in_memory().unwrap();
+        let profile = store
+            .create_worker(
+                "Installer",
+                ProviderKind::Codex,
+                &workspace.to_string_lossy(),
+                false,
+                1,
+            )
+            .unwrap();
+        let state = state.with_task_store(store);
+        match provider_start_request(&state, profile.id, &profile, TerminalSize::default(), None)
+            .unwrap()
+        {
+            HostRequest::StartCodex {
+                allow_outside_roots,
+                ..
+            }
+            | HostRequest::StartClaude {
+                allow_outside_roots,
+                ..
+            } => allow_outside_roots,
+            other => panic!("unexpected start request: {other:?}"),
+        }
+    }
+
+    /// A symlink inside a root, pointing outside it, is the one shape where the
+    /// two sides of this decision disagreed.
+    ///
+    /// This side chose whether to send the override; the terminal host decided
+    /// whether to honour the roots, and it canonicalizes first. Comparing the
+    /// stored string here against the resolved target there agrees on every
+    /// ordinary path and splits on exactly this one — the stored path looks
+    /// contained, so no override went, and the host resolved the target, found
+    /// it outside, and refused.
+    ///
+    /// The RCG Development Installer sat in exactly this shape and had never
+    /// started a session in its entire existence. Every existence check anyone
+    /// ran passed, because `is_dir` follows symlinks.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_inside_a_root_pointing_outside_it_is_judged_by_where_it_lands() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("projects");
+        let outside = directory.path().join("elsewhere");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let link = root.join("dev-install");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        assert!(
+            override_sent_for(&link, &root),
+            "the target is outside the root, so the host will refuse without the override"
+        );
+    }
+
+    /// And the ordinary contained case is unchanged — no override is sent, so
+    /// the host applies the roots rule exactly as before. Relaxing this is what
+    /// would let a symlink dropped in a root run an agent anywhere on the box,
+    /// and nothing here does that: the host still applies the same rule to the
+    /// same resolved path.
+    #[cfg(unix)]
+    #[test]
+    fn a_real_directory_inside_a_root_still_gets_no_override() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("projects");
+        let workspace = root.join("petal");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        assert!(
+            !override_sent_for(&workspace, &root),
+            "contained work must still be held to the roots"
+        );
+    }
+
+    /// A symlink inside a root that points somewhere else inside the same root
+    /// is contained, and must not be handed an override just for being a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_that_lands_back_inside_the_root_is_still_contained() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("projects");
+        let real = root.join("petal");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = root.join("petal-alias");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(
+            !override_sent_for(&link, &root),
+            "resolving inside the root is contained, however it was reached"
+        );
+    }
 
     #[test]
     fn first_wake_stages_an_existing_legacy_claude_conversation() {
