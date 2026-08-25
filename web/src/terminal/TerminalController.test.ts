@@ -18,8 +18,10 @@ afterEach(() => {
 });
 
 
-function fakeSurface(): TerminalSurface {
-  return {
+type FakeSurface = TerminalSurface & { renderableListener?: (renderable: boolean) => void };
+
+function fakeSurface(): FakeSurface {
+  const surface: FakeSurface = {
     open: vi.fn(),
     focus: vi.fn(),
     fit: vi.fn().mockResolvedValue({ rows: 24, columns: 80 }),
@@ -30,7 +32,12 @@ function fakeSurface(): TerminalSurface {
     onScroll: vi.fn((listener) => { listener(true); return { dispose: vi.fn() }; }),
     scrollToBottom: vi.fn(),
     dispose: vi.fn(),
+    onRenderable: vi.fn((listener: (renderable: boolean) => void) => {
+      surface.renderableListener = listener;
+      return { dispose: vi.fn() };
+    }),
   };
+  return surface;
 }
 
 test("a requested desktop focus follows the session into its mounted terminal", async () => {
@@ -115,6 +122,39 @@ function fakeConnection(): TerminalConnectionLike {
     resumeRendering: vi.fn(),
   };
 }
+
+test("a hidden tab stops rendering even though the surface is still attached", () => {
+  // The first fix keyed on attachment alone. The operator went for a run and
+  // came back to a terminal replaying: backgrounding a tab never detaches, and a
+  // hidden tab cannot render because the browser throttles animation frames.
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  vi.mocked(connection.suspendRendering!).mockClear();
+  vi.mocked(connection.resumeRendering!).mockClear();
+
+  surface.renderableListener?.(false);
+  expect(connection.suspendRendering).toHaveBeenCalledTimes(1);
+
+  surface.renderableListener?.(true);
+  expect(connection.resumeRendering).toHaveBeenCalledTimes(1);
+});
+
+test("returning to a visible tab does not resume a surface that is still detached", () => {
+  // Either half alone is enough to stop drawing, and neither alone is enough to
+  // start: a hidden tab holding a detached surface must stay suspended when the
+  // tab comes back.
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  controller.attach(document.createElement("div"));
+  controller.detach();
+  vi.mocked(connection.resumeRendering!).mockClear();
+
+  surface.renderableListener?.(true);
+  expect(connection.resumeRendering).not.toHaveBeenCalled();
+});
 
 test("the connection is told when there is, and is not, a surface to draw into", () => {
   // detach() leaves the surface open and only removes its host from the

@@ -86,6 +86,7 @@ export class XtermSurface implements TerminalSurface {
   #disposed = false;
   readonly #search = new SearchAddon();
   #findRequested?: () => void;
+  readonly #renderableListeners = new Set<(renderable: boolean) => void>();
   readonly #serialize = new SerializeAddon();
   /** Held so a lost GPU context can dispose it and fall back to the DOM. */
   #webgl?: WebglAddon;
@@ -454,8 +455,27 @@ export class XtermSurface implements TerminalSurface {
   };
 
   readonly #handleVisibilityChange = (): void => {
-    if (document.visibilityState === "visible") this.#scheduleFit();
+    const visible = document.visibilityState === "visible";
+    if (visible) this.#scheduleFit();
+    // A hidden tab cannot render: the browser throttles or stops animation
+    // frames, and xterm resolves a write only once it has drawn it. That is the
+    // same condition as a detached element, reached by a different door — the
+    // operator went for a run and came back to the terminal replaying, with the
+    // detach fix already live.
+    this.#renderableListeners.forEach((listener) => listener(visible));
   };
+
+  /**
+   * Whether this surface can currently draw.
+   *
+   * False while the tab is hidden. The controller combines it with whether the
+   * surface is attached, because either alone is enough to stop rendering and
+   * neither alone is enough to allow it.
+   */
+  onRenderable(listener: (renderable: boolean) => void): Disposable {
+    this.#renderableListeners.add(listener);
+    return { dispose: () => { this.#renderableListeners.delete(listener); } };
+  }
 
   #beginTouchGesture(clientY: number): void {
     this.#touchLastY = clientY;

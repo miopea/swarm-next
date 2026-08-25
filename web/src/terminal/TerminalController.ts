@@ -26,6 +26,8 @@ export interface TerminalSurface {
    * does not model it keeps working.
    */
   onFindRequested?(listener: () => void): Disposable;
+  /** Whether the surface can draw right now — false while the tab is hidden. */
+  onRenderable?(listener: (renderable: boolean) => void): Disposable;
   findNext?(query: string): boolean;
   findPrevious?(query: string): boolean;
 }
@@ -61,6 +63,17 @@ export class TerminalController {
   readonly #host = document.createElement("div");
   readonly #surface: TerminalSurface;
   readonly #connection: TerminalConnectionLike;
+  /**
+   * Both halves of "can anything draw this".
+   *
+   * Attached answers whether the host is in the document; visible answers
+   * whether the tab is on screen. Either alone stops rendering and neither
+   * alone allows it — the first fix keyed on attachment only, and the operator
+   * came back from a run to a terminal replaying, because a backgrounded tab
+   * never detaches.
+   */
+  #attached = false;
+  #visible = true;
   readonly #surfaceSubscriptions: Disposable[];
   readonly #statusSubscribers = new Set<TerminalStatusListener>();
   readonly #scrollSubscribers = new Set<TerminalScrollListener>();
@@ -84,6 +97,10 @@ export class TerminalController {
     this.#surfaceSubscriptions = [
       this.#surface.onData((text) => this.#connection.sendInput(text)),
       this.#surface.onScroll((atBottom) => this.#setAtBottom(atBottom)),
+      this.#surface.onRenderable?.((renderable) => {
+        this.#visible = renderable;
+        this.#updateRendering();
+      }) ?? { dispose: () => undefined },
     ];
   }
 
@@ -94,7 +111,8 @@ export class TerminalController {
       this.#surface.open(this.#host);
       this.#opened = true;
     }
-    this.#connection.resumeRendering?.();
+    this.#attached = true;
+    this.#updateRendering();
     if (this.#started) {
       this.#applyPendingFocus();
       this.#refitWhenAttached();
@@ -107,11 +125,17 @@ export class TerminalController {
     // The surface stays open — only its host leaves the document. xterm cannot
     // render into a detached element, so frames arriving now would queue behind
     // a write that cannot finish and replay on return.
-    this.#connection.suspendRendering?.();
+    this.#attached = false;
+    this.#updateRendering();
     this.#host.remove();
   }
 
   /** Told when the operator asks to search this terminal. */
+  #updateRendering(): void {
+    if (this.#attached && this.#visible) this.#connection.resumeRendering?.();
+    else this.#connection.suspendRendering?.();
+  }
+
   subscribeFind(listener: () => void): Disposable {
     return this.#surface.onFindRequested?.(listener) ?? { dispose: () => undefined };
   }
