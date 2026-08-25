@@ -384,6 +384,17 @@ pub enum TaskStoreError {
     InvalidWorkspace,
     #[error("task cannot move from {from} to {to}")]
     InvalidTransition { from: TaskState, to: TaskState },
+    /// A completed task asked to complete again, with the reason it is already
+    /// closed rather than the rule that forbids saying so twice.
+    ///
+    /// "task cannot move from completed to completed" is true and names
+    /// nothing. What happened is that something closed this task seconds
+    /// earlier on evidence someone else recorded, and a reader given the rule
+    /// goes looking for a lifecycle bug instead. Twice on 2026-08-25.
+    #[error(
+        "this task was already completed {seconds_ago}s ago by {closed_by}, so this note was not attached to it. The work is closed rather than blocked, and nothing is wrong. Evidence can still be recorded against a closed task with swarm_record_deployment; a handoff note cannot, so anything you still hold needs a durable home of its own."
+    )]
+    TaskAlreadyCompleted { seconds_ago: i64, closed_by: String },
     #[error("completed tasks cannot be assigned")]
     CompletedTask,
     #[error("work in progress must be stopped or completed before it can be removed")]
@@ -1729,6 +1740,20 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         let current = reportable_task_state(&transaction, id, reporting_session_id)?;
         if !current.can_transition_to(target) {
+            // ONLY the completed-to-completed case gets the richer answer.
+            // ready to ready and blocked to blocked are ordinary mistakes, and
+            // the plain rule is the right thing to tell someone who made one —
+            // dressing every same-state refusal up as a race would bury the one
+            // case that actually is one.
+            if current == TaskState::Completed
+                && target == TaskState::Completed
+                && let Some((seconds_ago, closed_by)) = completion_provenance(&transaction, id)?
+            {
+                return Err(TaskStoreError::TaskAlreadyCompleted {
+                    seconds_ago,
+                    closed_by,
+                });
+            }
             return Err(TaskStoreError::InvalidTransition {
                 from: current,
                 to: target,
@@ -2078,6 +2103,54 @@ pub fn verify_backup_at(path: &Path, expected_version: i64) -> Result<(), TaskSt
         Ok(())
     } else {
         Err(TaskStoreError::IntegrityFailure(check))
+    }
+}
+
+/// When this task was closed and by whom, for an error that names the event
+/// rather than the rule.
+///
+/// Read from `task_activity` rather than from the task row, because the row
+/// records only that it is closed. The activity ledger records the transition
+/// that closed it, the actor who caused it, and when — which is exactly the
+/// three things a reader needs and none of what they were being given.
+///
+/// Both timestamps come from the database clock, so the elapsed figure is
+/// self-consistent even where callers elsewhere inject their own `now`.
+fn completion_provenance(
+    transaction: &rusqlite::Transaction<'_>,
+    id: TaskId,
+) -> Result<Option<(i64, String)>, TaskStoreError> {
+    Ok(transaction
+        .query_row(
+            "SELECT MAX(0, unixepoch() - occurred_at), actor_kind, actor_id
+             FROM task_activity
+             WHERE task_id = ?1 AND to_state = 'completed'
+             ORDER BY sequence DESC LIMIT 1",
+            [id.to_string()],
+            |row| {
+                let seconds: i64 = row.get(0)?;
+                let kind: String = row.get(1)?;
+                let actor: Option<String> = row.get(2)?;
+                Ok((seconds, describe_actor(&kind, actor.as_deref())))
+            },
+        )
+        .optional()?)
+}
+
+/// Who closed it, in words a reader can act on.
+///
+/// A bare uuid identifies the actor without telling anyone anything; "the
+/// shipped-work sweep" says which mechanism to go and look at.
+fn describe_actor(kind: &str, actor: Option<&str>) -> String {
+    match (kind, actor) {
+        ("worker", Some(id)) => format!("worker {id}"),
+        ("worker", None) => "a worker".to_owned(),
+        ("operator", _) => "the operator".to_owned(),
+        ("jira", _) => "the Jira sync".to_owned(),
+        ("email", _) => "the email import".to_owned(),
+        // The sweep that closes reviewed work once its evidence lands, which is
+        // the actor in every instance of this reported so far.
+        _ => "the shipped-work sweep".to_owned(),
     }
 }
 
@@ -4301,6 +4374,58 @@ mod tests {
         let task = store.create_task("A task", "/workspace").unwrap();
         assert!(matches!(
             store.transition_task(task.id, TaskState::Completed),
+            Err(TaskStoreError::InvalidTransition { .. })
+        ));
+    }
+
+    /// A refusal that names the event, the actor and the time.
+    ///
+    /// "task cannot move from completed to completed" is true and names
+    /// nothing about what happened. What happened is that something closed the
+    /// task seconds earlier on evidence someone else recorded, and a reader
+    /// handed the rule goes looking for a lifecycle bug instead. It did that
+    /// twice on 2026-08-25, and it is the sixth instance of one shape: a
+    /// message that is accurate and names the wrong precondition.
+    #[test]
+    fn completing_an_already_completed_task_says_who_closed_it_and_when() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store
+            .create_task("Restore the schema", "/workspace")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store.transition_task(task.id, TaskState::Active).unwrap();
+        store.transition_task(task.id, TaskState::Review).unwrap();
+        store
+            .transition_task(task.id, TaskState::Completed)
+            .unwrap();
+
+        let refusal = store
+            .transition_task(task.id, TaskState::Completed)
+            .expect_err("a second completion must still be refused");
+
+        let message = refusal.to_string();
+        // The three things a reader needs, none of which they used to get.
+        assert!(message.contains("already completed"), "{message}");
+        assert!(message.contains("s ago by"), "{message}");
+        // And what to do with what they were carrying, rather than silence.
+        assert!(message.contains("swarm_record_deployment"), "{message}");
+        // It must not read as a failure. Nothing is broken here.
+        assert!(message.contains("closed rather than blocked"), "{message}");
+    }
+
+    /// ORDINARY same-state refusals are left alone.
+    ///
+    /// ready to ready is somebody making a mistake, not losing a race, and the
+    /// plain rule is the right thing to tell them. Dressing every same-state
+    /// refusal up as a collision would bury the one case that actually is one.
+    #[test]
+    fn an_ordinary_same_state_refusal_still_states_the_plain_rule() {
+        let store = TaskStore::in_memory().unwrap();
+        let task = store.create_task("A task", "/workspace").unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+
+        assert!(matches!(
+            store.transition_task(task.id, TaskState::Ready),
             Err(TaskStoreError::InvalidTransition { .. })
         ));
     }

@@ -7727,6 +7727,16 @@ fn task_store_error(error: &TaskStoreError) -> ApiError {
         | TaskStoreError::CompletionEvidenceRequired => {
             ApiError::new(StatusCode::BAD_REQUEST, "invalid_task", error.to_string())
         }
+        // Its own code, not lumped in with the transition rejections below.
+        // The whole point of this variant is that it is NOT a rule violation to
+        // go and investigate — the work is closed and nothing is wrong — so a
+        // caller matching on the code should be able to tell those apart
+        // without parsing prose.
+        TaskStoreError::TaskAlreadyCompleted { .. } => ApiError::new(
+            StatusCode::CONFLICT,
+            "task_already_completed",
+            error.to_string(),
+        ),
         TaskStoreError::InvalidTransition { .. }
         | TaskStoreError::CompletedTask
         | TaskStoreError::ActiveTaskCannotBeRemoved
