@@ -1251,6 +1251,17 @@ fn recommended_state(category_key: &str, status_name: &str) -> TaskState {
     {
         return TaskState::Blocked;
     }
+    // A backlog is work nobody has committed to. Ready claims the opposite —
+    // triaged, available, someone may pick it up now — and the board makes that
+    // stronger claim on weaker evidence if these are conflated. Draft is what
+    // "not decided about yet" already means here, and Queen triages drafts.
+    //
+    // Blast radius is the reason this matters more than one row: sync a project
+    // with a real backlog and the Ready column fills with work nobody has
+    // chosen, which destroys the meaning of Ready for everything beside it.
+    if name.contains("backlog") || name.contains("icebox") || name.contains("triage") {
+        return TaskState::Draft;
+    }
     match category_key {
         "indeterminate" | "in-flight" | "in_progress" => TaskState::Active,
         _ => TaskState::Ready,
@@ -1685,7 +1696,11 @@ mod tests {
 
         // The category still decides everything the name does not claim.
         assert_eq!(recommended_state("new", "To Do"), TaskState::Ready);
-        assert_eq!(recommended_state("new", "Backlog"), TaskState::Ready);
+        // A backlog is not Ready: Ready says somebody may pick this up now,
+        // and a backlog says nobody has decided. To Do keeps its category,
+        // because deciding to do something is exactly what it records.
+        assert_eq!(recommended_state("new", "Backlog"), TaskState::Draft);
+        assert_eq!(recommended_state("new", "Icebox"), TaskState::Draft);
         assert_eq!(
             recommended_state("indeterminate", "In Progress"),
             TaskState::Active
