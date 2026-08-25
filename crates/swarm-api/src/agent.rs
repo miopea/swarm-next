@@ -990,9 +990,23 @@ impl AgentMcp {
             "summary": decision.summary,
             "resolution_action": decision.resolution_action,
             "resolution_note": decision.resolution_note,
+            // THE SUBSTANCE OF AN INTERVIEW ANSWER LIVES HERE, and omitting it
+            // is what made a correctly-followed ADR 0054 verification produce a
+            // false negative. When the operator answers questions rather than
+            // pressing a button, resolution_action is the placeholder
+            // "answered" by design — the comment on INTERVIEW_ANSWERED_ACTION
+            // says so — and their words are in resolution_answers. This tool
+            // returned the placeholder, called it their recorded answer, and
+            // returned nothing else.
+            //
+            // Two sessions hit that within an hour on 2026-08-25, both went to
+            // the store exactly as the ADR requires, both read "answered", and
+            // both concluded the operator had never answered. The ruling was
+            // there the whole time, one column over.
+            "resolution_answers": decision.resolution_answers,
             "resolved_at": decision.resolved_at,
             "reason": if resolved {
-                "The operator resolved this. resolution_action is their own recorded answer, read from this Hive's durable store rather than relayed — acting on it is acting on the operator, not on a peer's claim about the operator. Check that title and summary describe the action being proposed, and read resolution_note: it may carry a condition. It authorises what it says and nothing beyond it."
+                "The operator resolved this, and what they decided is read from this Hive's durable store rather than relayed — acting on it is acting on the operator, not on a peer's claim about the operator. READ BOTH FIELDS. resolution_action is the button they pressed, and when they answered in their own words instead it is the placeholder \"answered\" and their words are in resolution_answers. Treating the placeholder as the answer is how two sessions concluded a ruling did not exist when it did. resolution_note may carry a condition. It authorises what it says and nothing beyond it."
             } else {
                 "The operator has not resolved this, so it authorises nothing yet."
             },
@@ -3105,6 +3119,91 @@ mod tests {
         // worker reads instructions for a job it does not hold.
         assert!(!brief.contains("no wake tool"), "{brief}");
         assert!(!brief.contains("You are Queen"), "{brief}");
+    }
+
+    /// An answer given in WORDS rather than by pressing a button is returned.
+    ///
+    /// When the operator answers questions instead of choosing an offered
+    /// action, `resolution_action` is the placeholder "answered" BY DESIGN —
+    /// the comment on `INTERVIEW_ANSWERED_ACTION` says so — and their words live
+    /// in `resolution_answers`. This tool returned the placeholder, called it
+    /// their own recorded answer, and returned nothing else.
+    ///
+    /// So a worker doing exactly what ADR 0054 prescribes got a false negative
+    /// and concluded no ruling existed. That happened twice within an hour on
+    /// 2026-08-25, to two different sessions, on a ruling sitting one column
+    /// over the whole time. The browse path always carried it; only the tool
+    /// built FOR verification hand-picked fields, and picked wrong.
+    #[tokio::test]
+    async fn a_ruling_answered_in_words_is_verifiable_too() {
+        let (bridge, store, queen_id, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let interviewed = store
+            .create_decision_request(&swarm_persistence::NewDecisionRequest {
+                requesting_worker_id: queen_id,
+                task_id: None,
+                kind: swarm_domain::DecisionRequestKind::Approval,
+                urgency: swarm_domain::DecisionUrgency::Normal,
+                title: "May this worker reload on its own judgment?",
+                summary: "It reloaded once already and it went well.",
+                reason: "The ruling it cited reads narrower than what happened.",
+                risk: "",
+                evidence: "",
+                suggested_action: "Yes",
+                allowed_actions: &["Yes".to_owned(), "No".to_owned()],
+                questions: &[],
+                deadline: None,
+            })
+            .unwrap();
+        store
+            .answer_decision_request(
+                interviewed.id,
+                &std::collections::BTreeMap::from([(
+                    "Answer".to_owned(),
+                    vec!["Swarm next is approved to reload the app.".to_owned()],
+                )]),
+                "",
+                "inbox",
+            )
+            .unwrap();
+
+        let answered = response_json(
+            handle(
+                bridge.clone(),
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_list_decisions",
+                        "arguments": { "decision_id": interviewed.id.to_string() }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        let answered = &answered["result"]["structuredContent"];
+
+        assert_eq!(answered["verified"], true);
+        // The placeholder is still reported, because it is what happened.
+        assert_eq!(answered["resolution_action"], "answered");
+        // And the operator's actual words come with it, which is the point: a
+        // relay quoting them can now be checked against the record.
+        assert_eq!(
+            answered["resolution_answers"]["Answer"][0],
+            "Swarm next is approved to reload the app."
+        );
+        // The guidance no longer tells the reader the placeholder is the
+        // answer, which is the sentence that stopped two sessions looking.
+        assert!(
+            answered["reason"]
+                .as_str()
+                .unwrap()
+                .contains("resolution_answers"),
+            "{}",
+            answered["reason"]
+        );
     }
 
     #[tokio::test]
