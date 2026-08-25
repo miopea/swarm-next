@@ -7,6 +7,8 @@ const xterm = vi.hoisted(() => ({
   terminal: undefined as { rows: number; cols: number; unicode: { activeVersion: string } } | undefined,
   options: undefined as Record<string, unknown> | undefined,
   focus: vi.fn(),
+  keyHandler: undefined as ((event: KeyboardEvent) => boolean) | undefined,
+  selection: "",
   resize: vi.fn(),
   refresh: vi.fn(),
   clearTextureAtlas: vi.fn(),
@@ -69,6 +71,11 @@ vi.mock("@xterm/xterm", () => ({
 
     loadAddon(): void {}
     open(): void {}
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
+      xterm.keyHandler = handler;
+    }
+    hasSelection(): boolean { return xterm.selection.length > 0; }
+    getSelection(): string { return xterm.selection; }
     focus(): void { xterm.focus(); }
     reset(): void {}
     resize(columns: number, rows: number): void {
@@ -103,6 +110,58 @@ import { XtermSurface } from "./XtermSurface";
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+function press(key: string, init: Partial<KeyboardEventInit> = {}): boolean {
+  return xterm.keyHandler!(new KeyboardEvent("keydown", { key, ctrlKey: true, ...init }));
+}
+
+test("Ctrl+C copies a selection and interrupts without one", async () => {
+  // Muscle memory: Ctrl+C is copy everywhere else. It is also the terminal's
+  // interrupt, and losing that would be worse than the paper cut it fixes. The
+  // selection decides, which is what VS Code and Windows Terminal do.
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  new XtermSurface();
+
+  xterm.selection = "";
+  expect(press("c")).toBe(true);
+  expect(writeText).not.toHaveBeenCalled();
+
+  xterm.selection = "deploy run 32667983788";
+  expect(press("c")).toBe(false);
+  await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("deploy run 32667983788"));
+});
+
+test("a refused clipboard does not break the terminal", async () => {
+  vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
+  new XtermSurface();
+  xterm.selection = "something";
+
+  expect(() => press("c")).not.toThrow();
+});
+
+test("keys Claude Code binds are left to the terminal", () => {
+  // Taking one of these silently removes a function the operator has: Ctrl+D is
+  // EOF, Ctrl+R is reverse history search, Ctrl+L clears the screen.
+  new XtermSurface();
+  xterm.selection = "selected";
+
+  for (const key of ["d", "r", "l", "a", "e", "z"]) {
+    expect(press(key)).toBe(true);
+  }
+  // And a bare C, with no chord, is just typing.
+  expect(press("c", { ctrlKey: false })).toBe(true);
+});
+
+test("Ctrl+F asks for search only once something is listening", () => {
+  const surface = new XtermSurface();
+  expect(press("f")).toBe(true);
+
+  const requested = vi.fn();
+  surface.onFindRequested(requested);
+  expect(press("f")).toBe(false);
+  expect(requested).toHaveBeenCalledOnce();
 });
 
 test("measures characters with Unicode 11 before anything is written", () => {

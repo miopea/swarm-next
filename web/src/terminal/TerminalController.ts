@@ -21,6 +21,13 @@ export interface TerminalSurface {
   onScroll(listener: (atBottom: boolean) => void): Disposable;
   scrollToBottom(): void;
   dispose(): void;
+  /**
+   * Search over the terminal and its scrollback. Optional so a test double that
+   * does not model it keeps working.
+   */
+  onFindRequested?(listener: () => void): Disposable;
+  findNext?(query: string): boolean;
+  findPrevious?(query: string): boolean;
 }
 
 export interface TerminalConnectionLike {
@@ -102,6 +109,16 @@ export class TerminalController {
     // a write that cannot finish and replay on return.
     this.#connection.suspendRendering?.();
     this.#host.remove();
+  }
+
+  /** Told when the operator asks to search this terminal. */
+  subscribeFind(listener: () => void): Disposable {
+    return this.#surface.onFindRequested?.(listener) ?? { dispose: () => undefined };
+  }
+
+  find(query: string, direction: "next" | "previous"): boolean {
+    const search = direction === "next" ? this.#surface.findNext : this.#surface.findPrevious;
+    return search?.call(this.#surface, query) ?? false;
   }
 
   subscribe(listener: TerminalStatusListener): Disposable {

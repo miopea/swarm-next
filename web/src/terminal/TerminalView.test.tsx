@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 const controller = vi.hoisted(() => ({
@@ -16,6 +16,13 @@ const controller = vi.hoisted(() => ({
     return { dispose: vi.fn() };
   }),
   scrollToBottom: vi.fn(),
+  findListener: undefined as (() => void) | undefined,
+  subscribeFind: vi.fn((listener: () => void) => {
+    controller.findListener = listener;
+    return { dispose: vi.fn() };
+  }),
+  find: vi.fn(() => true),
+  requestFocus: vi.fn(),
 }));
 
 vi.mock("./TerminalWorkspace", () => ({
@@ -35,6 +42,38 @@ afterEach(() => {
   controller.sendInput.mockClear();
   controller.scrollToBottom.mockClear();
   vi.unstubAllGlobals();
+});
+
+test("Ctrl+F opens a find bar that searches the terminal and its scrollback", async () => {
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  expect(screen.queryByRole("search")).not.toBeInTheDocument();
+
+  // The surface takes Ctrl+F when the terminal has focus, and hands it back.
+  act(() => controller.findListener!());
+
+  const bar = await screen.findByRole("search", { name: "Search this terminal" });
+  const input = within(bar).getByLabelText("Find in terminal");
+  fireEvent.change(input, { target: { value: "deploy run" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(controller.find).toHaveBeenCalledWith("deploy run", "next");
+
+  fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+  expect(controller.find).toHaveBeenCalledWith("deploy run", "previous");
+});
+
+test("a search with no match says so, and Escape returns focus to the terminal", async () => {
+  render(<TerminalView busy={false} operatorToken="browser-session-cookie" session={{ session_id: "session-1", running: true }} />);
+  act(() => controller.findListener!());
+  const input = await screen.findByLabelText("Find in terminal");
+
+  vi.mocked(controller.find).mockReturnValueOnce(false);
+  fireEvent.change(input, { target: { value: "nothing here" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(await screen.findByText("No match")).toBeInTheDocument();
+
+  fireEvent.keyDown(input, { key: "Escape" });
+  expect(screen.queryByRole("search")).not.toBeInTheDocument();
+  expect(controller.requestFocus).toHaveBeenCalledWith(true);
 });
 
 test("captures Ctrl-V text before the provider receives a terminal control character", () => {

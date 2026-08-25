@@ -85,6 +85,7 @@ export class XtermSurface implements TerminalSurface {
   #geometryPublicationForced = false;
   #disposed = false;
   readonly #search = new SearchAddon();
+  #findRequested?: () => void;
   readonly #serialize = new SerializeAddon();
   /** Held so a lost GPU context can dispose it and fall back to the DOM. */
   #webgl?: WebglAddon;
@@ -100,6 +101,11 @@ export class XtermSurface implements TerminalSurface {
       theme: terminalTheme(documentColorTheme()),
     });
     this.#terminal.loadAddon(this.#fit);
+    // Ctrl+C is muscle memory for copy and the terminal's own interrupt. Which
+    // one a keypress means is decided by whether anything is selected — the
+    // same rule VS Code and Windows Terminal use — so copy never costs the
+    // ability to interrupt, and interrupting never costs a copy.
+    this.#terminal.attachCustomKeyEventHandler((event) => this.#allowKeyEvent(event));
     this.#terminal.loadAddon(this.#search);
     this.#terminal.loadAddon(this.#serialize);
     // Links a worker prints — PR URLs, deploy runs, health endpoints — become
@@ -151,6 +157,65 @@ export class XtermSurface implements TerminalSurface {
       // No WebGL2 here. The DOM renderer is already handling the terminal.
       this.#webgl = undefined;
     }
+  }
+
+  /**
+   * Whether xterm should handle a key, or this surface has taken it.
+   *
+   * Deliberately a short list. Claude Code binds most control keys itself and
+   * taking one silently removes a function the operator has: Ctrl+D is EOF,
+   * Ctrl+R is reverse history search, Ctrl+L clears. Those stay with the
+   * terminal. Only keys whose terminal meaning is absent or recoverable are
+   * taken here.
+   */
+  #allowKeyEvent(event: KeyboardEvent): boolean {
+    if (event.type !== "keydown") return true;
+    const chord = event.ctrlKey || event.metaKey;
+    if (!chord || event.altKey) return true;
+    const key = event.key.toLowerCase();
+    if (key === "c" && this.#terminal.hasSelection()) {
+      // Only with a selection. Without one this falls through and Ctrl+C is
+      // the interrupt it has always been.
+      void this.#copySelection();
+      return false;
+    }
+    if (key === "f" && this.#findRequested) {
+      // Free in Claude Code, so taking it costs nothing.
+      event.preventDefault();
+      this.#findRequested();
+      return false;
+    }
+    return true;
+  }
+
+  async #copySelection(): Promise<void> {
+    const selection = this.#terminal.getSelection();
+    if (!selection) return;
+    try {
+      await navigator.clipboard?.writeText(selection);
+    } catch {
+      // A denied or unavailable clipboard must not break the terminal. The
+      // selection is still there to copy by other means.
+    }
+  }
+
+  /** Called when the operator asks to search this terminal. */
+  onFindRequested(listener: () => void): Disposable {
+    this.#findRequested = listener;
+    return { dispose: () => { this.#findRequested = undefined; } };
+  }
+
+  findNext(query: string): boolean {
+    return this.#search.findNext(query);
+  }
+
+  findPrevious(query: string): boolean {
+    return this.#search.findPrevious(query);
+  }
+
+  /** Everything the terminal is showing, including scrollback, as text. */
+  serialize(): string {
+    return this.#serialize.serialize();
   }
 
   open(element: HTMLElement): void {

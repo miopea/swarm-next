@@ -48,6 +48,10 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
   const report = useRef(onConnectionStateChange);
   useEffect(() => { report.current = onConnectionStateChange; }, [onConnectionStateChange]);
   const [sessionCopyState, setSessionCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [finding, setFinding] = useState(false);
+  const [query, setQuery] = useState("");
+  const [noMatch, setNoMatch] = useState(false);
+  const findInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const element = mount.current;
@@ -59,12 +63,31 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
       report.current?.(state);
     });
     const scrollSubscription = controller.subscribeScroll(setAtBottom);
+    // Ctrl+F is taken at the terminal surface, because that is where the key
+    // arrives — the panel never sees it once xterm has focus.
+    const findSubscription = controller.subscribeFind(() => setFinding(true));
     return () => {
       subscription.dispose();
       scrollSubscription.dispose();
+      findSubscription.dispose();
       controller.detach();
     };
   }, [controller]);
+
+  useEffect(() => {
+    if (finding) findInput.current?.focus();
+  }, [finding]);
+
+  function search(direction: "next" | "previous") {
+    if (!query) return;
+    setNoMatch(!controller.find(query, direction));
+  }
+
+  function closeFind() {
+    setFinding(false);
+    setNoMatch(false);
+    controller.requestFocus(true);
+  }
 
   function dismissAttachmentNotice() {
     setAttachmentState((state) => (state === "uploading" ? state : "idle"));
@@ -152,6 +175,13 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
       onKeyDownCapture={(event) => {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") event.stopPropagation();
         if (event.key === "Enter") dismissAttachmentNotice();
+        // Ctrl+F reaches here only when the terminal does not have focus; with
+        // focus it is taken at the surface. Both doors open the same bar.
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+          event.preventDefault();
+          event.stopPropagation();
+          setFinding(true);
+        }
       }}
       onPasteCapture={(event) => void handlePaste(event)}
       onDragOver={(event) => {
@@ -212,6 +242,26 @@ export default function TerminalView({ session, operatorToken, busy, canStop = t
         </div>
       </div>
       <div className="terminal-stage">
+        {finding && (
+          <div className="terminal-find" role="search" aria-label="Search this terminal">
+            <input
+              ref={findInput}
+              type="text"
+              value={query}
+              placeholder="Find in terminal"
+              aria-label="Find in terminal"
+              onChange={(event) => { setQuery(event.target.value); setNoMatch(false); }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") { event.preventDefault(); closeFind(); }
+                if (event.key === "Enter") { event.preventDefault(); search(event.shiftKey ? "previous" : "next"); }
+              }}
+            />
+            <button type="button" className="text-button" onClick={() => search("previous")} aria-label="Previous match">↑</button>
+            <button type="button" className="text-button" onClick={() => search("next")} aria-label="Next match">↓</button>
+            {noMatch ? <small role="status">No match</small> : null}
+            <button type="button" className="text-button" onClick={closeFind} aria-label="Close search">Close</button>
+          </div>
+        )}
         <div className="terminal-mount" ref={mount} />
         {!atBottom ? <button type="button" className="terminal-jump-latest" onClick={() => controller.scrollToBottom()}>Jump to latest ↓</button> : null}
       </div>

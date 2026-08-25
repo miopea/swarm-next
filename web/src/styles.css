@@ -1526,7 +1526,13 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .terminal-session-popover small { color: var(--quiet); line-height: 1.4; }
 .terminal-session-popover button { justify-self: start; min-height: 32px; padding: 5px 9px; font-size: .7rem; }
 .terminal-stage { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
-.terminal-stage .terminal-mount { width: 100%; height: 100%; }
+.terminal-stage /* Sits above the terminal rather than over it: a bar covering the output while
+   you search the output is its own small joke. */
+.terminal-find { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.terminal-find input { flex: 1 1 auto; min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-soft); color: var(--text); font-size: .8rem; }
+.terminal-find small { color: var(--accent-strong); font-size: .72rem; }
+
+.terminal-mount { width: 100%; height: 100%; }
 .terminal-jump-latest { position: absolute; z-index: 6; right: 14px; bottom: 12px; min-height: 34px; padding: 6px 11px; border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 999px; color: var(--text); background: color-mix(in srgb, var(--panel-raised) 94%, transparent); box-shadow: var(--shadow); font-size: .74rem; backdrop-filter: blur(8px); }
 .terminal-worker-controls { flex: 0 0 auto; }
 .queen-automation-chip { display: inline-flex; min-height: 30px; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--panel-raised); font-size: .72rem; white-space: nowrap; }
