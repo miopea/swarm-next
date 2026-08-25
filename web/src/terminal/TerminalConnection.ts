@@ -406,15 +406,40 @@ export class TerminalConnection {
     }
   }
 
+  /**
+   * Backs off, and keeps backing off — it does not stop.
+   *
+   * Running off the end of the ladder used to report an error and schedule
+   * nothing, and since #retryAttempt is only reset by a CONFIRMED connection,
+   * nothing could ever restart it. The terminal was dead until the page was
+   * reloaded. The operator hit this repeatedly: "this randomly happens and the
+   * only way to fix it is to force close or reload", with the banner reading
+   * "terminal attach grant received no response; reconnect limit reached". The
+   * whole ladder spans under sixteen seconds, so any absence longer than that —
+   * an API restart, a machine briefly loaded — spent the budget and gave up.
+   *
+   * What the bound is actually for is the open-close loop: a socket that opens
+   * and closes at once must not hammer the host. Holding at the ladder's last
+   * delay keeps that protection, because the rate stays bounded; it is the
+   * giving up that was never the point. The state stays "error" so a long
+   * failure is still visible rather than looking like a routine blip.
+   */
   #scheduleReconnect(detail: string): void {
     if (this.#disposed || this.#fatal || this.#retryTimer !== undefined) return;
-    const delay = this.#retryDelaysMs[this.#retryAttempt];
+    const ladder = this.#retryDelaysMs;
+    const exhausted = this.#retryAttempt >= ladder.length;
+    const delay = exhausted ? ladder[ladder.length - 1] : ladder[this.#retryAttempt];
     if (delay === undefined) {
-      this.#handlers?.onState("error", `${detail}; reconnect limit reached`);
+      // Only reachable with an empty ladder, which is a caller asking for no
+      // retries at all.
+      this.#handlers?.onState("error", `${detail}; not retrying`);
       return;
     }
     this.#retryAttempt += 1;
-    this.#handlers?.onState("disconnected", detail);
+    this.#handlers?.onState(
+      exhausted ? "error" : "disconnected",
+      exhausted ? `${detail}; still retrying every ${Math.round(delay / 1000)}s` : detail,
+    );
     this.#retryTimer = setTimeout(() => {
       this.#retryTimer = undefined;
       void this.#connect();

@@ -348,8 +348,13 @@ test("an open-close loop cannot reset the bounded reconnect budget", async () =>
     await vi.advanceTimersByTimeAsync(1);
     await vi.advanceTimersByTimeAsync(0);
   }
-  expect(sockets).toHaveLength(3);
-  expect(handlers.onState).toHaveBeenCalledWith("error", expect.stringContaining("reconnect limit reached"));
+  // The budget was not reset by the loop — the escalation ran to its end and
+  // said so. What it does at the end is hold, not stop: a bounded RATE is what
+  // protects the host from an open-close loop, and giving up permanently only
+  // ever protected it from recovering.
+  expect(handlers.onState).toHaveBeenCalledWith("error", expect.stringContaining("still retrying every"));
+  expect(handlers.onState).not.toHaveBeenCalledWith("error", expect.stringContaining("reconnect limit reached"));
+  expect(sockets.length).toBeGreaterThan(3);
 });
 
 test("an unconfirmed socket is abandoned inside the bounded retry budget", async () => {
@@ -388,8 +393,16 @@ test("the default reconnect budget spans a bounded rolling API handoff", async (
   expect(fetch).toHaveBeenCalledTimes(8);
   expect(handlers.onState).toHaveBeenCalledWith(
     "error",
-    expect.stringContaining("reconnect limit reached"),
+    expect.stringContaining("still retrying every 8s"),
   );
+
+  // And it is still trying. This is the reported bug: the ladder spans under
+  // sixteen seconds, so any absence longer than that used to end the terminal
+  // until the page was reloaded.
+  await vi.advanceTimersByTimeAsync(8_000);
+  expect(fetch).toHaveBeenCalledTimes(9);
+  await vi.advanceTimersByTimeAsync(8_000);
+  expect(fetch).toHaveBeenCalledTimes(10);
 });
 
 test("protocol failures use a browser-valid application close code", async () => {
@@ -425,7 +438,7 @@ test("state messages without canonical bytes cannot reset the reconnect budget",
   await vi.advanceTimersByTimeAsync(1);
   expect(handlers.onState).toHaveBeenCalledWith(
     "error",
-    expect.stringContaining("reconnect limit reached"),
+    expect.stringContaining("still retrying every"),
   );
 });
 
