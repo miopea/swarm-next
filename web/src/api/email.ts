@@ -231,6 +231,8 @@ export type UnansweredEmailTask = {
   worker_name: string | null;
   /** How many original threads one send actually answers. */
   thread_count: number;
+  /** Why the last delivery attempt failed, when one did. A cancelled reply is terminal. */
+  delivery_failure?: string | null;
 };
 
 export async function fetchEmailTasksAwaitingReply(operatorToken: string): Promise<UnansweredEmailTask[]> {

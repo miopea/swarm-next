@@ -99,6 +99,16 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
             and never said who it belonged to, so every card looked the same. */}
         <p className="eyebrow">{item.worker_name ? `${item.worker_name} · Email` : "Email"}</p>
         <h3 id={heading}>{recipientSummary(item)}</h3>
+        {/* A SEND THAT NEVER LEFT THE BUILDING. Seventeen replies were
+            cancelled on 2026-08-25 and none of them said so: the operator
+            pressed Send, the item left the queue, and it looked handled. They
+            found out by opening Outlook and seeing nothing. A terminal failure
+            with a recorded cause must be the loudest thing on the card. */}
+        {item.delivery_failure ? (
+          <p className="unanswered-email-failure" role="alert">
+            <strong>This reply was not delivered.</strong> {item.delivery_failure}
+          </p>
+        ) : null}
         <p>
           “{item.title}”.
           {/* How many people one press of Send reaches. Naming only the earliest

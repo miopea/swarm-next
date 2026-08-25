@@ -1372,6 +1372,7 @@ button:active:not(:disabled) { transform: translateY(1px); }
 /* The reply itself, where the operator already is. Bounded, because a long one
    must not push the rest of the attention queue off the screen. */
 .unanswered-email-draft { max-height: 160px; margin: 8px 0 0; padding: 9px 11px; overflow-y: auto; border-left: 3px solid var(--accent-strong); border-radius: 0 var(--radius-md) var(--radius-md) 0; color: var(--text); background: var(--panel-soft); font-size: .76rem; line-height: 1.45; white-space: pre-wrap; }
+.unanswered-email-failure { margin: 0 0 8px; padding: 8px 11px; border-left: 3px solid var(--danger); border-radius: 0 var(--radius-md) var(--radius-md) 0; color: var(--text); background: color-mix(in srgb, var(--danger) 12%, transparent); font-size: .78rem; line-height: 1.45; }
 .unanswered-email-draft small { display: block; margin-top: 6px; color: var(--muted); font-size: .68rem; font-variant-numeric: tabular-nums; white-space: normal; }
 .unanswered-email-editor { display: block; margin-top: 8px; }
 .unanswered-email-editor textarea { width: 100%; min-height: 180px; margin-top: 4px; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); color: var(--text); background: var(--surface-soft); font: inherit; font-size: .78rem; line-height: 1.5; resize: vertical; }

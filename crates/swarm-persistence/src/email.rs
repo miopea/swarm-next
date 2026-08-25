@@ -165,6 +165,11 @@ pub struct UnansweredEmailTask {
     /// The worker that carried this work, so the queue says whose it was
     /// rather than only that something is waiting.
     pub worker_name: Option<String>,
+    /// Why the last attempt to deliver this reply failed, when one did.
+    ///
+    /// A cancelled reply is terminal and used to be hidden entirely, so a send
+    /// that never left the building was indistinguishable from one that did.
+    pub delivery_failure: Option<String>,
     /// How many original threads one send actually answers.
     ///
     /// A task can be linked to several inbound emails, and the reply fans out
@@ -214,6 +219,10 @@ pub struct EmailReplyTargetDispatch {
     pub message_id: String,
     pub body: String,
     pub attempts: u8,
+    /// The stable RFC 5322 Message-ID. A Graph `id` is folder-scoped and
+    /// changes when a message moves; this does not, so it is what finds the
+    /// message again when the stored id has gone stale.
+    pub internet_message_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -472,7 +481,10 @@ impl TaskStore {
                      WHERE r.task_id = t.id AND r.state = 'draft'
                      ORDER BY r.created_at DESC, r.id DESC LIMIT 1),
                     (SELECT w.name FROM worker_profiles w WHERE w.id = t.assigned_worker_id),
-                    COUNT(link.id)
+                    COUNT(link.id),
+                    (SELECT r.last_error FROM email_reply_deliveries r
+                     WHERE r.task_id = t.id AND r.state = 'cancelled'
+                     ORDER BY r.updated_at DESC, r.id DESC LIMIT 1)
              FROM tasks t
              JOIN email_message_links link ON link.task_id = t.id
              WHERE t.state = 'completed' AND t.removed_at IS NULL
@@ -480,15 +492,23 @@ impl TaskStore {
                    SELECT 1 FROM email_reply_deliveries reply
                    WHERE reply.task_id = t.id AND reply.state = 'delivered'
                )
-               -- A reply that failed permanently is not one waiting to be sent.
-               -- The operator deleted the source messages, so sending reported
-               -- the message was not found and the reply was cancelled; the
-               -- card then said someone was still waiting on a thread that no
-               -- longer exists, forever, with nothing able to clear it.
-               AND NOT EXISTS (
-                   SELECT 1 FROM email_reply_deliveries cancelled
-                   WHERE cancelled.task_id = t.id AND cancelled.state = 'cancelled'
-               )
+               -- A CANCELLED REPLY IS SHOWN, carrying why it failed. This used
+               -- to exclude them, for a reason that was sound and rested on a
+               -- premise that was wrong -- that the operator had deleted
+               -- the source messages, so sending reported not found.
+               --
+               -- Not found did not mean deleted. A Graph id is folder-scoped and
+               -- changes when a message MOVES, so filing an email quietly made
+               -- it unanswerable. Seventeen replies were cancelled that way on
+               -- 2026-08-25 and this clause hid every one: the operator pressed
+               -- Send, the item left the queue, and it looked handled. They
+               -- found out by opening Outlook and seeing nothing.
+               --
+               -- The original worry — an item nobody can ever clear — is
+               -- answered by the resolver rather than by hiding it: a stale id
+               -- is now looked up again by its stable internet id, so a retry
+               -- can actually succeed. When the message really is gone, the
+               -- card says so and the operator can dismiss it knowing why.
              GROUP BY t.id
              ORDER BY MIN(link.received_at), t.id",
         )?;
@@ -505,6 +525,7 @@ impl TaskStore {
                     row.get::<_, Option<String>>(7)?,
                     row.get::<_, Option<String>>(8)?,
                     row.get::<_, i64>(9)?,
+                    row.get::<_, Option<String>>(10)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -521,6 +542,7 @@ impl TaskStore {
                     draft_body,
                     worker_name,
                     thread_count,
+                    delivery_failure,
                 )| {
                     Ok(UnansweredEmailTask {
                         task_id: TaskId::from_str(&id)
@@ -534,6 +556,7 @@ impl TaskStore {
                         draft_body,
                         worker_name,
                         thread_count: usize::try_from(thread_count).unwrap_or(1).max(1),
+                        delivery_failure,
                     })
                 },
             )
@@ -798,7 +821,7 @@ impl TaskStore {
         )?;
         let dispatch = transaction.query_row(
             "SELECT target.id, reply.id, reply.task_id, source.message_id, reply.body,
-                    target.attempts
+                    target.attempts, source.internet_message_id
                FROM email_reply_targets target
                JOIN email_reply_deliveries reply ON reply.id = target.reply_id
                JOIN email_message_links source ON source.id = target.source_id
@@ -812,6 +835,7 @@ impl TaskStore {
                     message_id: row.get(3)?,
                     body: row.get(4)?,
                     attempts: row.get(5)?,
+                    internet_message_id: row.get(6)?,
                 })
             },
         )?;
@@ -2379,13 +2403,16 @@ mod tests {
         assert_eq!(reply.targets.len(), 1, "one person, one reply");
     }
 
-    /// The operator deleted the source emails, so every send failed with the
-    /// message not being found and the reply was cancelled. The task then sat
-    /// in Needs you forever saying a reply was written and never sent — false
-    /// on both counts, and nothing in the product could clear it, because one
-    /// reply row per task means a cancelled one blocks every future attempt.
+    /// A send that failed is reported as failed, and can still be retried.
+    ///
+    /// Originally this asserted that a cancelled reply vanishes from the queue,
+    /// because a cancelled row blocked every future attempt and the card would
+    /// have nagged forever. Both halves have since changed: `prepare_email_reply`
+    /// clears a cancelled reply, and not-found turned out to mean the message
+    /// MOVED rather than was deleted. Vanishing is now the wrong behaviour — it
+    /// is what let seventeen undelivered replies look sent.
     #[test]
-    fn a_thread_that_no_longer_exists_stops_being_reported_as_waiting() {
+    fn a_send_that_failed_is_reported_with_its_cause_and_can_be_retried() {
         let store = TaskStore::in_memory().unwrap();
         let imported = store
             .import_email_message(&message(&[]), TaskPriority::Normal)
@@ -2420,13 +2447,28 @@ mod tests {
             )
             .unwrap();
 
-        // Nobody is waiting on a thread that does not exist.
-        assert!(
-            store
-                .completed_email_tasks_awaiting_a_reply()
-                .unwrap()
-                .is_empty(),
-            "an unanswerable thread is not an unanswered one"
+        // A FAILED SEND IS REPORTED, carrying why. This used to assert the
+        // opposite — that a cancelled reply disappears — and the justification
+        // has since expired twice over.
+        //
+        // It rested on the message being DELETED. It was not: a Graph id is
+        // folder-scoped and changes when a message MOVES, so filing an email
+        // made it unanswerable and "not found" meant moved, not gone. Hiding
+        // that cost the operator seventeen replies on 2026-08-25 — they pressed
+        // Send, the item left the queue, and they found out by opening Outlook
+        // and seeing nothing.
+        //
+        // Its second reason, that a cancelled row blocked every future attempt,
+        // was fixed separately: prepare_email_reply now clears a cancelled reply
+        // before writing a new one, which is exercised below. So the dead end
+        // this was avoiding no longer exists, and the silence it bought is the
+        // only thing left.
+        let waiting = store.completed_email_tasks_awaiting_a_reply().unwrap();
+        assert_eq!(waiting.len(), 1, "a send that failed is still unanswered");
+        assert_eq!(
+            waiting[0].delivery_failure.as_deref(),
+            Some("The email message was not found"),
+            "and it carries the cause, rather than looking like nobody has written one"
         );
 
         // And the dead end is no longer permanent: a new reply can be written.

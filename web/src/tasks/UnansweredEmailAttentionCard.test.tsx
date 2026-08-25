@@ -16,6 +16,7 @@ const waiting = {
   draft_body: null,
   worker_name: "Public Website",
   thread_count: 1,
+  delivery_failure: null,
 };
 
 test("names the person still waiting and how to reach the task", () => {
@@ -190,6 +191,29 @@ test("a single thread is not described as a group", () => {
 
   expect(screen.getByRole("heading", { name: "Lynn Kuczyra is waiting on a reply" })).toBeInTheDocument();
   expect(screen.queryByText(/original threads at once/)).not.toBeInTheDocument();
+});
+
+test("a reply that was never delivered says so, loudly, with the reason", () => {
+  // Seventeen replies were cancelled on 2026-08-25 and none of them said so:
+  // the operator pressed Send, the item left the queue, and it looked handled.
+  // They found out by opening Outlook and seeing nothing.
+  render(<UnansweredEmailAttentionCard
+    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Fixed.", delivery_failure: "The email message was not found" }]}
+    onOpenTask={vi.fn()}
+  />);
+
+  const failure = screen.getByRole("alert");
+  expect(failure).toHaveTextContent("This reply was not delivered");
+  expect(failure).toHaveTextContent("The email message was not found");
+});
+
+test("a reply that has not failed carries no alarm", () => {
+  render(<UnansweredEmailAttentionCard
+    awaiting={[{ ...waiting, drafted: true, draft_id: "reply-1", draft_body: "Fixed." }]}
+    onOpenTask={vi.fn()}
+  />);
+
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 test("says nothing when every finished email task has been answered", () => {

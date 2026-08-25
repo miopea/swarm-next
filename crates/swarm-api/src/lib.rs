@@ -861,7 +861,31 @@ impl AppState {
             }
         };
         let outlook = self.outlook.read().await.clone();
-        let outcome = outlook.reply(&dispatch.message_id, &dispatch.body).await;
+        // A STALE ID IS NOT A MISSING MESSAGE. A Graph id is folder-scoped and
+        // changes when a message moves — filed, archived, or swept by a rule —
+        // while the RFC 5322 Message-ID does not. Replying to the id captured
+        // at import meant that filing an email quietly made it unanswerable:
+        // every reply this Hive sent on 2026-08-25 came back 404 and was
+        // cancelled, seventeen targets, none delivered, and the operator found
+        // out by looking in Outlook and seeing nothing.
+        //
+        // A 404 was never a token or mailbox problem — those are 401 and 403 and
+        // map elsewhere. It meant authenticated, and this exact id is no longer
+        // in the mailbox. So look the message up again by the identifier that
+        // does not move, and only then believe it is gone.
+        let mut outcome = outlook.reply(&dispatch.message_id, &dispatch.body).await;
+        if matches!(outcome, Err(outlook::OutlookError::NotFound))
+            && let Some(internet_message_id) = dispatch.internet_message_id.as_deref()
+            && let Ok(current) = outlook
+                .message_id_for_internet_id(internet_message_id)
+                .await
+        {
+            tracing::info!(
+                target_id = %dispatch.target_id,
+                "the stored message id had gone stale; found the message again by its internet id"
+            );
+            outcome = outlook.reply(&current, &dispatch.body).await;
+        }
         let result = match outcome {
             Ok(receipt) => store.complete_email_reply(&dispatch.target_id, &receipt),
             Err(outlook::OutlookError::AmbiguousDelivery) => store.fail_email_reply(

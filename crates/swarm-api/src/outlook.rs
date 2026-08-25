@@ -316,6 +316,73 @@ impl OutlookProbe {
         Ok(OutlookAttachmentContent { metadata, bytes })
     }
 
+    /// The message's CURRENT Graph id, found by its stable internet id.
+    ///
+    /// A Graph `id` is folder-scoped and CHANGES when a message moves — filed,
+    /// archived, or swept by a rule. The internet message id is the RFC 5322
+    /// Message-ID and does not change. Storing the first and replying to it
+    /// months later is why every reply this Hive sent on 2026-08-25 came back
+    /// 404 and was cancelled: seventeen targets, none delivered, and the
+    /// operator found out by looking in Outlook and seeing nothing.
+    ///
+    /// A 404 there was never a token or mailbox problem — those are 401 and 403.
+    /// It meant authenticated, and that exact id is not in this mailbox any
+    /// more.
+    ///
+    /// Returns `NotFound` only when the message genuinely is not there, which
+    /// is then an honest fact about the mailbox rather than something to retry.
+    pub(crate) async fn message_id_for_internet_id(
+        &self,
+        internet_message_id: &str,
+    ) -> Result<String, OutlookError> {
+        if internet_message_id.is_empty()
+            || internet_message_id.len() > 998
+            || internet_message_id.contains('\'')
+            || internet_message_id.chars().any(char::is_control)
+        {
+            return Err(OutlookError::InvalidRequest);
+        }
+        let access = self.access().await?;
+        let mut url = endpoint(&access.base_url, &["me", "messages"])?;
+        url.query_pairs_mut()
+            .append_pair(
+                "$filter",
+                &format!("internetMessageId eq '{internet_message_id}'"),
+            )
+            .append_pair("$select", "id")
+            .append_pair("$top", "1");
+        let response = access
+            .client
+            .get(url)
+            .bearer_auth(&access.access_token)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|_| OutlookError::NetworkUnavailable)?;
+        match response.status() {
+            StatusCode::OK => {}
+            StatusCode::UNAUTHORIZED => return Err(OutlookError::CredentialsInvalid),
+            StatusCode::FORBIDDEN => return Err(OutlookError::PermissionDenied),
+            status if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS => {
+                return Err(OutlookError::NetworkUnavailable);
+            }
+            _ => return Err(OutlookError::InvalidResponse),
+        }
+        let payload = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|_| OutlookError::InvalidResponse)?;
+        payload
+            .get("value")
+            .and_then(|value| value.as_array())
+            .and_then(|messages| messages.first())
+            .and_then(|message| message.get("id"))
+            .and_then(|id| id.as_str())
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned)
+            .ok_or(OutlookError::NotFound)
+    }
+
     pub(crate) async fn reply(&self, message_id: &str, body: &str) -> Result<String, OutlookError> {
         validate_identifier(message_id)?;
         let body = body.trim();
