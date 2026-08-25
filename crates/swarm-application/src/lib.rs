@@ -1930,6 +1930,30 @@ impl TaskService {
             .map_err(Into::into)
     }
 
+    /// Moves one open task to the front of the delivery order.
+    ///
+    /// Queen's lever for urgency, and she had none. Delivery orders by
+    /// `position`, never by `priority` — she set HIGH on a task, watched it sit
+    /// eight deep because she filed it last, and the only way to move it
+    /// forward was to Block something else, which makes the board lie about why
+    /// that work is waiting.
+    ///
+    /// Deliberately a promote rather than a reorder. A full reorder needs the
+    /// complete open set in order and can corrupt it if the caller gets the
+    /// list wrong; "put this first" cannot.
+    ///
+    /// # Errors
+    /// Denies a non-Queen caller, and propagates the reordering rules.
+    pub fn promote_task(
+        &self,
+        principal: AgentPrincipal,
+        task_id: TaskId,
+    ) -> Result<(), ApplicationError> {
+        require_queen(principal)?;
+        self.store.promote_open_task(task_id)?;
+        Ok(())
+    }
+
     /// Records why a reviewer does not consider shipped work finished.
     ///
     /// Queen's only lever for "shipped but not done". Before this there was
@@ -1994,19 +2018,6 @@ impl TaskService {
     /// Denies a worker caller, and propagates lifecycle and persistence
     /// failures — including the refusal to retire Active or Review work, which
     /// must be moved out of flight first.
-    /// Records why a reviewer does not consider shipped work finished.
-    ///
-    /// Queen's only lever for "shipped but not done". Before this there was
-    /// none: a task already in Review cannot be transitioned to Review, and
-    /// nothing else annotates a task, so a hold lived only in prose between
-    /// sessions and vanished when the shipped-work sweep closed the task.
-    ///
-    /// The hold does not stop the sweep, on the operator's ruling — closing
-    /// shipped work without a human round trip is what makes unattended running
-    /// possible. It makes the reason survive the close.
-    ///
-    /// # Errors
-    /// Denies a non-Queen caller and propagates persistence failures.
     pub fn retire_task(
         &self,
         principal: AgentPrincipal,

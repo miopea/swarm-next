@@ -1248,6 +1248,56 @@ impl TaskStore {
         })
     }
 
+    /// Moves one open task to the front of the delivery order.
+    ///
+    /// DELIVERY ORDER IS `position`, NOT `priority`. `deliverable_briefings`
+    /// orders by `t.position`, and the head-of-line rule that holds a briefing
+    /// back orders by `earlier.position` — neither consults priority anywhere.
+    /// Priority is carried into the brief so the worker knows how urgent the
+    /// work is; it does not decide what arrives first.
+    ///
+    /// Which left a reviewer with no lever at all. Queen sets priority
+    /// deliberately, watched a HIGH item sit eight deep behind five normal ones
+    /// because she filed it last, and the only way she found to move it forward
+    /// was to BLOCK a lower-value task to shorten the queue ahead of it. That is
+    /// an honest use of Blocked and plainly a workaround — it makes the board
+    /// lie about why something is waiting.
+    ///
+    /// Built on `reorder_open_tasks` rather than writing positions directly, so
+    /// the same validation applies: the full open set, no duplicates, nothing
+    /// invented. A promote is a reorder with one element moved, and it cannot
+    /// corrupt an order the way a hand-supplied list can.
+    ///
+    /// # Errors
+    /// Returns `NotFound` when the task is not open, and propagates the
+    /// reordering rules otherwise.
+    pub fn promote_open_task(&self, task_id: TaskId) -> Result<Vec<Task>, TaskStoreError> {
+        let hive_id = self.local_hive_identity()?.hive.id;
+        let order = {
+            let connection = self.connection()?;
+            let mut statement = connection.prepare(
+                "SELECT id FROM tasks
+                 WHERE hive_id = ?1 AND state != 'completed' AND removed_at IS NULL
+                 ORDER BY position, id",
+            )?;
+            statement
+                .query_map([hive_id.to_string()], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let wanted = task_id.to_string();
+        if !order.iter().any(|id| id == &wanted) {
+            return Err(TaskStoreError::NotFound);
+        }
+        let mut promoted = vec![task_id];
+        promoted.extend(
+            order
+                .iter()
+                .filter(|id| *id != &wanted)
+                .filter_map(|id| TaskId::from_str(id).ok()),
+        );
+        self.reorder_open_tasks(&promoted)
+    }
+
     /// Replaces the complete open-task order for the local Hive atomically.
     ///
     /// # Errors
@@ -3949,6 +3999,109 @@ mod tests {
         );
         assert!(matches!(
             store.list_task_activity(TaskId::new(), 30),
+            Err(TaskStoreError::NotFound)
+        ));
+    }
+
+    /// Queen's lever on what arrives first, because priority is not one.
+    ///
+    /// Delivery orders by `position` — `deliverable_briefings` orders by
+    /// `t.position` and the head-of-line rule by `earlier.position`. Neither
+    /// consults `priority` anywhere. Priority travels with the brief so the
+    /// worker knows how urgent the work is; it decides nothing about sequence.
+    ///
+    /// Queen set a task high, watched it sit eight deep behind five normal ones
+    /// because she had filed it last, and found only one way to move it: BLOCK
+    /// a lower-value task to shorten the queue ahead of it. That works and it
+    /// makes the board lie — Blocked means waiting on something else, and the
+    /// something else was her.
+    #[test]
+    fn promoting_a_task_moves_it_to_the_front_without_disturbing_the_rest() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store.create_task("First", "/workspace").unwrap();
+        let second = store.create_task("Second", "/workspace").unwrap();
+        let third = store.create_task("Third", "/workspace").unwrap();
+
+        let promoted = store.promote_open_task(third.id).unwrap();
+
+        assert_eq!(
+            promoted.iter().map(|task| task.id).collect::<Vec<_>>(),
+            vec![third.id, first.id, second.id],
+            "the promoted task leads and everything else keeps its relative order"
+        );
+        assert_eq!(
+            promoted
+                .iter()
+                .map(|task| task.position)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "positions stay dense, so the next promote reasons about the same numbers"
+        );
+    }
+
+    /// Promoting what is already first is a no-op rather than an error.
+    ///
+    /// Queen should not have to check the order before acting on urgency; that
+    /// is the work this exists to save.
+    #[test]
+    fn promoting_the_task_that_already_leads_changes_nothing() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store.create_task("First", "/workspace").unwrap();
+        let second = store.create_task("Second", "/workspace").unwrap();
+
+        let promoted = store.promote_open_task(first.id).unwrap();
+
+        assert_eq!(
+            promoted.iter().map(|task| task.id).collect::<Vec<_>>(),
+            vec![first.id, second.id]
+        );
+    }
+
+    /// NOTHING STARVES, and that is why this is a promote rather than an
+    /// ordering rule.
+    ///
+    /// A queue sorted by priority starves normal work whenever high-priority
+    /// work keeps arriving — the failure the brief warned about before asking
+    /// for one. Position is a total order that only changes when somebody
+    /// deliberately changes it, so promoting one task moves every other task
+    /// exactly one place back and none of them can be moved back twice by the
+    /// same act. Work filed and forgotten still reaches the front.
+    #[test]
+    fn a_promoted_task_pushes_others_back_by_one_and_never_further() {
+        let store = TaskStore::in_memory().unwrap();
+        let first = store.create_task("First", "/workspace").unwrap();
+        let second = store.create_task("Second", "/workspace").unwrap();
+        let third = store.create_task("Third", "/workspace").unwrap();
+
+        store.promote_open_task(third.id).unwrap();
+        let after = store.promote_open_task(second.id).unwrap();
+
+        // Two promotions, and the task nobody promoted has moved back exactly
+        // twice — not repeatedly, and not to the end.
+        assert_eq!(
+            after.iter().map(|task| task.id).collect::<Vec<_>>(),
+            vec![second.id, third.id, first.id]
+        );
+    }
+
+    /// A task that is not open cannot be promoted, and says so rather than
+    /// silently reordering nothing.
+    #[test]
+    fn a_completed_task_cannot_be_promoted() {
+        let store = TaskStore::in_memory().unwrap();
+        let done = store.create_task("Done", "/workspace").unwrap();
+        store.create_task("Open", "/workspace").unwrap();
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(done.id, state).unwrap();
+        }
+
+        assert!(matches!(
+            store.promote_open_task(done.id),
             Err(TaskStoreError::NotFound)
         ));
     }

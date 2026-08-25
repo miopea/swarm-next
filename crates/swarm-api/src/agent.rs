@@ -326,6 +326,7 @@ impl ServerHandler for AgentMcp {
                 approve_no_deployment_tool(),
                 retire_task_tool(),
                 hold_reviewed_work_tool(),
+                promote_task_tool(),
                 list_apiary_hives_tool(),
                 list_apiary_tasks_tool(),
                 create_apiary_task_tool(),
@@ -379,6 +380,7 @@ impl ServerHandler for AgentMcp {
             "swarm_approve_no_deployment" => self.approve_no_deployment(arguments),
             "swarm_retire_task" => self.retire_task(arguments),
             "swarm_hold_reviewed_work" => self.hold_reviewed_work(arguments),
+            "swarm_promote_task" => self.promote_task(arguments),
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
@@ -817,6 +819,14 @@ impl AgentMcp {
         self.tasks
             .retire_task(self.principal, task_id, &input.reason)?;
         structured(json!({ "task_id": input.task_id, "retired": true }))
+    }
+
+    fn promote_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<PromoteTaskInput>(arguments)?;
+        let task_id =
+            TaskId::from_str(&input.task_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        self.tasks.promote_task(self.principal, task_id)?;
+        structured(json!({ "task_id": input.task_id, "promoted": true }))
     }
 
     fn hold_reviewed_work(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -1383,6 +1393,12 @@ struct RetireTaskInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct PromoteTaskInput {
+    task_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HoldReviewedWorkInput {
     task_id: String,
     /// Absent when releasing; the store refuses an empty one when setting.
@@ -1548,6 +1564,22 @@ fn reload_app_tool() -> Tool {
                 }
             },
             "required": ["action"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn promote_task_tool() -> Tool {
+    tool(
+        "swarm_promote_task",
+        "Queen only: move one open task to the front of the delivery queue. THIS IS THE ONLY LEVER ON WHAT ARRIVES FIRST. Delivery order is the board's order — a task's position — and it does NOT consult priority: priority travels with the brief so the worker knows how urgent the work is, and decides nothing about sequence. So marking a task high does not move it, and a task filed last is delivered last however urgent it is. Use this rather than Blocking something else to shorten the queue ahead of it; that works, and it makes the board say a task is waiting on something when it is waiting on you.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "format": "uuid" }
+            },
+            "required": ["task_id"],
             "additionalProperties": false
         }),
         false,
@@ -2087,6 +2119,8 @@ mod tests {
         // own work is just a worker declining to finish it, which the lifecycle
         // already expresses.
         "swarm_hold_reviewed_work",
+        // Ordering the board is routing, and routing is Queen's.
+        "swarm_promote_task",
     ];
 
     fn setup() -> (
