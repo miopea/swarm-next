@@ -2079,9 +2079,16 @@ impl TaskService {
         if principal.role == WorkerRole::Queen {
             return Ok(task);
         }
-        let owned = task.assigned_worker_id == Some(principal.worker_id)
-            && task.assigned_session_id == principal.active_session_id
-            && principal.active_session_id.is_some();
+        // The WORKER, not the worker-and-session. Visibility is session-scoped
+        // because it answers "what may I act on now", and a new session is not
+        // holding the old one's assignment. This answers a different question —
+        // "did I do this work" — and the answer does not change when the fleet
+        // restarts. Keying on the session here meant a worker could never write
+        // the reply for anything it finished before a restart, which is exactly
+        // when a person has been waiting longest. Found by a reload on
+        // 2026-08-25: session 01a03637 ended, 01a0389d began, and the reply to
+        // an email from 22 August became unwritable.
+        let owned = task.assigned_worker_id == Some(principal.worker_id);
         owned.then_some(task).ok_or(ApplicationError::NotAuthorized)
     }
 

@@ -2534,6 +2534,75 @@ mod tests {
         assert_eq!(drafted["result"]["structuredContent"]["awaiting"], "operator review and send");
     }
 
+    /// A restart must not cost the person on the thread their reply.
+    ///
+    /// Found live: a fleet reload ended the session that did the work and began
+    /// a new one, and the reply to an email from 22 August became unwritable —
+    /// because ownership was keyed on the session rather than the worker. The
+    /// session answers "what may I act on now"; this answers "did I do this
+    /// work", and a restart does not change that answer.
+    #[tokio::test]
+    async fn a_restart_does_not_take_away_the_reply_a_worker_owes() {
+        let (bridge, store, _, worker_id, _) = setup();
+        let worker_token = bearer_from_path(&bridge.ensure_worker_config(worker_id).unwrap());
+        let finished_in = swarm_domain::WorkerSessionId::new();
+        store.bind_worker_session(worker_id, finished_in).unwrap();
+        let imported = store
+            .import_email_message(
+                &swarm_persistence::EmailMessageSnapshot {
+                    integration_id: "operator-outlook",
+                    message_id: "AAMk-reply-3",
+                    conversation_id: "AAQk-reply-3",
+                    internet_message_id: Some("<reply-3@example.test>"),
+                    subject: "Waiting since the 22nd",
+                    sender_name: "A Developer",
+                    sender_address: "dev@example.test",
+                    received_at: 1_786_730_000,
+                    web_url: "https://outlook.office.com/mail/inbox/id/AAMk-reply-3",
+                    body_text: "Still broken.",
+                    attachments: &[],
+                },
+                TaskPriority::Normal,
+            )
+            .unwrap();
+        let task_id = imported.task.id;
+        store.transition_task(task_id, TaskState::Ready).unwrap();
+        store.assign_task_to_worker(task_id, worker_id).unwrap();
+        store.transition_task(task_id, TaskState::Active).unwrap();
+        store.transition_task(task_id, TaskState::Review).unwrap();
+        store
+            .record_task_deployment(task_id, "operator's Hive", "a43c248", crate::unix_timestamp())
+            .unwrap();
+        store.transition_task(task_id, TaskState::Completed).unwrap();
+
+        // The fleet restarts: that session ends, a new one begins.
+        store.release_worker_session(finished_in).unwrap();
+        store
+            .bind_worker_session(worker_id, swarm_domain::WorkerSessionId::new())
+            .unwrap();
+
+        let drafted = response_json(
+            handle(
+                bridge,
+                plain_state(),
+                mcp_request(
+                    Some(&worker_token),
+                    "tools/call",
+                    &json!({
+                        "name": "swarm_draft_email_reply",
+                        "arguments": { "task_id": task_id.to_string(), "body": "This is fixed." }
+                    }),
+                ),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            drafted["result"]["isError"], false,
+            "the worker still owes this reply, and a restart did not change who did the work"
+        );
+    }
+
     /// The exception is for the caller's OWN finished work and nothing else.
     /// Widening worker visibility generally would have been the wrong fix.
     #[tokio::test]
