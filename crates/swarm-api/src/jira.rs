@@ -1367,8 +1367,10 @@ pub(crate) fn parse_credentials(
     email: &str,
     api_token: &str,
 ) -> Result<JiraCredentials, String> {
-    let base_url = Url::parse(base_url)
-        .map_err(|_| "That Jira site is not a valid URL. It looks like https://yourcompany.atlassian.net".to_owned())?;
+    let base_url = Url::parse(base_url).map_err(|_| {
+        "That Jira site is not a valid URL. It looks like https://yourcompany.atlassian.net"
+            .to_owned()
+    })?;
     let permitted_transport = base_url.scheme() == "https"
         || (base_url.scheme() == "http"
             && base_url

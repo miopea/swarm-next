@@ -19,16 +19,16 @@ use uuid::Uuid;
 
 mod apiary;
 mod coordinator;
-pub use task_dispatches::{DispatchHold, HeldTaskDispatch};
-pub use task_outcomes::CompletionEvidence;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, CoordinatorAttention,
     CoordinatorRefusal, CoordinatorStatus, CoordinatorWorkerWake, ExitedWorkerOwnedWorkCandidate,
     OverdueDecisionCandidate, REFUSAL_DELIVERY_HELD, REFUSAL_DELIVERY_HELD_UNSENT_TEXT,
-    REFUSAL_WAKE_UNCERTAIN, StaleOwnedWorkCandidate, UnreachableAssignment,
-    REFUSAL_WAKE_NOT_ADMITTED,
+    REFUSAL_WAKE_NOT_ADMITTED, REFUSAL_WAKE_UNCERTAIN, StaleOwnedWorkCandidate,
+    UnreachableAssignment,
 };
 pub use passkeys::RegisteredPasskey;
+pub use task_dispatches::{DispatchHold, HeldTaskDispatch};
+pub use task_outcomes::CompletionEvidence;
 mod decisions;
 mod email;
 mod events;
@@ -347,9 +347,7 @@ pub enum TaskStoreError {
          confirm this is running."
     )]
     InvalidTaskDeployment { max: usize },
-    #[error(
-        "deployment evidence belongs on work that is finished: move this task to review first"
-    )]
+    #[error("deployment evidence belongs on work that is finished: move this task to review first")]
     DeploymentEvidenceTooEarly,
     #[error("email resolution reply content is invalid")]
     InvalidEmailReply,
@@ -441,9 +439,7 @@ pub enum TaskStoreError {
     MigrationWorkerAwake(String),
     /// A selected worker collides with a worker Swarm already has, by name or
     /// by repository — including one imported earlier in the same batch.
-    #[error(
-        "Swarm already has a worker for '{0}'; rename or deselect it, then import again"
-    )]
+    #[error("Swarm already has a worker for '{0}'; rename or deselect it, then import again")]
     MigrationWorkerDuplicate(String),
     #[error("the Legacy migration batch was not found or was already rolled back")]
     MigrationBatchNotFound,
@@ -476,7 +472,6 @@ fn rearm_briefing_for_returned_work(
 }
 
 impl TaskStore {
-
     /// Opens, migrates, and integrity-checks a file-backed task database.
     ///
     /// # Errors
@@ -1682,8 +1677,8 @@ impl TaskStore {
         // Re-entry only. A worker moving its own Ready -> Active is starting
         // the work it was just briefed on, and re-arming there would replay a
         // briefing it has already acted on.
-        let returning_to_a_worker =
-            target == TaskState::Active && matches!(current, TaskState::Review | TaskState::Blocked);
+        let returning_to_a_worker = target == TaskState::Active
+            && matches!(current, TaskState::Review | TaskState::Blocked);
         if returning_to_a_worker {
             rearm_briefing_for_returned_work(&transaction, id)?;
         }

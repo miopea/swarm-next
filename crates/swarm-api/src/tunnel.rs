@@ -380,9 +380,8 @@ async fn verify_serving(url: &str) -> Result<(), String> {
                 if !(status == reqwest::StatusCode::NOT_FOUND && from_edge) {
                     return Ok(());
                 }
-                last = format!(
-                    "Cloudflare answered {status} for it without routing to this machine"
-                );
+                last =
+                    format!("Cloudflare answered {status} for it without routing to this machine");
             }
             Err(error) => {
                 last = format!("it could not be reached: {error}");
@@ -430,7 +429,9 @@ fn extract_quick_tunnel_url(line: &str) -> Option<String> {
     // nowhere.
     let host: String = rest
         .chars()
-        .take_while(|character| character.is_ascii_alphanumeric() || *character == '-' || *character == '.')
+        .take_while(|character| {
+            character.is_ascii_alphanumeric() || *character == '-' || *character == '.'
+        })
         .collect();
     host.strip_suffix(".trycloudflare.com")
         .is_some()
@@ -590,8 +591,7 @@ mod tests {
                 pixels % side,
                 0,
                 "{url} renders {side} modules into {pixels}px, which is {} px per module",
-                f64::from(u32::try_from(pixels).unwrap())
-                    / f64::from(u32::try_from(side).unwrap())
+                f64::from(u32::try_from(pixels).unwrap()) / f64::from(u32::try_from(side).unwrap())
             );
             assert_eq!(pixels / side, MODULE_PIXELS);
         }

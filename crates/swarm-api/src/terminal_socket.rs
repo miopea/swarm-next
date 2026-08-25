@@ -67,7 +67,10 @@ enum ServerTerminalMessage<'a> {
         /// opened on a worker left running on a desktop jumped continuously.
         geometry_owned: bool,
     },
-    Error { code: &'a str, message: String },
+    Error {
+        code: &'a str,
+        message: String,
+    },
 }
 
 pub async fn serve_terminal_socket(

@@ -2255,12 +2255,7 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .record_task_deployment(
-                    imported.task.id,
-                    "production",
-                    "release-51",
-                    1_786_730_300
-                )
+                .record_task_deployment(imported.task.id, "production", "release-51", 1_786_730_300)
                 .is_ok()
         );
     }

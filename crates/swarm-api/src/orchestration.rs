@@ -77,7 +77,9 @@ const HELD_DELIVERY_GRACE_SECONDS: i64 = 120;
 /// reach the refusal ledger. A briefing the dispatcher never claims is never
 /// attempted, so nothing recorded it and the board showed work assigned and
 /// apparently ignored.
-fn held_briefings(state: &Arc<AppState>) -> Result<Vec<swarm_persistence::HeldTaskDispatch>, ApiError> {
+fn held_briefings(
+    state: &Arc<AppState>,
+) -> Result<Vec<swarm_persistence::HeldTaskDispatch>, ApiError> {
     crate::task_store(state)?
         .held_task_dispatches(crate::unix_timestamp())
         .map_err(|error| task_store_error(&error))

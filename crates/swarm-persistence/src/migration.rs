@@ -1912,7 +1912,8 @@ mod tests {
             .create_worker("Daisy", ProviderKind::ClaudeCode, &workspace, false, 3)
             .unwrap();
         let mut source = worker("daisy", "Daisy", &workspace);
-        source.provider_conversation_id = Some(swarm_domain::ProviderConversationId::new().to_string());
+        source.provider_conversation_id =
+            Some(swarm_domain::ProviderConversationId::new().to_string());
         let bundle = worker_bundle(vec![source]);
 
         let sleeping = store.preview_legacy_worker_migration(&bundle).unwrap();

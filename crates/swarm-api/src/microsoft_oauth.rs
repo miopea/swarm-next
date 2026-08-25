@@ -170,7 +170,8 @@ impl MicrosoftOAuthClient {
             public_base_url.host_str(),
             Some("localhost" | "127.0.0.1" | "::1")
         );
-        if (public_base_url.scheme() != "https" && !(public_base_url.scheme() == "http" && loopback))
+        if (public_base_url.scheme() != "https"
+            && !(public_base_url.scheme() == "http" && loopback))
             || !public_base_url.username().is_empty()
             || public_base_url.password().is_some()
             || public_base_url.query().is_some()

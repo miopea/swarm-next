@@ -55,7 +55,9 @@ fn relying_party(headers: &HeaderMap) -> Option<(String, Url)> {
         .or_else(|| headers.get(header::HOST))
         .and_then(|value| value.to_str().ok())?
         .to_owned();
-    let name = host.rsplit_once(':').map_or(host.as_str(), |(name, _)| name);
+    let name = host
+        .rsplit_once(':')
+        .map_or(host.as_str(), |(name, _)| name);
     let scheme = headers
         .get("x-forwarded-proto")
         .and_then(|value| value.to_str().ok())
@@ -123,7 +125,12 @@ pub(super) async fn register_start(
         .map(|key| key.cred_id().clone())
         .collect();
     let (options, registration) = webauthn
-        .start_passkey_registration(OPERATOR_HANDLE, OPERATOR_NAME, OPERATOR_NAME, Some(existing))
+        .start_passkey_registration(
+            OPERATOR_HANDLE,
+            OPERATOR_NAME,
+            OPERATOR_NAME,
+            Some(existing),
+        )
         .map_err(|_| {
             ApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -364,11 +371,7 @@ pub(super) async fn list_passkeys(
             last_used_at: key.last_used_at,
         })
         .collect::<Vec<_>>();
-    Ok((
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(keys),
-    )
-        .into_response())
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(keys)).into_response())
 }
 
 pub(super) async fn remove_passkey(

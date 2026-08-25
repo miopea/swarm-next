@@ -1603,10 +1603,16 @@ mod tests {
         let home = std::env::var("HOME").expect("tests run with a home directory");
         assert_eq!(
             super::normalize_workspace("~/projects/rcg/rcg-dev-install").unwrap(),
-            format!("{}/projects/rcg/rcg-dev-install", home.trim_end_matches('/')),
+            format!(
+                "{}/projects/rcg/rcg-dev-install",
+                home.trim_end_matches('/')
+            ),
         );
         // A bare tilde is the home directory itself.
-        assert_eq!(super::normalize_workspace("~").unwrap(), home.trim_end_matches('/'));
+        assert_eq!(
+            super::normalize_workspace("~").unwrap(),
+            home.trim_end_matches('/')
+        );
         // Not every tilde is a home reference: a directory may legitimately
         // start with one.
         assert!(super::normalize_workspace("~notauser/thing").is_err());
@@ -1626,7 +1632,13 @@ mod tests {
     fn a_worker_created_with_a_tilde_gets_a_path_that_can_actually_start() {
         let store = TaskStore::in_memory().unwrap();
         let worker = store
-            .create_worker("Installer", ProviderKind::ClaudeCode, "~/projects/thing", false, 1)
+            .create_worker(
+                "Installer",
+                ProviderKind::ClaudeCode,
+                "~/projects/thing",
+                false,
+                1,
+            )
             .unwrap();
         assert!(
             worker.workspace.starts_with('/'),
@@ -1761,12 +1773,23 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         let worker = store
-            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
             .unwrap();
         let first = WorkerSessionId::new();
         store.bind_worker_session(worker.id, first).unwrap();
         let task = store
-            .create_task_with_details("Waiting on a reboot", "", TaskPriority::Normal, "/workspace/petal")
+            .create_task_with_details(
+                "Waiting on a reboot",
+                "",
+                TaskPriority::Normal,
+                "/workspace/petal",
+            )
             .unwrap();
         store.transition_task(task.id, TaskState::Ready).unwrap();
         store
@@ -1776,7 +1799,9 @@ mod tests {
         // The machine goes down. Nothing releases anything; on the way back up
         // the sweep only observes that the process is gone.
         assert_eq!(
-            store.release_missing_worker_sessions(&HashSet::new()).unwrap(),
+            store
+                .release_missing_worker_sessions(&HashSet::new())
+                .unwrap(),
             1
         );
         let second = WorkerSessionId::new();

@@ -201,7 +201,11 @@ pub(super) async fn approve_completion_exemption(
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
     let evidence = crate::task_store(&state)?
-        .approve_completion_exemption(parse_task_id(&task_id)?, "operator", crate::unix_timestamp())
+        .approve_completion_exemption(
+            parse_task_id(&task_id)?,
+            "operator",
+            crate::unix_timestamp(),
+        )
         .map_err(|error| crate::task_store_error(&error))?;
     state.control_room_notify.notify_waiters();
     Ok(Json(serde_json::json!({ "evidence": format!("{evidence:?}") })).into_response())

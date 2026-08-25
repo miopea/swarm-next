@@ -1958,7 +1958,11 @@ impl TaskService {
             return Err(ApplicationError::NotAuthorized);
         }
         self.store
-            .remove_task_as(task_id, &TaskActivityActor::worker(principal.worker_id), reason)
+            .remove_task_as(
+                task_id,
+                &TaskActivityActor::worker(principal.worker_id),
+                reason,
+            )
             .map_err(Into::into)
     }
 
@@ -2153,15 +2157,13 @@ impl TaskService {
         if !visible {
             return Err(ApplicationError::NotAuthorized);
         }
-        Ok(self
-            .store
-            .approve_completion_exemption(
-                task_id,
-                "queen",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(0)),
-            )?)
+        Ok(self.store.approve_completion_exemption(
+            task_id,
+            "queen",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| i64::try_from(elapsed.as_secs()).unwrap_or(0)),
+        )?)
     }
 
     /// Lists the local roster for Queen coordination.
@@ -3137,20 +3139,36 @@ mod tests {
     fn queen_can_read_the_whole_handoff_the_excerpt_pointed_at() {
         let (service, queen, worker) = setup();
         let session = WorkerSessionId::new();
-        service.store.bind_worker_session(worker.id, session).unwrap();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
         let task = service
             .store
             .create_task_with_details("Fix the gate", "", TaskPriority::Normal, "/workspace/petal")
             .unwrap();
         service.store.assign_task(task.id, session).unwrap();
-        service.store.transition_task(task.id, TaskState::Ready).unwrap();
-        service.store.transition_task(task.id, TaskState::Active).unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Ready)
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Active)
+            .unwrap();
 
         // The kind of report that does not survive an excerpt.
-        let handoff = format!("TWO INCIDENTS WERE MERGED INTO ONE TICKET. {}", "detail ".repeat(500));
+        let handoff = format!(
+            "TWO INCIDENTS WERE MERGED INTO ONE TICKET. {}",
+            "detail ".repeat(500)
+        );
         service
             .transition_task(
-                AgentPrincipal { worker_id: worker.id, role: WorkerRole::Worker, active_session_id: Some(session) },
+                AgentPrincipal {
+                    worker_id: worker.id,
+                    role: WorkerRole::Worker,
+                    active_session_id: Some(session),
+                },
                 task.id,
                 TaskState::Review,
                 &handoff,
@@ -3161,7 +3179,11 @@ mod tests {
             .read_task_history(AgentPrincipal::from(&queen), task.id, 50)
             .unwrap();
 
-        let notes = page.events.iter().map(|event| event.note.as_str()).collect::<Vec<_>>();
+        let notes = page
+            .events
+            .iter()
+            .map(|event| event.note.as_str())
+            .collect::<Vec<_>>();
         assert!(
             notes.iter().any(|note| *note == handoff),
             "the complete handoff must be readable, not an excerpt of it"
@@ -3174,14 +3196,21 @@ mod tests {
     fn a_worker_cannot_read_the_history_of_a_task_that_is_not_its_own() {
         let (service, _queen, worker) = setup();
         let session = WorkerSessionId::new();
-        service.store.bind_worker_session(worker.id, session).unwrap();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
         let other = service
             .store
             .create_task_with_details("Not yours", "", TaskPriority::Normal, "/workspace/other")
             .unwrap();
 
         let denied = service.read_task_history(
-            AgentPrincipal { worker_id: worker.id, role: WorkerRole::Worker, active_session_id: Some(session) },
+            AgentPrincipal {
+                worker_id: worker.id,
+                role: WorkerRole::Worker,
+                active_session_id: Some(session),
+            },
             other.id,
             50,
         );
@@ -3197,15 +3226,28 @@ mod tests {
     fn queen_can_approve_work_that_had_nothing_to_deploy() {
         let (service, queen, worker) = setup();
         let session = WorkerSessionId::new();
-        service.store.bind_worker_session(worker.id, session).unwrap();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
         let task = service
             .store
-            .create_task_with_details("Correct a standard", "", TaskPriority::Normal, "/workspace/petal")
+            .create_task_with_details(
+                "Correct a standard",
+                "",
+                TaskPriority::Normal,
+                "/workspace/petal",
+            )
             .unwrap();
         service.store.assign_task(task.id, session).unwrap();
         service
             .store
-            .claim_completion_exemption(task.id, "Documentation only; nothing ships.", Some(worker.id), 1_000)
+            .claim_completion_exemption(
+                task.id,
+                "Documentation only; nothing ships.",
+                Some(worker.id),
+                1_000,
+            )
             .unwrap();
 
         service
@@ -3213,9 +3255,18 @@ mod tests {
             .unwrap();
 
         // The gate is satisfied, so the work can finally be recorded as done.
-        service.store.transition_task(task.id, TaskState::Ready).unwrap();
-        service.store.transition_task(task.id, TaskState::Active).unwrap();
-        service.store.transition_task(task.id, TaskState::Review).unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Ready)
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Active)
+            .unwrap();
+        service
+            .store
+            .transition_task(task.id, TaskState::Review)
+            .unwrap();
         service
             .transition_task(
                 AgentPrincipal::from(&queen),
@@ -3232,7 +3283,10 @@ mod tests {
     fn a_worker_cannot_approve_its_own_no_deployment_claim() {
         let (service, _queen, worker) = setup();
         let session = WorkerSessionId::new();
-        service.store.bind_worker_session(worker.id, session).unwrap();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
         let task = service
             .store
             .create_task_with_details("Spike", "", TaskPriority::Normal, "/workspace/petal")
@@ -3244,7 +3298,11 @@ mod tests {
             .unwrap();
 
         let denied = service.approve_completion_exemption(
-            AgentPrincipal { worker_id: worker.id, role: WorkerRole::Worker, active_session_id: Some(session) },
+            AgentPrincipal {
+                worker_id: worker.id,
+                role: WorkerRole::Worker,
+                active_session_id: Some(session),
+            },
             task.id,
         );
 
@@ -3260,7 +3318,12 @@ mod tests {
         let (service, queen, _worker) = setup();
         let task = service
             .store
-            .create_task_with_details("Measures the legacy swarm", "", TaskPriority::Normal, "/workspace/petal")
+            .create_task_with_details(
+                "Measures the legacy swarm",
+                "",
+                TaskPriority::Normal,
+                "/workspace/petal",
+            )
             .unwrap();
 
         service
@@ -3272,7 +3335,13 @@ mod tests {
             .unwrap();
 
         // Off the live board.
-        assert!(!service.list_tasks().unwrap().iter().any(|open| open.id == task.id));
+        assert!(
+            !service
+                .list_tasks()
+                .unwrap()
+                .iter()
+                .any(|open| open.id == task.id)
+        );
 
         // And the reason is what a later reader finds, not a bare "removed".
         let history = service.store.list_task_activity(task.id, 50).unwrap();
@@ -3291,19 +3360,32 @@ mod tests {
     fn a_worker_cannot_retire_a_task() {
         let (service, _queen, worker) = setup();
         let session = WorkerSessionId::new();
-        service.store.bind_worker_session(worker.id, session).unwrap();
+        service
+            .store
+            .bind_worker_session(worker.id, session)
+            .unwrap();
         let task = service
             .store
             .create_task_with_details("Still wanted", "", TaskPriority::Normal, "/workspace/petal")
             .unwrap();
 
         let denied = service.retire_task(
-            AgentPrincipal { worker_id: worker.id, role: WorkerRole::Worker, active_session_id: Some(session) },
+            AgentPrincipal {
+                worker_id: worker.id,
+                role: WorkerRole::Worker,
+                active_session_id: Some(session),
+            },
             task.id,
             "I would rather not",
         );
 
         assert!(matches!(denied, Err(ApplicationError::NotAuthorized)));
-        assert!(service.list_tasks().unwrap().iter().any(|open| open.id == task.id));
+        assert!(
+            service
+                .list_tasks()
+                .unwrap()
+                .iter()
+                .any(|open| open.id == task.id)
+        );
     }
 }

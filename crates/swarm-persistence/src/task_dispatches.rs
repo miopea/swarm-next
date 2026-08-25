@@ -880,7 +880,13 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         let worker = store
-            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
             .unwrap();
         let session = WorkerSessionId::new();
         store.bind_worker_session(worker.id, session).unwrap();
@@ -918,7 +924,13 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         let worker = store
-            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
             .unwrap();
         let session = WorkerSessionId::new();
         store.bind_worker_session(worker.id, session).unwrap();

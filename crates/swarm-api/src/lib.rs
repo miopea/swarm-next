@@ -21,13 +21,12 @@ mod migration;
 mod notifications;
 mod orchestration;
 mod outlook;
+mod passkeys;
 mod presence;
 mod presentation;
 mod private_store;
 mod provider_activity;
-mod passkeys;
 mod release;
-mod tunnel;
 mod runtime;
 mod session_history;
 mod tasks;
@@ -35,6 +34,7 @@ mod terminal_attach;
 mod terminal_control;
 mod terminal_host;
 mod terminal_socket;
+mod tunnel;
 mod worker_description_ai;
 mod worker_runtime;
 mod workers;
@@ -1341,7 +1341,12 @@ impl AppState {
         }
         let activity = self.provider_activity.read().await;
         for candidate in candidates {
-            if !should_surface_stale_owned_work(activity.get(&candidate.session_id).map(|signals| signals.activity).as_ref()) {
+            if !should_surface_stale_owned_work(
+                activity
+                    .get(&candidate.session_id)
+                    .map(|signals| signals.activity)
+                    .as_ref(),
+            ) {
                 continue;
             }
             match store.record_stale_owned_work_attention(&candidate, now, STALE_OWNED_WORK_SECONDS)
@@ -1374,7 +1379,12 @@ impl AppState {
         }
         let activity = self.provider_activity.read().await;
         for candidate in candidates {
-            if !should_surface_stale_owned_work(activity.get(&candidate.session_id).map(|signals| signals.activity).as_ref()) {
+            if !should_surface_stale_owned_work(
+                activity
+                    .get(&candidate.session_id)
+                    .map(|signals| signals.activity)
+                    .as_ref(),
+            ) {
                 continue;
             }
             match store.record_assigned_ready_work_not_started_attention(
@@ -1471,7 +1481,10 @@ impl AppState {
         for (delivery, submission) in settled {
             let outcome = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
-                    clear_held_delivery_refusals(store, &format!("decision:{}", delivery.decision_id));
+                    clear_held_delivery_refusals(
+                        store,
+                        &format!("decision:{}", delivery.decision_id),
+                    );
                     store.complete_decision_delivery(delivery.decision_id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Deferred(reason)) => {
@@ -1544,7 +1557,10 @@ impl AppState {
         for (delivery, submission) in settled {
             let outcome = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
-                    clear_held_delivery_refusals(store, &format!("task-brief:{}", delivery.task_id));
+                    clear_held_delivery_refusals(
+                        store,
+                        &format!("task-brief:{}", delivery.task_id),
+                    );
                     store.complete_task_dispatch(&delivery.assignment_id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Deferred(reason)) => {
@@ -1624,14 +1640,20 @@ impl AppState {
         // Every outcome in a group shares the group's result, because they
         // shared the write.
         let settled = settled.into_iter().flat_map(|(group, submission)| {
-            group
-                .into_iter()
-                .map(move |outcome| (outcome, coordination_delivery::clone_submission(&submission)))
+            group.into_iter().map(move |outcome| {
+                (
+                    outcome,
+                    coordination_delivery::clone_submission(&submission),
+                )
+            })
         });
         for (outcome, submission) in settled {
             let result = match submission {
                 Ok(TerminalSubmission::Acknowledged) => {
-                    clear_held_delivery_refusals(store, &format!("task-outcome:{}", outcome.task_id));
+                    clear_held_delivery_refusals(
+                        store,
+                        &format!("task-outcome:{}", outcome.task_id),
+                    );
                     store.complete_task_outcome(&outcome.id, unix_timestamp())
                 }
                 Ok(TerminalSubmission::Deferred(reason)) => {
@@ -2515,10 +2537,7 @@ fn api_router(state: AppState) -> Router {
                 .delete(auth::delete_session),
         )
         .route("/api/v1/auth/token", axum::routing::put(auth::rotate_token))
-        .route(
-            "/api/v1/auth/passkeys",
-            get(passkeys::list_passkeys),
-        )
+        .route("/api/v1/auth/passkeys", get(passkeys::list_passkeys))
         .route(
             "/api/v1/auth/passkeys/{credential_id}",
             axum::routing::delete(passkeys::remove_passkey),
@@ -4741,8 +4760,8 @@ async fn set_jira_credentials(
             "An Atlassian email and API token are both required.",
         ));
     }
-    let credentials = jira::parse_credentials(input.base_url.trim(), email, api_token)
-        .map_err(|message| {
+    let credentials =
+        jira::parse_credentials(input.base_url.trim(), email, api_token).map_err(|message| {
             ApiError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "jira_credentials_invalid",
@@ -4750,8 +4769,8 @@ async fn set_jira_credentials(
             )
         })?;
     // Try it before keeping it.
-    let candidate = jira::JiraReadinessProbe::runtime(Some(credentials.clone()))
-        .map_err(|message| {
+    let candidate =
+        jira::JiraReadinessProbe::runtime(Some(credentials.clone())).map_err(|message| {
             ApiError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "jira_credentials_invalid",
@@ -4764,9 +4783,15 @@ async fn set_jira_credentials(
             StatusCode::UNPROCESSABLE_ENTITY,
             "jira_credentials_rejected",
             match readiness.connection {
-                swarm_domain::JiraConnectionState::CredentialsInvalid => "Atlassian rejected that email and token. Check the token was copied whole and belongs to that account.",
-                swarm_domain::JiraConnectionState::PermissionDenied => "That account reached Jira but is not permitted to read it.",
-                swarm_domain::JiraConnectionState::NetworkUnavailable => "That Jira site could not be reached from this host.",
+                swarm_domain::JiraConnectionState::CredentialsInvalid => {
+                    "Atlassian rejected that email and token. Check the token was copied whole and belongs to that account."
+                }
+                swarm_domain::JiraConnectionState::PermissionDenied => {
+                    "That account reached Jira but is not permitted to read it."
+                }
+                swarm_domain::JiraConnectionState::NetworkUnavailable => {
+                    "That Jira site could not be reached from this host."
+                }
                 _ => "That account could not be connected.",
             },
         ));
@@ -4778,7 +4803,10 @@ async fn set_jira_credentials(
             message,
         )
     })?;
-    state.jira_readiness.set_credentials(Some(credentials)).await;
+    state
+        .jira_readiness
+        .set_credentials(Some(credentials))
+        .await;
     state.control_room_notify.notify_waiters();
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
@@ -11094,7 +11122,9 @@ mod tests {
 
         state.observe_exited_worker_owned_work_after(&store, 0);
 
-        let attention = store.current_coordinator_attention(unix_timestamp()).unwrap();
+        let attention = store
+            .current_coordinator_attention(unix_timestamp())
+            .unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(attention[0].worker_id, worker.id);
         assert_eq!(attention[0].task_id, task.id);
@@ -11133,21 +11163,19 @@ mod tests {
                 .unwrap()
         );
         let state = AppState::default().with_task_store(store.clone());
-        state
-            .provider_activity
-            .write()
-            .await
-            .insert(
-                session,
-                provider_activity::ProviderSignals {
-                    activity: ProviderActivity::Resting,
-                    background_work: false,
-                },
-            );
+        state.provider_activity.write().await.insert(
+            session,
+            provider_activity::ProviderSignals {
+                activity: ProviderActivity::Resting,
+                background_work: false,
+            },
+        );
 
         state.observe_assigned_ready_work_not_started(&store).await;
 
-        let attention = store.current_coordinator_attention(unix_timestamp()).unwrap();
+        let attention = store
+            .current_coordinator_attention(unix_timestamp())
+            .unwrap();
         assert_eq!(attention.len(), 1);
         assert_eq!(attention[0].worker_id, worker.id);
         assert_eq!(attention[0].task_id, task.id);

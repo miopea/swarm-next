@@ -1662,7 +1662,13 @@ mod reviewed_work_tests {
         let store = TaskStore::in_memory().unwrap();
         store.ensure_queen("/workspace/queen").unwrap();
         let worker = store
-            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
             .unwrap();
         let session = WorkerSessionId::new();
         store.bind_worker_session(worker.id, session).unwrap();
@@ -1676,7 +1682,9 @@ mod reviewed_work_tests {
 
         let now = i64::MAX / 4;
         let grace = 15 * 60;
-        let fresh = store.reviewed_work_without_evidence_candidates(0, grace).unwrap();
+        let fresh = store
+            .reviewed_work_without_evidence_candidates(0, grace)
+            .unwrap();
         assert!(fresh.is_empty(), "work just reported is not yet stranded");
 
         let candidates = store
@@ -1718,11 +1726,19 @@ mod reviewed_work_tests {
         let store = TaskStore::in_memory().unwrap();
         store.ensure_queen("/workspace/queen").unwrap();
         let worker = store
-            .create_worker("Petal", ProviderKind::ClaudeCode, "/workspace/petal", false, 1)
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
             .unwrap();
         let session = WorkerSessionId::new();
         store.bind_worker_session(worker.id, session).unwrap();
-        let task = store.create_task("Shipped work", "/workspace/petal").unwrap();
+        let task = store
+            .create_task("Shipped work", "/workspace/petal")
+            .unwrap();
         store.transition_task(task.id, TaskState::Ready).unwrap();
         store.assign_task(task.id, session).unwrap();
         store.transition_task(task.id, TaskState::Active).unwrap();
@@ -2787,17 +2803,34 @@ mod tests {
         let store = TaskStore::in_memory().unwrap();
         let queen = store.ensure_queen("/workspace/queen").unwrap();
         let sleeping = store
-            .create_worker("RCG Hub", ProviderKind::ClaudeCode, "/workspace/hub", false, 1)
+            .create_worker(
+                "RCG Hub",
+                ProviderKind::ClaudeCode,
+                "/workspace/hub",
+                false,
+                1,
+            )
             .unwrap();
         let running = store
-            .create_worker("Scout", ProviderKind::ClaudeCode, "/workspace/scout", false, 1)
+            .create_worker(
+                "Scout",
+                ProviderKind::ClaudeCode,
+                "/workspace/scout",
+                false,
+                1,
+            )
             .unwrap();
         store
             .bind_worker_session(running.id, WorkerSessionId::new())
             .unwrap();
 
         let parked = store
-            .create_task_with_details("Latent hub work", "", TaskPriority::Normal, "/workspace/hub")
+            .create_task_with_details(
+                "Latent hub work",
+                "",
+                TaskPriority::Normal,
+                "/workspace/hub",
+            )
             .unwrap();
         store.transition_task(parked.id, TaskState::Ready).unwrap();
         store
@@ -2812,7 +2845,11 @@ mod tests {
             .transition_task(reachable.id, TaskState::Ready)
             .unwrap();
         store
-            .assign_task_to_worker_as(reachable.id, running.id, &TaskActivityActor::worker(queen.id))
+            .assign_task_to_worker_as(
+                reachable.id,
+                running.id,
+                &TaskActivityActor::worker(queen.id),
+            )
             .unwrap();
 
         // The wake itself IS armed: assignment queues one for the sleeping
@@ -2825,7 +2862,9 @@ mod tests {
             "assignment must queue a wake for a sleeping worker: {wakes:?}"
         );
 
-        let unreachable = store.work_assigned_to_a_worker_that_is_not_running().unwrap();
+        let unreachable = store
+            .work_assigned_to_a_worker_that_is_not_running()
+            .unwrap();
         assert_eq!(
             unreachable.len(),
             1,
@@ -2887,7 +2926,9 @@ mod tests {
 
         // Half an hour later, on the same unchanged record.
         let elapsed = 1_800;
-        let second = store.current_coordinator_attention(1_000 + elapsed).unwrap();
+        let second = store
+            .current_coordinator_attention(1_000 + elapsed)
+            .unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].action_id, action_id, "the same record");
         assert_eq!(
