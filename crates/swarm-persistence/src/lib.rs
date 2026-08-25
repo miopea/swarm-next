@@ -1594,6 +1594,21 @@ impl TaskStore {
         Ok(())
     }
 
+    /// The schema version this database is actually at, right now.
+    ///
+    /// Exposed because a reload has to compare the LIVE version against the one
+    /// the checkout declares, and it cannot use `CURRENT_SCHEMA_VERSION` for the
+    /// live side: this binary migrated the database to its own version at
+    /// startup, so that comparison reports "no migration" for every reload,
+    /// including the ones that carry one.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the pragma cannot be read.
+    pub fn schema_version(&self) -> Result<i64, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection.pragma_query_value(None, "user_version", |row| row.get(0))?)
+    }
+
     /// Runs `SQLite`'s quick integrity check against the live database.
     ///
     /// # Errors
@@ -2031,6 +2046,36 @@ impl TaskStore {
         self.connection
             .lock()
             .map_err(|_| TaskStoreError::LockPoisoned)
+    }
+}
+
+/// Proves a backup file is the database it claims to be, WITHOUT migrating it.
+///
+/// Deliberately not `TaskStore::open`: opening runs migrations forward, so
+/// verifying a backup that way would rewrite the very thing being kept as the
+/// escape route from a migration. This opens the file plainly and asks it two
+/// questions.
+///
+/// Writing bytes is not the same as having a backup. A file that exists,
+/// nobody reads, and turns out to be short is worse than a refusal at the time
+/// it was taken, because by then the migration has already run.
+///
+/// # Errors
+/// Returns a persistence error when the file cannot be opened, reports a
+/// different schema version than expected, or fails an integrity check.
+pub fn verify_backup_at(path: &Path, expected_version: i64) -> Result<(), TaskStoreError> {
+    let connection = Connection::open(path)?;
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version != expected_version {
+        return Err(TaskStoreError::IntegrityFailure(format!(
+            "the backup reports schema version {version} where the live database is at {expected_version}"
+        )));
+    }
+    let check: String = connection.pragma_query_value(None, "integrity_check", |row| row.get(0))?;
+    if check == "ok" {
+        Ok(())
+    } else {
+        Err(TaskStoreError::IntegrityFailure(check))
     }
 }
 

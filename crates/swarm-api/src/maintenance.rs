@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
     Json,
@@ -12,8 +12,9 @@ use swarm_terminal::{HostRequest, HostResponse, TerminalHostStatus};
 use tokio::time::{sleep, timeout};
 
 use crate::{
-    ApiError, AppState, authorize, build_version, runtime, task_store, task_store_error,
-    terminal_host::request_host, unix_timestamp, worker_engine_build_id, worker_runtime,
+    ApiError, AppState, authorize, build_version, reload_backup, runtime, task_store,
+    task_store_error, terminal_host::request_host, unix_timestamp, worker_engine_build_id,
+    worker_runtime,
 };
 use swarm_terminal::TerminalSize;
 
@@ -155,6 +156,51 @@ pub(super) async fn request_development_reload(
 pub(crate) struct StartedDevelopmentReload {
     pub(crate) source_revision: String,
     pub(crate) previous_version: String,
+    /// Where the pre-migration copy went, when this reload carried one.
+    ///
+    /// Reported rather than merely taken: a precaution nobody can see is one
+    /// nobody can check, and the caller has to be able to say WHERE the escape
+    /// route is without going to look for it.
+    pub(crate) backup: Option<PathBuf>,
+}
+
+/// Copies the database first when the incoming build would migrate it.
+///
+/// Refuses the reload on any failure. A backup that warns and proceeds is the
+/// same as no backup on the only day it matters.
+fn back_up_before_reload(
+    state: &Arc<AppState>,
+    source_revision: &str,
+) -> Result<Option<PathBuf>, ApiError> {
+    let (Some(directory), Some(checkout)) = (
+        state.database_directory.as_ref(),
+        state.development_checkout_path.as_ref(),
+    ) else {
+        return Ok(None);
+    };
+    reload_backup::back_up_before_migrating_reload(
+        task_store(state)?,
+        directory.as_ref(),
+        checkout.as_ref(),
+        source_revision,
+        &backup_timestamp(),
+    )
+    .map_err(|error| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "development_reload_backup_failed",
+            error.to_string(),
+        )
+    })
+}
+
+/// A sortable UTC stamp, so backups from one day read in order.
+///
+/// Matches the shape the operator's own hand-taken backups already use —
+/// `pre-557d78d-20260815T214222Z.sqlite3` — so the directory stays readable
+/// rather than acquiring a second naming convention.
+fn backup_timestamp() -> String {
+    chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
 }
 
 /// Asks the development reload service to rebuild and swap this Hive.
@@ -185,6 +231,19 @@ pub(crate) async fn start_development_reload(
         ));
     }
     let source_revision = source.map_or_else(|| "unknown".into(), |source| source.revision);
+
+    // A MIGRATION IS THE ONE PART OF A RELOAD THAT CANNOT BE UNDONE, so it is
+    // the one part that gets an enforced precaution rather than a remembered
+    // one. Reloading a bad build costs another reload; migrating onto bad data
+    // costs the data, because migrations here run forward only. The copy is
+    // taken BEFORE the build is requested, so a refusal leaves the running Hive
+    // exactly as it was.
+    //
+    // This deliberately does not ask the operator first. Requiring an ask would
+    // reinstate the wait-for-a-human dependency the heartbeat work exists to
+    // remove, and would bite hardest overnight, when nobody is there to grant it
+    // and the schema is no more dangerous than at noon.
+    let backup = back_up_before_reload(state, &source_revision)?;
     if matches!(
         runtime::development_reload_state_for_source(state, Some(&source_revision)),
         "requested" | "building"
@@ -249,6 +308,7 @@ pub(crate) async fn start_development_reload(
     Ok(StartedDevelopmentReload {
         source_revision,
         previous_version: build_version().to_owned(),
+        backup,
     })
 }
 

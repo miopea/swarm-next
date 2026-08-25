@@ -1,4 +1,8 @@
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{
+    env,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 use swarm_api::{AppState, router, router_with_asset_root, router_with_web_root};
 use swarm_persistence::TaskStore;
 use swarm_terminal::{HostClient, default_terminal_socket_path};
@@ -35,6 +39,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             |token| AppState::default().with_terminal_host(HostClient::new(terminal_socket), token),
         )
         .with_attachment_store(attachment_root_from_database(&database_path))
+        .with_database_directory(
+            database_path
+                .parent()
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf),
+        )
         .with_email_attachment_store(email_attachment_root_from_database(&database_path))
         .with_legacy_database_path(legacy_database_path_from_env())
         .with_maintenance_request_path(maintenance_request_path_from_env(&database_path))

@@ -817,6 +817,10 @@ impl AgentMcp {
             "requested": true,
             "expect_revision": started.source_revision,
             "previous_version": started.previous_version,
+            // Where the escape route is, when this reload carried a migration.
+            // A precaution nobody can see is one nobody can check, and after
+            // the API restarts this is the only place the path is stated.
+            "database_backup": started.backup.as_ref().map(|path| path.display().to_string()),
             "next": "The API restarts now, so this call cannot report the result. Poll swarm_reload_app with action=status until state is 'ready' or 'failed', then check running_revision against expect_revision before claiming the fix is running.",
         }))
     }
@@ -1639,7 +1643,7 @@ fn list_tasks_tool() -> Tool {
 fn reload_app_tool() -> Tool {
     tool(
         "swarm_reload_app",
-        "Rebuild and restart this Hive's App and API from the development checkout, so a fix does not wait for the operator to press a button. Only for the worker whose workspace IS that checkout. Refused while YOU still hold Active work — finish or report it first; the operator being at the Hive is not a refusal. action=request starts a build and returns the revision it will produce; the API restarts, so it cannot answer again from the same call. Poll action=status afterwards and compare running_revision to the revision you were given before claiming anything was reloaded. Workers keep running across the reload; the terminal host is a separate service. Other workers do keep running, but the API restarts under all of them, so a call mid-flight can fail — worth a thought when the fleet is busy, and worth more than a thought when the reload carries a schema migration.",
+        "Rebuild and restart this Hive's App and API from the development checkout, so a fix does not wait for the operator to press a button. Only for the worker whose workspace IS that checkout. Refused while YOU still hold Active work — finish or report it first; the operator being at the Hive is not a refusal. action=request starts a build and returns the revision it will produce; the API restarts, so it cannot answer again from the same call. Poll action=status afterwards and compare running_revision to the revision you were given before claiming anything was reloaded. Workers keep running across the reload; the terminal host is a separate service. Other workers do keep running, but the API restarts under all of them, so a call mid-flight can fail — worth a thought when the fleet is busy, and worth more than a thought when the reload carries a schema migration. A reload that would migrate the database copies it first and REFUSES if that copy cannot be written or verified; the path comes back as database_backup. That is taken care of for you — do not skip a reload to avoid it, and do not treat its absence on an ordinary reload as a failure.",
         &json!({
             "type": "object",
             "properties": {

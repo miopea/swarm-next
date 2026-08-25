@@ -28,6 +28,7 @@ mod presentation;
 mod private_store;
 mod provider_activity;
 mod release;
+mod reload_backup;
 mod runtime;
 mod session_history;
 mod tasks;
@@ -189,6 +190,9 @@ pub struct AppState {
     notification_sender: Option<notifications::NotificationSender>,
     attachment_store: Option<AttachmentStore>,
     email_attachment_store: Option<email_attachments::EmailAttachmentStore>,
+    /// Where this Hive's database lives, so a reload that carries a migration
+    /// can put its backup beside the operator's own.
+    database_directory: Option<Arc<PathBuf>>,
     legacy_database_path: Option<Arc<PathBuf>>,
     workspace_roots: Arc<Vec<PathBuf>>,
     maintenance_request_path: Option<Arc<PathBuf>>,
@@ -262,6 +266,7 @@ impl AppState {
             notification_sender: None,
             attachment_store: None,
             email_attachment_store: None,
+            database_directory: None,
             legacy_database_path: None,
             workspace_roots: Arc::new(Vec::new()),
             maintenance_request_path: None,
@@ -472,6 +477,14 @@ impl AppState {
     #[must_use]
     pub fn with_email_attachment_store(mut self, root: PathBuf) -> Self {
         self.email_attachment_store = Some(email_attachments::EmailAttachmentStore::new(root));
+        self
+    }
+
+    /// Configures where the database lives, so a migrating reload backs it up
+    /// beside the operator's own backups rather than somewhere new.
+    #[must_use]
+    pub fn with_database_directory(mut self, path: PathBuf) -> Self {
+        self.database_directory = Some(Arc::new(path));
         self
     }
 
