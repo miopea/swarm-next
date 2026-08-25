@@ -879,6 +879,26 @@ export async function fetchNotificationSettings(operatorToken: string): Promise<
   return response.json() as Promise<NotificationSettings>;
 }
 
+/**
+ * Tells the Hive the operator is looking at Needs you right now.
+ *
+ * The watermark this advances is what stops every push notification firing for
+ * the standing queue the moment they step away. So it must be called while the
+ * queue is genuinely ON SCREEN — never from a background poll, which would mark
+ * work seen that nobody read and silence the queue for good.
+ *
+ * Failure is ignored on purpose. Not recording a look means at worst one extra
+ * notification; surfacing an error here would put a banner over the queue they
+ * came to read.
+ */
+export async function recordAttentionSeen(operatorToken: string): Promise<void> {
+  try {
+    await authenticatedFetch(operatorToken, "/api/v1/notifications/seen", { method: "POST" });
+  } catch {
+    // Nothing useful to tell them, and nothing broken from their side.
+  }
+}
+
 export async function setNotificationPolicy(
   operatorToken: string,
   policy: NotificationPolicy,

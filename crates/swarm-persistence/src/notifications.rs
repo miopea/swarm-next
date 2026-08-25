@@ -281,11 +281,18 @@ impl TaskStore {
             return Err(TaskStoreError::NotificationQueueFull);
         }
         let inserted = transaction.execute(
+            // A FRESH SUBJECT PER TEST, so two tests never collapse into one.
+            // Deduplication is now keyed on subject_key, and the old key was
+            // (decision_id, subscription_id) with decision_id NULL — which
+            // SQLite treats as distinct every time, so repeated tests always
+            // queued. A constant key here would silently swallow the second
+            // press of a button whose entire purpose is proving a device works.
             "INSERT INTO notification_deliveries (
-                 operator_id, subscription_id, decision_id, urgency, kind,
-                 state, attempts, available_at, created_at
+                 operator_id, subscription_id, decision_id, subject_key, urgency,
+                 kind, state, attempts, available_at, created_at
              )
-             SELECT operator_id, device_id, NULL, 'time_sensitive', 'test',
+             SELECT operator_id, device_id, NULL,
+                    'test:' || lower(hex(randomblob(8))), 'time_sensitive', 'test',
                     'queued', 0, ?2, ?2
              FROM notification_subscriptions WHERE operator_id = ?1",
             params![operator_id.to_string(), now],
@@ -312,10 +319,11 @@ impl TaskStore {
         let operator_id = local_operator_id(&transaction)?;
         let inserted = transaction.execute(
             "INSERT INTO notification_deliveries (
-                 operator_id, subscription_id, decision_id, urgency, kind,
-                 state, attempts, available_at, created_at
+                 operator_id, subscription_id, decision_id, subject_key, urgency,
+                 kind, state, attempts, available_at, created_at
              )
-             SELECT operator_id, device_id, NULL, 'time_sensitive', 'test',
+             SELECT operator_id, device_id, NULL,
+                    'test:' || lower(hex(randomblob(8))), 'time_sensitive', 'test',
                     'queued', 0, ?3, ?3
              FROM notification_subscriptions
              WHERE operator_id = ?1 AND device_id = ?2",
@@ -329,6 +337,88 @@ impl TaskStore {
     ///
     /// # Errors
     /// Returns persistence failures.
+    /// The recorded watermark, for tests that need to see it moved.
+    ///
+    /// # Errors
+    /// Returns a persistence error when it cannot be read.
+    #[doc(hidden)]
+    pub fn attention_watermark_for_test(&self) -> Result<i64, TaskStoreError> {
+        let connection = self.connection()?;
+        let operator_id = local_operator_id(&connection)?;
+        attention_watermark_from(&connection, operator_id)
+    }
+
+    /// Sweeps the Needs-you queue and queues pushes for anything new.
+    ///
+    /// EXISTS BECAUSE NOTHING SWEPT ON A TIMER. The pending sweep ran only when
+    /// presence or policy CHANGED, so it caught "they walked away and work was
+    /// already waiting" and missed "they were already away and work arrived" —
+    /// which is the case actually reported: the operator went out mid-session
+    /// and work sat. Without a periodic caller the widening would have been
+    /// untestable in the field and silent in the one scenario it was built for.
+    ///
+    /// Cheap and idempotent: `INSERT OR IGNORE` against a subject key, so
+    /// running it every tick queues each item once and then does nothing.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the queue cannot be read or written.
+    pub fn sweep_attention_notifications(&self, now: i64) -> Result<usize, TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        // WITHDRAW BEFORE QUEUEING. Retraction used to happen only when
+        // something claimed, so an item handled between the queueing and the
+        // next claim stayed on the queue waiting to be sent. On a Hive whose
+        // operator is away — the case this whole path serves — claims are
+        // exactly what is not happening, so "cancel on claim" is the weakest
+        // possible moment to do it.
+        cancel_ineligible_deliveries(&transaction, now)?;
+        let queued = enqueue_pending_notifications(&transaction, now)?;
+        transaction.commit()?;
+        Ok(queued)
+    }
+
+    /// Records that the operator has just looked at Needs you.
+    ///
+    /// This is the anti-shouting mechanism, so it matters WHEN it is called:
+    /// while the queue is actually on screen, not on every poll. Calling it
+    /// from a background refresh would mark work seen that nobody read, and
+    /// then nothing would ever fire.
+    ///
+    /// Per operator, never per device or per tab — they use more than one
+    /// window, and a per-tab watermark would re-notify for work they read on
+    /// the other screen an hour ago.
+    ///
+    /// Queued pushes for work they are looking at RIGHT NOW are withdrawn in
+    /// the same breath. Walking away from a queue you just read should not be
+    /// followed by a buzz about it.
+    ///
+    /// # Errors
+    /// Returns a persistence error when the watermark cannot be written.
+    pub fn record_attention_seen(&self, now: i64) -> Result<(), TaskStoreError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let operator_id = local_operator_id(&transaction)?;
+        transaction.execute(
+            "INSERT INTO operator_attention_watermarks (operator_id, seen_at)
+             VALUES (?1, ?2)
+             ON CONFLICT(operator_id) DO UPDATE SET seen_at = excluded.seen_at
+             WHERE excluded.seen_at > operator_attention_watermarks.seen_at",
+            params![operator_id.to_string(), now],
+        )?;
+        let live: Vec<String> = crate::attention::needs_you_subjects(&transaction, now)?
+            .into_iter()
+            .map(|subject| subject.subject_key)
+            .collect();
+        transaction.execute(
+            "DELETE FROM notification_deliveries
+             WHERE kind <> 'test'
+               AND subject_key IN (SELECT value FROM json_each(?1))",
+            params![serde_json::to_string(&live).unwrap_or_else(|_| "[]".to_owned())],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn recover_notification_deliveries(&self, now: i64) -> Result<usize, TaskStoreError> {
         let connection = self.connection()?;
         let removed = connection.execute(
@@ -354,7 +444,7 @@ impl TaskStore {
     ) -> Result<Vec<NotificationDispatch>, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        cancel_ineligible_decision_deliveries(&transaction, now)?;
+        cancel_ineligible_deliveries(&transaction, now)?;
         let deliveries = {
             let mut statement = transaction.prepare(
                 "SELECT n.id, n.subscription_id, s.endpoint, s.p256dh, s.auth,
@@ -533,6 +623,19 @@ pub(super) fn enqueue_decision_notifications(
         .map_err(Into::into)
 }
 
+/// Queues a push for everything waiting on the operator that they have not
+/// already seen.
+///
+/// PARITY IS THE RULE, and it is the operator's: "If it makes it to Needs You
+/// then I should see it." So this no longer selects decisions and ignores the
+/// other four sources — it walks the same queue the control room draws.
+///
+/// WHAT KEEPS IT QUIET is no longer WHICH sources are eligible, because they
+/// all are. It is the watermark: only work that arrived since they last looked
+/// at the queue can fire. Without that, turning on parity would notify for
+/// every item already sitting on the board the moment they stepped away, which
+/// is precisely the "trains you to ignore alerts" failure that is harder to
+/// reverse than silence.
 pub(super) fn enqueue_pending_notifications(
     transaction: &Transaction<'_>,
     now: i64,
@@ -543,48 +646,126 @@ pub(super) fn enqueue_pending_notifications(
     if presence.mode == PresenceMode::AtHive || policy == NotificationPolicy::Off {
         return Ok(0);
     }
-    let available = available_delivery_slots(transaction)?;
+    let mut available = available_delivery_slots(transaction)?;
     if available <= 0 {
         return Ok(0);
     }
-    transaction
-        .execute(
+    let seen_at = attention_watermark(transaction, operator_id)?;
+    let mut queued = 0;
+    for subject in crate::attention::needs_you_subjects(transaction, now)? {
+        if available <= 0 {
+            break;
+        }
+        // Already on the board when they last looked, so it is not news.
+        if subject.created_at <= seen_at {
+            continue;
+        }
+        if !policy.allows(urgency_of(&subject.urgency), presence.mode) {
+            continue;
+        }
+        let inserted = transaction.execute(
             "INSERT OR IGNORE INTO notification_deliveries (
-                 operator_id, subscription_id, decision_id, urgency, kind,
-                 state, attempts, available_at, created_at
+                 operator_id, subscription_id, decision_id, subject_key, urgency,
+                 kind, state, attempts, available_at, created_at
              )
-             SELECT s.operator_id, s.device_id, d.id, d.urgency, 'decision',
-                    'queued', 0, ?2, ?2
-             FROM notification_subscriptions s
-             JOIN decision_requests d ON d.hive_id = (
-                 SELECT hive_id FROM local_hive_identity WHERE singleton = 1
-             )
-             WHERE s.operator_id = ?1 AND d.state = 'pending'
-               AND (?3 = 'all_decisions' OR d.urgency = 'time_sensitive')
-             ORDER BY d.urgency = 'time_sensitive' DESC, d.created_at DESC, s.updated_at DESC
-             LIMIT ?4",
-            params![operator_id.to_string(), now, policy.to_string(), available],
-        )
-        .map_err(Into::into)
+             SELECT operator_id, device_id, ?2, ?3, ?4, ?5, 'queued', 0, ?6, ?6
+             FROM notification_subscriptions
+             WHERE operator_id = ?1
+             ORDER BY updated_at DESC
+             LIMIT ?7",
+            params![
+                operator_id.to_string(),
+                subject.decision_id(),
+                subject.subject_key,
+                subject.urgency,
+                subject.kind,
+                now,
+                available,
+            ],
+        )?;
+        available -= i64::try_from(inserted).unwrap_or(0);
+        queued += inserted;
+    }
+    Ok(queued)
 }
 
-fn cancel_ineligible_decision_deliveries(
+/// When the operator last looked at Needs you, or the beginning of time.
+///
+/// A Hive that has never recorded a look treats everything as news, which is
+/// the safe direction: the failure it avoids is silence about work nobody has
+/// seen.
+fn attention_watermark(
+    transaction: &Transaction<'_>,
+    operator_id: OperatorId,
+) -> Result<i64, TaskStoreError> {
+    attention_watermark_from(transaction, operator_id)
+}
+
+fn attention_watermark_from(
+    connection: &Connection,
+    operator_id: OperatorId,
+) -> Result<i64, TaskStoreError> {
+    Ok(connection
+        .query_row(
+            "SELECT seen_at FROM operator_attention_watermarks WHERE operator_id = ?1",
+            params![operator_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(0))
+}
+
+/// Only decisions carry an urgency of their own; everything else is normal.
+fn urgency_of(urgency: &str) -> DecisionUrgency {
+    if urgency == "time_sensitive" {
+        DecisionUrgency::TimeSensitive
+    } else {
+        DecisionUrgency::Normal
+    }
+}
+
+/// Withdraws queued pushes that no longer describe anything waiting.
+///
+/// A notification for work that has since been handled is worse than none: it
+/// sends the operator to a queue that has already moved on, and doing that
+/// twice teaches them the buzz is not worth walking back for.
+///
+/// Now keyed on the SUBJECT rather than on a decision id, so it covers all five
+/// sources. The old version could only retract decision deliveries — for the
+/// other four there was nothing to retract, because nothing could be queued.
+fn cancel_ineligible_deliveries(
     transaction: &Transaction<'_>,
     now: i64,
 ) -> Result<(), TaskStoreError> {
     let operator_id = local_operator_id(transaction)?;
     let policy = notification_policy(transaction, operator_id)?;
     let presence = operator_presence_from_connection(transaction, now)?;
-    transaction.execute(
+    // Test deliveries are the operator proving their own device works, so they
+    // answer to the policy but not to the queue.
+    if presence.mode == PresenceMode::AtHive || policy == NotificationPolicy::Off {
+        transaction.execute(
+            "DELETE FROM notification_deliveries WHERE kind <> 'test'",
+            [],
+        )?;
+        return Ok(());
+    }
+    let live: Vec<String> = crate::attention::needs_you_subjects(transaction, now)?
+        .into_iter()
+        .map(|subject| subject.subject_key)
+        .collect();
+    let mut statement = transaction.prepare(
         "DELETE FROM notification_deliveries
-         WHERE kind = 'decision' AND (
-             decision_id NOT IN (SELECT id FROM decision_requests WHERE state = 'pending')
-             OR ?1 = 'at_hive'
-             OR ?2 = 'off'
-             OR (?2 = 'important_only' AND urgency <> 'time_sensitive')
-         )",
-        params![presence.mode.to_string(), policy.to_string()],
+         WHERE kind <> 'test'
+           AND (
+               subject_key NOT IN (SELECT value FROM json_each(?1))
+               OR (?2 = 'important_only' AND urgency <> 'time_sensitive'
+                   AND kind = 'decision')
+           )",
     )?;
+    statement.execute(params![
+        serde_json::to_string(&live).unwrap_or_else(|_| "[]".to_owned()),
+        policy.to_string(),
+    ])?;
     Ok(())
 }
 
@@ -685,6 +866,195 @@ mod tests {
             questions: &[],
             deadline: None,
         }
+    }
+
+    /// A completed task whose sender was never answered.
+    ///
+    /// Written as rows rather than driven through the lifecycle because what is
+    /// under test is the notification path, and the shape that reaches it is
+    /// "completed, linked to a message, with no delivered reply" — the same
+    /// predicate `completed_email_tasks_awaiting_a_reply` selects on.
+    fn seed_unanswered_email(store: &TaskStore, received_at: i64) -> uuid::Uuid {
+        let task = uuid::Uuid::now_v7();
+        let connection = store.connection().unwrap();
+        // A task belongs to this Hive; a trigger enforces it.
+        let hive: String = connection
+            .query_row(
+                "SELECT hive_id FROM local_hive_identity WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO tasks (id, title, workspace, state, hive_id, created_at, updated_at)
+                 VALUES (?1, 'Confirm email address', '/workspace', 'completed', ?3, ?2, ?2)",
+                params![task.to_string(), received_at, hive],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO email_message_links (
+                     id, task_id, integration_id, message_id, conversation_id,
+                     sender_name, sender_address, received_at, web_url
+                 ) VALUES (?1, ?2, 'operator-outlook', ?1, 'thread', 'A Sender',
+                           'sender@example.org', ?3, 'https://example.org/message')",
+                params![task.to_string(), task.to_string(), received_at],
+            )
+            .unwrap();
+        drop(connection);
+        task
+    }
+
+    /// A source that is not a decision can now reach the operator's phone.
+    ///
+    /// This is the whole point of the widening, and it is the operator's own
+    /// ruling: "If it makes it to Needs You then I should see it." Before this,
+    /// an email nobody had answered could sit on the queue indefinitely while
+    /// push stayed silent, because the schema could not represent it and the
+    /// enqueue never looked. One did sit, for eleven days.
+    #[test]
+    fn an_unanswered_email_reaches_the_phone_now_that_decisions_are_not_the_only_source() {
+        let store = TaskStore::in_memory().unwrap();
+        let device = PresenceDeviceId::new();
+        store
+            .save_notification_subscription(
+                &subscription(device, "https://fcm.googleapis.com/fcm/send/email"),
+                10,
+            )
+            .unwrap();
+        store
+            .set_notification_policy(NotificationPolicy::AllDecisions, 11)
+            .unwrap();
+        store
+            .set_manual_presence(Some(PresenceMode::Away), 12)
+            .unwrap();
+        let task = seed_unanswered_email(&store, 100);
+        // The tick, which is the only thing that catches work arriving after
+        // they had already gone.
+        store.sweep_attention_notifications(150).unwrap();
+
+        let queued = store.claim_notification_deliveries(200).unwrap();
+
+        assert_eq!(queued.len(), 1, "the unanswered email must notify");
+        // Addressed by its own subject rather than by a decision it does not have.
+        assert!(queued[0].decision_id.is_none());
+        let _ = task;
+    }
+
+    /// Work already on the board when they last looked does not buzz.
+    ///
+    /// With every source eligible, source selection is no longer what keeps the
+    /// phone quiet — this is. Without it, turning on parity would fire for the
+    /// entire standing queue the moment the operator stepped away, and an alert
+    /// on every board change teaches them to ignore alerts. That failure is
+    /// harder to reverse than silence.
+    #[test]
+    fn only_work_newer_than_the_last_look_is_worth_waking_someone_for() {
+        let store = TaskStore::in_memory().unwrap();
+        let device = PresenceDeviceId::new();
+        store
+            .save_notification_subscription(
+                &subscription(device, "https://fcm.googleapis.com/fcm/send/seen"),
+                10,
+            )
+            .unwrap();
+        store
+            .set_notification_policy(NotificationPolicy::AllDecisions, 11)
+            .unwrap();
+        seed_unanswered_email(&store, 100);
+
+        // They read the queue at the Hive, then walked away.
+        store.record_attention_seen(150).unwrap();
+        store
+            .set_manual_presence(Some(PresenceMode::Away), 160)
+            .unwrap();
+        // Swept explicitly, so this cannot pass merely because nothing ran.
+        assert_eq!(store.sweep_attention_notifications(170).unwrap(), 0);
+
+        assert!(
+            store.claim_notification_deliveries(200).unwrap().is_empty(),
+            "work they already read must not follow them out of the building"
+        );
+    }
+
+    /// A notification for work that has since been handled is withdrawn.
+    ///
+    /// Sending someone back to a queue that has already moved on, twice,
+    /// teaches them the buzz is not worth walking back for.
+    ///
+    /// Counts the QUEUED ROW rather than claiming twice. The first draft of
+    /// this test claimed, handled the work, then claimed again and asserted
+    /// empty — and it passed with withdrawal disabled, because claiming moves a
+    /// row to 'dispatching' and the second claim only ever looks at 'queued'.
+    /// It proved nothing. The ablation caught that, which is the entire reason
+    /// for running one.
+    #[test]
+    fn a_queued_push_is_withdrawn_once_its_subject_is_handled() {
+        let store = TaskStore::in_memory().unwrap();
+        let device = PresenceDeviceId::new();
+        store
+            .save_notification_subscription(
+                &subscription(device, "https://fcm.googleapis.com/fcm/send/gone"),
+                10,
+            )
+            .unwrap();
+        store
+            .set_notification_policy(NotificationPolicy::AllDecisions, 11)
+            .unwrap();
+        store
+            .set_manual_presence(Some(PresenceMode::Away), 12)
+            .unwrap();
+        let task = seed_unanswered_email(&store, 100);
+        store.sweep_attention_notifications(150).unwrap();
+        assert_eq!(queued_rows(&store), 1, "the email should be queued first");
+
+        // The reply goes out, so the item leaves Needs you. A reply needs
+        // settled evidence first — the trigger enforces it — so this records a
+        // deployment the way finishing the work actually would.
+        let connection = store.connection().unwrap();
+        let operator: String = connection
+            .query_row("SELECT id FROM operators LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO task_deployments
+                     (id, task_id, environment, reference, deployed_at,
+                      approved_by_operator_id, recorded_at)
+                 VALUES (?1, ?1, 'production', 'abc123', ?2, ?3, ?2)",
+                params![task.to_string(), 155, operator],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO email_reply_deliveries
+                     (id, task_id, body, state, idempotency_key, delivered_at,
+                      provider_reply_id, available_at, created_at, updated_at)
+                 VALUES (?1, ?1, 'Answered.', 'delivered', ?1, ?2, 'reply-1', ?2, ?2, ?2)",
+                params![task.to_string(), 160],
+            )
+            .unwrap();
+        drop(connection);
+        store.sweep_attention_notifications(170).unwrap();
+
+        assert_eq!(
+            queued_rows(&store),
+            0,
+            "a push for handled work must be retracted rather than delivered"
+        );
+    }
+
+    /// Deliveries still sitting in the table, claimed or not.
+    fn queued_rows(store: &TaskStore) -> i64 {
+        store
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM notification_deliveries WHERE kind <> 'test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
     }
 
     #[test]
@@ -858,4 +1228,102 @@ mod tests {
         assert!(store.claim_notification_deliveries(131).unwrap().is_empty());
         assert_eq!(store.claim_notification_deliveries(132).unwrap().len(), 1);
     }
+}
+
+/// Widens notification deliveries past decisions, and remembers when the
+/// operator last looked at the queue.
+///
+/// THE OLD SHAPE COULD ONLY EVER CARRY DECISIONS, by construction:
+///
+///   kind TEXT NOT NULL CHECK (kind IN ('decision','test'))
+///   CHECK ((kind = 'decision' AND decision_id IS NOT NULL)
+///          OR (kind = 'test' AND decision_id IS NULL))
+///   UNIQUE(decision_id, subscription_id)
+///
+/// Every non-test row had to name a decision, and the deduplication key was a
+/// decision id, so there was nowhere to hang the other four sources of Needs
+/// you and no way to tell two of them apart if there had been. The operator's
+/// ruling is parity — "If it makes it to Needs You then I should see it" — so
+/// `subject_key` replaces `decision_id` as the identity of a delivery, and
+/// `decision_id` stays only for its cascade.
+///
+/// SQLite cannot alter a CHECK, so this is a rebuild. Existing rows keep their
+/// meaning: a queued decision delivery is still a queued decision delivery,
+/// addressed by the key it would be given today.
+///
+/// Guarded on the table existing and on the column being absent, because the
+/// migration tests rewind `user_version` WITHOUT rewinding the tables — they
+/// model a database restored from a backup or half-upgraded, and a migration
+/// that assumes the old shape is still there fails on exactly that.
+pub(super) fn migrate_attention_notifications(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    let widened: bool = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM pragma_table_info('notification_deliveries')
+             WHERE name = 'subject_key'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    let present: bool = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_master
+             WHERE type = 'table' AND name = 'notification_deliveries'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if present && !widened {
+        transaction.execute_batch(
+            "CREATE TABLE notification_deliveries_widened (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 operator_id TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+                 subscription_id TEXT NOT NULL
+                     REFERENCES notification_subscriptions(device_id) ON DELETE CASCADE,
+                 decision_id TEXT REFERENCES decision_requests(id) ON DELETE CASCADE,
+                 subject_key TEXT NOT NULL,
+                 urgency TEXT NOT NULL CHECK (urgency IN ('normal','time_sensitive')),
+                 kind TEXT NOT NULL CHECK (kind IN (
+                     'decision','assist','queen_automation','held_delivery',
+                     'email_reply','test'
+                 )),
+                 state TEXT NOT NULL CHECK (state IN ('queued','dispatching')),
+                 attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+                 available_at INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 CHECK ((kind = 'decision' AND decision_id IS NOT NULL)
+                        OR (kind <> 'decision' AND decision_id IS NULL)),
+                 UNIQUE(subject_key, subscription_id)
+             );
+             INSERT INTO notification_deliveries_widened (
+                 id, operator_id, subscription_id, decision_id, subject_key,
+                 urgency, kind, state, attempts, available_at, created_at
+             )
+             SELECT id, operator_id, subscription_id, decision_id,
+                    CASE WHEN kind = 'decision' THEN 'decision:' || decision_id
+                         ELSE 'test:' || id END,
+                    urgency, kind, state, attempts, available_at, created_at
+             FROM notification_deliveries;
+             DROP TABLE notification_deliveries;
+             ALTER TABLE notification_deliveries_widened
+                 RENAME TO notification_deliveries;",
+        )?;
+    }
+    // WHEN THE OPERATOR LAST LOOKED, per operator rather than per device.
+    //
+    // It cannot be per-tab or per-browser state: they use more than one window,
+    // and a watermark that resets per tab would re-notify for work they read an
+    // hour ago on the other screen.
+    //
+    // This is the whole defence against shouting. Under parity every source is
+    // eligible, so what keeps the phone quiet is no longer "which sources" but
+    // "newer than the last time they looked at the queue".
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS operator_attention_watermarks (
+             operator_id TEXT PRIMARY KEY REFERENCES operators(id) ON DELETE CASCADE,
+             seen_at INTEGER NOT NULL
+         );
+         PRAGMA user_version = 94;",
+    )
 }

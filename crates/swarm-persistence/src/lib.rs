@@ -18,6 +18,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 mod apiary;
+mod attention;
 mod coordinator;
 pub use coordinator::{
     AUTOMATIC_WAKE_BATCH_LIMIT, AssignedReadyWorkNotStartedCandidate, CoordinatorAttention,
@@ -145,7 +146,8 @@ const REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION: i64 = 90;
 const REVIEW_HOLD_SCHEMA_VERSION: i64 = 91;
 const SESSION_END_REASON_SCHEMA_VERSION: i64 = 92;
 const REPLY_ALLOWS_APPROVED_EXEMPTION_SCHEMA_VERSION: i64 = 93;
-const CURRENT_SCHEMA_VERSION: i64 = REPLY_ALLOWS_APPROVED_EXEMPTION_SCHEMA_VERSION;
+const ATTENTION_NOTIFICATION_SCHEMA_VERSION: i64 = 94;
+const CURRENT_SCHEMA_VERSION: i64 = ATTENTION_NOTIFICATION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -2484,6 +2486,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < REPLY_ALLOWS_APPROVED_EXEMPTION_SCHEMA_VERSION {
         email::migrate_reply_allows_approved_exemption(transaction)?;
+    }
+    if schema_version < ATTENTION_NOTIFICATION_SCHEMA_VERSION {
+        notifications::migrate_attention_notifications(transaction)?;
     }
     Ok(())
 }
@@ -5739,6 +5744,42 @@ mod tests {
             probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
                  WHERE type = 'trigger' AND name = 'email_reply_requires_completed_deployment'
                    AND sql LIKE '%task_completion_exemptions%')",
+        },
+        // A table REBUILD rather than an added column, so the undo restores the
+        // decision-only shape in full: the narrow kind CHECK, the constraint
+        // tying every non-test row to a decision, and the decision-keyed
+        // UNIQUE. Dropping the column alone would not model a pre-94 database,
+        // and SQLite would refuse anyway while a UNIQUE still names it.
+        SchemaStep {
+            table: "notification_deliveries",
+            artifact: "",
+            undo_sql: "DROP TABLE IF EXISTS notification_deliveries;
+                 CREATE TABLE notification_deliveries (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     operator_id TEXT NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+                     subscription_id TEXT NOT NULL
+                         REFERENCES notification_subscriptions(device_id) ON DELETE CASCADE,
+                     decision_id TEXT REFERENCES decision_requests(id) ON DELETE CASCADE,
+                     urgency TEXT NOT NULL CHECK (urgency IN ('normal','time_sensitive')),
+                     kind TEXT NOT NULL CHECK (kind IN ('decision','test')),
+                     state TEXT NOT NULL CHECK (state IN ('queued','dispatching')),
+                     attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 5),
+                     available_at INTEGER NOT NULL,
+                     created_at INTEGER NOT NULL,
+                     CHECK ((kind = 'decision' AND decision_id IS NOT NULL)
+                            OR (kind = 'test' AND decision_id IS NULL)),
+                     UNIQUE(decision_id, subscription_id)
+                 )",
+            probe_sql: "SELECT EXISTS(
+                 SELECT 1 FROM pragma_table_info('notification_deliveries')
+                 WHERE name = 'subject_key'
+             )",
+        },
+        SchemaStep {
+            table: "operator_attention_watermarks",
+            artifact: "",
+            undo_sql: "",
+            probe_sql: "",
         },
     ];
 

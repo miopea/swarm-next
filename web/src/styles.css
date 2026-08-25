@@ -33,6 +33,19 @@
      A token rather than a literal so the next accent change has one place to
      check the contrast. */
   --on-accent: #1b1205;
+  /* THE NEEDS-YOU COUNT GETS ITS OWN FILL, lighter than accent-strong.
+     Passing AA was not enough to make it readable. The operator reported the
+     badge as hard to read while it sat at 5.25:1 on #b77d12 — comfortably over
+     the 4.5:1 bar — because the count renders at .7rem, dropping to .63rem in
+     the narrow rail. WCAG's ratio does not model an 11px bold numeral on a
+     saturated mid-tone, where the ink and the ground share a hue and the glyph
+     turns to mush.
+     Lightening the GROUND rather than changing the ink takes it to 11.48:1,
+     which also brings light into line with dark's 10:1 instead of leaving one
+     theme half as legible as the other. The saturated amber stays as the ring,
+     so the badge still reads as attention rather than as another grey count. */
+  --attention-badge: #f0c674;
+  --attention-badge-ring: var(--accent-strong);
   --accent-line: color-mix(in srgb, var(--accent) 38%, var(--line));
   --gold: var(--accent);
   --honey: var(--accent);
@@ -95,6 +108,10 @@
   --accent-strong: #e9b74f;
   --accent-soft: #443b24;
   --on-accent: #1b1205;
+  /* Already 10:1 against the same ink, so dark keeps its accent as the fill.
+     The operator guessed dark was the worse of the two; it was the better. */
+  --attention-badge: #e9b74f;
+  --attention-badge-ring: #e9b74f;
   --good: #9aaa89;
   --busy: #7fd070;
   --with-operator: #b79bf0;
@@ -168,7 +185,7 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    the state survives losing any of them: weight, a filled accent ground, and
    a ring that reads even in forced-colours or greyscale. WCAG 2.1 AA — the
    count itself carries the meaning, colour only reinforces it. */
-.surface-nav button small[data-waiting] { color: var(--on-accent); background: var(--accent-strong); box-shadow: 0 0 0 1px var(--accent-strong); font-weight: 700; font-variant-numeric: tabular-nums; }
+.surface-nav button small[data-waiting] { color: var(--on-accent); background: var(--attention-badge); box-shadow: 0 0 0 1px var(--attention-badge-ring); font-weight: 700; font-variant-numeric: tabular-nums; }
 @media (forced-colors: active) { .surface-nav button small[data-waiting] { outline: 2px solid currentColor; outline-offset: 1px; } }
 .surface-nav button:hover { color: var(--text); background: color-mix(in srgb, var(--text) 5%, transparent); }
 .surface-nav button.selected { border-color: color-mix(in srgb, var(--good) 38%, transparent); color: var(--text); background: color-mix(in srgb, var(--good-soft) 68%, transparent); }

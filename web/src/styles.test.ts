@@ -309,3 +309,53 @@ test("gives the held-work card a track list matching its two children", () => {
   expect(stylesheet).toContain(".held-delivery-card { grid-template-columns: minmax(0, 1fr) auto; }");
   expect(stylesheet).toContain(".held-delivery-card { grid-template-columns: minmax(0, 1fr); }");
 });
+
+/**
+ * The Needs-you count must be legible, which is a stricter bar than AA.
+ *
+ * It sat at 5.25:1 — over the 4.5:1 AA bar for normal text — and the operator
+ * still reported it as hard to read. The ratio was never the whole story: the
+ * count renders at .7rem, and .63rem in the narrow rail, so it is an ~11px bold
+ * numeral whose ink and ground share a hue. WCAG's formula does not model that,
+ * and a badge nobody can read is a badge that stops being checked, which
+ * defeats the one thing this queue has to do.
+ *
+ * So this asserts 7:1 rather than 4.5:1, in BOTH themes. The second half
+ * matters independently: the previous pairing was 5.25:1 in light and 10:1 in
+ * dark, leaving one theme half as legible as the other with nothing to say so.
+ */
+test("the Needs-you count clears a small-text bar in both themes, not merely AA", () => {
+  const channel = (value: number) => {
+    const c = value / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = (hex: string) => {
+    const value = hex.replace("#", "");
+    const [r, g, b] = [0, 2, 4].map((at) => parseInt(value.slice(at, at + 2), 16));
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  };
+  const contrast = (a: string, b: string) => {
+    const [high, low] = [luminance(a), luminance(b)].sort((first, second) => second - first);
+    return (high + 0.05) / (low + 0.05);
+  };
+  const token = (name: string, from: string) => {
+    const found = from.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
+    if (!found) throw new Error(`--${name} must be a literal colour so its contrast can be checked`);
+    return found[1];
+  };
+  // This app stamps the theme explicitly rather than reading the OS, so the
+  // dark palette lives under a selector, not a media query.
+  const darkAt = stylesheet.indexOf(':root[data-theme="dark"]');
+  expect(darkAt).toBeGreaterThan(0);
+  const lightBlock = stylesheet.slice(0, darkAt);
+  const darkBlock = stylesheet.slice(darkAt);
+
+  const light = contrast(token("on-accent", lightBlock), token("attention-badge", lightBlock));
+  const dark = contrast(token("on-accent", darkBlock), token("attention-badge", darkBlock));
+
+  expect(light).toBeGreaterThanOrEqual(7);
+  expect(dark).toBeGreaterThanOrEqual(7);
+  // Neither theme may be markedly worse than the other. The old pairing passed
+  // AA in both and was still twice as legible in one as in the other.
+  expect(Math.min(light, dark) / Math.max(light, dark)).toBeGreaterThan(0.6);
+});

@@ -1157,6 +1157,13 @@ impl AppState {
         if let Err(error) = store.observe_queen_automation(unix_timestamp()) {
             tracing::warn!(message = %error, "Queen automation queue could not be observed");
         }
+        // Work that arrives while the operator is ALREADY away. Presence and
+        // policy changes sweep the queue, so walking out past waiting work was
+        // covered; nothing covered work turning up after they had gone, which
+        // is the case they actually reported.
+        if let Err(error) = store.sweep_attention_notifications(unix_timestamp()) {
+            tracing::warn!(message = %error, "the attention queue could not be swept");
+        }
         self.deliver_queen_automation(store, client).await;
     }
 
@@ -2877,6 +2884,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/notifications/settings",
             get(notifications::notification_settings).put(notifications::set_notification_policy),
+        )
+        .route(
+            "/api/v1/notifications/seen",
+            post(notifications::record_attention_seen),
         )
         .route(
             "/api/v1/orchestration/queen-policy",
@@ -15107,6 +15118,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Recording a look is authorised, reachable, and actually moves the
+    /// watermark.
+    ///
+    /// The watermark is the only thing keeping push quiet now that every
+    /// Needs-you source can notify, and it advances from exactly one place. A
+    /// route that 404s or silently no-ops would leave the queue permanently
+    /// noisy with nothing to show for it, so this checks the effect rather than
+    /// the status code alone.
+    #[tokio::test]
+    async fn recording_a_look_needs_authorising_and_moves_the_watermark() {
+        let store = TaskStore::in_memory().unwrap();
+        let state = AppState::default()
+            .with_terminal_host(HostClient::new("/unreachable/terminal.sock"), "secret")
+            .with_task_store(store.clone());
+        let app = router(state);
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/notifications/seen")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let before = store.attention_watermark_for_test().unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/notifications/seen")
+                    .header("authorization", "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(
+            store.attention_watermark_for_test().unwrap() > before,
+            "the look must be recorded, not merely accepted"
+        );
     }
 
     async fn authorized_get(app: Router, uri: &str) -> Response {

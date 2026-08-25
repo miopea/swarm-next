@@ -84,6 +84,7 @@ import {
   readTunnel,
   stopTunnel,
   type TunnelStatus,
+  recordAttentionSeen,
 } from "./api";
 import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
@@ -1168,6 +1169,24 @@ export function App() {
   const heldDeliveryAttentionCount = heldDeliveries.length > 0 ? 1 : 0;
   const attentionCount = pendingDecisionCount + pendingAssistCount + queenAutomationAttentionCount
     + heldDeliveryAttentionCount + awaitingReply.length;
+  // WHEN THEY ACTUALLY LOOKED. The watermark this advances is the only thing
+  // keeping push quiet now that every Needs-you source is eligible, so it is
+  // recorded from the surface being open and visible — never from a poll.
+  //
+  // document.visibilityState matters as much as the surface: a Needs-you tab
+  // left open behind a browser window is not someone reading it, and treating
+  // it as a look would silence the queue for as long as the tab existed.
+  useEffect(() => {
+    if (!operatorToken || surface !== "decisions") return undefined;
+    const mark = () => {
+      if (document.visibilityState === "visible") void recordAttentionSeen(operatorToken);
+    };
+    mark();
+    document.addEventListener("visibilitychange", mark);
+    return () => document.removeEventListener("visibilitychange", mark);
+    // attentionCount is a dependency on purpose: reading the queue, then having
+    // a new item arrive while still looking at it, is still having seen it.
+  }, [operatorToken, surface, attentionCount]);
   const orphanSessions = useMemo(
     () => sessions.filter((session) => session.running && !workers.some((worker) => worker.active_session_id === session.session_id)),
     [sessions, workers],

@@ -518,3 +518,20 @@ pub(super) async fn record_click_trace(
     );
     Ok(StatusCode::NO_CONTENT)
 }
+
+/// Records that the operator is looking at Needs you right now.
+///
+/// Called while the queue is ON SCREEN, not on every poll. That distinction is
+/// the whole value of the watermark: marking work seen that nobody read would
+/// silence the queue permanently, which is a worse failure than notifying too
+/// often because it is invisible.
+pub(super) async fn record_attention_seen(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers)?;
+    task_store(&state)?
+        .record_attention_seen(crate::unix_timestamp())
+        .map_err(|error| task_store_error(&error))?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
