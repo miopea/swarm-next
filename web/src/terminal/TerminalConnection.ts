@@ -24,7 +24,7 @@ export interface TerminalConnectionHandlers {
  * build output read as an unexplained interruption. The reason travels with
  * the snapshot so the cover can say which of these actually happened.
  */
-export type SnapshotReason = "attached" | "fell_behind" | "dropped_output";
+export type SnapshotReason = "attached" | "fell_behind" | "dropped_output" | "reattached";
 
 export interface TerminalSnapshot {
   sequence: number;
@@ -110,6 +110,19 @@ export class TerminalConnection {
   #grantAbortController: AbortController | undefined;
   #retryAttempt = 0;
   #sequence = 0;
+  /**
+   * Whether a surface is currently on screen to render into.
+   *
+   * xterm resolves a write only once it has RENDERED it, and a host element
+   * removed from the document cannot render — so every frame that arrived while
+   * the operator was elsewhere sat in #renderQueue behind one that could not
+   * finish. Coming back drained them in order, which is the "playing back at a
+   * faster speed until it gets back to live" that was reported. A page reload
+   * looked instant only because a fresh connection asks for a snapshot instead.
+   */
+  #rendering = true;
+  /** Whether anything was dropped while detached, so the screen is now stale. */
+  #missedWhileDetached = false;
   #hasCanonicalState = false;
   /**
    * Whether this device may set the terminal's size, as the server last said.
@@ -305,8 +318,36 @@ export class TerminalConnection {
     }
   }
 
+  /**
+   * Stops queueing frames that nothing can draw.
+   *
+   * Dropping rather than buffering is safe because the recovery path asks for a
+   * canonical snapshot, and a snapshot carries the scrollback as well as the
+   * visible screen — so nothing is lost that replaying would have preserved.
+   * It is also the operator's stated expectation: the terminal should be live
+   * unless they scrolled up themselves.
+   */
+  suspendRendering(): void {
+    this.#rendering = false;
+  }
+
+  /** Back on screen: take a snapshot if anything happened while it was away. */
+  resumeRendering(): void {
+    if (this.#rendering) return;
+    this.#rendering = true;
+    if (!this.#missedWhileDetached) return;
+    this.#missedWhileDetached = false;
+    this.#recoverFromSnapshot("reattached", "terminal is catching up to live");
+  }
+
   #enqueueBinaryFrame(frame: Uint8Array): void {
     if (this.#recovering) return;
+    if (!this.#rendering) {
+      // Nothing can draw this, and holding it only decides how long the
+      // catch-up takes when the operator returns.
+      this.#missedWhileDetached = true;
+      return;
+    }
     if (this.#pendingRenderBytes + frame.byteLength > MAX_PENDING_RENDER_BYTES) {
       this.#recoverFromSnapshot("fell_behind", "terminal renderer fell behind its bounded queue");
       return;

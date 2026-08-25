@@ -337,6 +337,71 @@ test("explicit disposal cancels reconnect ownership", async () => {
   expect(sockets).toHaveLength(1);
 });
 
+test("output arriving while nothing can draw it is dropped, not replayed", async () => {
+  // Reported: "when I leave the worker view and come back it is like the
+  // terminal is playing back what happened at a faster speed until it gets back
+  // to live". xterm resolves a write only once it has RENDERED it, and a host
+  // element removed from the document cannot render — so frames queued behind a
+  // write that could not finish, and returning drained them in order.
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(1n, 24, 80, "live"));
+  await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalledTimes(1));
+
+  connection.suspendRendering();
+  sockets[0].message(outputFrame(2n, "while away"));
+  sockets[0].message(outputFrame(3n, "and more"));
+  await Promise.resolve();
+  expect(handlers.onOutput).not.toHaveBeenCalled();
+
+  // Coming back does not replay them. It asks for the current screen, which
+  // carries the scrollback too, so nothing replaying would have preserved is
+  // lost.
+  connection.resumeRendering();
+  expect(handlers.onState).toHaveBeenCalledWith(
+    "disconnected",
+    expect.stringContaining("catching up to live"),
+  );
+  expect(handlers.onOutput).not.toHaveBeenCalled();
+});
+
+test("coming back to a terminal that produced nothing does not disturb it", async () => {
+  // Leaving and returning must not cost a reconnect on its own, or every glance
+  // at another worker would churn the socket.
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(1n, 24, 80, "live"));
+  await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalledTimes(1));
+
+  connection.suspendRendering();
+  connection.resumeRendering();
+
+  expect(handlers.onState).not.toHaveBeenCalledWith(
+    "disconnected",
+    expect.stringContaining("catching up to live"),
+  );
+  expect(sockets).toHaveLength(1);
+});
+
+test("output resumes normally once a surface is back on screen", async () => {
+  const { connection, handlers, sockets } = harness();
+  connection.start(handlers);
+  await vi.waitFor(() => expect(sockets).toHaveLength(1));
+  sockets[0].open();
+  sockets[0].message(snapshotFrame(1n, 24, 80, "live"));
+  await vi.waitFor(() => expect(handlers.onSnapshot).toHaveBeenCalledTimes(1));
+
+  connection.suspendRendering();
+  connection.resumeRendering();
+  sockets[0].message(outputFrame(2n, "after"));
+
+  await vi.waitFor(() => expect(handlers.onOutput).toHaveBeenCalledTimes(1));
+});
+
 test("an open-close loop cannot reset the bounded reconnect budget", async () => {
   vi.useFakeTimers();
   const { connection, handlers, sockets } = harness([1, 1]);

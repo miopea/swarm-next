@@ -106,8 +106,35 @@ test("focus waits through a hidden canonical restore until the terminal is focus
 });
 
 function fakeConnection(): TerminalConnectionLike {
-  return { start: vi.fn(), sendInput: vi.fn(), resize: vi.fn(), dispose: vi.fn() };
+  return {
+    start: vi.fn(),
+    sendInput: vi.fn(),
+    resize: vi.fn(),
+    dispose: vi.fn(),
+    suspendRendering: vi.fn(),
+    resumeRendering: vi.fn(),
+  };
 }
+
+test("the connection is told when there is, and is not, a surface to draw into", () => {
+  // detach() leaves the surface open and only removes its host from the
+  // document. xterm cannot render into a detached element and resolves a write
+  // only once it has rendered, so frames arriving now would queue behind a
+  // write that cannot finish — and replay on return. The connection has to know.
+  const surface = fakeSurface();
+  const connection = fakeConnection();
+  const controller = new TerminalController(() => surface, () => connection);
+  const mount = document.createElement("div");
+
+  controller.attach(mount);
+  expect(connection.resumeRendering).toHaveBeenCalledTimes(1);
+
+  controller.detach();
+  expect(connection.suspendRendering).toHaveBeenCalledTimes(1);
+
+  controller.attach(mount);
+  expect(connection.resumeRendering).toHaveBeenCalledTimes(2);
+});
 
 test("view detach does not dispose, reopen, or reconnect a terminal", async () => {
   const surface = fakeSurface();

@@ -33,6 +33,13 @@ export interface TerminalConnectionLike {
    * that does not model the claim behaves as it did before — owning it.
    */
   readonly ownsGeometry?: boolean;
+  /**
+   * Told when there is, and is not, a surface on screen to draw into.
+   *
+   * Optional so a test double that does not model it behaves as it did before.
+   */
+  suspendRendering?(): void;
+  resumeRendering?(): void;
 }
 
 export type TerminalSurfaceFactory = () => TerminalSurface;
@@ -80,6 +87,7 @@ export class TerminalController {
       this.#surface.open(this.#host);
       this.#opened = true;
     }
+    this.#connection.resumeRendering?.();
     if (this.#started) {
       this.#applyPendingFocus();
       this.#refitWhenAttached();
@@ -89,6 +97,10 @@ export class TerminalController {
   }
 
   detach(): void {
+    // The surface stays open — only its host leaves the document. xterm cannot
+    // render into a detached element, so frames arriving now would queue behind
+    // a write that cannot finish and replay on return.
+    this.#connection.suspendRendering?.();
     this.#host.remove();
   }
 
