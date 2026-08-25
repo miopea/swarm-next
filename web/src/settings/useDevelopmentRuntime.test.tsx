@@ -18,6 +18,7 @@ test("detects a newly pulled working-copy revision while Settings remains open",
     reload_available: reloadAvailable,
     source_revision: reloadAvailable ? "newrevision123" : "oldrevision123",
     source_dirty: false,
+    deployed_source_published: true,
   })));
   vi.stubGlobal("fetch", fetch);
 
@@ -45,6 +46,7 @@ test("keeps what it knew while the API is restarting under the reload", async ()
       reload_available: false,
       source_revision: "newrevision123",
       source_dirty: false,
+      deployed_source_published: true,
     }))
     : Promise.reject(new Error("Runtime request returned 502")));
   vi.stubGlobal("fetch", fetch);

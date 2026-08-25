@@ -295,6 +295,8 @@ export type DevelopmentRuntime = {
   deployed_source_revision?: string | null;
   source_revision: string | null;
   source_dirty: boolean;
+  /** Whether the running revision exists on a remote, and so survives losing this machine. */
+  deployed_source_published: boolean;
 };
 /** One release the origin currently offers. Absent from the manifest means withdrawn. */
 export type ReleaseOffer = {

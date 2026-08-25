@@ -15,6 +15,7 @@ test("explains a failed build without implying that workers or the current app s
     deployed_source_revision: "76543210fedc",
     source_revision: "abcdef012345",
     source_dirty: false,
+    deployed_source_published: true,
   }} />);
 
   const status = screen.getByLabelText("App and API status");
@@ -35,6 +36,7 @@ test("names both revisions while a safe app reload is available", () => {
     deployed_source_revision: "76543210fedc",
     source_revision: "abcdef012345",
     source_dirty: false,
+    deployed_source_published: true,
   }} />);
 
   expect(screen.getByLabelText("App and API status")).toHaveTextContent(
@@ -51,6 +53,7 @@ test("explains that the running build matches the polled working copy", () => {
     deployed_source_revision: "abcdef012345",
     source_revision: "abcdef012345",
     source_dirty: false,
+    deployed_source_published: true,
   }} />);
 
   const status = screen.getByLabelText("App and API status");
@@ -69,6 +72,7 @@ test("blocks an older or unrelated development checkout", () => {
     deployed_source_revision: "76543210fedc",
     source_revision: "abcdef012345",
     source_dirty: false,
+    deployed_source_published: true,
   }} />);
 
   const status = screen.getByLabelText("App and API status");
@@ -90,6 +94,7 @@ test("shows a build in progress the way the worker engine card does", () => {
     deployed_source_revision: "76543210fedc",
     source_revision: "abcdef012345",
     source_dirty: false,
+    deployed_source_published: true,
   }} />);
 
   const status = screen.getByLabelText("App and API status");
@@ -108,6 +113,7 @@ test("separates a build that has been asked for from one that is running", () =>
     deployed_source_revision: "76543210fedc",
     source_revision: "abcdef012345",
     source_dirty: false,
+    deployed_source_published: true,
   }} />);
 
   expect(screen.getByLabelText("App and API status")).toHaveTextContent("Starting the App and API build…");
@@ -125,6 +131,7 @@ test("holds its place while the API restarts under the build", () => {
     deployed_source_revision: "76543210fedc",
     source_revision: "abcdef012345",
     source_dirty: false,
+    deployed_source_published: true,
   }} />);
 
   const status = screen.getByLabelText("App and API status");
@@ -144,11 +151,56 @@ test("confirms the last build landed, even while offering the next one", () => {
     deployed_source_revision: "a50fcb465413",
     source_revision: "9668d65abcde",
     source_dirty: false,
+    deployed_source_published: true,
   }} />);
 
   const status = screen.getByLabelText("App and API status");
   expect(status).toHaveTextContent("The last build completed, and revision a50fcb4 is serving this page");
   expect(status).toHaveTextContent("Build and switch the browser and API to working-copy revision 9668d65");
+});
+
+/**
+ * The running code exists only on this machine, and nothing said so.
+ *
+ * A reload builds from the local checkout — right for a tool whose developer is
+ * its operator, and it makes the develop-and-reload loop work. What was
+ * invisible is the consequence: this Hive ran a commit that was on no remote
+ * for about twenty minutes. Both a worker and Queen reported that work as
+ * "pushed, not deployed" when it was deployed and not pushed. Committed, pushed
+ * and deployed are three claims, and the surface carried only the third.
+ */
+test("says when the running revision exists only on this machine", () => {
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "ready",
+    reload_available: false,
+    deployed_source_revision: "a50fcb465413",
+    source_revision: "a50fcb465413",
+    source_dirty: false,
+    deployed_source_published: false,
+  }} />);
+
+  const status = screen.getByLabelText("App and API status");
+  expect(status).toHaveTextContent("is not on any remote");
+  expect(status).toHaveTextContent("only on this machine");
+});
+
+test("says nothing about remotes once the running revision is pushed", () => {
+  // Reported, never gated: the warning clears on its own when the commit lands
+  // on a remote, without anyone dismissing anything.
+  render(<DevelopmentReloadAction busy={false} onReload={vi.fn()} runtime={{
+    enabled: true,
+    version: "0.1.0-dev-123456789abc-20260815040000-10",
+    state: "ready",
+    reload_available: false,
+    deployed_source_revision: "a50fcb465413",
+    source_revision: "a50fcb465413",
+    source_dirty: false,
+    deployed_source_published: true,
+  }} />);
+
+  expect(screen.getByLabelText("App and API status")).not.toHaveTextContent("only on this machine");
 });
 
 test("says nothing about a last build when none has run", () => {
@@ -160,6 +212,7 @@ test("says nothing about a last build when none has run", () => {
     deployed_source_revision: "a50fcb465413",
     source_revision: "9668d65abcde",
     source_dirty: false,
+    deployed_source_published: true,
   }} />);
 
   expect(screen.getByLabelText("App and API status")).not.toHaveTextContent("The last build completed");
@@ -177,6 +230,7 @@ test("says uncommitted changes are the reason, not a revision that reads identic
     deployed_source_revision: "ed715fe3c3f3",
     source_revision: "ed715fe3c3f3",
     source_dirty: true,
+    deployed_source_published: true,
   }} />);
 
   const status = screen.getByLabelText("App and API status");

@@ -762,6 +762,13 @@ impl AgentMcp {
                 "running_revision": running_revision,
                 "checkout_revision": source.as_ref().map(|status| status.revision.clone()),
                 "checkout_dirty": source.as_ref().is_some_and(|status| status.dirty),
+                // Whether the RUNNING revision exists on a remote. Committed,
+                // pushed and deployed are three claims; this surface used to
+                // carry only the third, so a reader could verify code was live
+                // and still be wrong about whether it had left the machine.
+                "running_revision_published": source
+                    .as_ref()
+                    .is_some_and(|status| status.published),
                 "state": crate::runtime::development_reload_state_for_source(
                     &self.state,
                     source.as_ref().map(|status| status.revision.as_str()),

@@ -43,6 +43,24 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
   // reload anyway reads as nonsense.
   const uncommittedOnly = runtime.source_dirty
     && runtime.source_revision === runtime.deployed_source_revision;
+  /**
+   * The running code exists only on this machine.
+   *
+   * A reload builds from the local checkout, which is what makes the
+   * develop-and-reload loop work. What was invisible is the consequence: this
+   * Hive ran a commit that existed on no remote for about twenty minutes, and
+   * both a worker and Queen reported it as "pushed, not deployed" when it was
+   * deployed and not pushed. Committed, pushed and deployed are three claims;
+   * the surface carried only the third.
+   *
+   * Reported, not gated — refusing would break the loop this exists to serve.
+   */
+  const unpublished = runtime.deployed_source_revision && !runtime.deployed_source_published ? (
+    <p className="development-build-unpublished" role="status">
+      Revision {runningRevision} is running but is not on any remote, so it exists
+      only on this machine. Push it to make it recoverable.
+    </p>
+  ) : null;
   const lastBuildLanded = runtime.state === "ready" ? (
     <p className="development-build-landed" role="status">
       The last build completed, and revision {runningRevision} is serving this page.
@@ -83,12 +101,12 @@ export default function DevelopmentReloadAction({ busy, runtime, reachable = tru
     </article>
   );
   if (!runtime.reload_available) {
-    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Running build matches the working copy</strong></div><span className="runtime-status-badge current">Current</span></header><p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(healthVersion ?? runtime.version)}</p><p>Active revision {runningRevision} matches the product code in this checkout. No App/API build is waiting.</p><small>Swarm checks the working copy every 15 seconds. When product code changes, you can build and activate it without restarting Claude, Codex, or the worker engine.</small></article>;
+    return <article className="runtime-subsystem-card runtime-subsystem-current development-reload-action" aria-label="App and API status"><header><div><span className="runtime-component-name">App and API</span><strong>Running build matches the working copy</strong></div><span className="runtime-status-badge current">Current</span></header><p className="runtime-version"><strong>Installed</strong> {runtimeVersionIdentity(healthVersion ?? runtime.version)}</p><p>Active revision {runningRevision} matches the product code in this checkout. No App/API build is waiting.</p>{unpublished}<small>Swarm checks the working copy every 15 seconds. When product code changes, you can build and activate it without restarting Claude, Codex, or the worker engine.</small></article>;
   }
   return (
     <article className="runtime-subsystem-card runtime-subsystem-safe development-reload-action" aria-label="App and API status">
       <header><div><span className="runtime-component-name">App and API</span><strong>Development reload available</strong></div><span className="runtime-status-badge safe">Workers stay online</span></header>
-      {lastBuildLanded}
+      {lastBuildLanded}{unpublished}
       <p>{uncommittedOnly
         ? <>Revision {runningRevision} is active, and the working copy has uncommitted changes on top of it. Building picks those up.</>
         : <>Revision {runningRevision} is active. Build and switch the browser and API to working-copy revision {workingRevision}.</>}</p>

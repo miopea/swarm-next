@@ -42,6 +42,10 @@ struct TerminalRuntimeLimits {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "a response shape: each flag is an independent fact the reload card renders"
+)]
 struct DevelopmentRuntimeResponse {
     enabled: bool,
     version: &'static str,
@@ -50,6 +54,9 @@ struct DevelopmentRuntimeResponse {
     deployed_source_revision: Option<String>,
     source_revision: Option<String>,
     source_dirty: bool,
+    /// Whether the running revision exists on a remote, so the operator can see
+    /// that their Hive is on code that lives only on this machine.
+    deployed_source_published: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -202,17 +209,38 @@ pub(super) async fn development(
                 .is_some_and(|status| status.reload_available),
             deployed_source_revision: build_source_revision(),
             source_revision: source.as_ref().map(|status| status.revision.clone()),
-            source_dirty: source.is_some_and(|status| status.dirty),
+            source_dirty: source.as_ref().is_some_and(|status| status.dirty),
+            deployed_source_published: source.is_some_and(|status| status.published),
         }),
     )
         .into_response())
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "four independent facts about one checkout; collapsing them would hide which is which"
+)]
 pub(super) struct DevelopmentSourceStatus {
     pub(super) revision: String,
     pub(super) dirty: bool,
     pub(super) reload_available: bool,
     pub(super) aligned: bool,
+    /// Whether the RUNNING revision exists on a remote, and so survives losing
+    /// this machine.
+    ///
+    /// A reload builds from the local checkout, which is what makes the
+    /// develop-and-reload loop work and is right for a tool whose developer is
+    /// its operator. What was invisible is the consequence: on 2026-08-25 this
+    /// Hive ran a commit that existed on no remote for about twenty minutes,
+    /// and nothing said so. Both a worker and Queen reported that work as
+    /// "pushed, not deployed" when it was in fact deployed and not pushed —
+    /// committed, pushed and deployed are three claims, and the surface only
+    /// carried the third.
+    ///
+    /// FALSE WHEN UNKNOWN, deliberately. A wrong "unpushed" costs a glance; a
+    /// wrong "published" costs the code if the machine is lost. The cheap error
+    /// is the one to make.
+    pub(super) published: bool,
 }
 
 pub(super) fn development_source_status(state: &AppState) -> Option<DevelopmentSourceStatus> {
@@ -249,11 +277,24 @@ pub(super) fn development_source_status_for(
                 .status()
                 .is_ok_and(|status| !status.success())
         });
+    // ANY remote ref, not origin/main. The property that matters is whether
+    // this commit survives losing the machine, and a commit pushed to a feature
+    // branch is exactly as recoverable as one on main. Asking about main would
+    // report perfectly safe work as at risk.
+    //
+    // Remote-tracking refs can be stale if nothing has fetched, which can only
+    // make this answer "not published" for something that is — the safe
+    // direction.
+    let published = deployed_revision.is_some_and(|deployed| {
+        git_output(checkout, &["branch", "--remotes", "--contains", deployed])
+            .is_some_and(|refs| !refs.trim().is_empty())
+    });
     Some(DevelopmentSourceStatus {
         revision,
         dirty,
         reload_available: aligned && (dirty || committed_changes),
         aligned,
+        published,
     })
 }
 

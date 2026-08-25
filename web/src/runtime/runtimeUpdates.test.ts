@@ -21,6 +21,7 @@ const development = (over: Partial<DevelopmentRuntime>): DevelopmentRuntime => (
   reload_available: false,
   source_revision: "abcdef1234567",
   source_dirty: false,
+  deployed_source_published: true,
   ...over,
 });
 
@@ -138,6 +139,7 @@ test("does not report uncommitted work in progress as an update waiting", () => 
   const summary = runtimeUpdateSummary(health("same"), host("same"), development({
     reload_available: true,
     source_dirty: true,
+    deployed_source_published: true,
     source_revision: "ed715fe3c3f3",
     deployed_source_revision: "ed715fe3c3f3",
   }));
@@ -149,6 +151,7 @@ test("still reports an update when the working copy is a different commit", () =
   const summary = runtimeUpdateSummary(health("same"), host("same"), development({
     reload_available: true,
     source_dirty: true,
+    deployed_source_published: true,
     source_revision: "9668d65abcde",
     deployed_source_revision: "ed715fe3c3f3",
   }));
