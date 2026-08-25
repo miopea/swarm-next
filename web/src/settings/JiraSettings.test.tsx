@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import JiraSettings from "./JiraSettings";
@@ -7,6 +7,52 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+test("a connected project says when its mapping has fallen behind, and changes nothing", async () => {
+  // The real case: mapped 2026-08-15, and the rule reading "Waiting On" as
+  // blocked landed four days later. Nothing re-applies a recommendation, so the
+  // binding quietly got worse as the code got better.
+  const requests: { url: string; method: string }[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    requests.push({ url, method });
+    if (url.includes("/bindings/binding-1/mappings") && method === "GET") return ok([
+      { jira_status_id: "1", jira_status_name: "To Do", task_state: "ready" },
+      { jira_status_id: "4", jira_status_name: "Waiting On", task_state: "ready" },
+    ]);
+    if (url.includes("/bindings") && method === "GET") return ok([{
+      id: "binding-1", project_id: "10001", project_key: "WEB", project_name: "Website Services",
+      scope: "hive", hive_id: "hive-1", apiary_id: null, access_verified: true, workflow_mapped: true,
+      auto_sync_assigned: false,
+    }]);
+    if (url.includes("/projects/10001/statuses")) return ok([
+      { id: "1", name: "To Do", category_key: "new", recommended_task_state: "ready" },
+      { id: "4", name: "Waiting On", category_key: "new", recommended_task_state: "blocked" },
+    ]);
+    if (url.includes("/projects?")) return ok([]);
+    throw new Error(`Unexpected request: ${method} ${url}`);
+  }));
+
+  render(
+    <JiraSettings
+      operatorToken="operator-token"
+      readiness={{ configured: true, accepts_api_token: false, connection: "ready", account_name: "Bea" }}
+      unavailable={false}
+    />,
+  );
+
+  expect(await screen.findByText(/1 of this project's statuses map differently/)).toBeInTheDocument();
+  const drift = screen.getByRole("status", { name: "WEB status mapping drift" });
+  expect(within(drift).getByText("Waiting On")).toBeInTheDocument();
+  expect(within(drift).getByText("Ready")).toBeInTheDocument();
+  expect(within(drift).getByText("Blocked")).toBeInTheDocument();
+  // The one that still agrees is not reported.
+  expect(within(drift).queryByText("To Do")).not.toBeInTheDocument();
+
+  // Reports only. An override may have been deliberate, so nothing is written.
+  expect(requests.every((request) => request.method === "GET")).toBe(true);
 });
 
 test("discovers a project, maps its workflow, and connects it as a shared Hive pool", async () => {

@@ -2081,6 +2081,15 @@ kbd { display: inline-grid; min-width: 25px; min-height: 24px; margin-left: 4px;
 .email-configuration-fields { display: grid; grid-template-columns: minmax(145px, .65fr) minmax(230px, 1fr) minmax(230px, 1fr); gap: 10px; }
 .email-configuration-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .jira-binding-list, .jira-project-setup, .jira-workflow-setup, .jira-status-map { display: grid; gap: 10px; }
+/* Advisory, not an error: the mapping may have been chosen deliberately. Sits
+   under the binding it describes rather than shouting from the top of the page. */
+.jira-mapping-drift { display: grid; gap: 6px; margin-top: 10px; padding: 10px; border: 1px solid var(--accent-line); border-radius: var(--radius-sm); background: var(--honey-wash); }
+.jira-mapping-drift strong { font-size: .82rem; }
+.jira-mapping-drift small { color: var(--muted); font-size: .74rem; }
+.jira-mapping-drift ul { display: grid; gap: 5px; margin: 2px 0 0; padding: 0; list-style: none; }
+.jira-mapping-drift li { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; font-size: .76rem; }
+.jira-drift-status { min-width: 8ch; font-weight: 600; }
+
 .jira-binding-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 20px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel-raised); }
 .jira-binding-card > span { display: grid; min-width: 0; gap: 2px; }
 .jira-binding-card > span:last-child { text-align: right; }

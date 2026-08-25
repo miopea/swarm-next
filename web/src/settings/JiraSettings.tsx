@@ -6,6 +6,7 @@ import {
   createJiraBinding,
   disconnectJira,
   fetchJiraBindings,
+  fetchJiraMappings,
   fetchJiraProjects,
   fetchJiraProjectStatuses,
   replaceJiraMappings,
@@ -32,6 +33,8 @@ type Props = {
 /// operator who cannot find it is stuck with no way forward.
 const ATLASSIAN_TOKEN_URL = "https://id.atlassian.com/manage-profile/security/api-tokens";
 
+import { jiraMappingDrift, type JiraMappingDrift } from "./jiraMappingDrift";
+
 const taskStates: { value: TaskState; label: string }[] = [
   { value: "draft", label: "Inbox" },
   { value: "ready", label: "Ready" },
@@ -48,6 +51,7 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
   const [bindings, setBindings] = useState<JiraProjectBinding[]>([]);
   const [bindingsState, setBindingsState] = useState<"loading" | "ready" | "error">("loading");
   const [bindingsAttempt, setBindingsAttempt] = useState(0);
+  const [drift, setDrift] = useState<Record<string, JiraMappingDrift[]>>({});
   const [query, setQuery] = useState("");
   const [projects, setProjects] = useState<JiraProject[]>([]);
   const [selectedProject, setSelectedProject] = useState<JiraProject>();
@@ -73,6 +77,31 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
       });
     return () => { cancelled = true; };
   }, [bindingsAttempt, operatorToken]);
+
+  // A binding is mapped once, at creation, and nothing re-applies the
+  // recommendation when the recommendation improves. So a binding quietly gets
+  // worse as the code gets better, and the only way to notice was to compare
+  // the two by hand. Both reads already existed; nobody had put them together.
+  //
+  // Reports only. An operator may have overridden a recommendation on purpose,
+  // and a system that silently "corrects" a deliberate choice is worse than one
+  // that never notices — so this shows both values and changes nothing.
+  useEffect(() => {
+    if (bindingsState !== "ready" || bindings.length === 0) return;
+    let cancelled = false;
+    void Promise.all(bindings.filter((binding) => binding.workflow_mapped).map(async (binding) => {
+      const [stored, statuses] = await Promise.all([
+        fetchJiraMappings(operatorToken, binding.id),
+        fetchJiraProjectStatuses(operatorToken, binding.project_id),
+      ]);
+      return [binding.id, jiraMappingDrift(stored, statuses)] as const;
+    }))
+      // A failure here must not disturb the page: drift is advisory, and the
+      // binding list beside it is not.
+      .then((entries) => { if (!cancelled) setDrift(Object.fromEntries(entries)); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [bindings, bindingsState, operatorToken]);
 
   useEffect(() => {
     if (readiness?.connection !== "ready" || selectedProject) return;
@@ -278,6 +307,22 @@ export default function JiraSettings({ operatorToken, readiness, unavailable, on
                   <input type="checkbox" checked={binding.auto_sync_assigned} disabled={busy || !binding.workflow_mapped} onChange={(event) => void changeAssignedSync(binding, event.target.checked)} />
                   <span><strong>Automatically sync my assigned work</strong><small>Open issues assigned to you appear within a minute. Jira closures move linked work to Completed.</small></span>
                 </label>
+                {drift[binding.id]?.length ? (
+                  <div className="jira-mapping-drift" role="status" aria-label={`${binding.project_key} status mapping drift`}>
+                    <strong>{drift[binding.id].length} of this project&apos;s statuses map differently from what Swarm now recommends</strong>
+                    <small>This mapping was saved when the project was connected and has not changed since. Nothing has been altered — remap the project to take a recommendation, or keep what is here if it was chosen deliberately.</small>
+                    <ul>
+                      {drift[binding.id].map((entry) => (
+                        <li key={entry.jira_status_id}>
+                          <span className="jira-drift-status">{entry.jira_status_name}</span>
+                          <span className={`task-state state-${entry.stored}`}>{taskStates.find((state) => state.value === entry.stored)?.label ?? entry.stored}</span>
+                          <span aria-hidden="true">→</span>
+                          <span className={`task-state state-${entry.recommended}`}>{taskStates.find((state) => state.value === entry.recommended)?.label ?? entry.recommended}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </div>
           ))}
         </div>
