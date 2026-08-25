@@ -3,18 +3,22 @@ import { useState, type FormEvent } from "react";
 import type { Task, TaskState, Worker } from "../api";
 import { workerAttention } from "../workers/workerAttention";
 
+// Both sets describe the delivery of a MESSAGE, not the state of the task.
+// "Queen notified" sat on a Blocked row and read as a statement about the
+// block; the operator could not tell what it was claiming. Each label now names
+// what was sent and which way it travelled.
 const dispatchLabels = {
-  queued: "Briefing waits for a quiet moment",
-  dispatching: "Briefing worker",
-  delivered: "Worker briefed",
-  uncertain: "Briefing uncertain — task remains authoritative",
+  queued: "This task's briefing waits for a quiet moment",
+  dispatching: "Sending this task's briefing to the worker",
+  delivered: "The worker has this task's briefing",
+  uncertain: "Briefing delivery unconfirmed — the task record remains authoritative",
 } as const;
 
 const outcomeDeliveryLabels = {
-  queued: "Queen handoff waits for a quiet moment",
-  dispatching: "Notifying Queen",
-  delivered: "Queen notified",
-  uncertain: "Queen handoff uncertain — task remains authoritative",
+  queued: "This task's handoff waits for a quiet moment before reaching Queen",
+  dispatching: "Sending this task's handoff to Queen",
+  delivered: "Queen has this task's handoff",
+  uncertain: "Handoff delivery unconfirmed — the task record remains authoritative",
 } as const;
 
 export default function TaskAssignment({ task, workers, busy, onAssign, onOpenWorker, onTransition, onStartWorker }: {

@@ -1,5 +1,5 @@
 import type { JiraTaskLink, Task, TaskPriority, TaskState } from "../api";
-import { taskAge, taskAgeTitle } from "./taskAge";
+import { taskAgeTitle, taskCreatedOn } from "./taskAge";
 
 const stateLabels: Record<TaskState, string> = {
   draft: "Draft",
@@ -36,14 +36,19 @@ export default function TaskMetadata({ task, jiraLink, busy, onRetryJira }: {
 }) {
   return (
     <div className="task-metadata-panel">
+      {/* No "Swarm" label here. It named the task's source, which is the same
+          word on every Swarm-native row, and it held the widest column on the
+          board to say it — read by the operator as the worker's name. The Jira
+          section below keeps its label, because there it distinguishes. */}
       <section className="task-metadata-section" aria-label="Swarm details">
-        <strong className="task-section-label">Swarm</strong>
         <dl>
           <div><dt>Status</dt><dd><span className={`task-state state-${task.state}${task.state === "completed" && !task.deployment_recorded ? " unverified" : ""}`} title={task.state === "completed" && !task.deployment_recorded ? "The work is finished. Nothing has recorded where it is running, so nothing has shown it to be live." : undefined}>{taskStateLabel(task)}</span></dd></div>
           <div><dt>Priority</dt><dd><span className={`task-priority priority-${task.priority}`}>{priorityLabels[task.priority]}</span></dd></div>
-          {/* Beside the state, because "which of these has gone wrong" is
-              answered by age and the board previously said nothing about it. */}
-          <div><dt>Age</dt><dd><span className="task-age" title={taskAgeTitle(task.created_at)}>{taskAge(task.created_at, Date.now())}</span></dd></div>
+          {/* The date, with the elapsed time in the tooltip. It was the other
+              way round until the operator asked for the date: an age answers
+              "which of these has gone wrong" but never answers "when was this
+              raised", and only one of those can be read off a row. */}
+          <div><dt>Created</dt><dd><span className="task-age" title={taskAgeTitle(task.created_at, Date.now())}>{taskCreatedOn(task.created_at, Date.now())}</span></dd></div>
         </dl>
       </section>
       {jiraLink && (

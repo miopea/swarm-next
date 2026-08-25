@@ -95,7 +95,10 @@ export default function WorkerContextBar({
           type="button"
           className="worker-context-queue"
           aria-label={`Show all ${openCount} open tasks for ${worker.name}`}
-          title={workSummary}
+          // Names whose work it is. Read beside a single task row, a bare
+          // "1 active · 5 blocked · 1 ready" invites the reading that those
+          // numbers describe THIS task.
+          title={workSummary ? `${worker.name}'s open work: ${workSummary}` : undefined}
           onClick={() => onOpenQueue(worker.id)}
         >+{openCount - 1}</button>
       ) : null}

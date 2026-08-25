@@ -1605,7 +1605,7 @@ export function App() {
                       <span className="mobile-worker-choice-copy">
                         <span><strong>{worker.name}</strong><small>{worker.role === "queen" ? "Queen" : repositoryName(worker.workspace)}</small></span>
                         <small>{worker.runtime_error ?? workerSwitcherDetail(worker, assignedTask?.title)}</small>
-                        {work?.summary ? <span className="worker-work-summary">{work.summary}</span> : null}
+                        {work?.summary ? <span className="worker-work-summary" title={`${worker.name}'s open work: ${work.summary}`}>Open work · {work.summary}</span> : null}
                       </span>
                       <span className={`presence ${worker.running ? "online" : "offline"}`} aria-label={worker.running ? workerAttentionLabel(worker) : "Sleeping"} />
                     </button>

@@ -41,6 +41,18 @@ test("opens the worker's queue focused on the task it names", () => {
   expect(onOpenQueue).toHaveBeenCalledWith("worker-1", "task-1");
 });
 
+test("the workload summary says whose work it counts", () => {
+  // Read beside a single task row, a bare "1 active · 5 blocked · 1 ready"
+  // invites the reading that those numbers describe THIS task. The operator
+  // asked what it meant.
+  render_({ openCount: 7, workSummary: "1 active · 5 blocked · 1 ready" });
+
+  expect(screen.getByRole("button", { name: /Show all/ })).toHaveAttribute(
+    "title",
+    "Public Website's open work: 1 active · 5 blocked · 1 ready",
+  );
+});
+
 test("offers the rest of the queue only when there is more than one task", () => {
   render_({ openCount: 1 });
   expect(screen.queryByRole("button", { name: /Show all/ })).not.toBeInTheDocument();

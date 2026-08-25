@@ -3,15 +3,17 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
 /**
- * How long a task has been waiting, short enough to sit beside its state.
+ * How long a task has been waiting.
  *
- * Relative rather than a date, because the question a board answers at a glance
- * is "which of these has gone wrong", and a five-day-old draft reads as wrong
- * where "19 Aug" reads as a fact to work out. The operator found exactly that
- * set by opening ninety tasks one at a time.
+ * This used to be what the row displayed, on the reasoning that "5d" reads as
+ * wrong where a date reads as a fact to work out. The operator overruled it
+ * after living with it — "the Age is useless, we need a created date" — so the
+ * date is what shows and this is the tooltip. The argument was not worthless:
+ * elapsed time is the thing a date makes you compute, which is why it is still
+ * here rather than deleted.
  *
- * Coarse on purpose: nothing here is improved by knowing a task is 37 minutes
- * old rather than 38, and a row has no room to say so.
+ * Coarse on purpose: nothing is improved by knowing a task is 37 minutes old
+ * rather than 38.
  */
 export function taskAge(createdAt: number, now: number): string {
   const seconds = Math.max(0, Math.floor(now / 1000) - createdAt);
@@ -21,7 +23,24 @@ export function taskAge(createdAt: number, now: number): string {
   return `${Math.floor(seconds / DAY)}d`;
 }
 
-/** The exact moment, for the tooltip. The short form is for scanning. */
-export function taskAgeTitle(createdAt: number): string {
-  return `Created ${new Date(createdAt * 1000).toLocaleString()}`;
+/**
+ * When the task was created, short enough to sit beside its state.
+ *
+ * The year is shown only when it is not the current one: on a board where
+ * nearly everything is from this year, repeating it on every row is the same
+ * kind of constant that made the source column worth reclaiming.
+ */
+export function taskCreatedOn(createdAt: number, now: number): string {
+  const created = new Date(createdAt * 1000);
+  const sameYear = created.getFullYear() === new Date(now).getFullYear();
+  return created.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+}
+
+/** The exact moment and the elapsed time, for the tooltip. */
+export function taskAgeTitle(createdAt: number, now: number): string {
+  return `Created ${new Date(createdAt * 1000).toLocaleString()} · ${taskAge(createdAt, now)} ago`;
 }

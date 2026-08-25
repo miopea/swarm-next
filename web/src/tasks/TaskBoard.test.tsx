@@ -698,10 +698,10 @@ test("moves open tasks with keyboard-accessible ordering controls", () => {
   expect(onReorder).toHaveBeenCalledWith([second.id, task.id]);
 });
 test.each([
-  ["queued", "Briefing waits for a quiet moment"],
-  ["dispatching", "Briefing worker"],
-  ["delivered", "Worker briefed"],
-  ["uncertain", "Briefing uncertain — task remains authoritative"],
+  ["queued", "This task's briefing waits for a quiet moment"],
+  ["dispatching", "Sending this task's briefing to the worker"],
+  ["delivered", "The worker has this task's briefing"],
+  ["uncertain", "Briefing delivery unconfirmed — the task record remains authoritative"],
 ] as const)("renders the %s task briefing state", (dispatchState, label) => {
   renderBoard({
     tasks: [{ ...task, assigned_session_id: "session-1", dispatch_state: dispatchState }],
@@ -724,7 +724,9 @@ test("shows Queen handoff state and its durable history note", async () => {
     onFetchActivity,
   });
 
-  expect(screen.getByRole("status")).toHaveTextContent("Queen notified");
+  // Says what was delivered and which way it went. "Queen notified" on a
+  // Blocked row read as a statement about the block.
+  expect(screen.getByRole("status")).toHaveTextContent("Queen has this task's handoff");
   fireEvent.click(screen.getByRole("button", { name: `Actions for ${task.title}` }));
   fireEvent.click(screen.getByRole("menuitem", { name: "Show history" }));
   await waitFor(() => expect(screen.getByText("Android voice and shortcuts verified.")).toBeInTheDocument());
@@ -806,8 +808,14 @@ test("a task's age is readable without opening it", async () => {
 
   const card = await screen.findByLabelText("Waiting since Tuesday");
   const swarmDetails = within(card).getByRole("region", { name: "Swarm details" });
-  expect(within(swarmDetails).getByText("Age")).toBeInTheDocument();
-  expect(within(swarmDetails).getByText("5d")).toBeInTheDocument();
-  // The exact moment stays available without spending a row on it.
-  expect(within(swarmDetails).getByText("5d")).toHaveAttribute("title", expect.stringMatching(/^Created /));
+  // The date is what shows, per the operator: "the Age is useless, we need a
+  // created date". The elapsed time moved into the tooltip rather than away.
+  expect(within(swarmDetails).getByText("Created")).toBeInTheDocument();
+  expect(within(swarmDetails).queryByText("Age")).not.toBeInTheDocument();
+  const created = within(swarmDetails).getByTitle(/^Created /);
+  expect(created).toHaveAttribute("title", expect.stringContaining("5d ago"));
+
+  // And the source column no longer spends the board's widest slot on a word
+  // that is the same on every Swarm-native row.
+  expect(within(swarmDetails).queryByText("Swarm")).not.toBeInTheDocument();
 });
