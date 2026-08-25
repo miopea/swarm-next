@@ -8,6 +8,7 @@ const xterm = vi.hoisted(() => ({
   options: undefined as Record<string, unknown> | undefined,
   focus: vi.fn(),
   keyHandler: undefined as ((event: KeyboardEvent) => boolean) | undefined,
+  breakUnicodeAddon: false,
   selection: "",
   resize: vi.fn(),
   refresh: vi.fn(),
@@ -37,8 +38,16 @@ vi.mock("@xterm/addon-fit", () => ({
 }));
 
 vi.mock("@xterm/addon-search", () => ({ SearchAddon: class {} }));
+vi.mock("@xterm/addon-unicode11", () => ({
+  // Throws on demand, the way an addon built for a different xterm major does.
+  // That failure locked the operator out of every worker.
+  Unicode11Addon: class {
+    constructor() {
+      if (xterm.breakUnicodeAddon) throw new Error("incompatible addon");
+    }
+  },
+}));
 vi.mock("@xterm/addon-serialize", () => ({ SerializeAddon: class {} }));
-vi.mock("@xterm/addon-unicode11", () => ({ Unicode11Addon: class {} }));
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 // Constructing this throws without WebGL2, which jsdom does not have — the same
 // path a real browser takes on a GPU denylist. The surface must fall back.
@@ -162,6 +171,30 @@ test("Ctrl+F asks for search only once something is listening", () => {
   surface.onFindRequested(requested);
   expect(press("f")).toBe(false);
   expect(requested).toHaveBeenCalledOnce();
+});
+
+test("an addon that cannot load does not stop the terminal opening", () => {
+  // The regression this exists to prevent: addons were loaded unguarded, one
+  // threw against xterm 6, and the constructor threw with it — so the terminal
+  // view failed to mount and every worker was unreachable behind an error
+  // boundary telling the operator to refresh. Refreshing could not help.
+  vi.stubGlobal("ResizeObserver", class {
+    observe(): void {}
+    disconnect(): void {}
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  xterm.breakUnicodeAddon = true;
+
+  const surface = new XtermSurface();
+
+  expect(() => surface.open(document.createElement("div"))).not.toThrow();
+  // Reported rather than swallowed.
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining("unicode11"),
+    expect.anything(),
+  );
+  warn.mockRestore();
+  xterm.breakUnicodeAddon = false;
 });
 
 test("measures characters with Unicode 11 before anything is written", () => {

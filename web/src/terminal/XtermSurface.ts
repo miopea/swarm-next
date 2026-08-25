@@ -107,23 +107,50 @@ export class XtermSurface implements TerminalSurface {
     // same rule VS Code and Windows Terminal use — so copy never costs the
     // ability to interrupt, and interrupting never costs a copy.
     this.#terminal.attachCustomKeyEventHandler((event) => this.#allowKeyEvent(event));
-    this.#terminal.loadAddon(this.#search);
-    this.#terminal.loadAddon(this.#serialize);
+    // EVERY addon is optional, and none of them may take the terminal with it.
+    //
+    // Learned the hard way: these were loaded unguarded, one threw against
+    // xterm 6, and `new XtermSurface()` threw with it — so the terminal view
+    // failed to mount and the operator was locked out of every worker behind an
+    // error boundary that told them to refresh. Refreshing could not help,
+    // because the bundle was not stale; it was broken. A terminal without
+    // clickable links is a small loss. A terminal that will not open is total.
+    this.#optional("search", () => this.#terminal.loadAddon(this.#search));
+    this.#optional("serialize", () => this.#terminal.loadAddon(this.#serialize));
     // Links a worker prints — PR URLs, deploy runs, health endpoints — become
     // clickable instead of something to select and retype.
-    this.#terminal.loadAddon(new WebLinksAddon());
+    this.#optional("web-links", () => this.#terminal.loadAddon(new WebLinksAddon()));
     // Loaded AND activated before anything is written. Claude Code's own output
     // is full of emoji and box drawing, and xterm's default width table is
     // Unicode 6: it measures several of those a column narrow, which shifts
     // every character after them on the line. Activating later would leave
     // whatever had already been parsed measured by the old table.
-    this.#terminal.loadAddon(new Unicode11Addon());
-    this.#terminal.unicode.activeVersion = "11";
+    this.#optional("unicode11", () => {
+      this.#terminal.loadAddon(new Unicode11Addon());
+      this.#terminal.unicode.activeVersion = "11";
+    });
     this.#terminalResizeSubscription = this.#terminal.onResize(() => this.#queueGeometryPublication());
     this.#themeObserver = typeof MutationObserver === "undefined" ? undefined : new MutationObserver(() => {
       this.#terminal.options.theme = terminalTheme(documentColorTheme());
     });
     this.#themeObserver?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  }
+
+  /**
+   * Loads one addon, or carries on without it.
+   *
+   * An addon is an enhancement. The terminal is the product, and no
+   * enhancement may be able to stop it opening — including by throwing during
+   * construction, which is how a version mismatch presents.
+   */
+  #optional(name: string, load: () => void): void {
+    try {
+      load();
+    } catch (error) {
+      // Reported rather than swallowed: a silently missing addon is how
+      // somebody spends an afternoon wondering why search does nothing.
+      console.warn(`terminal addon '${name}' is unavailable and was skipped`, error);
+    }
   }
 
   /**
