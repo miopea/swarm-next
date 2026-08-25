@@ -17,7 +17,7 @@ rm -rf -- "$bundle"
 mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 
 (cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_BUILD_SOURCE_REVISION="$revision" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" SWARM_RELEASE_VERIFYING_KEY="$release_verifying_key" cargo build --release --locked --workspace) >&2
-(cd "$repo_root" && "${SWARM_PNPM_BIN:-pnpm}" --dir web build) >&2
+(cd "$repo_root" && VITE_SWARM_BUILD_VERSION="$version" "${SWARM_PNPM_BIN:-pnpm}" --dir web build) >&2
 [ -f "$repo_root/web/dist/index.html" ] || { echo "compiled web assets are missing" >&2; exit 1; }
 cp "$repo_root/target/release/swarm-api" "$bundle/bin/"
 cp "$repo_root/target/release/swarm-terminal-host" "$bundle/bin/"

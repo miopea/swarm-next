@@ -196,6 +196,14 @@ svg:not(.bee-mascot) { width: 18px; height: 18px; fill: none; stroke: currentCol
    warning rendered as plain text. It is a state, not a destination, so it is
    styled as a warning and carries the control that ends it. */
 .surface-nav .public-address-warning { display: grid; gap: 6px; margin-top: 8px; padding: 9px 10px; border: 1px solid var(--warn); border-radius: 10px; background: var(--warn-soft); }
+/* Scoped into the rail for the same reason as the address warning above:
+   `.surface-nav button` sets its own display and background at higher
+   specificity, so a bare selector loses on both count and order. */
+.surface-nav .stale-bundle-notice { display: grid; gap: 8px; margin-top: 8px; padding: 9px 10px; border: 1px solid var(--accent-line); border-radius: 10px; background: var(--accent-soft); }
+.surface-nav .stale-bundle-notice > span:first-child { display: grid; gap: 3px; }
+.surface-nav .stale-bundle-notice strong { color: var(--text); font-size: .82rem; }
+.surface-nav .stale-bundle-notice small { color: var(--text-muted); font-size: .74rem; line-height: 1.35; }
+.surface-nav .stale-bundle-actions { display: flex; align-items: center; gap: 8px; }
 .surface-nav .public-address-open { display: flex; min-height: 0; align-items: center; justify-content: flex-start; gap: 9px; padding: 0; border: 0; color: var(--warn-strong); background: transparent; }
 .surface-nav .public-address-open:hover { background: transparent; text-decoration: underline; }
 .surface-nav .public-address-open > span:last-child { display: grid; min-width: 0; gap: 1px; }

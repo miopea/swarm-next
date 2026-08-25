@@ -1,4 +1,5 @@
 import PublicAddressWarning from "./PublicAddressWarning";
+import StaleBundleNotice from "./StaleBundleNotice";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 
 import {
@@ -86,6 +87,7 @@ import {
   type TunnelStatus,
   recordAttentionSeen,
 } from "./api";
+import { bundleIsStale } from "./staleBundle";
 import BeeMascot from "./brand/BeeMascot";
 import ApiaryAttentionCard from "./apiary/ApiaryAttentionCard";
 import QueenAutomationAttentionCard from "./orchestration/QueenAutomationAttentionCard";
@@ -214,6 +216,25 @@ export function App() {
     const interval = window.setInterval(load, 30_000);
     return () => { current = false; window.clearInterval(interval); };
   }, [operatorToken, feedbackRevision]);
+  // WHETHER THIS PAGE IS STILL THE PAGE THE HIVE SERVES. Health is read once
+  // at mount, which is fine for starting up and useless for a tab left open
+  // across an upgrade — and a tab left open across an upgrade is exactly the
+  // situation that had a developer reporting a bug fixed days earlier.
+  //
+  // Rides the same 30s cadence rather than adding a poll. The cost is one
+  // unauthenticated health call, which this page already makes.
+  const [serverVersion, setServerVersion] = useState<string | null>(null);
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    // RE-reads only. The version at mount already arrived with the health call
+    // that decides whether the Hive is reachable at all, and asking twice on
+    // startup would be a second request for something already in hand.
+    const interval = window.setInterval(() => void fetchHealth()
+      .then((health) => { if (current) setServerVersion(health.version); })
+      .catch(() => undefined), 30_000);
+    return () => { current = false; window.clearInterval(interval); };
+  }, []);
   const [repository, setRepository] = useState<RepositoryState | null>();
   const [popoutBlocked, setPopoutBlocked] = useState(false);
   // A window opened to show one surface shows exactly that: no navigation, no
@@ -428,6 +449,9 @@ export function App() {
         // The Hive's own number, so an oversized image is refused with the
         // limit that is actually enforced rather than a copy that can drift.
         if (health.attachment_max_bytes) configureTerminalImageLimit(health.attachment_max_bytes);
+        // The baseline the staleness check compares against, so a page loaded
+        // AFTER an upgrade starts out correct rather than warning for 30s.
+        setServerVersion(health.version);
         setLoadState({ kind: "ready", health });
       })
       .catch((error: unknown) => {
@@ -1424,6 +1448,15 @@ export function App() {
                   if (!operatorToken) return;
                   setPublicAddress(await stopTunnel(operatorToken));
                 }}
+              />
+              {/* In the rail rather than over the page, for the same reason the
+                  address warning is: it is a state this Hive is in, not an
+                  interruption, and a terminal is a bad place to put a banner. */}
+              <StaleBundleNotice
+                stale={bundleIsStale(serverVersion)}
+                serverVersion={serverVersion}
+                dismissed={dismissedVersion}
+                onDismiss={setDismissedVersion}
               />
             </nav>}
 

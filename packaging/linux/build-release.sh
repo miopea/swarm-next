@@ -56,7 +56,7 @@ mkdir -p "$bundle/bin" "$bundle/web" "$bundle/systemd-user"
 
 (cd "$repo_root" && SWARM_BUILD_VERSION="$version" SWARM_BUILD_SOURCE_REVISION="$source_revision" SWARM_WORKER_ENGINE_BUILD_ID="$worker_engine_build_id" SWARM_RELEASE_VERIFYING_KEY="$release_verifying_key" cargo build --release --locked --workspace)
 if [ "${SWARM_SKIP_WEB_BUILD:-0}" != "1" ]; then
-  (cd "$repo_root" && "${SWARM_PNPM_BIN:-pnpm}" --dir web build)
+  (cd "$repo_root" && VITE_SWARM_BUILD_VERSION="$version" "${SWARM_PNPM_BIN:-pnpm}" --dir web build)
 fi
 [ -f "$repo_root/web/dist/index.html" ] || { echo "compiled web assets are missing" >&2; exit 1; }
 if [ "${SWARM_SKIP_WEB_BUILD:-0}" = "1" ]; then
