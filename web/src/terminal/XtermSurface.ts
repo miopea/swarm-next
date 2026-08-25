@@ -1,4 +1,9 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 
 import { documentColorTheme, terminalTheme } from "../brand/terminalTheme";
@@ -79,6 +84,10 @@ export class XtermSurface implements TerminalSurface {
   #geometryPublicationQueued = false;
   #geometryPublicationForced = false;
   #disposed = false;
+  readonly #search = new SearchAddon();
+  readonly #serialize = new SerializeAddon();
+  /** Held so a lost GPU context can dispose it and fall back to the DOM. */
+  #webgl?: WebglAddon;
 
   constructor() {
     this.#terminal = new Terminal({
@@ -91,6 +100,18 @@ export class XtermSurface implements TerminalSurface {
       theme: terminalTheme(documentColorTheme()),
     });
     this.#terminal.loadAddon(this.#fit);
+    this.#terminal.loadAddon(this.#search);
+    this.#terminal.loadAddon(this.#serialize);
+    // Links a worker prints — PR URLs, deploy runs, health endpoints — become
+    // clickable instead of something to select and retype.
+    this.#terminal.loadAddon(new WebLinksAddon());
+    // Loaded AND activated before anything is written. Claude Code's own output
+    // is full of emoji and box drawing, and xterm's default width table is
+    // Unicode 6: it measures several of those a column narrow, which shifts
+    // every character after them on the line. Activating later would leave
+    // whatever had already been parsed measured by the old table.
+    this.#terminal.loadAddon(new Unicode11Addon());
+    this.#terminal.unicode.activeVersion = "11";
     this.#terminalResizeSubscription = this.#terminal.onResize(() => this.#queueGeometryPublication());
     this.#themeObserver = typeof MutationObserver === "undefined" ? undefined : new MutationObserver(() => {
       this.#terminal.options.theme = terminalTheme(documentColorTheme());
@@ -98,9 +119,44 @@ export class XtermSurface implements TerminalSurface {
     this.#themeObserver?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   }
 
+  /**
+   * Draws on the GPU where the browser allows it, and silently does not where
+   * it does not.
+   *
+   * The DOM renderer is the slowest of xterm's three, and terminal output here
+   * arrives in bursts — a worker's build log is thousands of lines in a second.
+   * That cost was visible: when a returning terminal drained a backlog, the
+   * drain was slow enough to read as playback.
+   *
+   * Every failure path falls back rather than throwing. Constructing the addon
+   * throws outright without WebGL2 — headless test environments, remote
+   * sessions, GPU denylists — and a context can be lost at runtime when the
+   * driver resets or the tab is backgrounded too long. Losing the canvas must
+   * never take the terminal with it: the DOM renderer is always there, and a
+   * slower terminal is not a broken one.
+   */
+  #useGpuRendering(): void {
+    if (this.#webgl || this.#disposed) return;
+    try {
+      const webgl = new WebglAddon();
+      // Registered before loading: a context lost during load must still be
+      // caught rather than leaving a terminal drawing to nothing.
+      webgl.onContextLoss(() => {
+        webgl.dispose();
+        if (this.#webgl === webgl) this.#webgl = undefined;
+      });
+      this.#terminal.loadAddon(webgl);
+      this.#webgl = webgl;
+    } catch {
+      // No WebGL2 here. The DOM renderer is already handling the terminal.
+      this.#webgl = undefined;
+    }
+  }
+
   open(element: HTMLElement): void {
     this.#element = element;
     this.#terminal.open(element);
+    this.#useGpuRendering();
     // Android Chromium reports terminal drags through PointerEvent. Capture
     // that primary path at the mount boundary and retain TouchEvent only for
     // older WebKit. Registering both would apply the same physical drag twice.
@@ -264,6 +320,10 @@ export class XtermSurface implements TerminalSurface {
     this.#element?.removeEventListener("touchend", this.#handleTouchEnd, true);
     this.#element?.removeEventListener("touchcancel", this.#handleTouchEnd, true);
     this.#resetTouchGesture();
+    // Before the terminal: the addon holds a GPU context of its own, and
+    // disposing the terminal first orphans it.
+    this.#webgl?.dispose();
+    this.#webgl = undefined;
     this.#terminal.dispose();
   }
 

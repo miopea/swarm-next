@@ -4,7 +4,7 @@ const xterm = vi.hoisted(() => ({
   fit: vi.fn(),
   propose: vi.fn<() => { rows: number; cols: number } | undefined>(),
   resizeListener: undefined as ((size: { rows: number; cols: number }) => void) | undefined,
-  terminal: undefined as { rows: number; cols: number } | undefined,
+  terminal: undefined as { rows: number; cols: number; unicode: { activeVersion: string } } | undefined,
   options: undefined as Record<string, unknown> | undefined,
   focus: vi.fn(),
   resize: vi.fn(),
@@ -34,6 +34,18 @@ vi.mock("@xterm/addon-fit", () => ({
   },
 }));
 
+vi.mock("@xterm/addon-search", () => ({ SearchAddon: class {} }));
+vi.mock("@xterm/addon-serialize", () => ({ SerializeAddon: class {} }));
+vi.mock("@xterm/addon-unicode11", () => ({ Unicode11Addon: class {} }));
+vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
+// Constructing this throws without WebGL2, which jsdom does not have — the same
+// path a real browser takes on a GPU denylist. The surface must fall back.
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: class {
+    constructor() { throw new Error("WebGL2 is unavailable"); }
+  },
+}));
+
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     rows = 24;
@@ -44,6 +56,10 @@ vi.mock("@xterm/xterm", () => ({
       length: 24,
     } };
     options: Record<string, unknown>;
+    // The real Terminal exposes this, and the surface activates Unicode 11 on
+    // it before anything is written. A double without it would let the surface
+    // stop doing that without any test noticing.
+    unicode = { activeVersion: "6" };
 
     constructor(options: Record<string, unknown>) {
       this.options = options;
@@ -87,6 +103,30 @@ import { XtermSurface } from "./XtermSurface";
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+test("measures characters with Unicode 11 before anything is written", () => {
+  // Claude Code's output is full of emoji and box drawing. xterm's default
+  // width table is Unicode 6 and measures several of those a column narrow,
+  // which shifts every character after them on the line. Activating after
+  // content had been parsed would leave that content measured by the old table.
+  new XtermSurface();
+
+  expect(xterm.terminal?.unicode.activeVersion).toBe("11");
+});
+
+test("falls back to the DOM renderer when the GPU is unavailable", () => {
+  // Constructing the WebGL addon throws without WebGL2 — headless environments,
+  // remote sessions, GPU denylists. A slower terminal is not a broken one, so
+  // opening must survive it. The mock throws, which is that path.
+  vi.stubGlobal("ResizeObserver", class {
+    observe(): void {}
+    disconnect(): void {}
+  });
+  const surface = new XtermSurface();
+
+  expect(() => surface.open(document.createElement("div"))).not.toThrow();
+  expect(() => surface.dispose()).not.toThrow();
 });
 
 test("uses the complete botanical ANSI palette", () => {
