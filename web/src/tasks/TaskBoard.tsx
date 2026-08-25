@@ -309,7 +309,7 @@ export default function TaskBoard({
   useEffect(() => {
     if (!canCreateApiaryWork && workScope === "apiary") setWorkScope("hive");
   }, [canCreateApiaryWork, workScope]);
-  const { open: openTasks, completed: completedTasks, jiraByTask } = taskView;
+  const { open: openTasks, unverified: unverifiedTasks, completed: completedTasks, jiraByTask } = taskView;
   const focusedTaskCompleted = Boolean(focusTaskId && completedTasks.some((task) => task.id === focusTaskId));
   const canReorder = sort === "queue" && !query.trim() && filter === "all";
   const taskReorder = useReorderDrag(openTasks.map((task) => task.id), (taskIds) => void onReorder(taskIds));
@@ -578,6 +578,55 @@ export default function TaskBoard({
           })}
         </div>
       </section> : null}
+
+      {/* Held above Completed work and outside its fold. Finished-but-unverified
+          is the one closed state that still needs somebody, and filing it in the
+          place people go to stop looking is what the operator reported. */}
+      {unverifiedTasks.length > 0 && (
+        <section className="unverified-tasks" aria-labelledby="unverified-work-heading">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Finished, not shown to be live</p>
+              <h3 id="unverified-work-heading">Waiting on evidence</h3>
+              <small>No deployment recorded and no approved nothing-to-deploy claim.</small>
+            </div>
+            <span className="count-badge">{unverifiedTasks.length}</span>
+          </div>
+          <div className="task-grid compact">
+            {unverifiedTasks.map((task) => (
+              <TaskCard
+                key={task.id}
+                task={task}
+                jiraLink={jiraTaskLinks.find((link) => link.task_id === task.id)}
+                emailSources={emailTaskSources.filter((source) => source.task_id === task.id)}
+                operatorToken={operatorToken}
+                workers={workers}
+                busy={busy}
+                onUpdate={onUpdate}
+                onRemove={onRemove}
+                onTransition={onTransition}
+                onAssign={onAssign}
+                onStartWorker={onStartWorker}
+                onOpenWorker={onOpenWorker}
+                onFetchActivity={onFetchActivity}
+                onFetchJiraComments={onFetchJiraComments}
+                onAddJiraComment={onAddJiraComment}
+                onRetryJira={onRetryJira}
+                canMoveEarlier={false}
+                canMoveLater={false}
+                onMoveEarlier={() => undefined}
+                onMoveLater={() => undefined}
+                onDropBefore={() => undefined}
+                dropTarget={false}
+                onDragTarget={() => undefined}
+                onDragLeave={() => undefined}
+                onDragStart={taskReorder.start}
+                onDragEnd={taskReorder.end}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       {completedTasks.length > 0 && (
         <details ref={completedTasksPanel} className="completed-tasks">

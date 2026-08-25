@@ -63,7 +63,7 @@ test("opens and focuses task creation when requested from global navigation", as
 });
 
 test("reveals and focuses a completed task selected through global navigation", async () => {
-  const completed = { ...task, state: "completed" as const };
+  const completed = { ...task, state: "completed" as const, closed_on_evidence: true };
   const scrollIntoView = vi.fn();
   Element.prototype.scrollIntoView = scrollIntoView;
   renderBoard({ tasks: [completed], focusTaskId: completed.id, focusRequest: 1 });
@@ -72,6 +72,16 @@ test("reveals and focuses a completed task selected through global navigation", 
   await waitFor(() => expect(card).toHaveFocus());
   expect(card.closest("details")).toHaveAttribute("open");
   expect(scrollIntoView).toHaveBeenCalled();
+});
+
+test("an unverified task needs no reveal, because it is not behind a fold", async () => {
+  const waiting = { ...task, state: "completed" as const, closed_on_evidence: false };
+  Element.prototype.scrollIntoView = vi.fn();
+  renderBoard({ tasks: [waiting], focusTaskId: waiting.id, focusRequest: 1 });
+
+  const card = screen.getByRole("article", { name: waiting.title });
+  await waitFor(() => expect(card).toHaveFocus());
+  expect(card.closest("details")).toBeNull();
 });
 
 test("keeps task creation focused after navigating from a completed task", async () => {
@@ -782,16 +792,37 @@ function ok(payload: unknown) {
 
 test("does not call work completed when nothing has shown it to be live", async () => {
   // Operator ruling 2026-08-20: completion still works, but a task with no
-  // deployment record reads as finished-and-unverified. Committed and deployed
-  // are not synonyms, and work that has nothing to deploy is not blocked.
-  renderBoard({ tasks: [{ ...task, state: "completed", deployment_recorded: false }] });
-  fireEvent.click(screen.getByText("Completed work"));
+  // evidence reads as finished-and-unverified. Committed and deployed are not
+  // synonyms, and work that has nothing to deploy is not blocked.
+  //
+  // 2026-08-25: it is also not filed with completed work. It gets its own
+  // section, above the fold, because Completed is where work goes to stop being
+  // looked at and this is the one closed state that still needs somebody.
+  renderBoard({ tasks: [{ ...task, state: "completed", closed_on_evidence: false }] });
 
   expect(await screen.findByText("Finished · unverified")).toBeInTheDocument();
+  const section = screen.getByRole("region", { name: "Waiting on evidence" });
+  expect(within(section).getByText(task.title)).toBeInTheDocument();
+  // Not inside the collapsed Completed work panel.
+  expect(screen.queryByText("Completed work")).not.toBeInTheDocument();
 });
 
 test("calls it completed once something has", async () => {
-  renderBoard({ tasks: [{ ...task, state: "completed", deployment_recorded: true }] });
+  renderBoard({ tasks: [{ ...task, state: "completed", closed_on_evidence: true }] });
+  fireEvent.click(screen.getByText("Completed work"));
+
+  expect(await screen.findByText("Completed")).toBeInTheDocument();
+  expect(screen.queryByText("Finished · unverified")).not.toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Waiting on evidence" })).not.toBeInTheDocument();
+});
+
+test("work closed on an approved nothing-to-deploy claim is finished, not unverified", async () => {
+  // The measurement that made this necessary: on the reporting Hive the badge
+  // appeared on 68 rows and 30 of them were closed on an exemption Queen had
+  // approved. Reading deployment_recorded alone libelled every one of them.
+  renderBoard({
+    tasks: [{ ...task, state: "completed", deployment_recorded: false, closed_on_evidence: true }],
+  });
   fireEvent.click(screen.getByText("Completed work"));
 
   expect(await screen.findByText("Completed")).toBeInTheDocument();

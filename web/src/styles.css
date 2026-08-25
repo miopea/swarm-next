@@ -859,6 +859,10 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .empty-card span { font-size: .79rem; }
 .empty-card button { justify-self: start; margin-top: 4px; }
 .empty-bee { width: 112px; height: 112px; }
+/* Its own section, above Completed work and outside its fold. The visual weight
+   is deliberate: this is finished work that still needs somebody. */
+.unverified-tasks { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--accent-line); border-radius: var(--radius-md); background: var(--honey-wash); }
+
 .completed-tasks, .removed-tasks { max-width: 1400px; margin: 24px auto 0; color: var(--muted); }
 .completed-tasks summary, .removed-tasks summary { display: inline-flex; min-height: 34px; cursor: pointer; list-style: none; align-items: center; gap: 9px; padding: 5px 9px; border-radius: var(--radius-sm); font-size: .79rem; font-weight: 500; }
 .completed-tasks summary::-webkit-details-marker, .removed-tasks summary::-webkit-details-marker { display: none; }

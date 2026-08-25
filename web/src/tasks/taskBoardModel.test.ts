@@ -13,7 +13,7 @@ const tasks: Task[] = [
   { id: "local", hive_id: "hive", title: "Local notes", workspace: "/projects/a", state: "draft", description: "", operator_instruction: "", priority: "low", assigned_worker_id: null, assigned_session_id: null, position: 0, created_at: 1, updated_at: 2 },
   { id: "jira", hive_id: "hive", title: "Repair checkout", workspace: "/projects/a", state: "ready", description: "Cart fails", operator_instruction: "", priority: "urgent", assigned_worker_id: worker.id, assigned_session_id: null, position: 1, created_at: 1, updated_at: 4 },
   { id: "blocked", hive_id: "hive", title: "Await credentials", workspace: "/projects/a", state: "blocked", description: "", operator_instruction: "", priority: "normal", assigned_worker_id: worker.id, assigned_session_id: null, position: 2, created_at: 1, updated_at: 3 },
-  { id: "done", hive_id: "hive", title: "Already shipped", workspace: "/projects/a", state: "completed", description: "", operator_instruction: "", priority: "high", assigned_worker_id: worker.id, assigned_session_id: null, position: 3, created_at: 1, updated_at: 5 },
+  { id: "done", hive_id: "hive", title: "Already shipped", workspace: "/projects/a", state: "completed", closed_on_evidence: true, description: "", operator_instruction: "", priority: "high", assigned_worker_id: worker.id, assigned_session_id: null, position: 3, created_at: 1, updated_at: 5 },
 ];
 
 const jiraLink: JiraTaskLink = {
@@ -29,6 +29,25 @@ test("separates completed work and retains the total open count while filtering"
   expect(view.open.map((task) => task.id)).toEqual(["blocked"]);
   expect(view.completed.map((task) => task.id)).toEqual(["done"]);
   expect(view.allOpenCount).toBe(3);
+});
+
+test("finished work with no evidence is held apart from completed work", () => {
+  // Completed is where work goes to stop being looked at. Filing unverified
+  // work there put the one closed state that still needs somebody in the place
+  // least likely to get it.
+  const base = tasks[0];
+  const shipped = { ...base, id: "shipped", state: "completed", closed_on_evidence: true } as Task;
+  const exempted = { ...base, id: "exempted", state: "completed", deployment_recorded: false, closed_on_evidence: true } as Task;
+  const waiting = { ...base, id: "waiting", state: "completed", closed_on_evidence: false } as Task;
+
+  const view = buildTaskBoardView([shipped, exempted, waiting], [], [], baseQuery);
+
+  expect(view.unverified.map((task) => task.id)).toEqual(["waiting"]);
+  // An approved nothing-to-deploy claim closes a task as surely as a deployment
+  // does, so it belongs with completed work and not beside it.
+  expect(view.completed.map((task) => task.id).sort()).toEqual(["exempted", "shipped"]);
+  // And the count of completed work does not quietly carry the unverified row.
+  expect(view.completed).toHaveLength(2);
 });
 
 test("searches Jira identity and combines project, worker, and assignment filters", () => {
@@ -60,8 +79,8 @@ test("filters and sorts finished work the same way as work in progress", () => {
   // a source narrowed the top of the board and left everything below it alone.
   const base = tasks[0];
   const open = { ...base, id: "open-email", title: "Bravo", state: "active" } as Task;
-  const closedEmail = { ...base, id: "closed-email", title: "Alpha", state: "completed" } as Task;
-  const closedLocal = { ...base, id: "closed-local", title: "Zulu", state: "completed" } as Task;
+  const closedEmail = { ...base, id: "closed-email", title: "Alpha", state: "completed", closed_on_evidence: true } as Task;
+  const closedLocal = { ...base, id: "closed-local", title: "Zulu", state: "completed", closed_on_evidence: true } as Task;
 
   const view = buildTaskBoardView(
     [open, closedLocal, closedEmail],

@@ -16,6 +16,8 @@ export type Task = {
   operator_instruction: string;
   /** Whether anyone has recorded where this work is running. */
   deployment_recorded?: boolean;
+  /** Deployment recorded, or a nothing-to-deploy claim Queen approved. Either closes a task. */
+  closed_on_evidence?: boolean;
   priority: TaskPriority;
   workspace: string;
   state: TaskState;

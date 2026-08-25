@@ -15,6 +15,15 @@ export type TaskBoardQuery = {
 
 export type TaskBoardView = {
   open: Task[];
+  /**
+   * Finished, with nothing showing it to be live.
+   *
+   * Held apart from `completed` rather than sorted within it. Completed is
+   * where work goes to stop being looked at — 115 of 138 tasks on the reporting
+   * Hive — so filing unverified work there put the one finished state that
+   * still needs somebody's attention in the place least likely to get it.
+   */
+  unverified: Task[];
   completed: Task[];
   allOpenCount: number;
   jiraByTask: Map<string, JiraTaskLink>;
@@ -88,5 +97,16 @@ export function buildTaskBoardView(
   open.sort(comparator);
   const closed = completed.filter(matches);
   closed.sort(comparator);
-  return { open, completed: closed, allOpenCount: allOpen.length, jiraByTask };
+  // Evidence, not deployment. A task closed on a no-deployment claim Queen
+  // approved is properly finished — somebody looked and agreed there was
+  // nothing to ship — and keying this off deployment_recorded alone called 29
+  // of the 67 rows it touched unverified when they were not.
+  const unverified = closed.filter((task) => !task.closed_on_evidence);
+  return {
+    open,
+    unverified,
+    completed: closed.filter((task) => task.closed_on_evidence),
+    allOpenCount: allOpen.length,
+    jiraByTask,
+  };
 }

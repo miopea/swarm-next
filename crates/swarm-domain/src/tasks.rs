@@ -427,6 +427,16 @@ pub struct Task {
     /// and deployed that this repo draws everywhere else.
     #[serde(default)]
     pub deployment_recorded: bool,
+    /// Whether this task has evidence that can close it: a recorded deployment,
+    /// or a nothing-to-deploy claim Queen has approved.
+    ///
+    /// Distinct from `deployment_recorded`, and the board needs both. Work
+    /// closed on an approved exemption is properly finished — somebody looked
+    /// and agreed there was nothing to ship — but it has no deployment, so
+    /// keying "unverified" off `deployment_recorded` alone libelled it. On this
+    /// Hive that was 29 of the 67 rows the badge appeared on.
+    #[serde(default)]
+    pub closed_on_evidence: bool,
     pub priority: TaskPriority,
     pub workspace: String,
     pub state: TaskState,
