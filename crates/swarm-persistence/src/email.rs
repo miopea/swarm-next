@@ -652,11 +652,24 @@ impl TaskStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let ready: bool = transaction.query_row(
+            // A DEPLOYMENT OR AN APPROVED EXEMPTION — the same evidence that
+            // closes the task. Requiring a deployment specifically made work
+            // that legitimately shipped nothing permanently unanswerable: a
+            // worker established that a question needed no change, Queen
+            // approved the exemption, the worker noted "Answer drafted", and
+            // there was nowhere to put it. Approved only; a claim nobody has
+            // approved is not evidence here either.
             "SELECT EXISTS(
                  SELECT 1 FROM tasks task
                  JOIN email_message_links source ON source.task_id = task.id
-                 JOIN task_deployments deployment ON deployment.task_id = task.id
                  WHERE task.id = ?1 AND task.state IN ('completed', 'review')
+                   AND (
+                       EXISTS (SELECT 1 FROM task_deployments deployment
+                                WHERE deployment.task_id = task.id)
+                       OR EXISTS (SELECT 1 FROM task_completion_exemptions exemption
+                                   WHERE exemption.task_id = task.id
+                                     AND exemption.approved_at IS NOT NULL)
+                   )
              )",
             [task_id.to_string()],
             |row| row.get(0),
@@ -1726,6 +1739,49 @@ pub(super) fn migrate_email_reply_from_review(
     transaction.pragma_update(None, "user_version", EMAIL_REPLY_FROM_REVIEW_SCHEMA_VERSION)
 }
 
+/// A reply may follow work that legitimately shipped nothing.
+///
+/// The trigger demanded a row in `task_deployments`. An APPROVED no-deployment
+/// exemption did not satisfy it, so a task closed on "nothing was built" could
+/// never have a reply created at all — the person who wrote in was structurally
+/// unanswerable, and the database would have rejected the answer.
+///
+/// Found on a real task: a worker investigated a question, established that no
+/// change was needed, wrote "Answer drafted for Ryan", and Queen approved the
+/// exemption. Completing that way is correct and is what the exemption exists
+/// for. Being unable to then tell Ryan is not.
+///
+/// The operator's own ruling makes this worse than an inconvenience: they said
+/// the only thing they verify on an email task is the draft, and the worker
+/// verifies whether anything is running. The old rule sent them to record a
+/// deployment that did not exist and should not exist.
+///
+/// Approved only. A CLAIMED exemption nobody has approved still blocks a reply,
+/// which matches what closes a task: claiming is not evidence.
+pub(super) fn migrate_reply_allows_approved_exemption(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "DROP TRIGGER IF EXISTS email_reply_requires_completed_deployment;
+         CREATE TRIGGER email_reply_requires_completed_deployment
+             BEFORE INSERT ON email_reply_deliveries
+             WHEN NOT EXISTS (
+                 SELECT 1 FROM tasks task
+                 WHERE task.id = NEW.task_id
+                   AND task.state IN ('completed', 'review')
+                   AND (
+                       EXISTS (SELECT 1 FROM task_deployments deployment
+                                WHERE deployment.task_id = task.id)
+                       OR EXISTS (SELECT 1 FROM task_completion_exemptions exemption
+                                   WHERE exemption.task_id = task.id
+                                     AND exemption.approved_at IS NOT NULL)
+                   )
+             )
+             BEGIN SELECT RAISE(ABORT, 'Email replies require deployed work, or an approved no-deployment exemption, in review or completed'); END;
+         PRAGMA user_version = 93;",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2401,6 +2457,68 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(reply.targets.len(), 1, "one person, one reply");
+    }
+
+    /// Work that legitimately shipped nothing can still answer the person who
+    /// asked.
+    ///
+    /// Found on a real task: someone wrote in with a question, a worker
+    /// established that no change was needed, and Queen approved a
+    /// no-deployment exemption — "Question, not a change; nothing was built or
+    /// shipped". Closing that way is correct and is exactly what the exemption
+    /// is for.
+    ///
+    /// But the reply trigger demanded a row in `task_deployments`, so the answer
+    /// could not even be created. The worker's own note said "Answer drafted
+    /// for Ryan" and there was nowhere to put it. The operator was then sent to
+    /// a form asking them to record a deployment that did not exist and should
+    /// not exist — against their own ruling that the worker verifies what is
+    /// running and they only review the words.
+    #[test]
+    fn an_approved_no_deployment_exemption_lets_the_reply_be_written() {
+        let store = TaskStore::in_memory().unwrap();
+        let imported = store
+            .import_email_message(&message(&[]), TaskPriority::Normal)
+            .unwrap();
+        for state in [
+            TaskState::Ready,
+            TaskState::Active,
+            TaskState::Review,
+            TaskState::Completed,
+        ] {
+            store.transition_task(imported.task.id, state).unwrap();
+        }
+        store
+            .claim_completion_exemption(imported.task.id, "Question, not a change", None, 1_000)
+            .unwrap();
+
+        // A CLAIM alone is not evidence, and must not open the reply path
+        // either — that is the same rule that governs closing the task.
+        let refused = store
+            .prepare_email_reply(imported.task.id, "Answering the question.")
+            .unwrap_err()
+            .to_string();
+
+        // AND THE REFUSAL NAMES WHAT IS ACTUALLY MISSING. The old wording,
+        // "requires completed and deployed work", was true and read as a
+        // SEQUENCING instruction: finish, deploy, come back. Two sessions hit it
+        // on the same task hours apart, both concluded they had arrived too
+        // early, and neither checked what the gate tested. Ryan Denee waited
+        // eleven days on a correct report because of that sentence.
+        assert!(
+            refused.contains("approved no-deployment exemption"),
+            "{refused}"
+        );
+        assert!(refused.contains("recorded deployment"), "{refused}");
+
+        store
+            .approve_completion_exemption(imported.task.id, "queen", 1_100)
+            .unwrap();
+
+        let reply = store
+            .prepare_email_reply(imported.task.id, "Answering the question.")
+            .unwrap();
+        assert_eq!(reply.body, "Answering the question.");
     }
 
     /// A send that failed is reported as failed, and can still be retried.

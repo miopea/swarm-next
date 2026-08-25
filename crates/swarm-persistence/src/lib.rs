@@ -144,7 +144,8 @@ const UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION: i64 = 89;
 const REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION: i64 = 90;
 const REVIEW_HOLD_SCHEMA_VERSION: i64 = 91;
 const SESSION_END_REASON_SCHEMA_VERSION: i64 = 92;
-const CURRENT_SCHEMA_VERSION: i64 = SESSION_END_REASON_SCHEMA_VERSION;
+const REPLY_ALLOWS_APPROVED_EXEMPTION_SCHEMA_VERSION: i64 = 93;
+const CURRENT_SCHEMA_VERSION: i64 = REPLY_ALLOWS_APPROVED_EXEMPTION_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -353,7 +354,19 @@ pub enum TaskStoreError {
     DeploymentEvidenceTooEarly,
     #[error("email resolution reply content is invalid")]
     InvalidEmailReply,
-    #[error("email resolution replies require completed and deployed work")]
+    // NAMES BOTH CONDITIONS, because the old wording cost eleven days. It read
+    // "email resolution replies require completed and deployed work", which is
+    // true and unhelpful: it parses as a SEQUENCING instruction — finish the
+    // work, then deploy, then come back — so two different sessions hit it on
+    // the same task, both concluded they had simply arrived too early, and
+    // neither checked what the gate actually tested. Ryan Denee had written on
+    // 2026-08-14 about spam arriving through literature orders. He was right,
+    // the scoping was done, the operator ruled, and the task was completed
+    // specifically so the reply could be drafted. He heard nothing for eleven
+    // days because a message described the wrong precondition.
+    #[error(
+        "email resolution replies need the task in review or completed AND either a recorded deployment or an approved no-deployment exemption; this task has neither"
+    )]
     EmailReplyNotReady,
     #[error("this task already has an email resolution reply")]
     EmailReplyAlreadyExists,
@@ -2423,6 +2436,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < SESSION_END_REASON_SCHEMA_VERSION {
         workers::migrate_session_end_reason(transaction)?;
+    }
+    if schema_version < REPLY_ALLOWS_APPROVED_EXEMPTION_SCHEMA_VERSION {
+        email::migrate_reply_allows_approved_exemption(transaction)?;
     }
     Ok(())
 }
@@ -5662,6 +5678,22 @@ mod tests {
             artifact: "ended_reason",
             undo_sql: "",
             probe_sql: "",
+        },
+        SchemaStep {
+            table: "email_reply_deliveries",
+            artifact: "",
+            undo_sql: "DROP TRIGGER IF EXISTS email_reply_requires_completed_deployment;
+                 CREATE TRIGGER email_reply_requires_completed_deployment
+                     BEFORE INSERT ON email_reply_deliveries
+                     WHEN NOT EXISTS (
+                         SELECT 1 FROM tasks task
+                         JOIN task_deployments deployment ON deployment.task_id = task.id
+                         WHERE task.id = NEW.task_id AND task.state IN ('completed', 'review')
+                     )
+                     BEGIN SELECT RAISE(ABORT, 'Email replies require deployed work in review or completed'); END",
+            probe_sql: "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'trigger' AND name = 'email_reply_requires_completed_deployment'
+                   AND sql LIKE '%task_completion_exemptions%')",
         },
     ];
 

@@ -78,7 +78,13 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
   // until they choose to write it.
   const [undoBody, setUndoBody] = useState<string | null>(null);
   const heading = `unanswered-email-${item.task_id}`;
-  const canEditHere = Boolean(item.draft_body && onSaveReply);
+  // Writing the FIRST reply happens here too. Every task on this queue is
+  // Completed, and completing requires settled evidence, so a reply can always
+  // be written from here — there is never a reason to send the operator to the
+  // task page's deployment form. That form asked them to record something the
+  // worker verifies, and for work closed on an approved exemption it asked for
+  // a deployment that does not exist.
+  const canEditHere = Boolean(onSaveReply);
 
   async function revise() {
     if (!onReviseReply || !instruction.trim()) return;
@@ -159,7 +165,7 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
             <button
               className="primary-action"
               type="button"
-              disabled={busy || !body.trim() || body.trim() === item.draft_body}
+              disabled={busy || !body.trim() || body.trim() === (item.draft_body ?? "")}
               onClick={() => { onSaveReply?.(item.task_id, body.trim()); setEditing(false); }}
             >Save changes</button>
             <button
@@ -178,7 +184,7 @@ function UnansweredEmailCard({ item, busy, onOpenTask, onSendReply, onSaveReply,
             ) : null}
             {canEditHere ? (
               <button className="secondary-button" type="button" disabled={busy} onClick={() => { setBody(item.draft_body ?? ""); setEditing(true); }}>
-                Edit here
+                {item.draft_body ? "Edit here" : "Write the reply"}
               </button>
             ) : null}
             {/* Still a route to the task itself, for everything a reply editor

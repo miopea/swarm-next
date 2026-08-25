@@ -216,6 +216,31 @@ test("a reply that has not failed carries no alarm", () => {
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+test("the first reply is written here, not on the task page", () => {
+  // The operator: "This is still showing on the for you page and it links to
+  // this, not our new response system" — pressing Open the task landed on the
+  // old two-step panel asking them to Confirm the fix is live.
+  //
+  // That form is wrong twice over. Verifying what is running is the worker's
+  // job by their own ruling, and the task in the screenshot was closed on an
+  // APPROVED NO-DEPLOYMENT EXEMPTION — a question that needed no change — so it
+  // was asking for a deployment that does not exist and never will.
+  const onSaveReply = vi.fn();
+  const onOpenTask = vi.fn();
+  render(<UnansweredEmailAttentionCard
+    awaiting={[{ ...waiting, drafted: false, draft_id: null, draft_body: null }]}
+    onOpenTask={onOpenTask}
+    onSaveReply={onSaveReply}
+  />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Write the reply" }));
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "No change was needed, and here is why." } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+  expect(onSaveReply).toHaveBeenCalledWith("task-1", "No change was needed, and here is why.");
+  expect(onOpenTask).not.toHaveBeenCalled();
+});
+
 test("says nothing when every finished email task has been answered", () => {
   const { container } = render(<UnansweredEmailAttentionCard awaiting={[]} onOpenTask={vi.fn()} />);
 

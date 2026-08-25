@@ -15,6 +15,7 @@ import {
   setStartSurface as setStartSurfaceRequest,
   sendEmailReply,
   reviseEmailReplyDraft,
+  prepareEmailReply,
   updateEmailReplyDraft,
   restartSupersededWorkers,
   runQueenAutomation,
@@ -962,7 +963,15 @@ export function App() {
   async function saveAwaitingReply(taskId: string, body: string) {
     if (!operatorToken) return;
     await perform(async () => {
-      await updateEmailReplyDraft(operatorToken, taskId, body);
+      // Prepare when there is no reply yet, update when there is. Every task on
+      // this queue is Completed, and completing requires settled evidence — a
+      // deployment or an approved exemption — so a reply can always be written
+      // from here. The operator never needs the task page's deployment form,
+      // which was asking them to record something that is the worker's to
+      // verify and, for exemption-closed work, does not exist at all.
+      const existing = awaitingReply.find((item) => item.task_id === taskId);
+      if (existing?.draft_id) await updateEmailReplyDraft(operatorToken, taskId, body);
+      else await prepareEmailReply(operatorToken, taskId, body);
       setAwaitingReply(await fetchEmailTasksAwaitingReply(operatorToken));
     }, "Saving the reply…");
   }
