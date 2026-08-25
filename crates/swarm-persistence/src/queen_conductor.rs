@@ -25,6 +25,12 @@ const MAX_AUTOMATION_ATTEMPTS: i64 = 3;
 const RECHECK_UNCHANGED_BOARD_SECONDS: i64 = 15 * 60;
 const MAX_FINGERPRINT_TASKS: i64 = 256;
 const RUN_TIMEOUT_SECONDS: i64 = 60 * 60;
+/// How long an unsettleable uncertain run blocks automation before it is
+/// abandoned in favour of a fresh one.
+///
+/// Long enough that settling and resuming — both of which are exact — get their
+/// chance first, and short enough that a night does not die on one restart.
+const ABANDON_UNSETTLED_UNCERTAIN_SECONDS: i64 = 30 * 60;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueenAutomationDelivery {
@@ -52,10 +58,14 @@ pub enum QueenAutomationFinish {
     Closed,
     /// The run is the current one, but its marker is in a state the finish does
     /// not cover — already completed, or still queued or delivering.
-    WrongState { state: String },
+    WrongState {
+        state: String,
+    },
     /// A different run is current. The caller is holding an id from an earlier
     /// turn, which is the shape a stale prompt in scrollback produces.
-    DifferentRun { current: String },
+    DifferentRun {
+        current: String,
+    },
     /// No run has ever been recorded.
     NoRun,
 }
@@ -73,6 +83,7 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         expire_stale_run(&transaction, now)?;
         resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
+        abandon_unsettled_uncertain_run(&transaction, now)?;
         let (_, actionable_count) = actionable_fingerprint(&transaction)?;
         let row = transaction.query_row(
             "SELECT enabled, state, run_id, trigger, attempts, requested_at,
@@ -160,6 +171,7 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         expire_stale_run(&transaction, now)?;
         resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
+        abandon_unsettled_uncertain_run(&transaction, now)?;
         let state: String = transaction.query_row(
             "SELECT state FROM queen_automation WHERE id = 1",
             [],
@@ -210,6 +222,7 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         expire_stale_run(&transaction, now)?;
         resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
+        abandon_unsettled_uncertain_run(&transaction, now)?;
         let (fingerprint, count) = actionable_fingerprint(&transaction)?;
         let (enabled, state, delivered, finished_at): (bool, String, String, Option<i64>) =
             transaction.query_row(
@@ -265,6 +278,7 @@ impl TaskStore {
         let transaction = connection.transaction()?;
         expire_stale_run(&transaction, now)?;
         resume_run_delivered_to_an_ended_queen_session(&transaction, now)?;
+        abandon_unsettled_uncertain_run(&transaction, now)?;
         let candidate = transaction.query_row(
             "SELECT automation.run_id, session.session_id, automation.trigger, automation.actionable_count, queen.id
              FROM queen_automation automation
@@ -772,6 +786,55 @@ fn resume_run_delivered_to_an_ended_queen_session(
     Ok(())
 }
 
+/// Gives up on an uncertain run nothing could settle, so automation resumes.
+///
+/// Uncertain is the state Swarm enters when it cannot confirm a review reached
+/// Queen, and both exits from it are exact: the delivery session ended, or the
+/// run marker is still on Queen's screen. Neither is guaranteed to arrive. The
+/// API going down mid-run marks every run uncertain, an app reload does not end
+/// Queen's terminal — the terminal host is a separate service — and the marker
+/// scrolls out of the visible window within minutes of a busy session. That
+/// combination is ordinary, not exotic.
+///
+/// What it cost: `observe_queen_automation` will not queue while a run is
+/// uncertain, so one unsettleable run stopped every automatic review from then
+/// on. The board kept filling and Queen was never asked to look at it again.
+/// The control room showed a state, nothing raised an alarm, and the only exit
+/// was an operator pressing the button — which is precisely the dependency the
+/// automation exists to remove, and precisely what is absent overnight.
+///
+/// Abandoning rather than replaying is what makes this safe. The uncertain
+/// state exists to stop a review being DOUBLED, and that risk lives in reusing
+/// the run id: Queen holding the original could finish a run somebody else had
+/// already re-delivered. Here the run is dropped instead, and the next
+/// observation queues a new one with a new id and a fresh prompt. A Queen still
+/// working the old run can still close it — `finish_queen_automation_run`
+/// accepts `uncertain` — and at worst reads one duplicated review request,
+/// which costs a turn. Sitting still until morning costs the night.
+///
+/// Age is measured from the run's own timestamps, not from `updated_at`.
+/// `updated_at` is written with the database's clock while everything that
+/// decides here takes an injected `now`, so a comparison against it is between
+/// two different clocks and, in a test, never true.
+fn abandon_unsettled_uncertain_run(
+    transaction: &rusqlite::Transaction<'_>,
+    now: i64,
+) -> Result<(), TaskStoreError> {
+    let changed = transaction.execute(
+        "UPDATE queen_automation
+         SET state = 'idle', run_id = NULL, trigger = NULL, pending_fingerprint = NULL,
+             delivery_session_id = NULL, attempts = 0, attempted_at = NULL,
+             delivered_at = NULL, finished_at = NULL, outcome = NULL, updated_at = ?1
+         WHERE id = 1 AND state = 'uncertain'
+           AND COALESCE(delivered_at, requested_at, updated_at) + ?2 <= ?1",
+        params![now, ABANDON_UNSETTLED_UNCERTAIN_SECONDS],
+    )?;
+    if changed > 0 {
+        insert_control_room_event(transaction, ControlRoomEventKind::WorkersChanged)?;
+    }
+    Ok(())
+}
+
 fn expire_stale_run(
     transaction: &rusqlite::Transaction<'_>,
     now: i64,
@@ -891,7 +954,12 @@ mod tests {
         let session = WorkerSessionId::new();
         store.bind_worker_session(queen.id, session).unwrap();
         store
-            .create_task_with_details("Waiting on judgement", "", TaskPriority::Normal, "/workspace")
+            .create_task_with_details(
+                "Waiting on judgement",
+                "",
+                TaskPriority::Normal,
+                "/workspace",
+            )
             .unwrap();
         store.set_queen_automation_enabled(true, 100).unwrap();
 
@@ -1151,6 +1219,68 @@ mod tests {
         assert_eq!(
             store.queen_automation_status(14).unwrap().state,
             QueenAutomationState::Completed
+        );
+    }
+
+    /// The trapdoor: one unsettleable run stopped automation for good.
+    ///
+    /// Uncertain has two exits and neither is guaranteed. The session ending is
+    /// exact but an app reload does not end Queen's terminal, because the
+    /// terminal host is a separate service. Reading the marker off her screen is
+    /// exact but it scrolls away. Meanwhile `observe_queen_automation` refuses
+    /// to queue while a run is uncertain — so the ordinary case of a reload
+    /// during a run left Queen never asked to look at the board again, with the
+    /// board still filling and nothing raising an alarm.
+    #[test]
+    fn an_uncertain_run_nothing_could_settle_stops_blocking_automation() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        // Her terminal never ends, which is what a reload actually looks like.
+        store
+            .bind_worker_session(queen.id, WorkerSessionId::new())
+            .unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store
+            .create_task("Something to look at", "/workspace/petal")
+            .unwrap();
+        store.assign_task_to_worker(task.id, worker.id).unwrap();
+        // Enabling observes the board, which already has work on it, so a run
+        // is queued the ordinary way rather than by hand.
+        store.set_queen_automation_enabled(true, 10).unwrap();
+        store.claim_queen_automation(11).unwrap().unwrap();
+
+        // The API restarts underneath the run, and nothing can settle it.
+        assert_eq!(store.recover_inflight_queen_automation().unwrap(), 1);
+        assert_eq!(
+            store.queen_automation_status(12).unwrap().state,
+            QueenAutomationState::Uncertain
+        );
+        assert!(
+            !store.observe_queen_automation(13).unwrap(),
+            "while it is genuinely fresh, uncertain must still hold automation back"
+        );
+
+        // Half an hour later it is abandoned rather than believed, and the
+        // board — which still has work on it — gets looked at again.
+        let later = 13 + ABANDON_UNSETTLED_UNCERTAIN_SECONDS;
+        assert!(
+            store.observe_queen_automation(later).unwrap(),
+            "an unsettleable run must not block every future review"
+        );
+        let status = store.queen_automation_status(later).unwrap();
+        assert_eq!(status.state, QueenAutomationState::Queued);
+        assert_eq!(
+            status.trigger,
+            Some(QueenAutomationTrigger::ActionableWork),
+            "the replacement is a fresh run, not a replay of the one that was lost"
         );
     }
 

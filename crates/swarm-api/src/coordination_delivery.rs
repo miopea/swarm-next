@@ -823,7 +823,7 @@ pub(super) async fn settle_uncertain_queen_review(state: &AppState) {
 
 pub(super) fn queen_automation_message(delivery: &QueenAutomationDelivery) -> Vec<u8> {
     format!(
-        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Draft tasks are part of this review: a draft is work nobody has decided about yet, so triage each one into ready, blocked, or removed rather than leaving it sitting. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. When operator judgment is needed, create one swarm_request_decision per concrete task. Link its task_id, make the suggested_action exactly one allowed_actions button, and never group unrelated tasks or a fleet review into one approval. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
+        "[Swarm automation {}] Review {} actionable records while the operator is {}. Use swarm_list_tasks, swarm_list_workers, and swarm_list_coordination_attention as the authority. Draft tasks are part of this review: a draft is work nobody has decided about yet, so triage each one into ready, blocked, or removed rather than leaving it sitting. Coordination attention can identify Ready work whose delivered brief did not start, Active work that is unchanged while its loaded worker is resting, or work whose worker process exited; recheck the current task and worker before deciding whether to restart, steer, wait, or ask the operator. Work parked on a SLEEPING worker is yours to move rather than yours to wait on: there is no wake tool, and assigning READY work with swarm_assign_task queues a guarded wake, so reassigning it to the same sleeping worker is how that worker is started. Only Ready work wakes anyone — work left Active or Blocked on a sleeping worker wakes nobody, so return it to Ready first (Active to Blocked to Ready) and then assign. Observe the live session before calling the work Active again. Respect worker repository ownership and the configured Queen autonomy ceiling. Do not perform Jira, Apiary, email, deployment, or other external side effects during this run. When operator judgment is needed, create one swarm_request_decision per concrete task. Link its task_id, make the suggested_action exactly one allowed_actions button, and never group unrelated tasks or a fleet review into one approval. When this exact review is finished, call swarm_finish_automation_run with run_id {} and outcome completed, needs_operator, or no_action.\r",
         delivery.run_id,
         delivery.actionable_count,
         delivery.presence,
@@ -863,7 +863,10 @@ fn handoff_excerpt_within(note: &str, budget: usize) -> String {
     // instrument to read, and gave no hint whether one line or forty was
     // missing — so a report whose whole point was "this ticket describes the
     // wrong incident" could be summarised as routine completion.
-    let dropped = note.chars().count().saturating_sub(note[..cut].chars().count());
+    let dropped = note
+        .chars()
+        .count()
+        .saturating_sub(note[..cut].chars().count());
     format!(
         "{}… (+{dropped} more characters — call swarm_read_task_history for the whole handoff)",
         note[..cut].trim_end()
@@ -1255,7 +1258,10 @@ mod tests {
         let unsent = DeferralReason::PromptHoldsUnsentText;
 
         assert_ne!(busy.refusal_kind(), unsent.refusal_kind());
-        assert_eq!(busy.refusal_kind(), swarm_persistence::REFUSAL_DELIVERY_HELD);
+        assert_eq!(
+            busy.refusal_kind(),
+            swarm_persistence::REFUSAL_DELIVERY_HELD
+        );
         assert_eq!(
             unsent.refusal_kind(),
             swarm_persistence::REFUSAL_DELIVERY_HELD_UNSENT_TEXT
@@ -1342,7 +1348,10 @@ mod tests {
 
         assert!(message.starts_with("[Swarm worker outcome] 3 tasks reported."));
         for reporter in ["Architecture", "RCG Hub", "Sculpt Studio"] {
-            assert!(message.contains(reporter), "{reporter} missing from {message}");
+            assert!(
+                message.contains(reporter),
+                "{reporter} missing from {message}"
+            );
         }
         // Typed into a prompt: a newline would submit half of it.
         assert_eq!(message.matches('\n').count(), 0);
@@ -1375,9 +1384,12 @@ mod tests {
     /// shape for everything.
     #[test]
     fn a_single_outcome_is_unchanged() {
-        let message =
-            String::from_utf8(task_outcome_message(&[outcome("a", "Architecture", "fixed")]))
-                .unwrap();
+        let message = String::from_utf8(task_outcome_message(&[outcome(
+            "a",
+            "Architecture",
+            "fixed",
+        )]))
+        .unwrap();
 
         assert!(message.starts_with("[Swarm worker outcome] Architecture moved task "));
         assert!(!message.contains("tasks reported"));
