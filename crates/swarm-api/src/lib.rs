@@ -1304,12 +1304,30 @@ impl AppState {
                     // nothing distinguishing it from work merely queued. Two
                     // of these were sitting unseen in the operator's Hive from
                     // 2026-08-21.
+                    //
+                    // THE CAUSE TRAVELS WITH IT. start_worker_process hands
+                    // back the exact reason and this used to log it and write a
+                    // fixed string to the durable record — the symptom with the
+                    // cause stripped off. It cost a real diagnosis: the RCG
+                    // Development Installer had never started once in its
+                    // existence, Queen assigned its work twice and correctly
+                    // reported she did not know why, and the answer had been
+                    // sitting in journalctl the whole time as "workspace is
+                    // outside the configured roots". One line, unreadable from
+                    // the board. Since the wake never retries, that first
+                    // failure is the only chance to say why.
+                    let worker_name = store
+                        .get_worker_profile(action.worker_id)
+                        .map_or_else(|_| "This worker".to_owned(), |profile| profile.name);
                     let _ = store.record_coordinator_refusal(
                         REFUSAL_WAKE_UNCERTAIN,
                         &format!("wake:{}", action.task_id),
                         Some(action.worker_id),
                         None,
-                        "a wake could not be confirmed, so this work is assigned but never started",
+                        &format!(
+                            "{worker_name} could not be started, so this work is assigned but never started and the wake will not retry: {}",
+                            error.message
+                        ),
                         unix_timestamp(),
                     );
                     store
@@ -8510,6 +8528,84 @@ mod tests {
         assert_eq!(status.queued_actions, 1);
         assert_eq!(status.uncertain_actions, 0);
         assert_eq!(status.completed_actions, 0);
+    }
+
+    /// A wake that fails says WHY, durably, where the board can be read.
+    ///
+    /// The cause is in hand at the moment of failure and used to be written to
+    /// tracing and then thrown away, leaving a fixed string — the symptom with
+    /// the cause removed. It cost a real diagnosis: the RCG Development
+    /// Installer had never started a session in its existence, Queen assigned
+    /// its work twice and correctly reported she did not know why, and the
+    /// answer sat in journalctl as "workspace is outside the configured roots".
+    ///
+    /// This matters more than an ordinary log-versus-record question because
+    /// the wake NEVER RETRIES — `coordinator_actions` caps attempts at one, on
+    /// purpose, since a worker woken twice is briefed twice. The first failure
+    /// is the only chance to say anything at all.
+    #[tokio::test]
+    async fn a_wake_that_fails_records_the_cause_and_not_only_the_symptom() {
+        let store = TaskStore::in_memory().unwrap();
+        let queen = store.ensure_queen("/workspace/queen").unwrap();
+        let worker = store
+            .create_worker(
+                "RCG Development Installer",
+                ProviderKind::ClaudeCode,
+                "/workspace/installer",
+                false,
+                1,
+            )
+            .unwrap();
+        let task = store
+            .create_task("Work that never starts", "/workspace/installer")
+            .unwrap();
+        store.transition_task(task.id, TaskState::Ready).unwrap();
+        store
+            .assign_task_to_worker_as(task.id, worker.id, &TaskActivityActor::worker(queen.id))
+            .unwrap();
+
+        // No terminal host is configured, so starting the worker genuinely
+        // fails and the real failure path runs.
+        AppState::default()
+            .run_deterministic_worker_wakes(&store, runtime::CoordinatorStartAdmission::Allowed)
+            .await;
+
+        // Read through the surface the operator's queue reads, not a private
+        // one, so this asserts what they would actually see.
+        let refusal = store
+            .standing_coordinator_refusals(unix_timestamp(), 0)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.kind == swarm_persistence::REFUSAL_WAKE_UNCERTAIN)
+            .expect("a failed wake is recorded as a refusal");
+
+        // Whose it is, so the operator knows where to look.
+        assert!(
+            refusal.reason.contains("RCG Development Installer"),
+            "{}",
+            refusal.reason
+        );
+        // That it will not fix itself, because it will not.
+        assert!(
+            refusal.reason.contains("will not retry"),
+            "{}",
+            refusal.reason
+        );
+        // And the cause itself, which is the whole point — the old fixed string
+        // said only that a wake "could not be confirmed", which is true of
+        // every possible failure and therefore tells nobody anything.
+        assert!(
+            refusal.reason.len()
+                > "a wake could not be confirmed, so this work is assigned but never started".len(),
+            "the reason must carry more than the old fixed symptom: {}",
+            refusal.reason
+        );
+
+        // The no-replay rule is untouched: still exactly one attempt, still
+        // uncertain rather than retried.
+        let status = store.coordinator_status().unwrap();
+        assert_eq!(status.uncertain_actions, 1);
+        assert_eq!(status.queued_actions, 0);
     }
 
     #[tokio::test]
