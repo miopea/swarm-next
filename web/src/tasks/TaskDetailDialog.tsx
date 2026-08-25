@@ -13,6 +13,7 @@ import {
 } from "../api";
 import { useModalFocus } from "../shared/useModalFocus";
 import UnsavedChangesPrompt from "../shared/UnsavedChangesPrompt";
+import ImageViewer from "../shared/ImageViewer";
 
 type LoadedImage = JiraTaskAttachment & { url: string };
 const noEmailSources: EmailTaskSource[] = [];
@@ -182,7 +183,7 @@ export default function TaskDetailDialog({ task, jiraLink, emailSources = noEmai
             <section>
               <h3>Images</h3>
               <div className="task-detail-gallery">
-                {images.map((image) => <figure key={image.id}><img src={image.url} alt={image.filename} /><figcaption>{image.filename}</figcaption></figure>)}
+                {images.map((image) => <ImageViewer key={image.id} src={image.url} filename={image.filename} />)}
               </div>
             </section>
           )}

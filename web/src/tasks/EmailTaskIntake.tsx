@@ -14,6 +14,7 @@ import {
   type Worker,
 } from "../api";
 import IntegrationSourceState from "../shared/IntegrationSourceState";
+import ImageViewer from "../shared/ImageViewer";
 
 type Props = {
   operatorToken: string;
@@ -270,7 +271,7 @@ export default function EmailTaskIntake({ operatorToken, workers = [], onImporte
               <div className="email-detail-toolbar"><span>{formatReceived(preview.summary.received_at)}</span><a href={preview.summary.web_url} target="_blank" rel="noreferrer">Open original</a></div>
               <header><h4>{preview.summary.subject || "(No subject)"}</h4><p>{preview.summary.sender_name || preview.summary.sender_address} · {preview.summary.sender_address}</p></header>
               <div className="email-body-preview">{readableBody(preview.body_text || preview.summary.preview || "No readable message body.")}</div>
-              {Object.keys(imageUrls).length ? <div className="email-inline-images" aria-label="Images in this message">{preview.attachments.filter((attachment) => imageUrls[attachment.id]).map((attachment) => <figure key={attachment.id}><img src={imageUrls[attachment.id]} alt={attachment.name || "Image from email"} /><figcaption>{attachment.name}</figcaption></figure>)}</div> : null}
+              {Object.keys(imageUrls).length ? <div className="email-inline-images" aria-label="Images in this message">{preview.attachments.filter((attachment) => imageUrls[attachment.id]).map((attachment) => <ImageViewer key={attachment.id} src={imageUrls[attachment.id]} filename={attachment.name || "Image from email"} />)}</div> : null}
               {preview.attachments.length ? <div className="email-attachment-list"><strong>{preview.attachments.length} attachment{preview.attachments.length === 1 ? "" : "s"}</strong>{preview.attachments.map((attachment) => <span key={attachment.id}>{attachment.name} · {formatBytes(attachment.byte_size)}</span>)}</div> : null}
             </article> : null}
           </section>

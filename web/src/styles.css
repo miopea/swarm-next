@@ -673,9 +673,29 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .email-body-preview { max-height: 320px; margin: 0; padding: 14px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); color: var(--text); font-size: .82rem; line-height: 1.55; overflow-wrap: anywhere; }
 .email-body-preview p { margin: 0 0 1em; white-space: pre-wrap; }
 .email-body-preview p:last-child { margin-bottom: 0; }
+/* An attached image reads as reachable rather than as a picture that happens to
+   be small. The trigger is a button so the affordance is real for a pointer and
+   for a keyboard, and so nothing has to be guessed at. */
+.image-viewer { display: grid; gap: 5px; margin: 0; min-width: 0; }
+.image-viewer-trigger { position: relative; display: block; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; cursor: zoom-in; }
+.image-viewer-trigger img { display: block; width: 100%; border-radius: var(--radius-sm); }
+.image-viewer-hint { position: absolute; right: 6px; bottom: 6px; padding: 2px 7px; border-radius: 999px; background: rgb(0 0 0 / .66); color: #fff; font-size: .64rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; opacity: 0; transition: opacity .12s ease; }
+.image-viewer-trigger:hover .image-viewer-hint,
+.image-viewer-trigger:focus-visible .image-viewer-hint { opacity: 1; }
+.image-viewer figcaption { overflow: hidden; color: var(--muted); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Portalled to the body, so an image at full size cannot push the narrow panel
+   it was opened from around. */
+.image-viewer-backdrop { position: fixed; z-index: 60; inset: 0; display: grid; padding: 24px; place-items: center; background: rgb(0 0 0 / .72); }
+.image-viewer-dialog { display: grid; overflow: hidden; max-width: min(96vw, 1400px); max-height: 92vh; gap: 0; border-radius: var(--radius-md); background: var(--panel); box-shadow: 0 18px 48px rgb(0 0 0 / .4); }
+.image-viewer-dialog img { display: block; min-height: 0; max-width: 100%; max-height: calc(92vh - 52px); margin: 0 auto; object-fit: contain; }
+.image-viewer-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-top: 1px solid var(--line); }
+.image-viewer-bar span { overflow: hidden; color: var(--muted); font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .image-viewer-hint { transition: none; } }
+
 .email-inline-images { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 280px)); gap: 10px; }
-.email-inline-images figure { display: grid; gap: 5px; margin: 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
-.email-inline-images img { display: block; width: 100%; max-height: 260px; object-fit: contain; }
+.email-inline-images .image-viewer { padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.email-inline-images .image-viewer-trigger img { max-height: 260px; object-fit: contain; }
 .email-inline-images figcaption { overflow: hidden; color: var(--muted); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
 .email-attachment-list { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 .email-attachment-list > span { padding: 5px 8px; border-radius: 999px; color: var(--muted); background: var(--surface-soft); font-size: .73rem; }
@@ -1442,8 +1462,8 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .task-detail-loading { margin: 0; color: var(--muted); }
 .task-detail-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--danger); border-radius: var(--radius-md); color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, var(--panel)); }
 .task-detail-gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-.task-detail-gallery figure { display: grid; gap: 7px; margin: 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
-.task-detail-gallery img { display: block; width: 100%; max-height: 520px; object-fit: contain; border-radius: var(--radius-sm); background: var(--panel-soft); }
+.task-detail-gallery .image-viewer { gap: 7px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
+.task-detail-gallery .image-viewer-trigger img { max-height: 520px; object-fit: contain; background: var(--panel-soft); }
 .task-detail-gallery figcaption { overflow-wrap: anywhere; color: var(--muted); font-size: .76rem; }
 .task-detail-attachments { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .task-detail-attachments li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
