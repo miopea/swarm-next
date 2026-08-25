@@ -437,6 +437,21 @@ pub struct Task {
     /// Hive that was 29 of the 67 rows the badge appeared on.
     #[serde(default)]
     pub closed_on_evidence: bool,
+    /// Whether any Swarm worker has ever acted on this task.
+    ///
+    /// A task imported from Jira and completed there has none: its only
+    /// activity is the sync that mirrored it. Swarm did not do that work, so
+    /// Swarm has no deployment to record for it, and asking for one is a
+    /// category error rather than missing evidence.
+    ///
+    /// The condition is worker involvement, NOT the presence of a Jira link.
+    /// Work a Swarm worker really did against a Jira issue and never deployed
+    /// is a genuine gap and must stay visible. On this Hive that case has never
+    /// occurred — zero Jira-linked tasks have any worker activity, in any state
+    /// — which is exactly why the distinction is drawn in code rather than left
+    /// to the current shape of the data.
+    #[serde(default)]
+    pub worked_here: bool,
     pub priority: TaskPriority,
     pub workspace: String,
     pub state: TaskState,

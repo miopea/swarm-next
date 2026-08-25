@@ -50,6 +50,47 @@ test("finished work with no evidence is held apart from completed work", () => {
   expect(view.completed).toHaveLength(2);
 });
 
+test("a Jira issue nobody here worked on is not Swarm work awaiting evidence", () => {
+  // Twelve of these sat in the section asking somebody to chase evidence nobody
+  // owed. They were imported from Jira, completed in Jira, and no Swarm worker
+  // ever acted on them — the completion record exists, in the system that owns
+  // the work.
+  const base = tasks[0];
+  const mirrored = { ...base, id: "mirrored", state: "completed", closed_on_evidence: false, worked_here: false } as Task;
+  const link = { ...jiraLink, task_id: "mirrored" };
+
+  const view = buildTaskBoardView([mirrored], [link], [], baseQuery);
+
+  expect(view.unverified).toHaveLength(0);
+  expect(view.completed.map((task) => task.id)).toEqual(["mirrored"]);
+});
+
+test("work a Swarm worker really did against a Jira issue still needs evidence", () => {
+  // The boundary that matters most, and it protects a case that has never
+  // occurred on this Hive — zero Jira-linked tasks have any worker activity, in
+  // any state. Making the Jira link alone sufficient would turn a correct fix
+  // into a blind spot, and no live row would reveal it.
+  const base = tasks[0];
+  const worked = { ...base, id: "worked", state: "completed", closed_on_evidence: false, worked_here: true } as Task;
+  const link = { ...jiraLink, task_id: "worked" };
+
+  const view = buildTaskBoardView([worked], [link], [], baseQuery);
+
+  expect(view.unverified.map((task) => task.id)).toEqual(["worked"]);
+  expect(view.completed).toHaveLength(0);
+});
+
+test("a local task nobody worked on is still Swarm's to account for", () => {
+  // Worker involvement is not sufficient on its own either. Without a Jira
+  // link there is no other system holding the record, so the row stays.
+  const base = tasks[0];
+  const local = { ...base, id: "local", state: "completed", closed_on_evidence: false, worked_here: false } as Task;
+
+  const view = buildTaskBoardView([local], [], [], baseQuery);
+
+  expect(view.unverified.map((task) => task.id)).toEqual(["local"]);
+});
+
 test("searches Jira identity and combines project, worker, and assignment filters", () => {
   const view = buildTaskBoardView(tasks, [jiraLink], [worker], {
     ...baseQuery, text: "wwd-42", project: "WWD", worker: worker.id, filter: "assigned",

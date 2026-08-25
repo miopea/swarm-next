@@ -1080,7 +1080,9 @@ impl TaskStore {
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
                      OR EXISTS(SELECT 1 FROM task_completion_exemptions e
-                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL)
+                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
+                   EXISTS(SELECT 1 FROM task_activity worked
+                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker')
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -1118,7 +1120,9 @@ impl TaskStore {
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
                      OR EXISTS(SELECT 1 FROM task_completion_exemptions e
-                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL)
+                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
+                   EXISTS(SELECT 1 FROM task_activity worked
+                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker')
             FROM tasks t
             LEFT JOIN task_assignments a
               ON a.task_id = t.id AND a.released_at IS NULL
@@ -1153,7 +1157,9 @@ impl TaskStore {
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id),
                    EXISTS(SELECT 1 FROM task_deployments d WHERE d.task_id = t.id)
                      OR EXISTS(SELECT 1 FROM task_completion_exemptions e
-                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL)
+                               WHERE e.task_id = t.id AND e.approved_at IS NOT NULL),
+                   EXISTS(SELECT 1 FROM task_activity worked
+                          WHERE worked.task_id = t.id AND worked.actor_kind = 'worker')
                 FROM tasks t
                 LEFT JOIN task_assignments a
                   ON a.task_id = t.id AND a.released_at IS NULL
@@ -3568,6 +3574,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         operator_instruction: row.get(14)?,
         deployment_recorded: row.get(15).unwrap_or(false),
         closed_on_evidence: row.get(16).unwrap_or(false),
+        worked_here: row.get(17).unwrap_or(false),
         outcome_delivery_state: outcome_delivery_state
             .map(|value| TaskOutcomeDeliveryState::from_str(&value))
             .transpose()

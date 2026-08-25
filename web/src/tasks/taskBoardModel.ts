@@ -99,13 +99,25 @@ export function buildTaskBoardView(
   closed.sort(comparator);
   // Evidence, not deployment. A task closed on a no-deployment claim Queen
   // approved is properly finished — somebody looked and agreed there was
-  // nothing to ship — and keying this off deployment_recorded alone called 29
-  // of the 67 rows it touched unverified when they were not.
-  const unverified = closed.filter((task) => !task.closed_on_evidence);
+  // nothing to ship — and keying this off deployment_recorded alone called 30
+  // of the 68 rows it touched unverified when they were not.
+  //
+  // And a Jira issue mirrored in, that no Swarm worker ever acted on, is not
+  // Swarm work awaiting evidence at all: the completion record exists, in the
+  // system that owns the work. Twelve of these sat in the section asking
+  // somebody to chase evidence nobody owed.
+  //
+  // The condition is worker involvement AND Jira ownership, never the Jira link
+  // alone. Work a Swarm worker really did against a Jira issue and never
+  // deployed is a genuine gap and stays visible — that case has never occurred
+  // on this Hive, which is precisely why it is written down rather than left to
+  // the shape of today's data.
+  const ownedElsewhere = (task: Task) => Boolean(jiraByTask.get(task.id)) && !task.worked_here;
+  const unverified = closed.filter((task) => !task.closed_on_evidence && !ownedElsewhere(task));
   return {
     open,
     unverified,
-    completed: closed.filter((task) => task.closed_on_evidence),
+    completed: closed.filter((task) => task.closed_on_evidence || ownedElsewhere(task)),
     allOpenCount: allOpen.length,
     jiraByTask,
   };

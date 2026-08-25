@@ -18,6 +18,8 @@ export type Task = {
   deployment_recorded?: boolean;
   /** Deployment recorded, or a nothing-to-deploy claim Queen approved. Either closes a task. */
   closed_on_evidence?: boolean;
+  /** Whether any Swarm worker has ever acted on this task. False for a Jira issue mirrored in. */
+  worked_here?: boolean;
   priority: TaskPriority;
   workspace: string;
   state: TaskState;
