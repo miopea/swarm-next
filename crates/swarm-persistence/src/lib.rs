@@ -143,7 +143,8 @@ const TERMINAL_GEOMETRY_LEDGER_SCHEMA_VERSION: i64 = 88;
 const UNDELIVERED_BRIEF_ATTENTION_SCHEMA_VERSION: i64 = 89;
 const REVIEWED_WORK_EVIDENCE_ATTENTION_SCHEMA_VERSION: i64 = 90;
 const REVIEW_HOLD_SCHEMA_VERSION: i64 = 91;
-const CURRENT_SCHEMA_VERSION: i64 = REVIEW_HOLD_SCHEMA_VERSION;
+const SESSION_END_REASON_SCHEMA_VERSION: i64 = 92;
+const CURRENT_SCHEMA_VERSION: i64 = SESSION_END_REASON_SCHEMA_VERSION;
 pub const MAX_TASK_ACTIVITY_PAGE: usize = 100;
 pub const MAX_OPEN_TASKS_PER_ORDER: usize = 1_000;
 
@@ -2419,6 +2420,9 @@ fn migrate_named_schema_steps(
     }
     if schema_version < REVIEW_HOLD_SCHEMA_VERSION {
         task_outcomes::migrate_review_holds(transaction)?;
+    }
+    if schema_version < SESSION_END_REASON_SCHEMA_VERSION {
+        workers::migrate_session_end_reason(transaction)?;
     }
     Ok(())
 }
@@ -5650,6 +5654,12 @@ mod tests {
         SchemaStep {
             table: "task_review_holds",
             artifact: "",
+            undo_sql: "",
+            probe_sql: "",
+        },
+        SchemaStep {
+            table: "worker_sessions",
+            artifact: "ended_reason",
             undo_sql: "",
             probe_sql: "",
         },

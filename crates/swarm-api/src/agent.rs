@@ -327,6 +327,7 @@ impl ServerHandler for AgentMcp {
                 retire_task_tool(),
                 hold_reviewed_work_tool(),
                 promote_task_tool(),
+                sleep_worker_tool(),
                 list_apiary_hives_tool(),
                 list_apiary_tasks_tool(),
                 create_apiary_task_tool(),
@@ -381,6 +382,7 @@ impl ServerHandler for AgentMcp {
             "swarm_retire_task" => self.retire_task(arguments),
             "swarm_hold_reviewed_work" => self.hold_reviewed_work(arguments),
             "swarm_promote_task" => self.promote_task(arguments),
+            "swarm_sleep_worker" => self.sleep_worker(arguments).await,
             "swarm_transition_task" => self.transition_task(arguments).await,
             "swarm_list_jira_comments" => self.list_jira_comments(arguments).await,
             "swarm_comment_jira_task" => self.comment_jira_task(arguments),
@@ -819,6 +821,61 @@ impl AgentMcp {
         self.tasks
             .retire_task(self.principal, task_id, &input.reason)?;
         structured(json!({ "task_id": input.task_id, "retired": true }))
+    }
+
+    /// Stands a worker down, refusing while it holds Active work.
+    ///
+    /// The guard mirrors the wake exactly, and that symmetry is the point: a
+    /// wake only fires for READY work, so a sleep only fires when nothing is
+    /// Active. Both are state queries on the board rather than judgements about
+    /// what a worker might be doing, so neither depends on Queen being right
+    /// about the moment — which is what makes granting her this safe.
+    async fn sleep_worker(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
+        let input = parse::<SleepWorkerInput>(arguments)?;
+        if self.principal.role != WorkerRole::Queen {
+            return Err(ApplicationError::NotAuthorized);
+        }
+        let worker_id =
+            WorkerId::from_str(&input.worker_id).map_err(|_| ApplicationError::NotAuthorized)?;
+        let reason = input.reason.trim();
+        if reason.is_empty() {
+            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                "say why this worker is being stood down; a worker that is simply gone is the failure this exists to avoid".to_owned(),
+            )));
+        }
+        let store = self.tasks.store();
+        let profile = store
+            .get_worker_profile(worker_id)
+            .map_err(ApplicationError::Store)?;
+        let holds_active = store
+            .list_tasks()
+            .map_err(ApplicationError::Store)?
+            .into_iter()
+            .any(|task| {
+                task.assigned_worker_id == Some(worker_id) && task.state == TaskState::Active
+            });
+        if holds_active {
+            return Err(ApplicationError::Store(TaskStoreError::IntegrityFailure(
+                format!(
+                    "{} still holds Active work, so it is mid-sentence. Move that task out of flight first.",
+                    profile.name
+                ),
+            )));
+        }
+        // The reason travels with the session that ends, which is where a
+        // reader looking at a resting worker will go. Not the refusal ledger:
+        // that holds refusals still being made and ages out after 180 seconds,
+        // so a sleep recorded there would be gone in three minutes.
+        crate::workers::stand_worker_down(&self.state, worker_id, Some((reason, "queen")))
+            .await
+            .map_err(|error| {
+                ApplicationError::Store(TaskStoreError::IntegrityFailure(error.message.clone()))
+            })?;
+        structured(json!({
+            "worker_id": input.worker_id,
+            "asleep": true,
+            "note": "Its Ready work stays assigned and is wakeable by assigning it again.",
+        }))
     }
 
     fn promote_task(&self, arguments: Value) -> Result<CallToolResult, ApplicationError> {
@@ -1393,6 +1450,13 @@ struct RetireTaskInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SleepWorkerInput {
+    worker_id: String,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PromoteTaskInput {
     task_id: String,
 }
@@ -1564,6 +1628,28 @@ fn reload_app_tool() -> Tool {
                 }
             },
             "required": ["action"],
+            "additionalProperties": false
+        }),
+        false,
+    )
+}
+
+fn sleep_worker_tool() -> Tool {
+    tool(
+        "swarm_sleep_worker",
+        "Queen only: stand a worker down when it has nothing to do. The counterpart to waking, which has no tool of its own — assigning READY work to a sleeping worker queues a guarded wake, and this is how one goes back. REFUSED while the worker holds ACTIVE work: that is a state query on the board, not a judgement about the moment, so it does not depend on you being right about what the worker is doing. Its Ready work stays assigned to it and remains wakeable by assignment; only the live session ends. Say why in the reason — it is recorded, and a worker that is simply gone with no explanation is the failure this fleet keeps rediscovering.",
+        &json!({
+            "type": "object",
+            "properties": {
+                "worker_id": { "type": "string", "format": "uuid" },
+                "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": "Why this worker is being stood down. Recorded where the operator can read it."
+                }
+            },
+            "required": ["worker_id", "reason"],
             "additionalProperties": false
         }),
         false,
@@ -2121,6 +2207,9 @@ mod tests {
         "swarm_hold_reviewed_work",
         // Ordering the board is routing, and routing is Queen's.
         "swarm_promote_task",
+        // Standing a worker down is roster work. A worker stopping itself is a
+        // different thing and is not this.
+        "swarm_sleep_worker",
     ];
 
     fn setup() -> (

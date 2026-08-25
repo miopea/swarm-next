@@ -475,6 +475,32 @@ impl TaskStore {
     /// Loads one durable worker profile.
     ///
     /// # Errors
+    /// Why this worker's most recent session ended, when anyone recorded it.
+    ///
+    /// Read separately rather than widened into `WorkerProfile`, which is
+    /// carried through a great deal of code that has no use for it. A resting
+    /// worker is the only place this matters.
+    ///
+    /// # Errors
+    /// Returns an error when the session history cannot be read.
+    pub fn last_session_end_reason(
+        &self,
+        worker_id: WorkerId,
+    ) -> Result<Option<String>, TaskStoreError> {
+        let connection = self.connection()?;
+        Ok(connection
+            .query_row(
+                "SELECT ended_reason FROM worker_sessions
+                 WHERE worker_id = ?1 AND ended_at IS NOT NULL AND ended_reason IS NOT NULL
+                 ORDER BY ended_at DESC, session_id DESC LIMIT 1",
+                [worker_id.to_string()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    /// # Errors
     /// Returns `WorkerNotFound` when the identity is unknown.
     pub fn get_worker_profile(&self, id: WorkerId) -> Result<WorkerProfile, TaskStoreError> {
         let connection = self.connection()?;
@@ -1127,12 +1153,38 @@ impl TaskStore {
         &self,
         session_id: WorkerSessionId,
     ) -> Result<bool, TaskStoreError> {
+        self.release_worker_session_because(session_id, None)
+    }
+
+    /// Ends a session and records WHY, and who ended it.
+    ///
+    /// A worker that is simply not running is the failure this fleet keeps
+    /// rediscovering: the state is visible and the reason is not. Standing one
+    /// down deliberately must not become another silent state — a resting
+    /// worker should be distinguishable from a crashed one.
+    ///
+    /// `None` is honest rather than lazy: most sessions end without anyone
+    /// recording why, and an absent reason means "not recorded" instead of a
+    /// backfilled guess.
+    ///
+    /// # Errors
+    /// Returns an error when the session cannot be released.
+    pub fn release_worker_session_because(
+        &self,
+        session_id: WorkerSessionId,
+        ended: Option<(&str, &str)>,
+    ) -> Result<bool, TaskStoreError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let released = transaction.execute(
-            "UPDATE worker_sessions SET ended_at = unixepoch()
+            "UPDATE worker_sessions SET ended_at = unixepoch(),
+                 ended_reason = ?2, ended_by = ?3
              WHERE session_id = ?1 AND ended_at IS NULL",
-            [session_id.to_string()],
+            params![
+                session_id.to_string(),
+                ended.map(|(reason, _)| reason),
+                ended.map(|(_, actor)| actor)
+            ],
         )? == 1;
         if released {
             transaction.execute(
@@ -1591,8 +1643,139 @@ fn move_worker_repository(
     Ok(())
 }
 
+/// Why a worker session ended, and who ended it.
+///
+/// A worker that is simply not running is the failure this fleet keeps
+/// rediscovering in other forms: the state is visible and the reason is not.
+/// Standing a worker down deliberately must not become another silent state —
+/// an operator looking at a resting worker should be able to tell "Queen stood
+/// this down because the queue was empty" from "this crashed" from "nobody has
+/// started it yet".
+///
+/// Nullable, because most sessions end without anyone recording why — a crash,
+/// a restart, an operator pressing stop. An absent reason honestly means "not
+/// recorded" rather than being backfilled with a guess.
+pub(super) fn migrate_session_end_reason(
+    transaction: &rusqlite::Transaction<'_>,
+) -> rusqlite::Result<()> {
+    // Guarded because the migration chain is re-run against databases whose
+    // tables are already current — the migration tests rewind user_version
+    // without rewinding the schema, which is exactly the shape of a database
+    // that was restored or partly upgraded. An unguarded ADD COLUMN fails with
+    // "duplicate column name" and takes the whole upgrade with it.
+    // The table itself may not exist yet: pragma_table_info returns nothing for
+    // a missing table, so guarding only on the column passes and the ALTER then
+    // fails with "no such table". Both halves are needed, which is why
+    // presence.rs checks both.
+    let table_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'worker_sessions')",
+        [],
+        |row| row.get(0),
+    )?;
+    for column in ["ended_reason", "ended_by"] {
+        if !table_exists {
+            break;
+        }
+        let present: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('worker_sessions') WHERE name = ?1)",
+            [column],
+            |row| row.get(0),
+        )?;
+        if !present {
+            transaction.execute_batch(&format!(
+                "ALTER TABLE worker_sessions ADD COLUMN {column} TEXT;"
+            ))?;
+        }
+    }
+    transaction.execute_batch("PRAGMA user_version = 92;")
+}
+
 #[cfg(test)]
 mod tests {
+    /// A worker stood down on purpose says so, and one that simply stopped does
+    /// not pretend to.
+    ///
+    /// A worker that is merely not running is the failure this fleet keeps
+    /// rediscovering: the state is visible and the reason is not. Sleeping must
+    /// not become another silent state — a resting worker has to be
+    /// distinguishable from a crashed one.
+    #[test]
+    fn a_session_ended_on_purpose_records_why_and_who() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        store
+            .release_worker_session_because(session, Some(("the queue is empty", "queen")))
+            .unwrap();
+
+        assert_eq!(
+            store.last_session_end_reason(worker.id).unwrap().as_deref(),
+            Some("the queue is empty")
+        );
+    }
+
+    /// An unrecorded ending stays unrecorded. "Not recorded" is the honest
+    /// answer, and inventing one would make a crash look deliberate.
+    #[test]
+    fn a_session_that_just_ended_claims_no_reason() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let session = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, session).unwrap();
+
+        store.release_worker_session(session).unwrap();
+
+        assert_eq!(store.last_session_end_reason(worker.id).unwrap(), None);
+    }
+
+    /// The newest ending wins, so a worker woken and stood down again reports
+    /// why it is resting NOW rather than why it rested last time.
+    #[test]
+    fn the_most_recent_ending_is_the_one_reported() {
+        let store = TaskStore::in_memory().unwrap();
+        let worker = store
+            .create_worker(
+                "Petal",
+                ProviderKind::ClaudeCode,
+                "/workspace/petal",
+                false,
+                1,
+            )
+            .unwrap();
+        let first = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, first).unwrap();
+        store
+            .release_worker_session_because(first, Some(("first rest", "queen")))
+            .unwrap();
+        let second = WorkerSessionId::new();
+        store.bind_worker_session(worker.id, second).unwrap();
+        store
+            .release_worker_session_because(second, Some(("second rest", "queen")))
+            .unwrap();
+
+        assert_eq!(
+            store.last_session_end_reason(worker.id).unwrap().as_deref(),
+            Some("second rest")
+        );
+    }
 
     /// A profile stored `~/projects/rcg/rcg-dev-install` on 2026-08-16 and never
     /// started once. The tilde is not a filesystem concept, the directory was

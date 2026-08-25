@@ -2054,6 +2054,11 @@ struct WorkerView {
     engagement_expires_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     runtime_error: Option<String>,
+    /// Why this worker is resting, when somebody said. NOT `runtime_error`: a
+    /// worker stood down on purpose has not failed, and filing a deliberate act
+    /// under "error" is how a resting worker starts looking broken.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rest_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system_role: Option<&'static str>,
     /// Wall-clock second this worker's terminal last produced output, so the
@@ -2269,6 +2274,8 @@ struct WorkerViewFacts {
     running: bool,
     awaiting_operator: bool,
     runtime_error: Option<String>,
+    /// Why this worker is resting, when somebody recorded it.
+    rest_reason: Option<String>,
     provider_activity: ProviderActivity,
     /// Something this worker started is still running after its turn ended.
     /// Reported beside the activity rather than inside it: both situations
@@ -2293,6 +2300,7 @@ impl Default for WorkerViewFacts {
             running: false,
             awaiting_operator: false,
             runtime_error: None,
+            rest_reason: None,
             provider_activity: ProviderActivity::Unknown,
             background_work: false,
             system_role: None,
@@ -2309,6 +2317,7 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         running,
         awaiting_operator,
         runtime_error,
+        rest_reason,
         provider_activity,
         background_work,
         system_role,
@@ -2364,6 +2373,7 @@ fn worker_view(profile: WorkerProfile, facts: WorkerViewFacts) -> WorkerView {
         background_work,
         engagement_expires_at,
         runtime_error,
+        rest_reason,
         system_role,
         last_output_at,
         held_for_answer_since: held_for_answer.map(|held| held.since),
@@ -11166,6 +11176,7 @@ mod tests {
             running: false,
             awaiting_operator: false,
             runtime_error: None,
+            rest_reason: None,
             provider_activity: ProviderActivity::Resting,
             background_work: false,
             system_role: None,

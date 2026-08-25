@@ -125,6 +125,16 @@ pub(super) async fn list_workers(
                     running,
                     awaiting_operator: needs_operator,
                     runtime_error,
+                    // Only for a worker that is not running: why it is resting
+                    // is meaningless for one that is.
+                    rest_reason: (!running)
+                        .then(|| {
+                            task_store(&state)
+                                .ok()
+                                .and_then(|store| store.last_session_end_reason(profile_id).ok())
+                                .flatten()
+                        })
+                        .flatten(),
                     provider_activity: activity,
                     background_work,
                     system_role: is_scout.then_some("scout"),
@@ -726,21 +736,43 @@ pub(super) async fn stop_worker(
     AxumPath(worker_id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &headers)?;
-    let _guard = state.worker_lifecycle.lock().await;
     let worker_id = parse_worker_id(&worker_id)?;
-    let is_scout = task_store(&state)?
+    // The operator pressing Stop records no reason, and that is honest: an
+    // absent reason means "not recorded" rather than a guess.
+    let view = stand_worker_down(&state, worker_id, None).await?;
+    Ok(Json(view).into_response())
+}
+
+/// Stands a worker down: stops its session, releases what that session held,
+/// and clears its error state.
+///
+/// Extracted so the operator's stop button and Queen's sleep tool are the SAME
+/// operation rather than two that drift. The guard about whether a given caller
+/// MAY stop this worker belongs to the caller, not here — the operator may stop
+/// anything, and Queen is refused while the worker holds Active work.
+///
+/// Releasing the session's assignments is what makes the worker wakeable again
+/// afterwards: the task keeps its assigned worker, only the session binding
+/// ends, so a later assignment queues a fresh guarded wake.
+pub(super) async fn stand_worker_down(
+    state: &Arc<AppState>,
+    worker_id: WorkerId,
+    ended: Option<(&str, &str)>,
+) -> Result<crate::WorkerView, ApiError> {
+    let _guard = state.worker_lifecycle.lock().await;
+    let is_scout = task_store(state)?
         .scout_worker_id()
         .map_err(|error| task_store_error(&error))?
         == Some(worker_id);
-    let profile = task_store(&state)?
+    let profile = task_store(state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
     if let Some(session_id) = profile.active_session_id {
-        request_host(&state, HostRequest::Stop { session_id }).await?;
-        task_store(&state)?
-            .release_worker_session(session_id)
+        request_host(state, HostRequest::Stop { session_id }).await?;
+        task_store(state)?
+            .release_worker_session_because(session_id, ended)
             .map_err(|error| task_store_error(&error))?;
-        task_store(&state)?
+        task_store(state)?
             .release_session_assignments(session_id)
             .map_err(|error| task_store_error(&error))?;
     }
@@ -751,17 +783,16 @@ pub(super) async fn stop_worker(
         .await
         .remove(&worker_id);
     state.control_room_notify.notify_waiters();
-    let profile = task_store(&state)?
+    let profile = task_store(state)?
         .get_worker_profile(worker_id)
         .map_err(|error| task_store_error(&error))?;
-    Ok(Json(worker_view(
+    Ok(worker_view(
         profile,
         WorkerViewFacts {
             system_role: is_scout.then_some("scout"),
             ..WorkerViewFacts::default()
         },
     ))
-    .into_response())
 }
 
 #[cfg(test)]
