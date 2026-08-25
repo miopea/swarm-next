@@ -93,6 +93,13 @@ export class XtermSurface implements TerminalSurface {
 
   constructor() {
     this.#terminal = new Terminal({
+      // Unicode 11 measurement is proposed API, and xterm refuses it unless
+      // this is set: "You must set the allowProposedApi option to true to use
+      // proposed API". Without it the addon threw on construction — which is
+      // what locked every terminal behind an error boundary until addons were
+      // made optional. Measured against a real browser rather than guessed:
+      // with this set, all five addons load against xterm 6.
+      allowProposedApi: true,
       cursorBlink: true,
       convertEol: false,
       fontFamily: '"Atkinson Hyperlegible Mono Variable", "Cascadia Code", "SFMono-Regular", Consolas, monospace',
